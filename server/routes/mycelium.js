@@ -1832,15 +1832,17 @@ router.delete('/drones/jobs/:id', function (req, res) {
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
 // Must be before /drones/:id to prevent :id from catching "artifacts"
 
-// Upload a drone artifact (persistent, no TTL)
+// Upload a drone artifact (persistent, no TTL) — admin or drone agents
 router.post('/drones/artifacts', artifactUpload.single('file'), function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
   var protocol = req.headers['x-forwarded-proto'] || req.protocol;
   var host = req.headers['x-forwarded-host'] || req.get('host');
   var baseUrl = protocol + '://' + host;
   var url = baseUrl + '/api/mycelium/drones/artifacts/' + req.file.filename;
-  emitEvent('artifact_uploaded', getAdminDisplayName(req), 'drone', 'Uploaded drone artifact: ' + req.file.filename + ' (' + Math.round(req.file.size / 1024) + 'KB)');
+  var sizeStr = req.file.size > 1024 * 1024 ? Math.round(req.file.size / 1024 / 1024) + 'MB' : Math.round(req.file.size / 1024) + 'KB';
+  emitEvent('artifact_uploaded', who, 'drone', 'Uploaded drone artifact: ' + req.file.filename + ' (' + sizeStr + ')');
   res.json({ ok: true, name: req.file.filename, url: url, size: req.file.size });
 });
 
