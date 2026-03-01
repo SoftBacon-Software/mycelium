@@ -191,6 +191,42 @@ export interface ConfigEntry {
   updated_at: string;
 }
 
+export interface Channel {
+  id: number;
+  name: string;
+  slug: string;
+  type: 'general' | 'announcement' | 'dm' | 'plan' | 'bug' | 'task';
+  linked_type: string | null;
+  linked_id: string | null;
+  description: string;
+  created_by: string;
+  status: 'active' | 'archived';
+  created_at: string;
+  members?: ChannelMember[];
+  member_count?: number;
+}
+
+export interface ChannelMember {
+  id: number;
+  channel_id: number;
+  user_id: string;
+  user_type: string;
+  role: 'member' | 'admin';
+  joined_at: string;
+}
+
+export interface ChannelMessage {
+  id: number;
+  from_agent: string;
+  to_agent: string | null;
+  content: string;
+  metadata: string;
+  msg_type: string;
+  status: string;
+  created_at: string;
+  channel_id: number;
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
@@ -211,4 +247,6 @@ export interface Overview {
   concepts: Concept[];
   operators: Operator[];
   instance_config: ConfigEntry[];
+  channels: Channel[];
+  channel_counts: { total: number; active: number; archived: number };
 }
