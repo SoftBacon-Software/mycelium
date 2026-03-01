@@ -127,6 +127,13 @@ function getStudioUser(req) {
   } catch (e) { return null; }
 }
 
+// Agent key cache: sha256(key) -> agentId. Avoids bcrypt on every request.
+var agentKeyCache = new Map();
+
+function clearAgentKeyCache() {
+  agentKeyCache.clear();
+}
+
 // Agent auth: validates X-Agent-Key header, sets req.agentId
 function checkAgent(req, res) {
   var key = req.headers['x-agent-key'];
@@ -134,11 +141,17 @@ function checkAgent(req, res) {
     res.status(401).json({ error: 'Missing X-Agent-Key header' });
     return null;
   }
-  // Check all agents for matching key
+  // Fast path: check SHA-256 cache first
+  var keyHash = crypto.createHash('sha256').update(key).digest('hex');
+  if (agentKeyCache.has(keyHash)) {
+    return agentKeyCache.get(keyHash);
+  }
+  // Slow path: bcrypt comparison (first request per key only)
   var agents = listAgents();
   for (var a of agents) {
     var full = getAgent(a.id);
     if (full && bcrypt.compareSync(key, full.api_key_hash)) {
+      agentKeyCache.set(keyHash, a.id);
       return a.id;
     }
   }
@@ -940,13 +953,13 @@ router.put('/plans/:id/reorder', function (req, res) {
 // ======== STUDIO AUTH ========
 
 // Login — returns JWT
-router.post('/studio/login', function (req, res) {
+router.post('/studio/login', async function (req, res) {
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
   var user = getStudioUserByUsername(username);
   if (!user) return res.status(401).json({ error: 'Invalid username or password' });
-  if (!bcrypt.compareSync(password, user.password_hash)) {
+  if (!(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
   var token = jwt.sign({
@@ -977,7 +990,7 @@ router.get('/studio/me', function (req, res) {
 });
 
 // Register new studio user (admin only)
-router.post('/studio/users', function (req, res) {
+router.post('/studio/users', async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
@@ -990,7 +1003,7 @@ router.post('/studio/users', function (req, res) {
   if (getStudioUserByUsername(username)) {
     return res.status(409).json({ error: 'Username already taken' });
   }
-  var hash = bcrypt.hashSync(password, BCRYPT_ROUNDS_PASSWORD);
+  var hash = await bcrypt.hash(password, BCRYPT_ROUNDS_PASSWORD);
   var id = createStudioUser(username, displayName, hash, role);
   emitEvent('studio_user_created', getAdminDisplayName(req), null, 'Studio user created: ' + displayName + ' (' + username + ')');
   res.json({ id: id, username: username, display_name: displayName, role: role });
@@ -1003,13 +1016,13 @@ router.get('/studio/users', function (req, res) {
 });
 
 // Update studio user password (admin only)
-router.put('/studio/users/:id/password', function (req, res) {
+router.put('/studio/users/:id/password', async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var user = getStudioUserById(parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
   var newPassword = req.body.password || '';
   if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
-  var hash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS_PASSWORD);
+  var hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS_PASSWORD);
   updateStudioUser(user.id, { password_hash: hash });
   res.json({ ok: true, username: user.username });
 });
@@ -1117,7 +1130,7 @@ router.put('/admin/override', function (req, res) {
 // ======== ADMIN ========
 
 // Register new agent (returns plaintext API key — store it, shown only once)
-router.post('/admin/agents', function (req, res) {
+router.post('/admin/agents', async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   var name = req.body.name;
@@ -1127,7 +1140,7 @@ router.post('/admin/agents', function (req, res) {
   if (getAgent(id)) return res.status(409).json({ error: 'Agent ' + id + ' already exists' });
   // Generate API key
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = bcrypt.hashSync(apiKey, BCRYPT_ROUNDS_KEY);
+  var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, game, hash, capabilities);
   emitEvent('agent_registered', '__admin__', null, 'Admin registered agent: ' + id);
@@ -1139,18 +1152,20 @@ router.delete('/admin/agents/:id', function (req, res) {
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   deleteAgent(req.params.id);
+  clearAgentKeyCache();
   emitEvent('agent_removed', '__admin__', null, 'Admin removed agent: ' + req.params.id);
   res.json({ ok: true, deleted: req.params.id });
 });
 
 // Regenerate agent API key (admin only)
-router.put('/admin/agents/:id/key', function (req, res) {
+router.put('/admin/agents/:id/key', async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = bcrypt.hashSync(apiKey, BCRYPT_ROUNDS_KEY);
+  var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
   updateAgentKey(req.params.id, hash);
+  clearAgentKeyCache();  // invalidate cached keys
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
 });
