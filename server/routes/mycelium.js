@@ -173,6 +173,24 @@ function emitEvent(type, agentId, game, summary, data) {
   createDvEvent(type, agentId || '', game || null, summary || '', JSON.stringify(data || {}));
 }
 
+// ---- Approval gate helpers ----
+// Soft enforcement: warns agents but doesn't block (returns warning field).
+// Hard enforcement: blocks agents without an approved approval_id.
+function checkApprovalGate(req, who, actionType) {
+  // Admin/studio users bypass gates
+  if (who === '__admin__' || !who || who.indexOf('-claude') === -1) return { ok: true };
+  var approvalId = req.body.approval_id || req.query.approval_id;
+  if (!approvalId) {
+    return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call studio_request_approval first.' };
+  }
+  var approval = getApproval(parseInt(approvalId));
+  if (!approval) return { ok: false, error: 'Approval #' + approvalId + ' not found' };
+  if (approval.status !== 'approved') return { ok: false, error: 'Approval #' + approvalId + ' is ' + approval.status + ', not approved' };
+  if (approval.action_type !== actionType) return { ok: false, error: 'Approval #' + approvalId + ' is for ' + approval.action_type + ', not ' + actionType };
+  if (approval.requested_by !== who) return { ok: false, error: 'Approval #' + approvalId + ' belongs to ' + approval.requested_by + ', not ' + who };
+  return { ok: true, approval: approval };
+}
+
 // ---- Router ----
 
 var router = Router();
@@ -756,6 +774,7 @@ router.get('/plans', function (req, res) {
 router.post('/plans', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  var gate = checkApprovalGate(req, agentId, 'plan_create');
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var description = escapeHtml(req.body.description || '');
@@ -765,7 +784,9 @@ router.post('/plans', function (req, res) {
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
   var id = createDvPlan(title, description, game, owner, priority, tags, agentId);
   emitEvent('plan_created', agentId, game, agentId + ' created plan: ' + title, { plan_id: id });
-  res.json({ id: id, title: title });
+  var result = { id: id, title: title };
+  if (gate.warning) result.approval_warning = gate.warning;
+  res.json(result);
 });
 
 router.get('/plans/:id', function (req, res) {
@@ -797,12 +818,17 @@ router.put('/plans/:id', function (req, res) {
 });
 
 router.delete('/plans/:id', function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var gate = checkApprovalGate(req, who, 'delete');
+  if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
   var plan = getDvPlan(parseInt(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   deleteDvPlan(plan.id);
-  emitEvent('plan_deleted', '__admin__', plan.game, 'Admin deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
-  res.json({ ok: true, deleted: plan.id });
+  emitEvent('plan_deleted', who, plan.game, who + ' deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
+  var result = { ok: true, deleted: plan.id };
+  if (gate.warning) result.approval_warning = gate.warning;
+  res.json(result);
 });
 
 // -- Plan Steps --
@@ -1101,14 +1127,19 @@ router.put('/concepts/:id', function (req, res) {
   res.json(updated);
 });
 
-// Delete concept (admin only)
+// Delete concept
 router.delete('/concepts/:id', function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var gate = checkApprovalGate(req, who, 'delete');
+  if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
   var concept = getConcept(parseInt(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   deleteConcept(concept.id);
-  emitEvent('concept_deleted', getAdminDisplayName(req), null, 'Deleted concept: ' + concept.name);
-  res.json({ ok: true });
+  emitEvent('concept_deleted', who, null, who + ' deleted concept: ' + concept.name);
+  var result = { ok: true };
+  if (gate.warning) result.approval_warning = gate.warning;
+  res.json(result);
 });
 
 // Link concept to project
@@ -1730,6 +1761,13 @@ router.post('/outreach/send/:id', async function (req, res) {
     var dryRun = config.dry_run !== undefined ? config.dry_run : true;
     if (req.body.dry_run !== undefined) dryRun = req.body.dry_run;
 
+    // Hard gate: agents cannot send real emails without approval
+    if (!dryRun) {
+      var gate = checkApprovalGate(req, who, 'outreach_send');
+      if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
+      if (!gate.ok && gate.soft) return res.status(403).json({ error: 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', approval_required: true });
+    }
+
     if (dryRun) {
       updateOutreachContact(contact.id, {
         status: 'sent',
@@ -1778,6 +1816,13 @@ router.post('/outreach/followup/:id', async function (req, res) {
 
     var dryRun = config.dry_run !== undefined ? config.dry_run : true;
     if (req.body.dry_run !== undefined) dryRun = req.body.dry_run;
+
+    // Hard gate: agents cannot send real followups without approval
+    if (!dryRun) {
+      var gate = checkApprovalGate(req, who, 'outreach_send');
+      if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
+      if (!gate.ok && gate.soft) return res.status(403).json({ error: 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', approval_required: true });
+    }
 
     if (!dryRun && contact.email) {
       var { sendEmail } = await import('../outreach/mailer.js');
