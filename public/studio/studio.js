@@ -1615,29 +1615,16 @@
         highpass.frequency.value = 80;
         highpass.Q.value = 0.7;
 
-        // Lowpass at 14kHz — cuts high-frequency hiss
-        var lowpass = audioCtx.createBiquadFilter();
-        lowpass.type = 'lowpass';
-        lowpass.frequency.value = 14000;
-        lowpass.Q.value = 0.7;
-
-        // Gentle compressor — just evens out volume, no amplification
-        var compressor = audioCtx.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.knee.value = 30;
-        compressor.ratio.value = 3;
-        compressor.attack.value = 0.01;
-        compressor.release.value = 0.25;
-
         // No gain boost — prevents feedback loop
         var gain = audioCtx.createGain();
         gain.gain.value = 1.0;
 
-        // Chain: mic → highpass → lowpass → compressor → gain → output
+        // Chain: mic → highpass → gain → output
+        // Browser already handles noise suppression + auto gain control
+        // No lowpass filter (was cutting sibilants at 14kHz, muffling voices)
+        // No compressor (double-compressing with browser AGC = unnatural sound)
         source.connect(highpass);
-        highpass.connect(lowpass);
-        lowpass.connect(compressor);
-        compressor.connect(gain);
+        highpass.connect(gain);
 
         // Bug #7: Speaking indicator via analyser
         var analyser = audioCtx.createAnalyser();
@@ -1820,7 +1807,7 @@
 
   // Boost Opus to max quality (128kbps, wideband, FEC for packet loss resilience)
   function boostOpusSDP(sdp) {
-    return sdp.replace(/a=fmtp:111 /g, 'a=fmtp:111 maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;usedtx=0;');
+    return sdp.replace(/a=fmtp:111 /g, 'a=fmtp:111 maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;cbr=0;');
   }
 
   function createPeerConnection(peerId, isOfferer) {

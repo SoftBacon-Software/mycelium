@@ -1333,25 +1333,14 @@ html, body {
       highpass.frequency.value = 80;
       highpass.Q.value = 0.7;
 
-      var lowpass = audioCtx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.value = 14000;
-      lowpass.Q.value = 0.7;
-
-      var compressor = audioCtx.createDynamicsCompressor();
-      compressor.threshold.value = -24;
-      compressor.knee.value = 30;
-      compressor.ratio.value = 3;
-      compressor.attack.value = 0.01;
-      compressor.release.value = 0.25;
-
       var gain = audioCtx.createGain();
       gain.gain.value = 1.0;
 
+      // Chain: mic → highpass → gain → output
+      // Browser handles noise suppression + auto gain control
+      // No lowpass (was muffling voices), no compressor (double-compression with AGC)
       source.connect(highpass);
-      highpass.connect(lowpass);
-      lowpass.connect(compressor);
-      compressor.connect(gain);
+      highpass.connect(gain);
 
       var analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
@@ -1514,7 +1503,7 @@ html, body {
   }
 
   function boostOpusSDP(sdp) {
-    return sdp.replace(/a=fmtp:111 /g, 'a=fmtp:111 maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;usedtx=0;');
+    return sdp.replace(/a=fmtp:111 /g, 'a=fmtp:111 maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;cbr=0;');
   }
 
   function createPeerConnection(peerId, isOfferer) {
