@@ -1146,7 +1146,9 @@ export function getDvOverview() {
         try { con.data = JSON.parse(con.data); } catch (e) {}
       });
       return c;
-    })()
+    })(),
+    operators: listOperators(),
+    instance_config: listInstanceConfig()
   };
 }
 
