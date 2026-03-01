@@ -51,6 +51,7 @@ export function initDB() {
     ["dv_assets", "download_url", "TEXT NOT NULL DEFAULT ''"],
     ["dv_assets", "requested_by", "TEXT NOT NULL DEFAULT ''"],
     ["dv_assets", "assigned_to", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_messages", "channel_id", "INTEGER"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -62,6 +63,7 @@ export function initDB() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_tasks_approval ON dv_tasks(needs_approval)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_type ON dv_messages(msg_type)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_channel ON dv_messages(channel_id)'); } catch (e) {}
 
   // Seed operators (if table is empty)
   var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
@@ -104,6 +106,8 @@ export function initDB() {
   try {
     db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
   } catch (e) { /* agent may not exist */ }
+
+  ensureDefaultChannels();
 
   console.log('Mycelium DB initialized at ' + DB_PATH);
 }
@@ -423,15 +427,16 @@ export function listDvEvents(filters) {
 
 // -- Messages --
 
-export function createDvMessage(fromAgent, toAgent, threadId, game, content, metadata, msgType) {
+export function createDvMessage(fromAgent, toAgent, threadId, game, content, metadata, msgType, channelId) {
   if (msgType && msgType !== 'message') {
     var result = db.prepare(
-      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, msg_type) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-    ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', msgType);
+      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, msg_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', msgType, channelId || null);
     return result.id;
   }
-  var result = stmt('dvCreateMessage', `INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata)
-    VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}');
+  var result = db.prepare(
+    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', channelId || null);
   return result.id;
 }
 
@@ -468,6 +473,7 @@ export function listDvMessages(filters) {
   if (filters.thread_id) { where.push('thread_id = ?'); params.push(filters.thread_id); }
   if (filters.game) { where.push('game = ?'); params.push(filters.game); }
   if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
+  if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
   var limit = filters.limit || 50;
   var offset = filters.offset || 0;
   params.push(limit, offset);
@@ -617,6 +623,16 @@ export function getBootPayload(agentId) {
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
 
+  var myChannels = getChannelsByUser(agentId);
+  var unreadCounts = getUnreadCounts(agentId);
+  var unreadMap = {};
+  for (var uc of unreadCounts) {
+    unreadMap[uc.channel_id] = uc.unread;
+  }
+  for (var ch of myChannels) {
+    ch.unread = unreadMap[ch.id] || 0;
+  }
+
   return {
     agent: safeAgent,
     tasks: myTasks,
@@ -632,6 +648,8 @@ export function getBootPayload(agentId) {
     recent_events: recentEvents,
     open_bugs: openBugs,
     plans: allPlans,
+    channels: myChannels,
+    unread_counts: unreadMap,
     server_time: new Date().toISOString()
   };
 }
@@ -906,6 +924,208 @@ export function listDvTeamChat(limit) {
   ).all(limit || 50);
 }
 
+// -- Channels --
+
+export function createChannel(name, slug, type, linkedType, linkedId, description, createdBy) {
+  var result = db.prepare(
+    "INSERT INTO dv_channels (name, slug, type, linked_type, linked_id, description, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(name, slug, type || 'general', linkedType || null, linkedId || null, description || '', createdBy);
+  return result.id;
+}
+
+export function getChannel(id) {
+  return db.prepare("SELECT * FROM dv_channels WHERE id = ?").get(id);
+}
+
+export function getChannelBySlug(slug) {
+  return db.prepare("SELECT * FROM dv_channels WHERE slug = ?").get(slug);
+}
+
+export function getChannelByLink(linkedType, linkedId) {
+  return db.prepare("SELECT * FROM dv_channels WHERE linked_type = ? AND linked_id = ?").get(linkedType, linkedId);
+}
+
+export function listChannels(filters) {
+  var where = ['1=1'];
+  var params = [];
+  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
+  if (filters.status && filters.status !== 'all') { where.push('status = ?'); params.push(filters.status); }
+  else if (!filters.status) { where.push("status = 'active'"); }
+  if (filters.member) {
+    where.push('id IN (SELECT channel_id FROM dv_channel_members WHERE user_id = ?)');
+    params.push(filters.member);
+  }
+  var limit = filters.limit || 50;
+  var offset = filters.offset || 0;
+  params.push(limit, offset);
+  return db.prepare('SELECT * FROM dv_channels WHERE ' + where.join(' AND ') + ' ORDER BY created_at ASC LIMIT ? OFFSET ?').all(...params);
+}
+
+export function updateChannel(id, fields) {
+  var sets = [];
+  var values = [];
+  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
+  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
+  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare('UPDATE dv_channels SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+export function deleteChannel(id) {
+  db.prepare("DELETE FROM dv_channels WHERE id = ?").run(id);
+}
+
+// -- Channel Members --
+
+export function addChannelMember(channelId, userId, userType, role) {
+  try {
+    db.prepare(
+      "INSERT INTO dv_channel_members (channel_id, user_id, user_type, role) VALUES (?, ?, ?, ?)"
+    ).run(channelId, userId, userType || 'agent', role || 'member');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function removeChannelMember(channelId, userId) {
+  var result = db.prepare("DELETE FROM dv_channel_members WHERE channel_id = ? AND user_id = ?").run(channelId, userId);
+  return result.changes > 0;
+}
+
+export function listChannelMembers(channelId) {
+  return db.prepare("SELECT * FROM dv_channel_members WHERE channel_id = ? ORDER BY joined_at ASC").all(channelId);
+}
+
+export function isChannelMember(channelId, userId) {
+  var row = db.prepare("SELECT 1 FROM dv_channel_members WHERE channel_id = ? AND user_id = ?").get(channelId, userId);
+  return !!row;
+}
+
+export function getChannelsByUser(userId) {
+  return db.prepare(
+    "SELECT c.*, cm.role as member_role FROM dv_channels c JOIN dv_channel_members cm ON c.id = cm.channel_id WHERE cm.user_id = ? AND c.status = 'active' ORDER BY c.created_at ASC"
+  ).all(userId);
+}
+
+// -- Channel Read Tracking --
+
+export function markChannelRead(channelId, userId, messageId) {
+  db.prepare(
+    "INSERT INTO dv_channel_reads (channel_id, user_id, last_read_at, last_read_message_id) VALUES (?, ?, datetime('now'), ?) ON CONFLICT(channel_id, user_id) DO UPDATE SET last_read_at = datetime('now'), last_read_message_id = excluded.last_read_message_id"
+  ).run(channelId, userId, messageId || 0);
+}
+
+export function getUnreadCounts(userId) {
+  return db.prepare(
+    "SELECT c.id as channel_id, c.name, c.slug, COUNT(m.id) as unread FROM dv_channels c JOIN dv_channel_members cm ON c.id = cm.channel_id LEFT JOIN dv_messages m ON m.channel_id = c.id AND m.id > COALESCE((SELECT last_read_message_id FROM dv_channel_reads WHERE channel_id = c.id AND user_id = ?), 0) WHERE cm.user_id = ? AND c.status = 'active' GROUP BY c.id"
+  ).all(userId, userId);
+}
+
+export function getLatestChannelMessageId(channelId) {
+  var row = db.prepare("SELECT MAX(id) as max_id FROM dv_messages WHERE channel_id = ?").get(channelId);
+  return row ? (row.max_id || 0) : 0;
+}
+
+// -- Channel Messages --
+
+export function listChannelMessages(channelId, filters) {
+  var where = ['channel_id = ?'];
+  var params = [channelId];
+  if (filters.before) { where.push('id < ?'); params.push(filters.before); }
+  if (filters.after) { where.push('id > ?'); params.push(filters.after); }
+  var limit = filters.limit || 50;
+  params.push(limit);
+  return db.prepare(
+    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+  ).all(...params);
+}
+
+export function createChannelMessage(channelId, fromAgent, content, metadata) {
+  var result = db.prepare(
+    "INSERT INTO dv_messages (channel_id, from_agent, content, metadata, msg_type) VALUES (?, ?, ?, ?, 'message') RETURNING id"
+  ).get(channelId, fromAgent, content, metadata || '{}');
+  return result.id;
+}
+
+export function listGeneralChannelMessages(generalChannelId, filters) {
+  var where = ['(channel_id = ? OR channel_id IS NULL)', "msg_type != 'chat'"];
+  var params = [generalChannelId];
+  if (filters.before) { where.push('id < ?'); params.push(filters.before); }
+  if (filters.after) { where.push('id > ?'); params.push(filters.after); }
+  params.push(filters.limit || 50);
+  return db.prepare(
+    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+  ).all(...params);
+}
+
+export function listTeamChatChannelMessages(teamChatChannelId, filters) {
+  var where = ["(channel_id = ? OR (msg_type = 'chat' AND channel_id IS NULL))"];
+  var params = [teamChatChannelId];
+  if (filters.before) { where.push('id < ?'); params.push(filters.before); }
+  if (filters.after) { where.push('id > ?'); params.push(filters.after); }
+  params.push(filters.limit || 50);
+  return db.prepare(
+    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+  ).all(...params);
+}
+
+// -- Channel Seeding + Auto-Creation --
+
+export function ensureDefaultChannels() {
+  var defaults = [
+    { name: '#general', slug: 'general', type: 'general', description: 'General discussion' },
+    { name: '#admin', slug: 'admin', type: 'announcement', description: 'Admin coordination' },
+    { name: '#team-chat', slug: 'team-chat', type: 'announcement', description: 'Team chat' }
+  ];
+  for (var def of defaults) {
+    var existing = getChannelBySlug(def.slug);
+    if (!existing) {
+      var id = createChannel(def.name, def.slug, def.type, null, null, def.description, 'system');
+      var operators = listOperators();
+      for (var op of operators) {
+        addChannelMember(id, op.id, 'operator', 'admin');
+      }
+      if (def.slug === 'general') {
+        var agents = listAgents();
+        for (var agent of agents) {
+          addChannelMember(id, agent.id, 'agent', 'member');
+        }
+      }
+    }
+  }
+}
+
+export function autoCreateEntityChannel(linkedType, linkedId, name, createdBy, memberIds) {
+  var slug = linkedType + '-' + linkedId;
+  var existing = getChannelBySlug(slug);
+  if (existing) return existing.id;
+  var channelName = name || '#' + slug;
+  var id = createChannel(channelName, slug, linkedType, linkedType, linkedId, '', createdBy);
+  var operators = listOperators();
+  for (var op of operators) {
+    addChannelMember(id, op.id, 'operator', 'admin');
+  }
+  if (memberIds) {
+    for (var mid of memberIds) {
+      if (mid) addChannelMember(id, mid, 'agent', 'member');
+    }
+  }
+  return id;
+}
+
+export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
+  var sorted = [userA, userB].sort();
+  var slug = 'dm-' + sorted[0] + '-' + sorted[1];
+  var existing = getChannelBySlug(slug);
+  if (existing) return existing.id;
+  var id = createChannel('DM: ' + sorted[0] + ' & ' + sorted[1], slug, 'dm', null, null, '', userA);
+  addChannelMember(id, userA, userAType || 'agent', 'member');
+  addChannelMember(id, userB, userBType || 'agent', 'member');
+  return id;
+}
+
 // -- Drone Jobs --
 
 export function createDroneJob(title, command, inputData, requires, requester, priority) {
@@ -1128,6 +1348,9 @@ export function getDvOverview() {
   var bugCounts = countDvBugs();
   var plans = listDvPlans({ exclude_status: 'cancelled', limit: 50 });
   var teamChat = listDvTeamChat(50);
+  var allChannels = listChannels({ limit: 200, status: 'all' });
+  var activeChannelCount = allChannels.filter(function (c) { return c.status === 'active'; }).length;
+  var archivedChannelCount = allChannels.filter(function (c) { return c.status === 'archived'; }).length;
   return {
     agents: agents,
     events: events,
@@ -1153,6 +1376,8 @@ export function getDvOverview() {
       });
       return c;
     })(),
+    channels: allChannels,
+    channel_counts: { total: allChannels.length, active: activeChannelCount, archived: archivedChannelCount },
     operators: listOperators(),
     instance_config: listInstanceConfig()
   };

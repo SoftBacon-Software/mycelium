@@ -358,3 +358,45 @@ CREATE TABLE IF NOT EXISTS dv_approval_votes (
 );
 CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_approval ON dv_approval_votes(approval_id);
 CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_voter ON dv_approval_votes(voter);
+
+-- Chat channels
+CREATE TABLE IF NOT EXISTS dv_channels (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  slug        TEXT UNIQUE NOT NULL,
+  type        TEXT NOT NULL DEFAULT 'general',
+  linked_type TEXT,
+  linked_id   INTEGER,
+  description TEXT NOT NULL DEFAULT '',
+  created_by  TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dv_channels_slug ON dv_channels(slug);
+CREATE INDEX IF NOT EXISTS idx_dv_channels_type ON dv_channels(type);
+CREATE INDEX IF NOT EXISTS idx_dv_channels_linked ON dv_channels(linked_type, linked_id);
+CREATE INDEX IF NOT EXISTS idx_dv_channels_status ON dv_channels(status);
+
+-- Channel membership
+CREATE TABLE IF NOT EXISTS dv_channel_members (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id  INTEGER NOT NULL REFERENCES dv_channels(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL,
+  user_type   TEXT NOT NULL DEFAULT 'agent',
+  role        TEXT NOT NULL DEFAULT 'member',
+  joined_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(channel_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dv_channel_members_channel ON dv_channel_members(channel_id);
+CREATE INDEX IF NOT EXISTS idx_dv_channel_members_user ON dv_channel_members(user_id);
+
+-- Channel read tracking
+CREATE TABLE IF NOT EXISTS dv_channel_reads (
+  channel_id          INTEGER NOT NULL REFERENCES dv_channels(id) ON DELETE CASCADE,
+  user_id             TEXT NOT NULL,
+  last_read_at        TEXT,
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(channel_id, user_id)
+);
