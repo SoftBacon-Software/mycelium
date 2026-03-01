@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { useState } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useVoiceStore } from '../stores/voiceStore'
 
 const navItems = [
   { to: '/', label: 'Dashboard', abbr: 'Da' },
@@ -17,6 +18,10 @@ const navItems = [
 export default function SideNav() {
   const [collapsed, setCollapsed] = useState(false)
   const agents = useDashboardStore((s) => s.agents)
+  const voiceConnected = useVoiceStore((s) => s.isConnected)
+  const voiceChannel = useVoiceStore((s) => s.channelName)
+  const voicePeers = useVoiceStore((s) => s.peers)
+  const voiceLeave = useVoiceStore((s) => s.leave)
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
 
@@ -88,6 +93,44 @@ export default function SideNav() {
             </>
           )}
         </div>
+
+        {/* Voice indicator */}
+        {voiceConnected && (
+          <>
+            <div className="my-3 border-t border-border" />
+            <div className="px-2.5">
+              {collapsed ? (
+                <div
+                  className="flex flex-col items-center gap-1"
+                  title={`Voice: #${voiceChannel}`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse shrink-0" />
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">
+                      Voice
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-green">#{voiceChannel}</span>
+                    <span className="text-xs text-text-muted">
+                      {voicePeers.length} peer{voicePeers.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <button
+                    onClick={voiceLeave}
+                    className="mt-0.5 w-full px-2 py-1 rounded-sm text-[10px] font-medium bg-red/15 text-red hover:bg-red/25 transition-colors"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Toggle button */}
