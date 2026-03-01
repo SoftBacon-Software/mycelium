@@ -850,6 +850,7 @@ export function getDvOverview() {
     team_chat: teamChat,
     context: context,
     context_keys: contextKeys,
+    projects: games,
     games: games,
     approval_queue: approvalQueue,
     pending_requests: pendingRequests,

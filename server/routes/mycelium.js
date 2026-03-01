@@ -23,7 +23,7 @@ var storage = multer.diskStorage({
 var upload = multer({ storage: storage, limits: { fileSize: 50 * 1024 * 1024 } });
 import {
   createAgent, getAgent, listAgents, updateAgentHeartbeat, deleteAgent,
-  listGames, getGame,
+  createGame, listGames, getGame,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
   approveDvTask, listTasksNeedingApproval,
@@ -901,11 +901,27 @@ router.get('/admin/overview', function (req, res) {
   res.json(getDvOverview());
 });
 
-// List games
-router.get('/games', function (req, res) {
+// List projects
+router.get('/projects', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listGames());
+});
+router.get('/games', function (req, res) { // backward compat
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listGames());
+});
+
+// Create project (admin only)
+router.post('/projects', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { id, name, description, repo_url } = req.body;
+  if (!id || !name) return res.status(400).json({ error: 'id and name required' });
+  createGame(id, name, description || '', repo_url || '');
+  var project = getGame(id);
+  emitEvent('project_created', getAdminDisplayName(req), id, 'Project created: ' + name);
+  res.json(project);
 });
 
 // =============== FILES (temp — auto-expire) ===============
@@ -928,14 +944,17 @@ setInterval(function () {
 }, 10 * 60 * 1000);
 
 // POST /files — upload a temp file (multipart form, field name: "file")
-// curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://willingsacrifice.com/api/dioverse/files
-// Files auto-delete after 1 hour. Download with wget/curl before then.
+// curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://mycelium.fyi/api/mycelium/files
+// Files auto-delete after 24 hours. Download with wget/curl before then.
 router.post('/files', upload.single('file'), function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
-  var url = '/api/dioverse/files/' + req.file.filename;
-  var fullUrl = 'https://willingsacrifice.com' + url;
+  var protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  var host = req.headers['x-forwarded-host'] || req.get('host');
+  var baseUrl = protocol + '://' + host;
+  var url = '/api/mycelium/files/' + req.file.filename;
+  var fullUrl = baseUrl + url;
   var expiresAt = new Date(Date.now() + FILE_TTL_MS).toISOString();
   emitEvent('file_uploaded', who, null, who + ' uploaded ' + req.file.originalname + ' (' + Math.round(req.file.size / 1024) + 'KB)', { filename: req.file.filename });
   res.json({ ok: true, filename: req.file.filename, url: fullUrl, size: req.file.size, expires_at: expiresAt });
