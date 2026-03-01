@@ -183,6 +183,28 @@ CREATE TABLE IF NOT EXISTS dv_drone_jobs (
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Shared concepts (characters, styles, rulesets, etc. that flow between projects)
+CREATE TABLE IF NOT EXISTS dv_concepts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT NOT NULL,
+  type            TEXT NOT NULL DEFAULT 'custom',
+  description     TEXT NOT NULL DEFAULT '',
+  data            TEXT NOT NULL DEFAULT '{}',
+  version         INTEGER NOT NULL DEFAULT 1,
+  created_by      TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Project-concept links (many-to-many)
+CREATE TABLE IF NOT EXISTS dv_project_concepts (
+  project_id      TEXT NOT NULL,
+  concept_id      INTEGER NOT NULL REFERENCES dv_concepts(id) ON DELETE CASCADE,
+  linked_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  linked_by       TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (project_id, concept_id)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_status ON dv_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_game ON dv_tasks(game);
@@ -212,3 +234,7 @@ CREATE INDEX IF NOT EXISTS idx_dv_drone_jobs_status ON dv_drone_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_dv_drone_jobs_drone ON dv_drone_jobs(drone_id);
 CREATE INDEX IF NOT EXISTS idx_dv_drone_jobs_requester ON dv_drone_jobs(requester);
 CREATE INDEX IF NOT EXISTS idx_dv_drone_jobs_priority ON dv_drone_jobs(priority DESC, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_dv_concepts_type ON dv_concepts(type);
+CREATE INDEX IF NOT EXISTS idx_dv_concepts_name ON dv_concepts(name);
+CREATE INDEX IF NOT EXISTS idx_dv_project_concepts_project ON dv_project_concepts(project_id);
+CREATE INDEX IF NOT EXISTS idx_dv_project_concepts_concept ON dv_project_concepts(concept_id);

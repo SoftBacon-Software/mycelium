@@ -42,6 +42,8 @@ import {
   completeLinkedPlanSteps,
   createStudioUser, getStudioUserByUsername, getStudioUserById,
   listStudioUsers, deleteStudioUser, updateStudioUser,
+  createConcept, getConcept, listConcepts, updateConcept, deleteConcept,
+  linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
   createDvTeamChat, listDvTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones
@@ -922,6 +924,108 @@ router.post('/projects', function (req, res) {
   var project = getGame(id);
   emitEvent('project_created', getAdminDisplayName(req), id, 'Project created: ' + name);
   res.json(project);
+});
+
+// =============== SHARED CONCEPTS ===============
+
+// List all concepts (optional ?type= filter)
+router.get('/concepts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var filters = {};
+  if (req.query.type) filters.type = req.query.type;
+  var concepts = listConcepts(filters);
+  // Attach linked projects to each concept
+  concepts.forEach(function (c) {
+    c.projects = getConceptProjects(c.id);
+    try { c.data = JSON.parse(c.data); } catch (e) {}
+  });
+  res.json(concepts);
+});
+
+// Get single concept
+router.get('/concepts/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var concept = getConcept(parseInt(req.params.id));
+  if (!concept) return res.status(404).json({ error: 'Concept not found' });
+  concept.projects = getConceptProjects(concept.id);
+  try { concept.data = JSON.parse(concept.data); } catch (e) {}
+  res.json(concept);
+});
+
+// Create concept (admin or agent)
+router.post('/concepts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var { name, type, description, data } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  var validTypes = ['character', 'style', 'ruleset', 'library', 'brand', 'custom'];
+  if (type && validTypes.indexOf(type) === -1) {
+    return res.status(400).json({ error: 'type must be one of: ' + validTypes.join(', ') });
+  }
+  var id = createConcept(name, type, description, data, who);
+  emitEvent('concept_created', who, null, 'Created concept: ' + name + ' (' + (type || 'custom') + ')');
+  var concept = getConcept(id);
+  try { concept.data = JSON.parse(concept.data); } catch (e) {}
+  concept.projects = [];
+  res.json(concept);
+});
+
+// Update concept
+router.put('/concepts/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var concept = getConcept(parseInt(req.params.id));
+  if (!concept) return res.status(404).json({ error: 'Concept not found' });
+  updateConcept(concept.id, req.body);
+  var updated = getConcept(concept.id);
+  try { updated.data = JSON.parse(updated.data); } catch (e) {}
+  updated.projects = getConceptProjects(updated.id);
+  emitEvent('concept_updated', who, null, 'Updated concept: ' + updated.name);
+  res.json(updated);
+});
+
+// Delete concept (admin only)
+router.delete('/concepts/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var concept = getConcept(parseInt(req.params.id));
+  if (!concept) return res.status(404).json({ error: 'Concept not found' });
+  deleteConcept(concept.id);
+  emitEvent('concept_deleted', getAdminDisplayName(req), null, 'Deleted concept: ' + concept.name);
+  res.json({ ok: true });
+});
+
+// Link concept to project
+router.post('/concepts/:id/link', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var concept = getConcept(parseInt(req.params.id));
+  if (!concept) return res.status(404).json({ error: 'Concept not found' });
+  var projectId = req.body.project || req.body.game;
+  if (!projectId) return res.status(400).json({ error: 'project is required' });
+  linkConceptToProject(projectId, concept.id, who);
+  emitEvent('concept_linked', who, projectId, 'Linked concept "' + concept.name + '" to project ' + projectId);
+  res.json({ ok: true, concept_id: concept.id, project: projectId });
+});
+
+// Unlink concept from project
+router.delete('/concepts/:id/link/:projectId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  unlinkConceptFromProject(req.params.projectId, parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// Get concepts for a specific project
+router.get('/projects/:projectId/concepts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var concepts = getProjectConcepts(req.params.projectId);
+  concepts.forEach(function (c) {
+    try { c.data = JSON.parse(c.data); } catch (e) {}
+  });
+  res.json(concepts);
 });
 
 // =============== FILES (temp — auto-expire) ===============
