@@ -264,7 +264,7 @@ export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
 // Drone Jobs
 
 export function createDroneJob(data: Partial<DroneJob>): Promise<DroneJob> {
-  return apiPost<DroneJob>('/drone-jobs', data);
+  return apiPost<DroneJob>('/drones/jobs', data);
 }
 
 export function updateDroneJob(id: number, data: Partial<DroneJob>): Promise<DroneJob> {
