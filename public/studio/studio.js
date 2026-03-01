@@ -1,4 +1,4 @@
-// Dioverse Studio Dashboard — v2 Interactive
+// Mycelium Dashboard — v2 Interactive
 // Security: All dynamic content is escaped via esc() which uses textContent round-trip.
 (function () {
   var API_BASE = '/api/dioverse';
@@ -335,7 +335,7 @@
       updateUserDisplay();
       fetchOverview();
       startPolling();
-      // Studio intro sound
+      // Mycelium intro sound
       try { var _a = new Audio('studio_intro.mp3'); _a.volume = 0.5; _a.play().catch(function(){}); } catch(e) {}
     }).catch(function (e) {
       loginError.textContent = e.message || 'Login failed';
@@ -426,6 +426,7 @@
     renderAssets(data.assets);
     renderBugs(data.bugs, data.bug_counts);
     renderPlans(data.plans);
+    renderConcepts(data.concepts);
   }
 
   function renderAgents(agents) {
@@ -508,7 +509,7 @@
       ]));
     }
     var meta = el('div', { className: 'detail-meta' });
-    [['Game', t.game], ['Status', t.status], ['Priority', t.priority || 'normal'], ['Assignee', t.assignee || 'unassigned'], ['Created', t.created_at || '']].forEach(function (pair) {
+    [['Project', t.game], ['Status', t.status], ['Priority', t.priority || 'normal'], ['Assignee', t.assignee || 'unassigned'], ['Created', t.created_at || '']].forEach(function (pair) {
       meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: pair[0] + ': ' }), el('span', { textContent: pair[1] })]));
     });
     body.appendChild(meta);
@@ -856,7 +857,7 @@
 
   function renderGames(games) {
     var c = document.getElementById('games-list');
-    if (!games || !games.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No games' })); return; }
+    if (!games || !games.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No projects' })); return; }
     clearAndAppend(c, games.map(function (g) {
       var tile = el('div', { className: 'queue-tile tile-game' });
       tile.appendChild(el('div', { className: 'tile-row' }, [
@@ -903,7 +904,7 @@
     body.textContent = '';
 
     var meta = el('div', { className: 'detail-meta' });
-    [['Game', b.game], ['Status', b.status], ['Severity', b.severity || 'normal'],
+    [['Project', b.game], ['Status', b.status], ['Severity', b.severity || 'normal'],
      ['Category', b.category || 'other'], ['Reporter', b.reporter || '?'],
      ['Assignee', b.assignee || 'unassigned'], ['Filed', b.created_at || '']].forEach(function (pair) {
       meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: pair[0] + ': ' }), el('span', { textContent: pair[1] })]));
@@ -1019,7 +1020,7 @@
       }
 
       var meta = el('div', { className: 'detail-meta' });
-      [['Game', plan.game], ['Status', plan.status], ['Priority', plan.priority || 'normal'],
+      [['Project', plan.game], ['Status', plan.status], ['Priority', plan.priority || 'normal'],
        ['Owner', plan.owner || 'unowned'], ['Created by', plan.created_by || '?'],
        ['Created', plan.created_at || '']].forEach(function (pair) {
         meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: pair[0] + ': ' }), el('span', { textContent: pair[1] })]));
@@ -1160,6 +1161,44 @@
 
       openModal(modalPlanDetail);
     });
+  }
+
+  // =============== CONCEPTS ===============
+  function renderConcepts(concepts) {
+    var c = document.getElementById('concepts-list');
+    var countEl = document.getElementById('concept-count');
+    if (!c) return;
+    if (!concepts || !concepts.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No concepts' })); if (countEl) countEl.textContent = ''; return; }
+    if (countEl) countEl.textContent = concepts.length;
+    clearAndAppend(c, concepts.map(function (con) {
+      var tile = el('div', { className: 'queue-tile tile-concept' });
+      var row = el('div', { className: 'tile-row' });
+      row.appendChild(el('span', { className: 'tile-dot dot-concept' }));
+      row.appendChild(el('span', { className: 'tile-label', textContent: con.name }));
+      var typeCls = 'concept-type-badge concept-type-' + (con.type || 'custom');
+      row.appendChild(el('span', { className: typeCls, textContent: con.type || 'custom' }));
+      tile.appendChild(row);
+      var detail = el('div', { className: 'tile-detail' });
+      if (con.description) {
+        var desc = con.description;
+        if (desc.length > 120) desc = desc.substring(0, 120) + '...';
+        detail.appendChild(el('div', { className: 'concept-desc', textContent: desc }));
+      }
+      var projects = con.projects || [];
+      if (projects.length) {
+        var chips = el('div', { className: 'concept-projects' });
+        projects.forEach(function (p) {
+          var name = typeof p === 'string' ? p : (p.name || p.project_id || '');
+          chips.appendChild(el('span', { className: 'concept-project-chip', textContent: name }));
+        });
+        detail.appendChild(chips);
+      }
+      if (con.version) {
+        detail.appendChild(el('div', { className: 'concept-version', textContent: 'v' + con.version }));
+      }
+      tile.appendChild(detail);
+      return tile;
+    }));
   }
 
   // =============== DICTATE TO AGENT (Speech-to-Text) ===============

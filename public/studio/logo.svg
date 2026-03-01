@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="200" height="40">
+  <style>
+    .node { fill: #D4A847; }
+    .branch { stroke: #D4A847; stroke-width: 1.2; fill: none; opacity: 0.6; }
+    .title { fill: #F0E8DB; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 16px; font-weight: 600; letter-spacing: 1px; }
+  </style>
+  <!-- Network icon -->
+  <path class="branch" d="M20 20 L10 10"/>
+  <path class="branch" d="M20 20 L30 10"/>
+  <path class="branch" d="M20 20 L8 26"/>
+  <path class="branch" d="M20 20 L32 26"/>
+  <path class="branch" d="M20 20 L20 32"/>
+  <path class="branch" d="M10 10 L6 5"/>
+  <path class="branch" d="M10 10 L16 5"/>
+  <path class="branch" d="M30 10 L26 5"/>
+  <path class="branch" d="M30 10 L35 5"/>
+  <circle class="node" cx="20" cy="20" r="2.5"/>
+  <circle class="node" cx="10" cy="10" r="1.8"/>
+  <circle class="node" cx="30" cy="10" r="1.8"/>
+  <circle class="node" cx="8" cy="26" r="1.3"/>
+  <circle class="node" cx="32" cy="26" r="1.3"/>
+  <circle class="node" cx="20" cy="32" r="1.3"/>
+  <circle class="node" cx="6" cy="5" r="1"/>
+  <circle class="node" cx="16" cy="5" r="1"/>
+  <circle class="node" cx="26" cy="5" r="1"/>
+  <circle class="node" cx="35" cy="5" r="1"/>
+  <!-- Text -->
+  <text class="title" x="48" y="25">MYCELIUM</text>
+</svg>

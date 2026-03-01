@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Mycelium network: branching nodes connected by lines -->
+  <style>
+    .node { fill: #D4A847; }
+    .branch { stroke: #D4A847; stroke-width: 1.2; fill: none; opacity: 0.7; }
+    .glow { fill: #D4A847; opacity: 0.3; }
+  </style>
+  <!-- Background -->
+  <rect width="32" height="32" rx="6" fill="#1A1612"/>
+  <!-- Branches -->
+  <path class="branch" d="M16 16 L8 8"/>
+  <path class="branch" d="M16 16 L24 8"/>
+  <path class="branch" d="M16 16 L6 20"/>
+  <path class="branch" d="M16 16 L26 20"/>
+  <path class="branch" d="M16 16 L16 26"/>
+  <path class="branch" d="M8 8 L4 4"/>
+  <path class="branch" d="M8 8 L12 4"/>
+  <path class="branch" d="M24 8 L20 4"/>
+  <path class="branch" d="M24 8 L28 4"/>
+  <path class="branch" d="M6 20 L4 26"/>
+  <path class="branch" d="M26 20 L28 26"/>
+  <path class="branch" d="M16 26 L12 30"/>
+  <path class="branch" d="M16 26 L20 30"/>
+  <!-- Glow behind center -->
+  <circle class="glow" cx="16" cy="16" r="4"/>
+  <!-- Nodes -->
+  <circle class="node" cx="16" cy="16" r="2.5"/>
+  <circle class="node" cx="8" cy="8" r="1.8"/>
+  <circle class="node" cx="24" cy="8" r="1.8"/>
+  <circle class="node" cx="6" cy="20" r="1.5"/>
+  <circle class="node" cx="26" cy="20" r="1.5"/>
+  <circle class="node" cx="16" cy="26" r="1.5"/>
+  <!-- Leaf nodes -->
+  <circle class="node" cx="4" cy="4" r="1"/>
+  <circle class="node" cx="12" cy="4" r="1"/>
+  <circle class="node" cx="20" cy="4" r="1"/>
+  <circle class="node" cx="28" cy="4" r="1"/>
+  <circle class="node" cx="4" cy="26" r="1"/>
+  <circle class="node" cx="28" cy="26" r="1"/>
+  <circle class="node" cx="12" cy="30" r="1"/>
+  <circle class="node" cx="20" cy="30" r="1"/>
+</svg>

@@ -18,6 +18,8 @@
   --yellow: #fbbf24;
   --cyan: #22d3ee;
   --indigo: #818cf8;
+  --amber: #D4A847;
+  --pink: #C47A8A;
   --glow-accent: rgba(14, 165, 233, 0.15);
   --glow-green: rgba(52, 211, 153, 0.15);
   --glow-red: rgba(248, 113, 113, 0.12);
@@ -434,7 +436,7 @@ header h1 {
 .tile-asset-status.status-delivered { color: var(--green); }
 .tile-asset-status.status-requested { color: var(--yellow); }
 
-/* Game tiles */
+/* Project tiles */
 .dot-game { background: var(--cyan); box-shadow: 0 0 4px rgba(34, 211, 238, 0.3); }
 
 /* ---- Queue Tiles (Approvals / Requests / Bugs) ---- */
@@ -537,7 +539,7 @@ header h1 {
 .tile-badge-sev-high { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
 .tile-badge-game { background: rgba(148, 163, 184, 0.08); color: var(--text-muted); }
 
-/* ---- Games (handled by tile system) ---- */
+/* ---- Projects (handled by tile system) ---- */
 
 /* ---- Modal ---- */
 .modal-overlay {
@@ -828,6 +830,34 @@ header h1 {
 }
 .plan-add-step input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow-accent); }
 .plan-add-step .form-row { margin-top: 0.3rem; grid-template-columns: 1fr 1fr auto; }
+
+/* ---- Concepts ---- */
+.queue-header-concept { color: var(--amber); }
+.dot-concept { background: var(--amber); box-shadow: 0 0 4px rgba(212, 168, 71, 0.3); }
+.concept-desc {
+  font-size: 0.55rem; color: var(--text-dim); line-height: 1.35;
+  margin-top: 0.15rem; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+.concept-projects { display: flex; gap: 0.2rem; flex-wrap: wrap; margin-top: 0.15rem; }
+.concept-project-chip {
+  font-size: 0.45rem; font-weight: 600; text-transform: uppercase;
+  padding: 0.05rem 0.25rem; border-radius: 6px;
+  background: rgba(148, 163, 184, 0.08); color: var(--text-muted);
+}
+.concept-version {
+  font-size: 0.48rem; color: var(--text-muted); margin-top: 0.1rem;
+}
+.concept-type-badge {
+  font-size: 0.48rem; font-weight: 600; text-transform: uppercase;
+  padding: 0.05rem 0.25rem; border-radius: 8px; flex-shrink: 0;
+}
+.concept-type-character { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+.concept-type-style { background: rgba(212, 168, 71, 0.15); color: var(--amber); }
+.concept-type-ruleset { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+.concept-type-library { background: rgba(14, 165, 233, 0.15); color: var(--accent); }
+.concept-type-brand { background: rgba(196, 122, 138, 0.15); color: var(--pink); }
+.concept-type-custom { background: rgba(148, 163, 184, 0.1); color: var(--text-muted); }
 
 /* ---- Responsive ---- */
 @media (max-width: 900px) {

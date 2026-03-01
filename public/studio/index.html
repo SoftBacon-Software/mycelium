@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dioverse Studio</title>
+  <title>Mycelium</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -12,18 +13,18 @@
 <body>
   <div id="login-screen">
     <div class="login-box">
-      <h1>DIOVERSE STUDIO</h1>
-      <p>Distributed Game Development Hub</p>
+      <h1>MYCELIUM</h1>
+      <p>Distributed Development Hub</p>
       <input type="text" id="login-username" placeholder="Username" autofocus>
       <input type="password" id="login-password" placeholder="Password">
-      <button id="login-btn">Enter Studio</button>
+      <button id="login-btn">Enter Mycelium</button>
       <div id="login-error"></div>
     </div>
   </div>
 
   <div id="dashboard" style="display:none">
     <header>
-      <h1>DIOVERSE STUDIO</h1>
+      <h1><img src="logo.svg" alt="Mycelium" style="height:28px;vertical-align:middle;margin-right:4px"></h1>
       <div class="header-actions">
         <button id="create-task-btn" class="action-btn">+ Task</button>
         <button id="send-msg-btn" class="action-btn">+ Message</button>
@@ -42,7 +43,7 @@
 
     <div id="voice-channel" class="voice-channel">
       <div class="voice-info">
-        <span class="voice-icon">Studio Voice</span>
+        <span class="voice-icon">Mycelium Voice</span>
         <span id="voice-status">Not connected</span>
         <div id="voice-peers"></div>
       </div>
@@ -141,7 +142,11 @@
             <div id="assets-list" class="queue-tiles"></div>
           </div>
           <div class="right-section">
-            <div class="queue-header queue-header-game">Games</div>
+            <div class="queue-header queue-header-concept">Concepts <span id="concept-count" class="queue-count"></span></div>
+            <div id="concepts-list" class="queue-tiles"></div>
+          </div>
+          <div class="right-section">
+            <div class="queue-header queue-header-game">Projects</div>
             <div id="games-list" class="queue-tiles"></div>
           </div>
         </section>
@@ -160,7 +165,7 @@
         <label>Title<input type="text" id="task-title" placeholder="Task title"></label>
         <label>Description<textarea id="task-desc" rows="3" placeholder="What needs to be done?"></textarea></label>
         <div class="form-row">
-          <label>Game
+          <label>Project
             <select id="task-game">
               <option value="willing-sacrifice">willing-sacrifice</option>
               <option value="king-city">king-city</option>
@@ -204,7 +209,7 @@
               <option value="request">Request (blocking)</option>
             </select>
           </label>
-          <label>Game
+          <label>Project
             <select id="msg-game">
               <option value="willing-sacrifice">willing-sacrifice</option>
               <option value="king-city">king-city</option>
@@ -239,11 +244,11 @@
         <label>Title<input type="text" id="bug-title" placeholder="Short bug summary"></label>
         <label>Description<textarea id="bug-desc" rows="4" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea></label>
         <div class="form-row">
-          <label>Game
+          <label>Project
             <select id="bug-game">
               <option value="willing-sacrifice">willing-sacrifice</option>
               <option value="king-city">king-city</option>
-              <option value="studio">studio</option>
+              <option value="mycelium">mycelium</option>
               <option value="dioverse">dioverse</option>
             </select>
           </label>
@@ -329,7 +334,7 @@
         <label>Title<input type="text" id="plan-title" placeholder="Plan title"></label>
         <label>Description<textarea id="plan-desc" rows="3" placeholder="What does this plan accomplish?"></textarea></label>
         <div class="form-row">
-          <label>Game
+          <label>Project
             <select id="plan-game">
               <option value="dioverse">dioverse</option>
               <option value="willing-sacrifice">willing-sacrifice</option>
