@@ -1,12 +1,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { useAuthStore } from '../stores/authStore'
-import { sendTeamChat, resolveRequest } from '../api/endpoints'
-import type { TeamChat, Message } from '../api/types'
-import ChatMessage, { Avatar, formatTime } from '../components/messages/ChatMessage'
+import { resolveRequest } from '../api/endpoints'
+import type { Message } from '../api/types'
+import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
-
-type Tab = 'team' | 'agent'
 
 // ─── Date separator ──────────────────────────────────────────────────────────
 
@@ -61,114 +58,7 @@ function useAutoScroll(deps: unknown[]) {
   return { containerRef, handleScroll }
 }
 
-// ─── Team Chat Tab ───────────────────────────────────────────────────────────
-
-function TeamChatTab() {
-  const teamChat = useDashboardStore((s) => s.teamChat)
-  const refresh = useDashboardStore((s) => s.refresh)
-  const user = useAuthStore((s) => s.user)
-
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-
-  const sorted = useMemo(
-    () => [...teamChat].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-    [teamChat],
-  )
-
-  const { containerRef, handleScroll } = useAutoScroll([sorted.length])
-
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  async function handleSend() {
-    const text = input.trim()
-    if (!text || !user || sending) return
-    setSending(true)
-    try {
-      await sendTeamChat(text, user.username, 'operator', user.display_name || user.username)
-      setInput('')
-      await refresh()
-    } catch (err) {
-      console.error('Failed to send team chat:', err)
-    } finally {
-      setSending(false)
-    }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  return (
-    <div className="flex flex-col flex-1 min-h-0">
-      {/* Message list */}
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 pb-2"
-      >
-        {sorted.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-text-muted text-sm">No messages yet. Start the conversation.</p>
-          </div>
-        ) : (
-          sorted.map((msg, i) => {
-            const prev = i > 0 ? sorted[i - 1] : null
-            const showDate = !prev || !isSameDay(prev.created_at, msg.created_at)
-            const isGrouped = !!prev && !showDate && prev.display_name === msg.display_name
-
-            return (
-              <div key={msg.id}>
-                {showDate && <DateSeparator date={msg.created_at} />}
-                <ChatMessage
-                  message={msg}
-                  isGrouped={isGrouped}
-                  isExpanded={expandedIds.has(msg.id)}
-                  onToggleExpand={() => toggleExpand(msg.id)}
-                />
-              </div>
-            )
-          })
-        )}
-      </div>
-
-      {/* Input bar */}
-      <div className="px-4 py-3 border-t border-border">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            className="flex-1 bg-surface-raised border border-border rounded px-3 py-2 text-text text-sm placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-ring"
-            disabled={sending}
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || sending}
-            className="bg-accent text-bg rounded px-4 py-2 text-sm font-medium hover:bg-accent-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-          >
-            {sending ? 'Sending...' : 'Send'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Agent Comms Tab ─────────────────────────────────────────────────────────
+// ─── Badge configs ───────────────────────────────────────────────────────────
 
 const msgTypeBadge: Record<string, 'red' | 'accent' | 'default'> = {
   directive: 'red',
@@ -182,6 +72,8 @@ const statusBadgeVariant: Record<string, 'green' | 'blue' | 'accent' | 'muted' |
   pending: 'accent',
   resolved: 'muted',
 }
+
+// ─── Agent Message ───────────────────────────────────────────────────────────
 
 function AgentMessage({
   msg,
@@ -278,12 +170,17 @@ function AgentMessage({
   )
 }
 
-function AgentCommsTab() {
+// ─── Main Page ───────────────────────────────────────────────────────────────
+
+export default function MessagesPage() {
   const messages = useDashboardStore((s) => s.messages)
+  const pendingRequests = useDashboardStore((s) => s.pendingRequests)
   const refresh = useDashboardStore((s) => s.refresh)
 
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [resolvingId, setResolvingId] = useState<string | null>(null)
+
+  const pendingCount = useMemo(() => pendingRequests.length, [pendingRequests])
 
   const sorted = useMemo(
     () => [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
@@ -317,7 +214,30 @@ function AgentCommsTab() {
   )
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col h-[calc(100vh-7rem)]">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 pt-1 pb-2 shrink-0">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-text">Agent Comms</h2>
+          {pendingCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
+              {pendingCount}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => refresh()}
+          className="text-text-muted hover:text-text transition-colors p-1 rounded-sm hover:bg-surface-raised"
+          title="Refresh"
+        >
+          <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4M13.5 8a5.5 5.5 0 0 1-9.3 4" />
+            <path d="M11.5 1v3h3M4.5 15v-3h-3" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Message list */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
@@ -353,55 +273,6 @@ function AgentCommsTab() {
           })
         )}
       </div>
-    </div>
-  )
-}
-
-// ─── Main Page ───────────────────────────────────────────────────────────────
-
-export default function MessagesPage() {
-  const [tab, setTab] = useState<Tab>('team')
-  const pendingRequests = useDashboardStore((s) => s.pendingRequests)
-  const messages = useDashboardStore((s) => s.messages)
-
-  // Count unread/pending items for badge
-  const agentUnread = useMemo(() => {
-    return pendingRequests.length
-  }, [pendingRequests])
-
-  return (
-    <div className="flex flex-col h-[calc(100vh-7rem)]">
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 bg-surface rounded-sm p-1 mx-4 mt-1 mb-2 shrink-0">
-        <button
-          onClick={() => setTab('team')}
-          className={`px-4 py-1.5 rounded-sm text-sm font-medium transition-colors ${
-            tab === 'team'
-              ? 'bg-surface-raised text-text'
-              : 'text-text-muted hover:text-text-dim'
-          }`}
-        >
-          Team Chat
-        </button>
-        <button
-          onClick={() => setTab('agent')}
-          className={`px-4 py-1.5 rounded-sm text-sm font-medium transition-colors flex items-center gap-2 ${
-            tab === 'agent'
-              ? 'bg-surface-raised text-text'
-              : 'text-text-muted hover:text-text-dim'
-          }`}
-        >
-          Agent Comms
-          {agentUnread > 0 && (
-            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
-              {agentUnread}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Tab content */}
-      {tab === 'team' ? <TeamChatTab /> : <AgentCommsTab />}
     </div>
   )
 }
