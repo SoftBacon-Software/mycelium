@@ -322,3 +322,39 @@ CREATE INDEX IF NOT EXISTS idx_dv_approvals_status ON dv_approvals(status);
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_action ON dv_approvals(action_type);
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_agent ON dv_approvals(requested_by);
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_project ON dv_approvals(project);
+
+-- Operators (human team members)
+CREATE TABLE IF NOT EXISTS dv_operators (
+  id              TEXT PRIMARY KEY,
+  display_name    TEXT NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'member',
+  responsibilities TEXT NOT NULL DEFAULT '',
+  email           TEXT NOT NULL DEFAULT '',
+  studio_user_id  INTEGER REFERENCES dv_studio_users(id),
+  status          TEXT NOT NULL DEFAULT 'active',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_operators_role ON dv_operators(role);
+CREATE INDEX IF NOT EXISTS idx_dv_operators_status ON dv_operators(status);
+
+-- Instance configuration (per-deployment settings)
+CREATE TABLE IF NOT EXISTS dv_instance_config (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL DEFAULT '',
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by  TEXT NOT NULL DEFAULT ''
+);
+
+-- Multi-human approval voting
+CREATE TABLE IF NOT EXISTS dv_approval_votes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  approval_id INTEGER NOT NULL REFERENCES dv_approvals(id),
+  voter       TEXT NOT NULL,
+  vote        TEXT NOT NULL DEFAULT 'approve',
+  notes       TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(approval_id, voter)
+);
+CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_approval ON dv_approval_votes(approval_id);
+CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_voter ON dv_approval_votes(voter);

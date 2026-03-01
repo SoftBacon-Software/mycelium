@@ -41,6 +41,16 @@ export function initDB() {
     ["dv_messages", "resolved_at", "TEXT"],
     ["dv_messages", "resolved_by", "TEXT"],
     ["dv_agents", "avatar_url", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_agents", "role", "TEXT NOT NULL DEFAULT 'agent'"],
+    ["dv_agents", "operator_id", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_agents", "project", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_approvals", "risk_tier", "TEXT NOT NULL DEFAULT 'medium'"],
+    ["dv_approvals", "required_approvals", "INTEGER NOT NULL DEFAULT 1"],
+    ["dv_approvals", "current_approvals", "INTEGER NOT NULL DEFAULT 0"],
+    ["dv_assets", "file_path", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_assets", "download_url", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_assets", "requested_by", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_assets", "assigned_to", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -52,6 +62,48 @@ export function initDB() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_tasks_approval ON dv_tasks(needs_approval)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_type ON dv_messages(msg_type)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
+
+  // Seed operators (if table is empty)
+  var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
+  if (opCount.c === 0) {
+    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities, email) VALUES (?, ?, ?, ?, ?)").run(
+      'greatness', 'Greatness', 'owner', 'Platform dev, WS game, asset generation, coordination', 'grbarajas@gmail.com'
+    );
+    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
+      'hijack', 'Hijack', 'ui_lead', 'UI/UX, King City development, visual design'
+    );
+    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
+      'unakron', 'Unakron', 'member', 'Infrastructure, GPU compute'
+    );
+    console.log('Seeded dv_operators with 3 team members');
+  }
+
+  // Seed instance config (if table is empty)
+  var cfgCount = db.prepare('SELECT COUNT(*) as c FROM dv_instance_config').get();
+  if (cfgCount.c === 0) {
+    var riskTiers = JSON.stringify({
+      plan_create: 'low', context_change: 'low',
+      deploy: 'medium', git_push: 'medium', delete: 'medium',
+      outreach_send: 'high', external_comm: 'high',
+      money_action: 'critical', delete_agent: 'critical', instance_config: 'critical'
+    });
+    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('instance_mode', 'developer', 'system');
+    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_agent_id', 'greatness-claude', 'system');
+    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_status', 'coordinator', 'system');
+    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('risk_tiers', riskTiers, 'system');
+    console.log('Seeded dv_instance_config with 4 keys');
+  }
+
+  // Update agent roles (agents may not exist yet, so wrap in try/catch)
+  try {
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('admin', 'greatness', 'willing-sacrifice', 'greatness-claude');
+  } catch (e) { /* agent may not exist */ }
+  try {
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('agent', 'hijack', 'king-city', 'hijack-claude');
+  } catch (e) { /* agent may not exist */ }
+  try {
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('drone', 'greatness', 'drone', 'unakron-gpu');
+  } catch (e) { /* agent may not exist */ }
 
   console.log('Mycelium DB initialized at ' + DB_PATH);
 }
@@ -81,7 +133,7 @@ export function getAgentByKeyHash(apiKeyHash) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents', 'SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAgents2', 'SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
@@ -101,9 +153,66 @@ export function updateAgent(id, fields) {
   var sets = []; var values = [];
   if (fields.avatar_url !== undefined) { sets.push('avatar_url = ?'); values.push(fields.avatar_url); }
   if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
+  if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
+  if (fields.operator_id !== undefined) { sets.push('operator_id = ?'); values.push(fields.operator_id); }
+  if (fields.project !== undefined) { sets.push('project = ?'); values.push(fields.project); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+// -- Operators --
+
+export function createOperator(id, displayName, role, responsibilities, email, studioUserId) {
+  stmt('dvCreateOperator', `INSERT INTO dv_operators (id, display_name, role, responsibilities, email, studio_user_id)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(id, displayName, role || 'member', responsibilities || '', email || '', studioUserId || null);
+}
+
+export function getOperator(id) {
+  return stmt('dvGetOperator', 'SELECT * FROM dv_operators WHERE id = ?').get(id);
+}
+
+export function listOperators() {
+  return stmt('dvListOperators', 'SELECT * FROM dv_operators ORDER BY created_at').all();
+}
+
+export function updateOperator(id, fields) {
+  var sets = ["updated_at = datetime('now')"];
+  var values = [];
+  if (fields.display_name !== undefined) { sets.push('display_name = ?'); values.push(fields.display_name); }
+  if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
+  if (fields.responsibilities !== undefined) { sets.push('responsibilities = ?'); values.push(fields.responsibilities); }
+  if (fields.email !== undefined) { sets.push('email = ?'); values.push(fields.email); }
+  if (fields.studio_user_id !== undefined) { sets.push('studio_user_id = ?'); values.push(fields.studio_user_id); }
+  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  values.push(id);
+  db.prepare('UPDATE dv_operators SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+export function deleteOperator(id) {
+  stmt('dvDeleteOperator', 'DELETE FROM dv_operators WHERE id = ?').run(id);
+}
+
+// -- Instance Config --
+
+export function getInstanceConfig(key) {
+  var row = stmt('dvGetConfig', 'SELECT value FROM dv_instance_config WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+export function setInstanceConfig(key, value, updatedBy) {
+  stmt('dvSetConfig', `INSERT INTO dv_instance_config (key, value, updated_by, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+  ).run(key, value, updatedBy || '');
+}
+
+export function listInstanceConfig() {
+  return stmt('dvListConfig', 'SELECT * FROM dv_instance_config ORDER BY key').all();
+}
+
+export function deleteInstanceConfig(key) {
+  stmt('dvDeleteConfig', 'DELETE FROM dv_instance_config WHERE key = ?').run(key);
 }
 
 // -- Games --
@@ -283,6 +392,10 @@ export function updateDvAsset(id, fields) {
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
   if (fields.path !== undefined) { sets.push('path = ?'); values.push(fields.path); }
   if (fields.metadata !== undefined) { sets.push('metadata = ?'); values.push(fields.metadata); }
+  if (fields.file_path !== undefined) { sets.push('file_path = ?'); values.push(fields.file_path); }
+  if (fields.download_url !== undefined) { sets.push('download_url = ?'); values.push(fields.download_url); }
+  if (fields.requested_by !== undefined) { sets.push('requested_by = ?'); values.push(fields.requested_by); }
+  if (fields.assigned_to !== undefined) { sets.push('assigned_to = ?'); values.push(fields.assigned_to); }
   values.push(id);
   return db.prepare('UPDATE dv_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
@@ -468,7 +581,7 @@ export function getBootPayload(agentId) {
   }
 
   var otherAgents = db.prepare(
-    "SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url FROM dv_agents WHERE id != ? ORDER BY created_at"
+    "SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? ORDER BY created_at"
   ).all(agentId);
 
   var gameContext = getDvContext(agent.game);
@@ -924,10 +1037,10 @@ export function initDioverse() {
 var GATED_ACTIONS = ['deploy', 'outreach_send', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
 export { GATED_ACTIONS };
 
-export function createApproval(actionType, requestedBy, title, payload, project) {
-  var result = stmt('dvCreateApproval',
-    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project) VALUES (?, ?, ?, ?, ?) RETURNING id"
-  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), project || 'mycelium');
+export function createApproval(actionType, requestedBy, title, payload, project, riskTier, requiredApprovals) {
+  var result = stmt('dvCreateApproval2',
+    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), project || 'mycelium', riskTier || 'medium', requiredApprovals || 1);
   return result.id;
 }
 
@@ -962,6 +1075,26 @@ export function countPendingApprovals() {
 
 export function listPendingApprovalsByAgent(agentId) {
   return db.prepare("SELECT * FROM dv_approvals WHERE requested_by = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC").all(agentId);
+}
+
+// -- Approval Votes --
+
+export function castApprovalVote(approvalId, voter, vote, notes) {
+  stmt('dvCastVote', `INSERT INTO dv_approval_votes (approval_id, voter, vote, notes)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(approval_id, voter) DO UPDATE SET vote = excluded.vote, notes = excluded.notes, created_at = datetime('now')`
+  ).run(approvalId, voter, vote || 'approve', notes || '');
+}
+
+export function getApprovalVotes(approvalId) {
+  return stmt('dvGetVotes', 'SELECT * FROM dv_approval_votes WHERE approval_id = ? ORDER BY created_at').all(approvalId);
+}
+
+export function countApprovalVotes(approvalId) {
+  var row = db.prepare(
+    "SELECT SUM(CASE WHEN vote = 'approve' THEN 1 ELSE 0 END) as approves, SUM(CASE WHEN vote = 'deny' THEN 1 ELSE 0 END) as denies FROM dv_approval_votes WHERE approval_id = ?"
+  ).get(approvalId);
+  return { approves: row.approves || 0, denies: row.denies || 0 };
 }
 
 export function getDvOverview() {
