@@ -6,6 +6,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', abbr: 'Da' },
   { to: '/tasks', label: 'Tasks', abbr: 'Ta' },
   { to: '/messages', label: 'Messages', abbr: 'Ms' },
+  { to: '/channels', label: 'Channels', abbr: 'Ch' },
   { to: '/plans', label: 'Plans', abbr: 'Pl' },
   { to: '/bugs', label: 'Bugs', abbr: 'Bu' },
   { to: '/assets', label: 'Assets', abbr: 'As' },

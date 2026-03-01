@@ -11,6 +11,7 @@ import BugsPage from './pages/BugsPage'
 import AssetsPage from './pages/AssetsPage'
 import OperatorsPage from './pages/OperatorsPage'
 import ApprovalsPage from './pages/ApprovalsPage'
+import ChannelsPage from './pages/ChannelsPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -33,6 +34,7 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="channels" element={<ChannelsPage />} />
           <Route path="plans" element={<PlansPage />} />
           <Route path="bugs" element={<BugsPage />} />
           <Route path="assets" element={<AssetsPage />} />
