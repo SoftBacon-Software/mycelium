@@ -66,7 +66,7 @@ import {
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
   createDvTeamChat, listDvTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob,
   addTaskComment, getTaskComments, deleteTaskComment,
   createOutreachCampaign, getOutreachCampaign, listOutreachCampaigns, updateOutreachCampaign,
   createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
@@ -638,6 +638,11 @@ router.put('/assets/:id', function (req, res) {
   if (req.body.status !== undefined) fields.status = req.body.status;
   if (req.body.path !== undefined) fields.path = req.body.path;
   if (req.body.metadata !== undefined) fields.metadata = JSON.stringify(req.body.metadata);
+  if (req.body.drone_job_id !== undefined) fields.drone_job_id = req.body.drone_job_id;
+  if (req.body.assigned_to !== undefined) fields.assigned_to = req.body.assigned_to;
+  if (req.body.file_path !== undefined) fields.file_path = req.body.file_path;
+  if (req.body.download_url !== undefined) fields.download_url = req.body.download_url;
+  if (req.body.prompt !== undefined) fields.prompt = req.body.prompt;
   updateDvAsset(asset.id, fields);
   if (fields.status) {
     emitEvent('asset_' + fields.status, agentId, asset.game, agentId + ' set asset ' + asset.name + ' to ' + fields.status, { asset_id: asset.id });
@@ -669,6 +674,24 @@ router.get('/assets/:id/download', function (req, res) {
   var filePath = asset.file_path || nodePath.join(FILES_DIR, asset.path);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
   res.download(filePath);
+});
+
+// Link assets to a drone job (bulk update status + drone_job_id)
+router.put('/assets/link-job', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var { asset_ids, drone_job_id, status } = req.body;
+  if (!asset_ids || !Array.isArray(asset_ids)) return res.status(400).json({ error: 'asset_ids array required' });
+  if (!drone_job_id) return res.status(400).json({ error: 'drone_job_id required' });
+  var updated = 0;
+  for (var id of asset_ids) {
+    var fields = { drone_job_id: drone_job_id };
+    if (status) fields.status = status;
+    var result = updateDvAsset(parseInt(id), fields);
+    if (result.changes) updated++;
+  }
+  emitEvent('assets_linked_to_job', who, null, updated + ' assets linked to drone job #' + drone_job_id, { asset_ids: asset_ids, drone_job_id: drone_job_id });
+  res.json({ ok: true, updated: updated });
 });
 
 // ======== EVENTS ========
@@ -1814,6 +1837,17 @@ router.put('/drones/jobs/:id', function (req, res) {
   updateDroneJob(job.id, fields);
   if (fields.status) {
     emitEvent('drone_job_' + fields.status, who, 'drone', who + ' set drone job #' + job.id + ' to ' + fields.status, { job_id: job.id, drone_id: job.drone_id });
+    // Auto-update linked assets when job completes
+    if (fields.status === 'done' || fields.status === 'failed') {
+      var linkedAssets = listAssetsByDroneJob(job.id);
+      var assetStatus = fields.status === 'done' ? 'ready' : 'requested';
+      for (var asset of linkedAssets) {
+        updateDvAsset(asset.id, { status: assetStatus });
+      }
+      if (linkedAssets.length > 0) {
+        emitEvent('assets_status_updated', who, null, linkedAssets.length + ' assets set to ' + assetStatus + ' (job #' + job.id + ' ' + fields.status + ')', { job_id: job.id, asset_count: linkedAssets.length });
+      }
+    }
   }
   res.json({ ok: true, id: job.id });
 });
