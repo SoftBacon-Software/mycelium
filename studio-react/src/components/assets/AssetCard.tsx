@@ -12,13 +12,21 @@ interface AssetCardProps {
 
 const statusStrip: Record<string, string> = {
   requested: 'bg-accent',
+  queued: 'bg-blue',
+  generating: 'bg-purple',
+  ready: 'bg-green',
+  delivered: 'bg-green',
   in_progress: 'bg-blue',
   completed: 'bg-green',
   cancelled: 'bg-text-muted',
 }
 
-const statusBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted'> = {
+const statusBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 'purple'> = {
   requested: 'accent',
+  queued: 'blue',
+  generating: 'purple',
+  ready: 'green',
+  delivered: 'green',
   in_progress: 'blue',
   completed: 'green',
   cancelled: 'muted',
@@ -74,6 +82,9 @@ export default function AssetCard({ asset, onUpload, onDelete, onStatusChange, o
             <Badge variant="default">{asset.game}</Badge>
           )}
           <span>by {asset.requested_by}</span>
+          {asset.drone_job_id && (
+            <span className="text-blue font-mono">DJ #{asset.drone_job_id}</span>
+          )}
         </div>
 
         {/* Assigned to */}

@@ -48,6 +48,13 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
   channel_created: 'blue',
   channel_message: 'green',
   channel_deleted: 'red',
+  drone_job_created: 'blue',
+  drone_job_claimed: 'blue',
+  drone_job_done: 'green',
+  drone_job_failed: 'red',
+  artifact_uploaded: 'accent',
+  assets_linked_to_job: 'blue',
+  assets_status_updated: 'green',
   context_updated: 'muted',
   context_key_updated: 'muted',
   config_changed: 'muted',
@@ -110,6 +117,7 @@ const quickLinks = [
   { to: '/plans', label: 'Plans', desc: 'Execution plans', color: 'text-purple' },
   { to: '/bugs', label: 'Bugs', desc: 'Bug tracker', color: 'text-red' },
   { to: '/assets', label: 'Assets', desc: 'Art pipeline', color: 'text-accent' },
+  { to: '/drones', label: 'Drones', desc: 'GPU compute', color: 'text-blue' },
   { to: '/approvals', label: 'Approvals', desc: 'Review queue', color: 'text-green' },
 ]
 
@@ -123,6 +131,7 @@ export default function DashboardPage() {
     bugCounts,
     plans,
     assets,
+    droneJobs,
     loading,
     refresh,
   } = useDashboardStore()
@@ -134,6 +143,7 @@ export default function DashboardPage() {
   const onlineAgents = agents.filter((a) => a.status === 'online').length
   const totalTasks = tasks.open.length + tasks.in_progress.length
   const activePlans = plans.filter((p) => p.status === 'active' || p.status === 'in_progress').length
+  const activeDroneJobs = droneJobs.filter((j) => j.status === 'pending' || j.status === 'claimed').length
   const recentEvents = events.slice(0, 20)
 
   return (
@@ -155,7 +165,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         <SummaryCard
           title="Agents"
           value={`${onlineAgents}/${agents.length}`}
@@ -197,6 +207,13 @@ export default function DashboardPage() {
           subtitle="total assets"
           color="accent"
           icon="assets"
+        />
+        <SummaryCard
+          title="Drones"
+          value={activeDroneJobs}
+          subtitle={`${droneJobs.length} total jobs`}
+          color="blue"
+          icon="drones"
         />
       </div>
 
@@ -296,7 +313,7 @@ export default function DashboardPage() {
       {/* Quick links */}
       <div>
         <h2 className="text-sm font-semibold text-text-dim mb-3">Quick Links</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
           {quickLinks.map((link) => (
             <Link
               key={link.to}
