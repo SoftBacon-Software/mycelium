@@ -228,6 +228,33 @@ export interface ChannelMessage {
   channel_id: number;
 }
 
+export interface DroneJob {
+  id: number;
+  title: string;
+  command: string;
+  input_data: string;
+  requires: string;
+  requester: string;
+  drone_id: string | null;
+  status: 'pending' | 'claimed' | 'done' | 'failed' | 'cancelled';
+  priority: number;
+  result_url: string | null;
+  result_data: string;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  workspace_repo: string | null;
+  workspace_branch: string;
+}
+
+export interface DroneArtifact {
+  name: string;
+  size: number;
+  uploaded: string;
+  url: string;
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
@@ -250,4 +277,6 @@ export interface Overview {
   instance_config: ConfigEntry[];
   channels: Channel[];
   channel_counts: { total: number; active: number; archived: number };
+  drones: Agent[];
+  drone_jobs: DroneJob[];
 }

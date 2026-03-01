@@ -17,6 +17,7 @@ import type {
   Operator,
   ConfigEntry,
   Channel,
+  DroneJob,
 } from '../api/types';
 
 interface DashboardState {
@@ -41,6 +42,8 @@ interface DashboardState {
   instanceConfig: ConfigEntry[];
   channels: Channel[];
   channelCounts: { total: number; active: number; archived: number };
+  drones: Agent[];
+  droneJobs: DroneJob[];
 
   // UI state
   loading: boolean;
@@ -74,6 +77,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   instanceConfig: [],
   channels: [],
   channelCounts: { total: 0, active: 0, archived: 0 },
+  drones: [],
+  droneJobs: [],
 
   // UI state defaults
   loading: false,
@@ -106,6 +111,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         instanceConfig: data.instance_config,
         channels: data.channels || [],
         channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
+        drones: data.drones || [],
+        droneJobs: data.drone_jobs || [],
         loading: false,
         lastRefresh: new Date(),
       });

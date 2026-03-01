@@ -1383,7 +1383,9 @@ export function getDvOverview() {
     channels: allChannels,
     channel_counts: { total: allChannels.length, active: activeChannelCount, archived: archivedChannelCount },
     operators: listOperators(),
-    instance_config: listInstanceConfig()
+    instance_config: listInstanceConfig(),
+    drones: listDrones(),
+    drone_jobs: listDroneJobs({ limit: 50 })
   };
 }
 

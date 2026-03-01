@@ -12,6 +12,7 @@ import BugsPage from './pages/BugsPage'
 import AssetsPage from './pages/AssetsPage'
 import OperatorsPage from './pages/OperatorsPage'
 import ApprovalsPage from './pages/ApprovalsPage'
+import DronesPage from './pages/DronesPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="assets" element={<AssetsPage />} />
           <Route path="operators" element={<OperatorsPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
+          <Route path="drones" element={<DronesPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

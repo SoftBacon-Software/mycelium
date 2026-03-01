@@ -18,6 +18,7 @@ const routeTitles: Record<string, string> = {
   '/assets': 'Assets',
   '/operators': 'Operators',
   '/approvals': 'Approvals',
+  '/drones': 'Drones',
 }
 
 function formatTime(date: Date | null): string {
