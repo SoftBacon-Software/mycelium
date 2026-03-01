@@ -54,6 +54,8 @@ export function initDB() {
     ["dv_messages", "channel_id", "INTEGER"],
     ["dv_drone_jobs", "workspace_repo", "TEXT"],
     ["dv_drone_jobs", "workspace_branch", "TEXT NOT NULL DEFAULT 'main'"],
+    ["dv_assets", "drone_job_id", "INTEGER"],
+    ["dv_assets", "prompt", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -402,8 +404,14 @@ export function updateDvAsset(id, fields) {
   if (fields.download_url !== undefined) { sets.push('download_url = ?'); values.push(fields.download_url); }
   if (fields.requested_by !== undefined) { sets.push('requested_by = ?'); values.push(fields.requested_by); }
   if (fields.assigned_to !== undefined) { sets.push('assigned_to = ?'); values.push(fields.assigned_to); }
+  if (fields.drone_job_id !== undefined) { sets.push('drone_job_id = ?'); values.push(fields.drone_job_id); }
+  if (fields.prompt !== undefined) { sets.push('prompt = ?'); values.push(fields.prompt); }
   values.push(id);
   return db.prepare('UPDATE dv_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+export function listAssetsByDroneJob(droneJobId) {
+  return db.prepare('SELECT * FROM dv_assets WHERE drone_job_id = ?').all(droneJobId);
 }
 
 // -- Events --
