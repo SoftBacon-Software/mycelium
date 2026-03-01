@@ -1756,7 +1756,7 @@
   function handleVoiceMessage(msg) {
     if (msg.type === 'welcome') {
       voiceMyId = msg.id;
-      voiceWs.send(JSON.stringify({ type: 'set_name', name: 'Admin' }));
+      voiceWs.send(JSON.stringify({ type: 'set_name', name: (currentUser && currentUser.display_name) || 'Guest' }));
       if (msg.peers) {
         msg.peers.forEach(function (p) {
           voiceConnections[p.id] = { name: p.name, muted: p.muted, pc: null, stream: null };
