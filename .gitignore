@@ -2,3 +2,5 @@ node_modules/
 server/data/
 *.db
 .env
+public/studio/assets/
+public/studio/index.html
