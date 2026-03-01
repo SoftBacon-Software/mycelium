@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { updateAsset, deleteAsset, uploadAsset } from '../api/endpoints'
 import type { Asset } from '../api/types'
@@ -6,18 +7,26 @@ import AssetCard from '../components/assets/AssetCard'
 import Badge from '../components/shared/Badge'
 
 type ViewMode = 'grid' | 'list'
-type StatusFilter = 'all' | 'requested' | 'in_progress' | 'completed' | 'cancelled'
+type StatusFilter = 'all' | 'requested' | 'queued' | 'generating' | 'ready' | 'delivered' | 'in_progress' | 'completed' | 'cancelled'
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'requested', label: 'Requested' },
+  { value: 'queued', label: 'Queued' },
+  { value: 'generating', label: 'Generating' },
+  { value: 'ready', label: 'Ready' },
+  { value: 'delivered', label: 'Delivered' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
-const statusBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 'default'> = {
+const statusBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 'default' | 'purple'> = {
   requested: 'accent',
+  queued: 'blue',
+  generating: 'purple',
+  ready: 'green',
+  delivered: 'green',
   in_progress: 'blue',
   completed: 'green',
   cancelled: 'muted',
@@ -99,6 +108,10 @@ function AssetDetailModal({ asset, onClose, onUpload, onDelete, onStatusChange }
               className="bg-surface-raised border border-border rounded-sm px-2.5 py-1.5 text-sm text-text focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="requested">Requested</option>
+              <option value="queued">Queued</option>
+              <option value="generating">Generating</option>
+              <option value="ready">Ready</option>
+              <option value="delivered">Delivered</option>
               <option value="in_progress">In Progress</option>
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
@@ -119,6 +132,20 @@ function AssetDetailModal({ asset, onClose, onUpload, onDelete, onStatusChange }
             <div className="flex items-center gap-3">
               <label className="text-text-muted text-xs uppercase tracking-wider w-20 shrink-0">Assigned</label>
               <span className="text-blue text-sm">{asset.assigned_to}</span>
+            </div>
+          )}
+
+          {/* Drone Job */}
+          {asset.drone_job_id && (
+            <div className="flex items-center gap-3">
+              <label className="text-text-muted text-xs uppercase tracking-wider w-20 shrink-0">Drone Job</label>
+              <Link
+                to="/drones"
+                className="text-blue text-sm hover:underline underline-offset-2"
+                onClick={onClose}
+              >
+                DJ #{asset.drone_job_id}
+              </Link>
             </div>
           )}
 
