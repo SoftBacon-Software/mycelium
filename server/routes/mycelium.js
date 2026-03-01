@@ -2,6 +2,12 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+
+// bcryptjs (pure JS) is very slow at high rounds on Railway containers.
+// API keys are 48 random hex chars (192-bit entropy) — 4 rounds is fine.
+// Passwords stay at 10 rounds for dictionary attack resistance.
+var BCRYPT_ROUNDS_KEY = 4;
+var BCRYPT_ROUNDS_PASSWORD = 10;
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import fs from 'fs';
@@ -984,7 +990,7 @@ router.post('/studio/users', function (req, res) {
   if (getStudioUserByUsername(username)) {
     return res.status(409).json({ error: 'Username already taken' });
   }
-  var hash = bcrypt.hashSync(password, 10);
+  var hash = bcrypt.hashSync(password, BCRYPT_ROUNDS_PASSWORD);
   var id = createStudioUser(username, displayName, hash, role);
   emitEvent('studio_user_created', getAdminDisplayName(req), null, 'Studio user created: ' + displayName + ' (' + username + ')');
   res.json({ id: id, username: username, display_name: displayName, role: role });
@@ -1003,7 +1009,7 @@ router.put('/studio/users/:id/password', function (req, res) {
   if (!user) return res.status(404).json({ error: 'User not found' });
   var newPassword = req.body.password || '';
   if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
-  var hash = bcrypt.hashSync(newPassword, 10);
+  var hash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS_PASSWORD);
   updateStudioUser(user.id, { password_hash: hash });
   res.json({ ok: true, username: user.username });
 });
@@ -1121,7 +1127,7 @@ router.post('/admin/agents', function (req, res) {
   if (getAgent(id)) return res.status(409).json({ error: 'Agent ' + id + ' already exists' });
   // Generate API key
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = bcrypt.hashSync(apiKey, 10);
+  var hash = bcrypt.hashSync(apiKey, BCRYPT_ROUNDS_KEY);
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, game, hash, capabilities);
   emitEvent('agent_registered', '__admin__', null, 'Admin registered agent: ' + id);
@@ -1143,7 +1149,7 @@ router.put('/admin/agents/:id/key', function (req, res) {
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = bcrypt.hashSync(apiKey, 10);
+  var hash = bcrypt.hashSync(apiKey, BCRYPT_ROUNDS_KEY);
   updateAgentKey(req.params.id, hash);
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });

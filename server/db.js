@@ -73,7 +73,7 @@ export function initDB() {
       'hijack', 'Hijack', 'ui_lead', 'UI/UX, King City development, visual design'
     );
     db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
-      'unakron', 'Unakron', 'member', 'Infrastructure, GPU compute'
+      'unakron', 'Unakron', 'member', 'Legal, security, penetration testing, breaking things on purpose. GPU compute.'
     );
     console.log('Seeded dv_operators with 3 team members');
   }
@@ -102,7 +102,7 @@ export function initDB() {
     db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('agent', 'hijack', 'king-city', 'hijack-claude');
   } catch (e) { /* agent may not exist */ }
   try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('drone', 'greatness', 'drone', 'unakron-gpu');
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
   } catch (e) { /* agent may not exist */ }
 
   console.log('Mycelium DB initialized at ' + DB_PATH);
