@@ -166,21 +166,23 @@ CREATE TABLE IF NOT EXISTS dv_webhooks (
 
 -- Drone compute job queue
 CREATE TABLE IF NOT EXISTS dv_drone_jobs (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  title          TEXT NOT NULL,
-  command        TEXT NOT NULL DEFAULT '',
-  input_data     TEXT NOT NULL DEFAULT '{}',
-  requires       TEXT NOT NULL DEFAULT '["cpu"]',
-  requester      TEXT NOT NULL,
-  drone_id       TEXT,
-  status         TEXT NOT NULL DEFAULT 'pending',
-  priority       INTEGER NOT NULL DEFAULT 0,
-  result_url     TEXT,
-  result_data    TEXT NOT NULL DEFAULT '{}',
-  error          TEXT,
-  started_at     TEXT,
-  completed_at   TEXT,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  title           TEXT NOT NULL,
+  command         TEXT NOT NULL DEFAULT '',
+  input_data      TEXT NOT NULL DEFAULT '{}',
+  requires        TEXT NOT NULL DEFAULT '["cpu"]',
+  requester       TEXT NOT NULL,
+  drone_id        TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  priority        INTEGER NOT NULL DEFAULT 0,
+  workspace_repo  TEXT,
+  workspace_branch TEXT NOT NULL DEFAULT 'main',
+  result_url      TEXT,
+  result_data     TEXT NOT NULL DEFAULT '{}',
+  error           TEXT,
+  started_at      TEXT,
+  completed_at    TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Shared concepts (characters, styles, rulesets, etc. that flow between projects)

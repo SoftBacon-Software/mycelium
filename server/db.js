@@ -52,6 +52,8 @@ export function initDB() {
     ["dv_assets", "requested_by", "TEXT NOT NULL DEFAULT ''"],
     ["dv_assets", "assigned_to", "TEXT NOT NULL DEFAULT ''"],
     ["dv_messages", "channel_id", "INTEGER"],
+    ["dv_drone_jobs", "workspace_repo", "TEXT"],
+    ["dv_drone_jobs", "workspace_branch", "TEXT NOT NULL DEFAULT 'main'"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -1128,16 +1130,18 @@ export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
 
 // -- Drone Jobs --
 
-export function createDroneJob(title, command, inputData, requires, requester, priority) {
+export function createDroneJob(title, command, inputData, requires, requester, priority, workspaceRepo, workspaceBranch) {
   var result = db.prepare(
-    "INSERT INTO dv_drone_jobs (title, command, input_data, requires, requester, priority) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO dv_drone_jobs (title, command, input_data, requires, requester, priority, workspace_repo, workspace_branch) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(
     title,
     command || '',
     typeof inputData === 'string' ? inputData : JSON.stringify(inputData || {}),
     typeof requires === 'string' ? requires : JSON.stringify(requires || ['cpu']),
     requester,
-    priority || 0
+    priority || 0,
+    workspaceRepo || null,
+    workspaceBranch || 'main'
   );
   return result.id;
 }
