@@ -590,7 +590,8 @@
       var tile = el('div', { className: tileCls, onclick: function () { showTaskDetail(t); } });
       tile.appendChild(el('div', { className: 'tile-row' }, [
         el('span', { className: dotCls }),
-        el('span', { className: 'tile-label', textContent: '#' + t.id + ' ' + t.title })
+        el('span', { className: 'tile-id', textContent: '#' + t.id }),
+        el('span', { className: 'tile-label', textContent: t.title })
       ]));
       var detail = el('div', { className: 'tile-detail' });
       var badges = el('div', { className: 'tile-badges' });
@@ -769,7 +770,8 @@
       var tile = el('div', { className: 'queue-tile tile-approval', onclick: function () { showTaskDetail(t); } });
       tile.appendChild(el('div', { className: 'tile-row' }, [
         el('span', { className: 'tile-dot dot-approval' }),
-        el('span', { className: 'tile-label', textContent: '#' + t.id + ' ' + t.title })
+        el('span', { className: 'tile-id', textContent: '#' + t.id }),
+        el('span', { className: 'tile-label', textContent: t.title })
       ]));
       var detail = el('div', { className: 'tile-detail' });
       detail.appendChild(el('div', { className: 'tile-meta', textContent: t.game + ' \u00B7 ' + (t.assignee || '?') }));
@@ -1154,7 +1156,8 @@
       var tile = el('div', { className: 'queue-tile tile-bug' + sevCls, onclick: function () { showBugDetail(b); } });
       tile.appendChild(el('div', { className: 'tile-row' }, [
         el('span', { className: 'tile-dot dot-bug' }),
-        el('span', { className: 'tile-label', textContent: '#' + b.id + ' ' + b.title })
+        el('span', { className: 'tile-id', textContent: '#' + b.id }),
+        el('span', { className: 'tile-label', textContent: b.title })
       ]));
       var detail = el('div', { className: 'tile-detail' });
       var badges = el('div', { className: 'tile-badges' });
@@ -1263,7 +1266,8 @@
       var tile = el('div', { className: 'queue-tile tile-plan tile-plan-' + p.status, onclick: function () { showPlanDetail(p.id); } });
       var row = el('div', { className: 'tile-row' });
       row.appendChild(el('span', { className: dotCls }));
-      row.appendChild(el('span', { className: 'tile-label', textContent: '#' + p.id + ' ' + p.title }));
+      row.appendChild(el('span', { className: 'tile-id', textContent: '#' + p.id }));
+      row.appendChild(el('span', { className: 'tile-label', textContent: p.title }));
       tile.appendChild(row);
       if (prog.total > 0) {
         var bar = el('div', { className: 'tile-progress-bar' });
