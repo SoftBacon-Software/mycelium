@@ -894,6 +894,47 @@ header h1 {
 .plan-add-step input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow-accent); }
 .plan-add-step .form-row { margin-top: 0.3rem; grid-template-columns: 1fr 1fr auto; }
 
+/* Plan tile current step */
+.tile-current-step {
+  display: flex; align-items: flex-start; gap: 0.25rem;
+  font-size: 0.55rem; color: var(--yellow); margin-top: 0.2rem;
+  line-height: 1.35;
+}
+.tile-current-step-indicator {
+  font-size: 0.45rem; flex-shrink: 0; margin-top: 1px;
+}
+
+/* Concept detail modal */
+.concept-detail-header {
+  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem;
+}
+.concept-detail-name { font-size: 1rem; font-weight: 700; color: var(--text); }
+.concept-detail-meta {
+  display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem;
+  font-size: 0.75rem; margin-bottom: 0.6rem;
+}
+.concept-detail-meta .detail-label { color: var(--text-muted); font-weight: 600; }
+.concept-detail-desc {
+  font-size: 0.8rem; color: var(--text-dim); line-height: 1.5;
+  margin-bottom: 0.6rem; padding: 0.5rem; background: var(--bg);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.concept-detail-data {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+  color: var(--text-dim); background: var(--bg); padding: 0.6rem;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.5;
+}
+.concept-detail-projects {
+  display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.6rem;
+}
+.concept-detail-chip {
+  font-size: 0.6rem; font-weight: 600; text-transform: uppercase;
+  padding: 0.15rem 0.4rem; border-radius: 8px;
+  background: rgba(94, 158, 160, 0.12); color: var(--blue);
+}
+
 /* ---- Concepts ---- */
 .queue-header-concept { color: var(--amber); }
 .dot-concept { background: var(--amber); box-shadow: 0 0 4px rgba(212, 168, 71, 0.3); }

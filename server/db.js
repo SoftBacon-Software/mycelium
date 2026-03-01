@@ -565,11 +565,15 @@ export function listDvPlans(filters) {
   params.push(limit, offset);
   var plans = db.prepare('SELECT * FROM dv_plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
   for (var p of plans) {
-    var steps = db.prepare("SELECT status FROM dv_plan_steps WHERE plan_id = ?").all(p.id);
+    var steps = db.prepare("SELECT status, title FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
     var total = steps.length;
     var completed = steps.filter(function (s) { return s.status === 'completed'; }).length;
     p.step_count = total;
     p.progress = { total: total, completed: completed, percent: total > 0 ? Math.round(completed / total * 100) : 0 };
+    // Current step: first in_progress, or first pending if none in_progress
+    var current = steps.find(function (s) { return s.status === 'in_progress'; }) ||
+                  steps.find(function (s) { return s.status === 'pending'; });
+    p.current_step = current ? current.title : null;
   }
   return plans;
 }
@@ -940,7 +944,14 @@ export function getDvOverview() {
     bugs: bugs,
     bug_counts: bugCounts,
     plans: plans,
-    concepts: listConcepts({ limit: 100 })
+    concepts: (function () {
+      var c = listConcepts({ limit: 100 });
+      c.forEach(function (con) {
+        con.projects = getConceptProjects(con.id);
+        try { con.data = JSON.parse(con.data); } catch (e) {}
+      });
+      return c;
+    })()
   };
 }
 

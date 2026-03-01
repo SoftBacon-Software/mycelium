@@ -26,6 +26,7 @@
   var modalDictate = document.getElementById('modal-dictate');
   var modalCreatePlan = document.getElementById('modal-create-plan');
   var modalPlanDetail = document.getElementById('modal-plan-detail');
+  var modalConceptDetail = document.getElementById('modal-concept-detail');
 
   // ---- Helpers ----
   function esc(s) {
@@ -1129,7 +1130,15 @@
     if (!plans || !plans.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No plans' })); if (countEl) countEl.textContent = ''; return; }
     var active = plans.filter(function (p) { return p.status === 'active' || p.status === 'draft'; });
     if (countEl) countEl.textContent = active.length || '';
-    clearAndAppend(c, plans.map(function (p) {
+    // Sort: active first, then draft, then paused, then completed/cancelled last
+    var statusOrder = { active: 0, draft: 1, paused: 2, completed: 3, cancelled: 4 };
+    var sorted = plans.slice().sort(function (a, b) {
+      var sa = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 3;
+      var sb = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 3;
+      if (sa !== sb) return sa - sb;
+      return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
+    clearAndAppend(c, sorted.map(function (p) {
       var prog = p.progress || { total: 0, completed: 0, percent: 0 };
       var dotCls = 'tile-dot dot-plan-' + p.status;
       var tile = el('div', { className: 'queue-tile tile-plan tile-plan-' + p.status, onclick: function () { showPlanDetail(p.id); } });
@@ -1152,6 +1161,13 @@
       detail.appendChild(el('div', { className: 'tile-meta', textContent: (p.owner || 'unowned') + ' \u00B7 ' + timeAgo(p.updated_at) }));
       if (prog.total > 0) {
         detail.appendChild(el('div', { className: 'tile-meta', textContent: prog.completed + '/' + prog.total + ' steps (' + prog.percent + '%)' }));
+      }
+      // Show current in-progress or next pending step on the tile
+      if (p.current_step) {
+        var stepLine = el('div', { className: 'tile-current-step' });
+        stepLine.appendChild(el('span', { className: 'tile-current-step-indicator', textContent: '\u25B6' }));
+        stepLine.appendChild(el('span', { textContent: p.current_step }));
+        detail.appendChild(stepLine);
       }
       tile.appendChild(detail);
       return tile;
@@ -1351,7 +1367,7 @@
     if (!concepts || !concepts.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No concepts' })); if (countEl) countEl.textContent = ''; return; }
     if (countEl) countEl.textContent = concepts.length;
     clearAndAppend(c, concepts.map(function (con) {
-      var tile = el('div', { className: 'queue-tile tile-concept' });
+      var tile = el('div', { className: 'queue-tile tile-concept', onclick: function () { showConceptDetail(con.id); } });
       var row = el('div', { className: 'tile-row' });
       row.appendChild(el('span', { className: 'tile-dot dot-concept' }));
       row.appendChild(el('span', { className: 'tile-label', textContent: con.name }));
@@ -1379,6 +1395,61 @@
       tile.appendChild(detail);
       return tile;
     }));
+  }
+
+  function showConceptDetail(conceptId) {
+    apiGet('/concepts/' + conceptId, function (err, con) {
+      if (err) { alert('Error loading concept: ' + err.message); return; }
+      var titleEl = document.getElementById('concept-detail-title');
+      var body = document.getElementById('concept-detail-body');
+      body.textContent = '';
+
+      // Header with name + type badge
+      var header = el('div', { className: 'concept-detail-header' });
+      header.appendChild(el('span', { className: 'concept-detail-name', textContent: con.name }));
+      var typeCls = 'concept-type-badge concept-type-' + (con.type || 'custom');
+      header.appendChild(el('span', { className: typeCls, textContent: con.type || 'custom' }));
+      if (con.version) header.appendChild(el('span', { className: 'concept-version', textContent: 'v' + con.version }));
+      body.appendChild(header);
+      titleEl.textContent = con.name;
+
+      // Meta
+      var meta = el('div', { className: 'concept-detail-meta' });
+      [['Type', con.type || 'custom'], ['Version', con.version || '1'],
+       ['Created', timeAgo(con.created_at)], ['Updated', timeAgo(con.updated_at)]].forEach(function (pair) {
+        meta.appendChild(el('span', { className: 'detail-label', textContent: pair[0] }));
+        meta.appendChild(el('span', { textContent: pair[1] }));
+      });
+      body.appendChild(meta);
+
+      // Linked projects
+      var projects = con.projects || [];
+      if (projects.length) {
+        var projSection = el('div', { className: 'concept-detail-projects' });
+        projects.forEach(function (p) {
+          var name = typeof p === 'string' ? p : (p.name || p.project_id || '');
+          projSection.appendChild(el('span', { className: 'concept-detail-chip', textContent: name }));
+        });
+        body.appendChild(projSection);
+      }
+
+      // Description
+      if (con.description) {
+        body.appendChild(el('div', { className: 'concept-detail-desc', textContent: con.description }));
+      }
+
+      // Data (JSON)
+      var data = con.data;
+      if (data) {
+        var dataSection = el('div', { className: 'detail-section' });
+        dataSection.appendChild(el('label', { style: 'font-weight:600;color:var(--accent);margin-bottom:0.3rem;display:block;font-size:0.75rem;' }, 'Data'));
+        var dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        dataSection.appendChild(el('pre', { className: 'concept-detail-data', textContent: dataStr }));
+        body.appendChild(dataSection);
+      }
+
+      openModal(modalConceptDetail);
+    });
   }
 
   // =============== DICTATE TO AGENT (Speech-to-Text) ===============
