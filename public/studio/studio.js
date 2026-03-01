@@ -335,6 +335,7 @@
       updateUserDisplay();
       fetchOverview();
       startPolling();
+      requestNotificationPermission();
       // Mycelium intro sound
       try { var _a = new Audio('studio_intro.mp3'); _a.volume = 0.5; _a.play().catch(function(){}); } catch(e) {}
     }).catch(function (e) {
@@ -410,9 +411,55 @@
     return new Date(normalizeTs(iso) + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  // ---- Browser Notifications ----
+  var prevApprovalCount = -1;
+  var prevRequestCount = -1;
+  var prevBugCount = -1;
+
+  function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
+  function showNotification(title, body) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        var n = new Notification(title, {
+          body: body,
+          icon: 'favicon.svg',
+          tag: title,
+          silent: false
+        });
+        setTimeout(function () { n.close(); }, 8000);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  function checkNotifications(data) {
+    var approvals = (data.approval_queue || []).length;
+    var requests = (data.pending_requests || []).length;
+    var bugs = data.bug_counts ? (data.bug_counts.open || 0) : 0;
+
+    if (prevApprovalCount >= 0 && approvals > prevApprovalCount) {
+      showNotification('New Approval Needed', (approvals - prevApprovalCount) + ' task(s) awaiting approval');
+    }
+    if (prevRequestCount >= 0 && requests > prevRequestCount) {
+      showNotification('New Request', (requests - prevRequestCount) + ' new blocking request(s)');
+    }
+    if (prevBugCount >= 0 && bugs > prevBugCount) {
+      showNotification('New Bug Filed', (bugs - prevBugCount) + ' new bug(s) reported');
+    }
+
+    prevApprovalCount = approvals;
+    prevRequestCount = requests;
+    prevBugCount = bugs;
+  }
+
   // ---- Render ----
   function render(data) {
     lastRefreshEl.textContent = new Date().toLocaleTimeString();
+    checkNotifications(data);
     renderAgents(data.agents);
     renderEvents(data.events);
     renderTasks(data.tasks);
@@ -546,6 +593,65 @@
       }));
     });
     body.appendChild(actions);
+
+    // Comments section
+    var commentsSection = el('div', { className: 'detail-section comments-section' });
+    commentsSection.style.marginTop = '0.8rem';
+    commentsSection.appendChild(el('label', {}, 'Comments'));
+    var commentsList = el('div', { className: 'comments-list' });
+    commentsList.textContent = 'Loading...';
+    commentsSection.appendChild(commentsList);
+
+    // Comment input
+    var commentInput = document.createElement('div');
+    commentInput.className = 'comment-input-bar';
+    var commentTextarea = document.createElement('input');
+    commentTextarea.type = 'text';
+    commentTextarea.placeholder = 'Add a comment...';
+    commentTextarea.className = 'comment-input';
+    var commentBtn = el('button', { className: 'btn-primary comment-send', textContent: 'Post' });
+    commentInput.appendChild(commentTextarea);
+    commentInput.appendChild(commentBtn);
+    commentsSection.appendChild(commentInput);
+    body.appendChild(commentsSection);
+
+    // Load comments
+    function loadComments() {
+      apiGet('/tasks/' + t.id + '/comments', function (err, comments) {
+        commentsList.textContent = '';
+        if (err || !comments || !comments.length) {
+          commentsList.appendChild(el('div', { className: 'comment-empty', textContent: 'No comments yet' }));
+          return;
+        }
+        comments.forEach(function (c) {
+          var item = el('div', { className: 'comment-item' });
+          var header = el('div', { className: 'comment-header' });
+          header.appendChild(el('span', { className: 'comment-author', textContent: c.author }));
+          header.appendChild(el('span', { className: 'comment-time', textContent: timeAgo(c.created_at) }));
+          item.appendChild(header);
+          item.appendChild(el('div', { className: 'comment-text', textContent: c.content }));
+          commentsList.appendChild(item);
+        });
+      });
+    }
+    loadComments();
+
+    // Post comment
+    function postComment() {
+      var text = commentTextarea.value.trim();
+      if (!text) return;
+      var author = currentUser ? currentUser.display_name : 'admin';
+      commentTextarea.value = '';
+      apiPost('/tasks/' + t.id + '/comments', { author: author, content: text }, function (err) {
+        if (err) { commentTextarea.value = text; return; }
+        loadComments();
+      });
+    }
+    commentBtn.addEventListener('click', postComment);
+    commentTextarea.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment(); }
+    });
+
     openModal(modalTaskDetail);
   }
 

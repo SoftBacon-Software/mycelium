@@ -205,6 +205,16 @@ CREATE TABLE IF NOT EXISTS dv_project_concepts (
   PRIMARY KEY (project_id, concept_id)
 );
 
+-- Task comments
+CREATE TABLE IF NOT EXISTS dv_task_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES dv_tasks(id) ON DELETE CASCADE,
+  author TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON dv_task_comments(task_id);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_status ON dv_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_game ON dv_tasks(game);

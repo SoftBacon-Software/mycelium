@@ -46,7 +46,8 @@ import {
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
   createDvTeamChat, listDvTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones,
+  addTaskComment, getTaskComments, deleteTaskComment
 } from '../db.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -359,6 +360,39 @@ router.put('/tasks/:id/approve', function (req, res) {
   approveDvTask(task.id, '__admin__');
   emitEvent('task_approved', '__admin__', task.game, 'Admin approved task #' + task.id + ': ' + task.title, { task_id: task.id });
   res.json({ ok: true, id: task.id, approved: true });
+});
+
+// ======== TASK COMMENTS ========
+
+router.get('/tasks/:id/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getDvTask(parseInt(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(getTaskComments(task.id));
+});
+
+router.post('/tasks/:id/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getDvTask(parseInt(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var author = escapeHtml(req.body.author || who);
+  var content = escapeHtml(req.body.content);
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  var comment = addTaskComment(task.id, author, content);
+  emitEvent('task_comment', who, task.game, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
+  res.json(comment);
+});
+
+router.delete('/tasks/:id/comments/:commentId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getDvTask(parseInt(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var deleted = deleteTaskComment(parseInt(req.params.commentId));
+  if (!deleted) return res.status(404).json({ error: 'Comment not found' });
+  res.json({ ok: true, deleted: parseInt(req.params.commentId) });
 });
 
 // ======== CONTEXT ========

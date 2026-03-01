@@ -203,6 +203,26 @@ export function listTasksNeedingApproval() {
   return db.prepare("SELECT * FROM dv_tasks WHERE needs_approval = 1 AND approved_by IS NULL AND status != 'done' ORDER BY updated_at DESC").all();
 }
 
+// -- Task Comments --
+
+export function addTaskComment(taskId, author, content) {
+  var result = db.prepare(
+    "INSERT INTO dv_task_comments (task_id, author, content) VALUES (?, ?, ?) RETURNING *"
+  ).get(taskId, author, content);
+  return result;
+}
+
+export function getTaskComments(taskId) {
+  return db.prepare(
+    "SELECT * FROM dv_task_comments WHERE task_id = ? ORDER BY created_at ASC"
+  ).all(taskId);
+}
+
+export function deleteTaskComment(commentId) {
+  var result = db.prepare("DELETE FROM dv_task_comments WHERE id = ?").run(commentId);
+  return result.changes > 0;
+}
+
 // -- Context --
 
 export function getDvContext(game) {
