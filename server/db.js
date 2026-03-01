@@ -40,6 +40,7 @@ export function initDB() {
     ["dv_messages", "status", "TEXT NOT NULL DEFAULT 'sent'"],
     ["dv_messages", "resolved_at", "TEXT"],
     ["dv_messages", "resolved_by", "TEXT"],
+    ["dv_agents", "avatar_url", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -80,7 +81,7 @@ export function getAgentByKeyHash(apiKeyHash) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents', 'SELECT id, name, game, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAgents', 'SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, created_at FROM dv_agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
@@ -94,6 +95,15 @@ export function updateAgentKey(id, apiKeyHash) {
 
 export function deleteAgent(id) {
   stmt('dvDeleteAgent', 'DELETE FROM dv_agents WHERE id = ?').run(id);
+}
+
+export function updateAgent(id, fields) {
+  var sets = []; var values = [];
+  if (fields.avatar_url !== undefined) { sets.push('avatar_url = ?'); values.push(fields.avatar_url); }
+  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Games --
@@ -458,7 +468,7 @@ export function getBootPayload(agentId) {
   }
 
   var otherAgents = db.prepare(
-    "SELECT id, name, game, status, working_on, last_heartbeat, capabilities FROM dv_agents WHERE id != ? ORDER BY created_at"
+    "SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url FROM dv_agents WHERE id != ? ORDER BY created_at"
   ).all(agentId);
 
   var gameContext = getDvContext(agent.game);

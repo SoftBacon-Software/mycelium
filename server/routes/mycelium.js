@@ -22,7 +22,7 @@ var storage = multer.diskStorage({
 });
 var upload = multer({ storage: storage, limits: { fileSize: 50 * 1024 * 1024 } });
 import {
-  createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent,
+  createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createGame, listGames, getGame,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
@@ -202,6 +202,10 @@ router.post('/agents/heartbeat', function (req, res) {
   if (!agentId) return;
   var status = req.body.status || 'online';
   var workingOn = req.body.working_on || '';
+  // Allow avatar_url to be set via heartbeat
+  if (req.body.avatar_url !== undefined) {
+    updateAgent(agentId, { avatar_url: req.body.avatar_url });
+  }
   // Read previous state to craft a meaningful event summary
   var prev = getAgent(agentId);
   var prevStatus = prev ? prev.status : 'offline';
@@ -236,6 +240,24 @@ router.get('/agents/:id', function (req, res) {
   // Don't leak key hash
   var { api_key_hash, ...safe } = agent;
   res.json(safe);
+});
+
+// Update agent profile (avatar_url, name)
+router.put('/agents/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  // Agents can only update themselves, admin can update anyone
+  if (who !== '__admin__' && who !== req.params.id) {
+    return res.status(403).json({ error: 'Can only update your own profile' });
+  }
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  var fields = {};
+  if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
+  if (req.body.name !== undefined) fields.name = req.body.name;
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  updateAgent(req.params.id, fields);
+  res.json({ ok: true, id: req.params.id, updated: Object.keys(fields) });
 });
 
 // ======== TASKS ========

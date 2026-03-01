@@ -112,6 +112,11 @@ header h1 {
 .action-btn:hover { background: rgba(212, 168, 71, 0.1); border-color: var(--accent); }
 .header-right { display: flex; align-items: center; gap: 0.6rem; }
 .header-right span { color: var(--text-muted); font-size: 0.7rem; }
+.header-dio {
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  object-fit: cover; border: 1px solid var(--yellow);
+  box-shadow: 0 0 6px rgba(212, 168, 71, 0.3);
+}
 .user-name {
   color: var(--accent) !important; font-weight: 600; font-size: 0.75rem !important;
   font-family: 'JetBrains Mono', monospace;
@@ -225,6 +230,10 @@ header h1 {
   width: 32px; height: 32px; border-radius: var(--radius-sm);
   display: flex; align-items: center; justify-content: center;
   font-size: 0.75rem; font-weight: 700; color: #fff; flex-shrink: 0;
+  overflow: hidden;
+}
+.agent-avatar-img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);
 }
 .agent-info { flex: 1; min-width: 0; }
 .agent-header { display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.1rem; }
@@ -373,6 +382,11 @@ header h1 {
 .avatar-hijack { background: linear-gradient(135deg, var(--purple), #B890C8); }
 .avatar-admin {
   background: linear-gradient(135deg, #f59e0b, #ef4444);
+  border: 1px solid var(--yellow); box-shadow: 0 0 4px rgba(212, 168, 71, 0.3);
+}
+.msg-avatar-img {
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  object-fit: cover; flex-shrink: 0;
   border: 1px solid var(--yellow); box-shadow: 0 0 4px rgba(212, 168, 71, 0.3);
 }
 .msg-sender { font-weight: 700; font-size: 0.8rem; color: var(--text); }

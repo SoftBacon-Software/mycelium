@@ -6,6 +6,7 @@
   var authToken = '';
   var currentUser = null;
   var pollTimer = null;
+  var agentAvatarMap = {}; // agentId -> avatar_url
 
   // ---- DOM refs ----
   var loginScreen = document.getElementById('login-screen');
@@ -495,12 +496,21 @@
   function renderAgents(agents) {
     var c = document.getElementById('agents-list');
     if (!agents || !agents.length) { c.textContent = 'No agents'; return; }
+    // Build avatar map for use in messages
+    agentAvatarMap = {};
+    agents.forEach(function (a) { if (a.avatar_url) agentAvatarMap[a.id] = a.avatar_url; });
     clearAndAppend(c, agents.map(function (a) {
       var isOnline = a.status === 'online';
       var card = el('div', { className: 'agent-card ' + (isOnline ? 'agent-online' : 'agent-offline') });
 
-      // Avatar
-      var avatar = el('div', { className: 'agent-avatar ' + agentAvatarClass(a.id), textContent: agentInitials(a.name) });
+      // Avatar — use image if agent has avatar_url, else initials
+      var avatar;
+      if (a.avatar_url) {
+        avatar = el('div', { className: 'agent-avatar' });
+        avatar.appendChild(el('img', { src: a.avatar_url, className: 'agent-avatar-img', alt: a.name }));
+      } else {
+        avatar = el('div', { className: 'agent-avatar ' + agentAvatarClass(a.id), textContent: agentInitials(a.name) });
+      }
       card.appendChild(avatar);
 
       // Info column
@@ -884,12 +894,21 @@
       if (!sameSender) {
         // Full header row with avatar
         var topRow = el('div', { className: 'msg-top' });
-        var avatarCls = 'msg-avatar';
-        var initial = '';
-        if (m.from_agent && m.from_agent.indexOf('hijack') !== -1) { avatarCls += ' avatar-hijack'; initial = 'H'; }
-        else if (m.from_agent && m.from_agent.indexOf('greatness') !== -1) { avatarCls += ' avatar-greatness'; initial = 'G'; }
-        else { avatarCls += ' avatar-admin'; initial = 'D'; }
-        topRow.appendChild(el('span', { className: avatarCls, textContent: initial }));
+        var agentAvUrl = m.from_agent ? agentAvatarMap[m.from_agent] : null;
+        var isAdmin = !m.from_agent || m.from_agent === '__admin__' || m.from_agent === 'admin';
+        if (isAdmin) {
+          // Dio sprite for admin
+          topRow.appendChild(el('img', { src: 'dio_avatar.png', className: 'msg-avatar msg-avatar-img' }));
+        } else if (agentAvUrl) {
+          topRow.appendChild(el('img', { src: agentAvUrl, className: 'msg-avatar msg-avatar-img' }));
+        } else {
+          var avatarCls = 'msg-avatar';
+          var initial = '';
+          if (m.from_agent.indexOf('hijack') !== -1) { avatarCls += ' avatar-hijack'; initial = 'H'; }
+          else if (m.from_agent.indexOf('greatness') !== -1) { avatarCls += ' avatar-greatness'; initial = 'G'; }
+          else { avatarCls += ' avatar-admin'; initial = m.from_agent.charAt(0).toUpperCase(); }
+          topRow.appendChild(el('span', { className: avatarCls, textContent: initial }));
+        }
         topRow.appendChild(el('span', { className: 'msg-sender', textContent: m.from_agent || 'system' }));
         if (m.to_agent) topRow.appendChild(el('span', { className: 'msg-target', textContent: '\u2192 ' + m.to_agent }));
         if (m.msg_type && m.msg_type !== 'message') topRow.appendChild(el('span', { className: 'badge badge-msg-type', textContent: m.msg_type }));
