@@ -5,7 +5,8 @@ import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useVoiceStore } from '../stores/voiceStore'
-import { useEffect, useMemo } from 'react'
+import { usePolling } from '../hooks/usePolling'
+import { useMemo } from 'react'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
@@ -31,7 +32,8 @@ export default function AppLayout() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const { lastRefresh, loading, refresh, instanceConfig } = useDashboardStore()
+  const { loading, refresh, instanceConfig } = useDashboardStore()
+  const { lastRefresh } = usePolling(10_000)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
   const voiceConnected = useVoiceStore((s) => s.isConnected)
@@ -41,11 +43,6 @@ export default function AppLayout() {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
     return adminStatus?.value === 'frozen'
   }, [instanceConfig])
-
-  // Initial data load
-  useEffect(() => {
-    refresh()
-  }, [refresh])
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
