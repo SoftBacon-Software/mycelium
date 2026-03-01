@@ -118,7 +118,7 @@ function VoicePanel() {
       {/* Controls */}
       {!isConnected ? (
         <button
-          onClick={join}
+          onClick={() => join('voice')}
           className="w-full px-3 py-1.5 rounded-sm text-xs font-medium bg-green/15 text-green hover:bg-green/25 transition-colors"
         >
           Join
