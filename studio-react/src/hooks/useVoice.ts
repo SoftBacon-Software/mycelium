@@ -1,7 +1,8 @@
+import { useShallow } from 'zustand/react/shallow'
 import { useVoiceStore } from '../stores/voiceStore'
 
 export function useVoice() {
-  return useVoiceStore((s) => ({
+  return useVoiceStore(useShallow((s) => ({
     isConnected: s.isConnected,
     isMuted: s.isMuted,
     channelName: s.channelName,
@@ -10,5 +11,5 @@ export function useVoice() {
     join: s.join,
     leave: s.leave,
     toggleMute: s.toggleMute,
-  }))
+  })))
 }
