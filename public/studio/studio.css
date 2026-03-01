@@ -545,6 +545,10 @@ header h1 {
 .dot-approval { background: var(--yellow); box-shadow: 0 0 4px rgba(212, 168, 71, 0.4); }
 .dot-request { background: var(--accent-light); box-shadow: 0 0 4px var(--glow-accent); }
 .dot-bug { background: var(--red); box-shadow: 0 0 4px var(--glow-red); }
+.tile-id {
+  font-size: 0.62rem; font-weight: 700; color: var(--accent-light);
+  flex-shrink: 0; opacity: 0.85;
+}
 .tile-label {
   font-size: 0.62rem; font-weight: 600; color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
