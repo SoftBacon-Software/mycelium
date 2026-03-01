@@ -16,7 +16,8 @@ export interface Event {
   type: string;
   agent: string;
   game: string;
-  description: string;
+  summary: string;
+  data: string;
   created_at: string;
 }
 
