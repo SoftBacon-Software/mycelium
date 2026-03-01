@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1A1612">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Mycelium</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #1A1612;
+  --surface: #231E19;
+  --surface-raised: #2A2420;
+  --surface-hover: #3D332C;
+  --border: #3D332C;
+  --border-bright: #4D403A;
+  --text: #F0E8DB;
+  --text-muted: #8A7B6B;
+  --text-dim: #6D5E4E;
+  --accent: #D4A847;
+  --accent-glow: rgba(212, 168, 71, 0.15);
+  --accent-dim: #B08D3A;
+  --green: #7A9E7E;
+  --green-glow: rgba(122, 158, 126, 0.2);
+  --amber: #D4A847;
+  --red: #C45B3E;
+  --purple: #9B7EAB;
+  --pink: #C47A8A;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --tab-height: 60px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+/* ---- LOGIN ---- */
+#login-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 30%, rgba(212,168,71,0.06) 0%, transparent 70%);
+}
+.login-brand {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.login-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 32px;
+}
+.login-form {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-form input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.login-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.login-form input::placeholder { color: var(--text-dim); }
+.login-form button {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.login-form button:active { opacity: 0.8; }
+#login-error {
+  color: var(--red);
+  font-size: 13px;
+  text-align: center;
+  min-height: 18px;
+}
+
+/* ---- APP SHELL ---- */
+#app {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+}
+#app.visible { display: flex; }
+
+/* Top bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  padding-top: calc(8px + var(--safe-top));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  min-height: 48px;
+  flex-shrink: 0;
+}
+.topbar-title {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.topbar-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  padding: 6px;
+  cursor: pointer;
+  border-radius: 6px;
+  line-height: 1;
+}
+.topbar-btn:active { background: var(--surface-hover); }
+.topbar-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* Tab content area */
+.tab-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+}
+.tab-panel {
+  display: none;
+  padding: 12px 16px 20px;
+  min-height: 100%;
+}
+.tab-panel.active { display: block; }
+
+/* Bottom tabs */
+.tab-bar {
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: var(--safe-bottom);
+  flex-shrink: 0;
+}
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  min-height: var(--tab-height);
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  transition: color 0.2s;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab-item.active {
+  color: var(--accent);
+}
+.tab-item.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 25%;
+  right: 25%;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 2px 2px;
+}
+.tab-icon {
+  font-size: 22px;
+  margin-bottom: 3px;
+  line-height: 1;
+}
+.tab-badge {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 18px);
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+/* ---- AGENTS TAB ---- */
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 10px;
+  margin-top: 16px;
+}
+.section-label:first-child { margin-top: 0; }
+
+.agent-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius-sm);
+  padding: 14px 14px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
+}
+.agent-card.online { border-left-color: var(--green); }
+.agent-card.offline { border-left-color: var(--text-dim); opacity: 0.65; }
+
+.agent-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.agent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+.agent-dot.online {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+.agent-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+.agent-game {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+.agent-game.kc {
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--purple);
+}
+.agent-working {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.agent-working.expanded {
+  -webkit-line-clamp: unset;
+}
+.agent-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* Quick stats */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  text-align: center;
+}
+.stat-val {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-top: 2px;
+}
+
+/* Activity feed */
+.event-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.event-item:last-child { border-bottom: none; }
+.event-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.event-text { color: var(--text-muted); flex: 1; }
+.event-agent { color: var(--text); font-weight: 500; }
+.event-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* ---- CHAT TAB ---- */
+.chat-subtabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  border: 1px solid var(--border);
+}
+.chat-subtab {
+  flex: 1;
+  padding: 8px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+.chat-subtab.active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--tab-height) - var(--safe-bottom) - 48px - var(--safe-top) - 60px);
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+}
+.chat-compose {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+.chat-compose input, .chat-compose select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  outline: none;
+}
+.chat-compose input {
+  flex: 1;
+  min-width: 0;
+}
+.chat-compose input:focus {
+  border-color: var(--accent);
+}
+.chat-compose input::placeholder { color: var(--text-dim); }
+.chat-send-btn {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.chat-send-btn:active { opacity: 0.7; }
+
+/* Agent selector for agent comms */
+.agent-selector {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.agent-selector select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  outline: none;
+  flex: 1;
+}
+
+/* Message bubbles */
+.msg-group { margin-bottom: 12px; }
+.msg-sender-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.msg-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+  color: #fff;
+}
+.msg-avatar.av-g { background: #16a34a; }
+.msg-avatar.av-h { background: #9333ea; }
+.msg-avatar.av-s { background: #ea580c; }
+.msg-avatar.av-default { background: var(--accent-dim); }
+.msg-avatar.av-admin { background: var(--amber); color: #000; }
+.msg-sender-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.msg-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+.msg-bubble {
+  background: var(--surface-raised);
+  border-radius: 4px 12px 12px 12px;
+  padding: 10px 14px;
+  margin-left: 36px;
+  margin-bottom: 3px;
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  color: var(--text);
+}
+.msg-bubble + .msg-bubble { margin-top: 2px; }
+.msg-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+.msg-badge.type-request { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+.msg-badge.status-sent { background: rgba(148, 163, 184, 0.15); color: var(--text-muted); }
+.msg-badge.status-acknowledged { background: rgba(212, 168, 71, 0.15); color: var(--accent); }
+.msg-badge.status-completed { background: rgba(122, 158, 126, 0.15); color: var(--green); }
+
+/* No data states */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* ---- VOICE TAB ---- */
+.voice-hero {
+  text-align: center;
+  padding: 24px 0;
+}
+.voice-status-text {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 16px;
+}
+.voice-status-text.connected { color: var(--green); }
+
+.voice-join-btn {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.voice-join-btn:active {
+  transform: scale(0.95);
+  background: var(--accent);
+  color: #000;
+}
+.voice-join-btn.active {
+  border-color: var(--red);
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--red);
+}
+.voice-join-btn.active:active {
+  background: var(--red);
+  color: #fff;
+}
+
+.voice-controls {
+  display: none;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+.voice-controls.visible { display: flex; }
+.voice-ctrl-btn {
+  padding: 12px 24px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.voice-ctrl-btn:active { background: var(--surface-hover); }
+.voice-ctrl-btn.muted {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.voice-peers-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px 0;
+}
+.voice-peer-circle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.voice-peer-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 2px solid var(--border-bright);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  transition: all 0.2s;
+}
+.voice-peer-avatar.speaking {
+  border-color: var(--green);
+  box-shadow: 0 0 16px var(--green-glow), 0 0 4px var(--green-glow);
+}
+.voice-peer-avatar.muted { opacity: 0.5; }
+.voice-peer-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: center;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-brand">Mycelium</div>
+  <div class="login-sub">Distributed Development</div>
+  <form class="login-form" id="login-form">
+    <input type="text" id="login-user" placeholder="Username" autocomplete="username" autocapitalize="none">
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password">
+    <button type="submit">Sign In</button>
+    <div id="login-error"></div>
+  </form>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <span class="topbar-title">Mycelium</span>
+    <div class="topbar-actions">
+      <span class="topbar-status" id="poll-status"></span>
+      <button class="topbar-btn" id="btn-refresh" title="Refresh">&#x21bb;</button>
+      <button class="topbar-btn" id="btn-logout" title="Logout">&#x2715;</button>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-content">
+    <!-- AGENTS TAB -->
+    <div class="tab-panel active" id="panel-agents">
+      <div class="stats-row" id="stats-row"></div>
+      <div class="section-label">Agents</div>
+      <div id="agents-list"></div>
+      <div class="section-label">Recent Activity</div>
+      <div id="events-list"></div>
+    </div>
+
+    <!-- CHAT TAB -->
+    <div class="tab-panel" id="panel-chat">
+      <div class="chat-subtabs">
+        <div class="chat-subtab active" data-chat="team">Team Chat</div>
+        <div class="chat-subtab" data-chat="agents">Agent Comms</div>
+      </div>
+      <!-- Team chat -->
+      <div id="chat-team" class="chat-container">
+        <div class="chat-messages" id="team-chat-msgs"></div>
+        <div class="chat-compose">
+          <input type="text" id="team-chat-input" placeholder="Message...">
+          <button class="chat-send-btn" id="team-chat-send">&uarr;</button>
+        </div>
+      </div>
+      <!-- Agent comms -->
+      <div id="chat-agents" class="chat-container" style="display:none">
+        <div class="chat-messages" id="agent-msgs-list"></div>
+        <div class="agent-selector">
+          <select id="agent-msg-to"><option value="">All agents</option></select>
+        </div>
+        <div class="chat-compose">
+          <input type="text" id="agent-msg-input" placeholder="Message to agent...">
+          <button class="chat-send-btn" id="agent-msg-send">&uarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VOICE TAB -->
+    <div class="tab-panel" id="panel-voice">
+      <div class="voice-hero">
+        <div class="voice-status-text" id="voice-status-text">Checking channel...</div>
+        <div class="voice-join-btn" id="voice-big-btn">&#x1F3A4;</div>
+        <div class="voice-controls" id="voice-controls">
+          <button class="voice-ctrl-btn" id="voice-mute-btn">Mute</button>
+          <button class="voice-ctrl-btn" id="voice-leave-btn" style="color:var(--red);border-color:var(--red)">Leave</button>
+        </div>
+      </div>
+      <div class="voice-peers-grid" id="voice-peers-grid"></div>
+    </div>
+  </div>
+
+  <!-- BOTTOM TABS -->
+  <div class="tab-bar">
+    <div class="tab-item active" data-tab="agents">
+      <span class="tab-icon">&#x1F916;</span>
+      Agents
+    </div>
+    <div class="tab-item" data-tab="chat">
+      <span class="tab-icon">&#x1F4AC;</span>
+      Chat
+      <span class="tab-badge" id="chat-badge" style="display:none"></span>
+    </div>
+    <div class="tab-item" data-tab="voice">
+      <span class="tab-icon">&#x1F3A4;</span>
+      Voice
+      <span class="tab-badge" id="voice-badge" style="display:none"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var API_BASE = '/api/dioverse';
+  var authToken = sessionStorage.getItem('mycelium_token');
+  var pollTimer = null;
+  var lastData = null;
+
+  // ---- DOM refs ----
+  var loginScreen = document.getElementById('login-screen');
+  var app = document.getElementById('app');
+  var loginForm = document.getElementById('login-form');
+  var loginError = document.getElementById('login-error');
+  var pollStatus = document.getElementById('poll-status');
+
+  // ---- Helpers ----
+  function esc(s) {
+    if (!s) return '';
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function el(tag, attrs, children) {
+    var e = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (k === 'className') e.className = attrs[k];
+        else if (k === 'textContent') e.textContent = attrs[k];
+        else if (k === 'style' && typeof attrs[k] === 'object') Object.assign(e.style, attrs[k]);
+        else e.setAttribute(k, attrs[k]);
+      }
+    }
+    if (children) {
+      if (!Array.isArray(children)) children = [children];
+      children.forEach(function (c) {
+        if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+        else if (c) e.appendChild(c);
+      });
+    }
+    return e;
+  }
+
+  function clearEl(container) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+  }
+
+  function normalizeTs(ts) {
+    if (!ts) return '';
+    return ts.replace(' ', 'T') + (ts.indexOf('Z') === -1 && ts.indexOf('+') === -1 ? 'Z' : '');
+  }
+
+  function timeAgo(ts) {
+    if (!ts) return '';
+    var d = new Date(normalizeTs(ts));
+    var now = new Date();
+    var diff = Math.floor((now - d) / 1000);
+    if (diff < 0) return 'just now';
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  function shortTime(ts) {
+    if (!ts) return '';
+    var d = new Date(normalizeTs(ts));
+    var h = d.getHours();
+    var m = d.getMinutes();
+    var ampm = h >= 12 ? 'pm' : 'am';
+    h = h % 12 || 12;
+    return h + ':' + (m < 10 ? '0' : '') + m + ampm;
+  }
+
+  function authHeaders() {
+    if (authToken) return { 'Authorization': 'Bearer ' + authToken };
+    return {};
+  }
+
+  function apiGet(path, cb) {
+    var h = authHeaders();
+    fetch(API_BASE + path, { headers: h })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { cb(null, d); })
+      .catch(function (e) { cb(e); });
+  }
+
+  function apiPost(path, body, cb) {
+    var h = authHeaders();
+    h['Content-Type'] = 'application/json';
+    fetch(API_BASE + path, { method: 'POST', headers: h, body: JSON.stringify(body) })
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || r.status); });
+        return r.json();
+      })
+      .then(function (d) { cb(null, d); })
+      .catch(function (e) { cb(e); });
+  }
+
+  // ---- Auth ----
+  loginForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var user = document.getElementById('login-user').value.trim();
+    var pass = document.getElementById('login-pass').value;
+    if (!user || !pass) { loginError.textContent = 'Enter username and password'; return; }
+    loginError.textContent = 'Signing in...';
+    fetch(API_BASE + '/studio/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Login failed'); });
+      return r.json();
+    }).then(function (data) {
+      authToken = data.token;
+      sessionStorage.setItem('mycelium_token', authToken);
+      showApp();
+    }).catch(function (err) {
+      loginError.textContent = err.message;
+    });
+  });
+
+  document.getElementById('btn-logout').addEventListener('click', function () {
+    authToken = null;
+    sessionStorage.removeItem('mycelium_token');
+    loginScreen.style.display = '';
+    app.classList.remove('visible');
+    if (pollTimer) clearInterval(pollTimer);
+  });
+
+  function showApp() {
+    loginScreen.style.display = 'none';
+    app.classList.add('visible');
+    fetchOverview();
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(fetchOverview, 10000);
+    // Start voice room polling
+    pollVoiceRoom();
+    setInterval(function () { if (!voiceConnected) pollVoiceRoom(); }, 5000);
+  }
+
+  if (authToken) showApp();
+
+  // ---- Tab switching ----
+  document.querySelectorAll('.tab-item').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      var target = tab.getAttribute('data-tab');
+      document.querySelectorAll('.tab-item').forEach(function (t) { t.classList.remove('active'); });
+      document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById('panel-' + target).classList.add('active');
+    });
+  });
+
+  // Chat subtabs
+  document.querySelectorAll('.chat-subtab').forEach(function (st) {
+    st.addEventListener('click', function () {
+      document.querySelectorAll('.chat-subtab').forEach(function (s) { s.classList.remove('active'); });
+      st.classList.add('active');
+      var target = st.getAttribute('data-chat');
+      document.getElementById('chat-team').style.display = target === 'team' ? '' : 'none';
+      document.getElementById('chat-agents').style.display = target === 'agents' ? '' : 'none';
+    });
+  });
+
+  // ---- Refresh ----
+  document.getElementById('btn-refresh').addEventListener('click', function () {
+    fetchOverview();
+  });
+
+  // ---- Data fetching ----
+  function fetchOverview() {
+    pollStatus.textContent = '...';
+    apiGet('/admin/overview', function (err, data) {
+      if (err) {
+        pollStatus.textContent = 'err';
+        if (err.message === '401' || err.message === '403') {
+          authToken = null;
+          sessionStorage.removeItem('mycelium_token');
+          loginScreen.style.display = '';
+          app.classList.remove('visible');
+          if (pollTimer) clearInterval(pollTimer);
+        }
+        return;
+      }
+      lastData = data;
+      pollStatus.textContent = shortTime(new Date().toISOString());
+      render(data);
+    });
+  }
+
+  function render(data) {
+    renderStats(data);
+    renderAgents(data.agents);
+    renderEvents(data.events);
+    renderTeamChat(data.team_chat);
+    renderMessages(data.messages);
+    updateAgentSelector(data.agents);
+  }
+
+  // ---- Stats ----
+  function renderStats(data) {
+    var c = document.getElementById('stats-row');
+    var t = data.tasks || {};
+    var openTasks = (t.open || []).length + (t.in_progress || []).length + (t.review || []).length;
+    var approvals = (data.approval_queue || []).length;
+    var msgs = (data.messages || []).filter(function (m) {
+      return m.msg_type === 'request' && m.status !== 'completed';
+    }).length;
+    clearEl(c);
+    [
+      { val: openTasks, label: 'Tasks' },
+      { val: approvals, label: 'Approvals' },
+      { val: msgs, label: 'Requests' }
+    ].forEach(function (s) {
+      var card = el('div', { className: 'stat-card' }, [
+        el('div', { className: 'stat-val', textContent: String(s.val) }),
+        el('div', { className: 'stat-label', textContent: s.label })
+      ]);
+      c.appendChild(card);
+    });
+  }
+
+  // ---- Agents ----
+  function renderAgents(agents) {
+    var c = document.getElementById('agents-list');
+    clearEl(c);
+    if (!agents || !agents.length) {
+      c.appendChild(el('div', { className: 'empty-state', textContent: 'No agents registered' }));
+      return;
+    }
+    agents.sort(function (a, b) {
+      var aOn = a.status === 'online' ? 0 : 1;
+      var bOn = b.status === 'online' ? 0 : 1;
+      return aOn - bOn;
+    });
+    agents.forEach(function (agent) {
+      var isOnline = agent.status === 'online';
+      var card = el('div', { className: 'agent-card ' + (isOnline ? 'online' : 'offline') });
+
+      var top = el('div', { className: 'agent-top' });
+      top.appendChild(el('span', { className: 'agent-dot ' + (isOnline ? 'online' : '') }));
+      top.appendChild(el('span', { className: 'agent-name', textContent: agent.name || agent.id }));
+      var gameClass = 'agent-game';
+      if (agent.game && agent.game.indexOf('king') !== -1) gameClass += ' kc';
+      top.appendChild(el('span', { className: gameClass, textContent: agent.game || 'none' }));
+      card.appendChild(top);
+
+      if (agent.working_on) {
+        var working = el('div', { className: 'agent-working', textContent: agent.working_on });
+        working.addEventListener('click', function () {
+          working.classList.toggle('expanded');
+        });
+        card.appendChild(working);
+      }
+
+      var meta = el('div', { className: 'agent-meta' });
+      if (agent.last_heartbeat) meta.appendChild(el('span', { textContent: timeAgo(agent.last_heartbeat) }));
+      card.appendChild(meta);
+
+      c.appendChild(card);
+    });
+  }
+
+  // ---- Events ----
+  function renderEvents(events) {
+    var c = document.getElementById('events-list');
+    clearEl(c);
+    if (!events || !events.length) {
+      c.appendChild(el('div', { className: 'empty-state', textContent: 'No recent activity' }));
+      return;
+    }
+    var recent = events.slice(0, 15);
+    recent.forEach(function (ev) {
+      var item = el('div', { className: 'event-item' });
+      item.appendChild(el('span', { className: 'event-dot' }));
+
+      var text = el('span', { className: 'event-text' });
+      text.appendChild(el('span', { className: 'event-agent', textContent: ev.agent_id || 'system' }));
+      text.appendChild(document.createTextNode(' ' + (ev.event_type || '')));
+      if (ev.details) {
+        try {
+          var d = typeof ev.details === 'string' ? JSON.parse(ev.details) : ev.details;
+          var detail = d.title || d.task_title || '';
+          if (detail) {
+            text.appendChild(document.createTextNode(' \u2014 ' + detail));
+          }
+        } catch (e) {}
+      }
+      item.appendChild(text);
+      item.appendChild(el('span', { className: 'event-time', textContent: timeAgo(ev.created_at) }));
+      c.appendChild(item);
+    });
+  }
+
+  // ---- Team Chat ----
+  function getUserAvatar(sender) {
+    var name = (sender || '').replace('__user:', '');
+    var lower = name.toLowerCase();
+    var initial = name.charAt(0).toUpperCase() || '?';
+    if (lower.indexOf('greatness') !== -1) return { cls: 'av-g', initial: 'G', name: name };
+    if (lower.indexOf('hijack') !== -1) return { cls: 'av-h', initial: 'H', name: name };
+    if (lower.indexOf('stoupe') !== -1) return { cls: 'av-s', initial: 'S', name: name };
+    if (lower.indexOf('admin') !== -1) return { cls: 'av-admin', initial: 'A', name: name };
+    return { cls: 'av-default', initial: initial, name: name };
+  }
+
+  function renderTeamChat(msgs) {
+    var c = document.getElementById('team-chat-msgs');
+    if (!msgs || !msgs.length) {
+      clearEl(c);
+      c.appendChild(el('div', { className: 'empty-state', textContent: 'No messages yet' }));
+      return;
+    }
+    var sorted = msgs.slice().sort(function (a, b) {
+      return new Date(normalizeTs(a.created_at)) - new Date(normalizeTs(b.created_at));
+    });
+    var wasAtBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 80;
+    clearEl(c);
+    var lastSender = null;
+    sorted.forEach(function (m) {
+      var sameSender = m.from_agent === lastSender;
+      if (!sameSender) {
+        var user = getUserAvatar(m.from_agent || 'unknown');
+        var senderRow = el('div', { className: 'msg-sender-row' });
+        senderRow.appendChild(el('span', { className: 'msg-avatar ' + user.cls, textContent: user.initial }));
+        senderRow.appendChild(el('span', { className: 'msg-sender-name', textContent: user.name }));
+        senderRow.appendChild(el('span', { className: 'msg-time', textContent: shortTime(m.created_at) }));
+        c.appendChild(senderRow);
+      }
+      c.appendChild(el('div', { className: 'msg-bubble', textContent: m.content }));
+      lastSender = m.from_agent;
+    });
+    if (wasAtBottom) c.scrollTop = c.scrollHeight;
+  }
+
+  // Team chat send
+  document.getElementById('team-chat-send').addEventListener('click', sendTeamChat);
+  document.getElementById('team-chat-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTeamChat(); }
+  });
+
+  function sendTeamChat() {
+    var input = document.getElementById('team-chat-input');
+    var content = input.value.trim();
+    if (!content) return;
+    input.value = '';
+    apiPost('/team-chat', { content: content }, function (err) {
+      if (err) { input.value = content; return; }
+      fetchOverview();
+    });
+  }
+
+  // ---- Agent Messages ----
+  function renderMessages(msgs) {
+    var c = document.getElementById('agent-msgs-list');
+    if (!msgs || !msgs.length) {
+      clearEl(c);
+      c.appendChild(el('div', { className: 'empty-state', textContent: 'No agent messages' }));
+      return;
+    }
+    var sorted = msgs.slice().sort(function (a, b) {
+      return new Date(normalizeTs(a.created_at)) - new Date(normalizeTs(b.created_at));
+    });
+    var wasAtBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 80;
+    clearEl(c);
+    sorted.forEach(function (m) {
+      var user = getUserAvatar(m.from_agent || 'system');
+      var senderRow = el('div', { className: 'msg-sender-row' });
+      senderRow.appendChild(el('span', { className: 'msg-avatar ' + user.cls, textContent: user.initial }));
+      senderRow.appendChild(el('span', { className: 'msg-sender-name', textContent: user.name }));
+      if (m.to_agent) {
+        senderRow.appendChild(el('span', { className: 'msg-time', textContent: '\u2192 ' + m.to_agent }));
+      }
+      if (m.msg_type && m.msg_type !== 'message') {
+        senderRow.appendChild(el('span', { className: 'msg-badge type-' + m.msg_type, textContent: m.msg_type }));
+      }
+      if (m.msg_type === 'request' && m.status) {
+        senderRow.appendChild(el('span', { className: 'msg-badge status-' + m.status, textContent: m.status }));
+      }
+      senderRow.appendChild(el('span', { className: 'msg-time', textContent: shortTime(m.created_at) }));
+      c.appendChild(senderRow);
+      c.appendChild(el('div', { className: 'msg-bubble', textContent: m.content }));
+    });
+    if (wasAtBottom) c.scrollTop = c.scrollHeight;
+  }
+
+  function updateAgentSelector(agents) {
+    var sel = document.getElementById('agent-msg-to');
+    var current = sel.value;
+    clearEl(sel);
+    sel.appendChild(el('option', { value: '', textContent: 'All agents' }));
+    if (agents) {
+      agents.forEach(function (a) {
+        sel.appendChild(el('option', { value: a.id, textContent: a.name || a.id }));
+      });
+    }
+    sel.value = current;
+  }
+
+  // Agent msg send
+  document.getElementById('agent-msg-send').addEventListener('click', sendAgentMsg);
+  document.getElementById('agent-msg-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAgentMsg(); }
+  });
+
+  function sendAgentMsg() {
+    var input = document.getElementById('agent-msg-input');
+    var content = input.value.trim();
+    if (!content) return;
+    var to = document.getElementById('agent-msg-to').value;
+    input.value = '';
+    var body = { from_agent: 'admin', content: content, game: 'willing-sacrifice' };
+    if (to) body.to_agent = to;
+    apiPost('/messages', body, function (err) {
+      if (err) { input.value = content; return; }
+      fetchOverview();
+    });
+  }
+
+  // =============== VOICE CHAT (WebRTC) ===============
+
+  var voiceWs = null;
+  var voiceMyId = null;
+  var voiceConnections = {};
+  var voiceLocalStream = null;
+  var voiceMuted = false;
+  var voiceConnected = false;
+  var ICE_SERVERS = [];
+  var voiceAudioCtx = null;
+
+  var voiceBigBtn = document.getElementById('voice-big-btn');
+  var voiceControls = document.getElementById('voice-controls');
+  var voiceMuteBtn = document.getElementById('voice-mute-btn');
+  var voiceLeaveBtn = document.getElementById('voice-leave-btn');
+  var voiceStatusText = document.getElementById('voice-status-text');
+  var voicePeersGrid = document.getElementById('voice-peers-grid');
+
+  function playVoiceTone(type) {
+    try {
+      if (!voiceAudioCtx) voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var ctx = voiceAudioCtx;
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.15;
+      if (type === 'join') {
+        osc.frequency.value = 440;
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.setValueAtTime(554, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.25);
+      } else {
+        osc.frequency.value = 554;
+        osc.frequency.setValueAtTime(554, ctx.currentTime);
+        osc.frequency.setValueAtTime(370, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.25);
+      }
+    } catch (e) {}
+  }
+
+  function pollVoiceRoom() {
+    fetch('/api/voice/peers').then(function (r) { return r.json(); }).then(function (data) {
+      if (!voiceConnected) {
+        renderVoiceRoomIdle(data.peers);
+      }
+    }).catch(function () {});
+  }
+
+  function renderVoiceRoomIdle(peers) {
+    clearEl(voicePeersGrid);
+    var badge = document.getElementById('voice-badge');
+    if (!peers || !peers.length) {
+      voiceStatusText.textContent = 'No one in voice';
+      voiceStatusText.className = 'voice-status-text';
+      badge.style.display = 'none';
+      return;
+    }
+    voiceStatusText.textContent = peers.length + ' in channel';
+    voiceStatusText.className = 'voice-status-text';
+    badge.textContent = peers.length;
+    badge.style.display = '';
+
+    peers.forEach(function (p) {
+      var name = p.name || p.id;
+      var circle = el('div', { className: 'voice-peer-circle' }, [
+        el('div', { className: 'voice-peer-avatar' + (p.muted ? ' muted' : ''), textContent: (name.charAt(0) || '?').toUpperCase() }),
+        el('div', { className: 'voice-peer-name', textContent: name })
+      ]);
+      voicePeersGrid.appendChild(circle);
+    });
+  }
+
+  // Join / Leave
+  voiceBigBtn.addEventListener('click', function () {
+    if (voiceConnected) voiceDisconnect();
+    else voiceConnectFn();
+  });
+  voiceLeaveBtn.addEventListener('click', function () { voiceDisconnect(); });
+  voiceMuteBtn.addEventListener('click', function () {
+    voiceMuted = !voiceMuted;
+    voiceMuteBtn.textContent = voiceMuted ? 'Unmute' : 'Mute';
+    voiceMuteBtn.classList.toggle('muted', voiceMuted);
+    if (voiceLocalStream) {
+      voiceLocalStream.getAudioTracks().forEach(function (t) { t.enabled = !voiceMuted; });
+      if (voiceLocalStream._rawStream) {
+        voiceLocalStream._rawStream.getAudioTracks().forEach(function (t) { t.enabled = !voiceMuted; });
+      }
+    }
+    if (voiceWs && voiceWs.readyState === 1) {
+      voiceWs.send(JSON.stringify({ type: 'mute', muted: voiceMuted }));
+    }
+    renderVoicePeersLive();
+  });
+
+  function voiceConnectFn() {
+    if (voiceConnected) return;
+
+    voiceStatusText.textContent = 'Connecting...';
+
+    fetch('/api/voice/turn-credentials').then(function (r) { return r.json(); }).then(function (data) {
+      ICE_SERVERS = data.iceServers;
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
+        },
+        video: false
+      });
+    }).then(function (rawStream) {
+      // Audio processing pipeline
+      var audioCtx = new AudioContext({ sampleRate: 48000 });
+      var source = audioCtx.createMediaStreamSource(rawStream);
+
+      var highpass = audioCtx.createBiquadFilter();
+      highpass.type = 'highpass';
+      highpass.frequency.value = 80;
+      highpass.Q.value = 0.7;
+
+      var lowpass = audioCtx.createBiquadFilter();
+      lowpass.type = 'lowpass';
+      lowpass.frequency.value = 14000;
+      lowpass.Q.value = 0.7;
+
+      var compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.value = -24;
+      compressor.knee.value = 30;
+      compressor.ratio.value = 3;
+      compressor.attack.value = 0.01;
+      compressor.release.value = 0.25;
+
+      var gain = audioCtx.createGain();
+      gain.gain.value = 1.0;
+
+      source.connect(highpass);
+      highpass.connect(lowpass);
+      lowpass.connect(compressor);
+      compressor.connect(gain);
+
+      var analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      gain.connect(analyser);
+
+      var dest = audioCtx.createMediaStreamDestination();
+      gain.connect(dest);
+
+      voiceLocalStream = dest.stream;
+      voiceLocalStream._rawStream = rawStream;
+      voiceLocalStream._audioCtx = audioCtx;
+      voiceLocalStream._analyser = analyser;
+      voiceConnected = true;
+
+      // Speaking detection
+      var analyserData = new Uint8Array(analyser.frequencyBinCount);
+      var wasSpeaking = false;
+      voiceLocalStream._speakingInterval = setInterval(function () {
+        if (!voiceConnected || voiceMuted) {
+          if (wasSpeaking) { wasSpeaking = false; renderVoicePeersLive(); }
+          return;
+        }
+        analyser.getByteFrequencyData(analyserData);
+        var sum = 0;
+        for (var i = 0; i < analyserData.length; i++) sum += analyserData[i];
+        var avg = sum / analyserData.length;
+        var speaking = avg > 15;
+        if (speaking !== wasSpeaking) {
+          wasSpeaking = speaking;
+          voiceLocalStream._speaking = speaking;
+          renderVoicePeersLive();
+        }
+      }, 100);
+
+      // UI update
+      voiceBigBtn.classList.add('active');
+      voiceBigBtn.textContent = '\u23F9';
+      voiceControls.classList.add('visible');
+      voiceStatusText.textContent = 'Connected';
+      voiceStatusText.className = 'voice-status-text connected';
+
+      // WebSocket
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      voiceWs = new WebSocket(proto + '//' + location.host + '/voice');
+
+      voiceWs.onopen = function () {
+        voiceStatusText.textContent = 'Connected';
+      };
+      voiceWs.onclose = function () { voiceDisconnect(); };
+      voiceWs.onerror = function () {
+        voiceStatusText.textContent = 'Connection error';
+        voiceStatusText.className = 'voice-status-text';
+      };
+      voiceWs.onmessage = function (evt) {
+        try { handleVoiceMessage(JSON.parse(evt.data)); } catch (e) {}
+      };
+
+    }).catch(function (err) {
+      voiceStatusText.textContent = 'Mic denied: ' + err.message;
+      voiceStatusText.className = 'voice-status-text';
+    });
+  }
+
+  function voiceDisconnect() {
+    voiceConnected = false;
+    voiceMyId = null;
+
+    for (var pid in voiceConnections) {
+      if (voiceConnections[pid].pc) voiceConnections[pid].pc.close();
+      var audioEl = document.getElementById('audio-' + pid);
+      if (audioEl) audioEl.remove();
+    }
+    voiceConnections = {};
+
+    if (voiceLocalStream) {
+      if (voiceLocalStream._speakingInterval) clearInterval(voiceLocalStream._speakingInterval);
+      voiceLocalStream.getTracks().forEach(function (t) { t.stop(); });
+      if (voiceLocalStream._rawStream) voiceLocalStream._rawStream.getTracks().forEach(function (t) { t.stop(); });
+      if (voiceLocalStream._audioCtx) voiceLocalStream._audioCtx.close().catch(function () {});
+      voiceLocalStream = null;
+    }
+
+    if (voiceWs) { voiceWs.close(); voiceWs = null; }
+
+    voiceMuted = false;
+    voiceMuteBtn.textContent = 'Mute';
+    voiceMuteBtn.classList.remove('muted');
+    voiceBigBtn.classList.remove('active');
+    voiceBigBtn.textContent = '\uD83C\uDFA4';
+    voiceControls.classList.remove('visible');
+    voiceStatusText.className = 'voice-status-text';
+
+    pollVoiceRoom();
+  }
+
+  function handleVoiceMessage(msg) {
+    if (msg.type === 'welcome') {
+      voiceMyId = msg.id;
+      voiceWs.send(JSON.stringify({ type: 'set_name', name: 'Mobile' }));
+      if (msg.peers) {
+        msg.peers.forEach(function (p) {
+          voiceConnections[p.id] = { name: p.name, muted: p.muted, pc: null, stream: null };
+          createPeerConnection(p.id, true);
+        });
+      }
+      renderVoicePeersLive();
+
+    } else if (msg.type === 'peer_joined') {
+      voiceConnections[msg.peer.id] = { name: msg.peer.name, muted: msg.peer.muted, pc: null, stream: null };
+      playVoiceTone('join');
+      renderVoicePeersLive();
+
+    } else if (msg.type === 'peer_left') {
+      if (voiceConnections[msg.id]) {
+        if (voiceConnections[msg.id].pc) voiceConnections[msg.id].pc.close();
+        var audioEl = document.getElementById('audio-' + msg.id);
+        if (audioEl) audioEl.remove();
+        delete voiceConnections[msg.id];
+      }
+      playVoiceTone('leave');
+      renderVoicePeersLive();
+
+    } else if (msg.type === 'peer_updated') {
+      if (voiceConnections[msg.peer.id]) {
+        voiceConnections[msg.peer.id].name = msg.peer.name;
+        voiceConnections[msg.peer.id].muted = msg.peer.muted;
+      }
+      renderVoicePeersLive();
+
+    } else if (msg.type === 'offer') {
+      if (!voiceConnections[msg.from]) {
+        voiceConnections[msg.from] = { name: msg.from, muted: false, pc: null, stream: null };
+      }
+      createPeerConnection(msg.from, false);
+      var pc = voiceConnections[msg.from].pc;
+      pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: msg.sdp }))
+        .then(function () { return pc.createAnswer(); })
+        .then(function (answer) {
+          answer.sdp = boostOpusSDP(answer.sdp);
+          return pc.setLocalDescription(answer);
+        })
+        .then(function () {
+          voiceWs.send(JSON.stringify({ type: 'answer', to: msg.from, sdp: pc.localDescription.sdp }));
+        })
+        .catch(function (e) { console.error('Voice answer error:', e); });
+
+    } else if (msg.type === 'answer') {
+      if (voiceConnections[msg.from] && voiceConnections[msg.from].pc) {
+        voiceConnections[msg.from].pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }))
+          .catch(function (e) { console.error('Voice set answer error:', e); });
+      }
+
+    } else if (msg.type === 'ice') {
+      if (voiceConnections[msg.from] && voiceConnections[msg.from].pc && msg.candidate) {
+        voiceConnections[msg.from].pc.addIceCandidate(new RTCIceCandidate(msg.candidate))
+          .catch(function () {});
+      }
+    }
+  }
+
+  function boostOpusSDP(sdp) {
+    return sdp.replace(/a=fmtp:111 /g, 'a=fmtp:111 maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;usedtx=0;');
+  }
+
+  function createPeerConnection(peerId, isOfferer) {
+    var pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    voiceConnections[peerId].pc = pc;
+
+    if (voiceLocalStream) {
+      voiceLocalStream.getTracks().forEach(function (track) {
+        pc.addTrack(track, voiceLocalStream);
+      });
+    }
+
+    pc.ontrack = function (event) {
+      voiceConnections[peerId].stream = event.streams[0];
+      var audioId = 'audio-' + peerId;
+      var audio = document.getElementById(audioId);
+      if (!audio) {
+        audio = document.createElement('audio');
+        audio.id = audioId;
+        audio.autoplay = true;
+        audio.volume = 1.0;
+        document.body.appendChild(audio);
+      }
+      audio.srcObject = event.streams[0];
+      var playPromise = audio.play();
+      if (playPromise) {
+        playPromise.catch(function () {
+          document.addEventListener('click', function retryPlay() {
+            audio.play().catch(function () {});
+            document.removeEventListener('click', retryPlay);
+          }, { once: true });
+        });
+      }
+    };
+
+    pc.onicecandidate = function (event) {
+      if (event.candidate && voiceWs && voiceWs.readyState === 1) {
+        voiceWs.send(JSON.stringify({ type: 'ice', to: peerId, candidate: event.candidate }));
+      }
+    };
+
+    pc.onconnectionstatechange = function () {
+      renderVoicePeersLive();
+    };
+
+    if (isOfferer) {
+      pc.createOffer()
+        .then(function (offer) {
+          offer.sdp = boostOpusSDP(offer.sdp);
+          return pc.setLocalDescription(offer);
+        })
+        .then(function () {
+          voiceWs.send(JSON.stringify({ type: 'offer', to: peerId, sdp: pc.localDescription.sdp }));
+        })
+        .catch(function (e) { console.error('Voice offer error:', e); });
+    }
+  }
+
+  function renderVoicePeersLive() {
+    clearEl(voicePeersGrid);
+
+    // Show self
+    var selfSpeaking = voiceLocalStream && voiceLocalStream._speaking && !voiceMuted;
+    var selfCircle = el('div', { className: 'voice-peer-circle' }, [
+      el('div', { className: 'voice-peer-avatar' + (selfSpeaking ? ' speaking' : '') + (voiceMuted ? ' muted' : ''), textContent: 'Y' }),
+      el('div', { className: 'voice-peer-name', textContent: 'You' + (voiceMuted ? ' (muted)' : '') })
+    ]);
+    voicePeersGrid.appendChild(selfCircle);
+
+    var peerCount = 1;
+    for (var pid in voiceConnections) {
+      var p = voiceConnections[pid];
+      var name = p.name || pid;
+      var connState = p.pc ? p.pc.connectionState : 'new';
+      var label = name;
+      if (connState !== 'connected' && connState !== 'new') label += ' (' + connState + ')';
+      var peerCircle = el('div', { className: 'voice-peer-circle' }, [
+        el('div', { className: 'voice-peer-avatar' + (p.muted ? ' muted' : ''), textContent: (name.charAt(0) || '?').toUpperCase() }),
+        el('div', { className: 'voice-peer-name', textContent: label })
+      ]);
+      voicePeersGrid.appendChild(peerCircle);
+      peerCount++;
+    }
+
+    voiceStatusText.textContent = peerCount + ' in channel';
+    var badge = document.getElementById('voice-badge');
+    badge.textContent = peerCount;
+    badge.style.display = '';
+  }
+
+})();
+</script>
+</body>
+</html>

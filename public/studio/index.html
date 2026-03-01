@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dioverse Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="studio.css">
+</head>
+<body>
+  <div id="login-screen">
+    <div class="login-box">
+      <h1>DIOVERSE STUDIO</h1>
+      <p>Distributed Game Development Hub</p>
+      <input type="text" id="login-username" placeholder="Username" autofocus>
+      <input type="password" id="login-password" placeholder="Password">
+      <button id="login-btn">Enter Studio</button>
+      <div id="login-error"></div>
+    </div>
+  </div>
+
+  <div id="dashboard" style="display:none">
+    <header>
+      <h1>DIOVERSE STUDIO</h1>
+      <div class="header-actions">
+        <button id="create-task-btn" class="action-btn">+ Task</button>
+        <button id="send-msg-btn" class="action-btn">+ Message</button>
+        <button id="create-plan-btn" class="action-btn btn-plan">+ Plan</button>
+        <button id="file-bug-btn" class="action-btn btn-bug">+ Bug</button>
+        <button id="voice-btn" class="action-btn btn-voice">Voice</button>
+        <button id="dictate-btn" class="action-btn btn-dictate">Dictate</button>
+      </div>
+      <div class="header-right">
+        <span id="user-display-name" class="user-name"></span>
+        <span id="last-refresh"></span>
+        <button id="refresh-btn" title="Refresh now">Refresh</button>
+        <button id="logout-btn">Logout</button>
+      </div>
+    </header>
+
+    <div id="voice-channel" class="voice-channel">
+      <div class="voice-info">
+        <span class="voice-icon">Studio Voice</span>
+        <span id="voice-status">Not connected</span>
+        <div id="voice-peers"></div>
+      </div>
+      <div class="voice-controls">
+        <button id="voice-join" class="voice-ctrl voice-ctrl-join">Join</button>
+        <button id="voice-mute" class="voice-ctrl" style="display:none" title="Mute">Mute</button>
+        <button id="voice-leave" class="voice-ctrl voice-ctrl-leave" style="display:none" title="Leave">Leave</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Left: Agents + Queue -->
+      <div class="left-col">
+        <section class="panel agents-panel">
+          <h2>Agents</h2>
+          <div id="agents-list"></div>
+        </section>
+        <section class="panel queue-panel">
+          <div class="queue-section">
+            <div class="queue-header queue-header-approval">Approvals <span id="approval-count" class="queue-count"></span></div>
+            <div id="approval-list" class="queue-tiles"></div>
+          </div>
+          <div class="queue-section">
+            <div class="queue-header queue-header-request">Requests <span id="request-count" class="queue-count"></span></div>
+            <div id="requests-list" class="queue-tiles"></div>
+          </div>
+          <div class="queue-section">
+            <div class="queue-header queue-header-bug">Bugs <span id="bug-count" class="queue-count"></span></div>
+            <div id="bugs-list" class="queue-tiles"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Center -->
+      <div class="center-col">
+        <section class="panel tasks-panel">
+          <h2>Tasks</h2>
+          <div class="task-board">
+            <div class="task-col">
+              <h3>Open <span id="count-open" class="col-count"></span></h3>
+              <div id="tasks-open"></div>
+            </div>
+            <div class="task-col">
+              <h3>In Progress <span id="count-progress" class="col-count"></span></h3>
+              <div id="tasks-progress"></div>
+            </div>
+            <div class="task-col">
+              <h3>Review <span id="count-review" class="col-count"></span></h3>
+              <div id="tasks-review"></div>
+            </div>
+            <div class="task-col">
+              <h3 class="collapsible collapsed" id="done-header">Done <span id="count-done" class="col-count"></span></h3>
+              <div id="tasks-done" style="display:none"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="bottom-panels">
+          <section class="panel messages-panel">
+            <div class="msg-tab-bar">
+              <button class="msg-tab active" data-msg-tab="chat">Team Chat</button>
+              <button class="msg-tab" data-msg-tab="agents">Agent Comms <span id="msg-count" class="col-count"></span></button>
+            </div>
+            <div id="team-chat-container" class="msg-tab-content">
+              <div id="team-chat-list" class="scrollable"></div>
+              <div class="chat-input-bar">
+                <input type="text" id="chat-input" placeholder="Message the team..." autocomplete="off">
+                <button id="chat-send" class="btn-primary">Send</button>
+              </div>
+            </div>
+            <div id="agent-msgs-container" class="msg-tab-content" style="display:none">
+              <div id="messages-list" class="scrollable"></div>
+            </div>
+          </section>
+          <section class="panel events-panel">
+            <h2>Activity</h2>
+            <div id="events-list" class="scrollable"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Right column -->
+      <div class="right-col">
+        <section class="panel right-panel">
+          <div class="right-section">
+            <div class="queue-header queue-header-plan">Plans <span id="plan-count" class="queue-count"></span></div>
+            <div id="plans-list" class="queue-tiles"></div>
+          </div>
+          <div class="right-section">
+            <div class="queue-header queue-header-context">Context</div>
+            <div id="context-keys-list" class="queue-tiles"></div>
+            <div id="context-list"></div>
+          </div>
+          <div class="right-section">
+            <div class="queue-header queue-header-asset">Assets <span id="asset-count" class="queue-count"></span></div>
+            <div id="assets-list" class="queue-tiles"></div>
+          </div>
+          <div class="right-section">
+            <div class="queue-header queue-header-game">Games</div>
+            <div id="games-list" class="queue-tiles"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---- Modals ---- -->
+  <div id="modal-overlay" class="modal-overlay" style="display:none">
+    <div id="modal-create-task" class="modal" style="display:none">
+      <div class="modal-header">
+        <h3>Create Task</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>Title<input type="text" id="task-title" placeholder="Task title"></label>
+        <label>Description<textarea id="task-desc" rows="3" placeholder="What needs to be done?"></textarea></label>
+        <div class="form-row">
+          <label>Game
+            <select id="task-game">
+              <option value="willing-sacrifice">willing-sacrifice</option>
+              <option value="king-city">king-city</option>
+              <option value="dioverse">dioverse</option>
+            </select>
+          </label>
+          <label>Priority
+            <select id="task-priority">
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="urgent">urgent</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Assignee<input type="text" id="task-assignee" placeholder="e.g. greatness-claude"></label>
+          <label>Tags<input type="text" id="task-tags" placeholder="comma-separated"></label>
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="task-approval"> Needs human approval before execution
+        </label>
+        <div class="modal-actions">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary" id="task-submit">Create Task</button>
+        </div>
+        <div id="task-form-error" class="form-error"></div>
+      </div>
+    </div>
+
+    <div id="modal-send-msg" class="modal" style="display:none">
+      <div class="modal-header">
+        <h3>Send Message</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Type
+            <select id="msg-type">
+              <option value="message">Message</option>
+              <option value="request">Request (blocking)</option>
+            </select>
+          </label>
+          <label>Game
+            <select id="msg-game">
+              <option value="willing-sacrifice">willing-sacrifice</option>
+              <option value="king-city">king-city</option>
+              <option value="dioverse">dioverse</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>From<input type="text" id="msg-from" placeholder="e.g. admin"></label>
+          <label>To<input type="text" id="msg-to" placeholder="e.g. greatness-claude (optional)"></label>
+        </div>
+        <label>Content<textarea id="msg-content" rows="4" placeholder="Message content..."></textarea></label>
+        <div id="request-options" style="display:none">
+          <label class="checkbox-label">
+            <input type="checkbox" id="msg-auto-task"> Auto-create task for target agent
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary" id="msg-submit">Send</button>
+        </div>
+        <div id="msg-form-error" class="form-error"></div>
+      </div>
+    </div>
+
+    <div id="modal-file-bug" class="modal" style="display:none">
+      <div class="modal-header">
+        <h3>File Bug Report</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>Title<input type="text" id="bug-title" placeholder="Short bug summary"></label>
+        <label>Description<textarea id="bug-desc" rows="4" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea></label>
+        <div class="form-row">
+          <label>Game
+            <select id="bug-game">
+              <option value="willing-sacrifice">willing-sacrifice</option>
+              <option value="king-city">king-city</option>
+              <option value="studio">studio</option>
+              <option value="dioverse">dioverse</option>
+            </select>
+          </label>
+          <label>Severity
+            <select id="bug-severity">
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Category
+            <select id="bug-category">
+              <option value="other">other</option>
+              <option value="gameplay">gameplay</option>
+              <option value="ui">ui</option>
+              <option value="crash">crash</option>
+              <option value="api">api</option>
+              <option value="infrastructure">infrastructure</option>
+              <option value="balance">balance</option>
+            </select>
+          </label>
+          <label>Assignee<input type="text" id="bug-assignee" placeholder="e.g. greatness-claude"></label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary" id="bug-submit">File Bug</button>
+        </div>
+        <div id="bug-form-error" class="form-error"></div>
+      </div>
+    </div>
+
+    <div id="modal-bug-detail" class="modal modal-wide" style="display:none">
+      <div class="modal-header">
+        <h3 id="bug-detail-title">Bug #0</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="bug-detail-body"></div>
+    </div>
+
+    <div id="modal-dictate" class="modal" style="display:none">
+      <div class="modal-header">
+        <h3>Dictate to Agent</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>To Agent
+            <select id="dictate-agent">
+              <option value="greatness-claude">greatness-claude</option>
+              <option value="hijack-claude">hijack-claude</option>
+            </select>
+          </label>
+          <label>Send As
+            <select id="dictate-type">
+              <option value="message">Message</option>
+              <option value="request">Request (blocking)</option>
+            </select>
+          </label>
+        </div>
+        <div class="dictate-area">
+          <div id="dictate-status" class="dictate-status">Click the mic to start</div>
+          <button id="dictate-mic" class="dictate-mic">MIC</button>
+          <div id="dictate-transcript" class="dictate-transcript" contenteditable="true"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel">Cancel</button>
+          <button id="dictate-clear" class="btn-cancel">Clear</button>
+          <button class="btn-primary" id="dictate-send">Send to Agent</button>
+        </div>
+        <div id="dictate-error" class="form-error"></div>
+      </div>
+    </div>
+
+    <div id="modal-create-plan" class="modal" style="display:none">
+      <div class="modal-header">
+        <h3>Create Plan</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>Title<input type="text" id="plan-title" placeholder="Plan title"></label>
+        <label>Description<textarea id="plan-desc" rows="3" placeholder="What does this plan accomplish?"></textarea></label>
+        <div class="form-row">
+          <label>Game
+            <select id="plan-game">
+              <option value="dioverse">dioverse</option>
+              <option value="willing-sacrifice">willing-sacrifice</option>
+              <option value="king-city">king-city</option>
+            </select>
+          </label>
+          <label>Priority
+            <select id="plan-priority">
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="urgent">urgent</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+        </div>
+        <label>Owner<input type="text" id="plan-owner" placeholder="e.g. greatness-claude"></label>
+        <div class="modal-actions">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary" id="plan-submit">Create Plan</button>
+        </div>
+        <div id="plan-form-error" class="form-error"></div>
+      </div>
+    </div>
+
+    <div id="modal-plan-detail" class="modal modal-wide" style="display:none">
+      <div class="modal-header">
+        <h3 id="plan-detail-title">Plan #0</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="plan-detail-body"></div>
+    </div>
+
+    <div id="modal-task-detail" class="modal modal-wide" style="display:none">
+      <div class="modal-header">
+        <h3 id="detail-title">Task #0</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="detail-body"></div>
+    </div>
+  </div>
+
+  <script src="studio.js"></script>
+</body>
+</html>
