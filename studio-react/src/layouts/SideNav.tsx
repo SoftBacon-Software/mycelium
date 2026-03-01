@@ -13,6 +13,7 @@ const navItems = [
   { to: '/assets', label: 'Assets', abbr: 'As' },
   { to: '/operators', label: 'Operators', abbr: 'Op' },
   { to: '/approvals', label: 'Approvals', abbr: 'Ap' },
+  { to: '/drones', label: 'Drones', abbr: 'Dr' },
 ] as const
 
 export default function SideNav() {
