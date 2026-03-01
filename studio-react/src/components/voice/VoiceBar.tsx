@@ -1,70 +1,58 @@
-import { useVoice } from '../../hooks/useVoice';
+import { Link } from 'react-router-dom'
+import { useVoiceStore } from '../../stores/voiceStore'
 
 export default function VoiceBar() {
-  const { isConnected, isMuted, peers, error, join, leave, toggleMute } = useVoice();
+  const { isConnected, isMuted, channelName, peers, error, leave, toggleMute } =
+    useVoiceStore()
 
-  const peerCount = peers.length;
+  if (!isConnected) return null
 
+  const peerCount = peers.length
   const statusText = error
     ? error
-    : !isConnected
-      ? 'Not connected'
-      : peerCount === 0
-        ? 'Connected'
-        : `${peerCount} peer${peerCount !== 1 ? 's' : ''}`;
+    : peerCount === 0
+      ? 'Connected'
+      : `${peerCount} peer${peerCount !== 1 ? 's' : ''}`
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1 rounded bg-surface-raised/50 text-xs font-mono">
-      {/* Label */}
-      <span className="text-text-muted select-none">VOICE</span>
+    <div className="flex items-center gap-2 px-3 py-1.5 bg-surface border-t border-border text-xs font-mono">
+      {/* Green dot */}
+      <span className="w-2 h-2 rounded-full bg-green animate-pulse shrink-0" />
+
+      {/* Channel name */}
+      <Link
+        to="/channels"
+        className="text-accent hover:underline underline-offset-2"
+      >
+        #{channelName}
+      </Link>
 
       {/* Status */}
-      <span
-        className={
-          error
-            ? 'text-red'
-            : isConnected
-              ? 'text-green'
-              : 'text-text-muted'
-        }
-        title={error || undefined}
-      >
+      <span className={error ? 'text-red' : 'text-text-muted'}>
         {statusText}
       </span>
 
-      {/* Join button — shown when disconnected */}
-      {!isConnected && (
-        <button
-          onClick={join}
-          className="px-2 py-0.5 rounded-sm bg-green/20 text-green hover:bg-green/30 transition-colors"
-        >
-          JOIN
-        </button>
-      )}
+      <div className="flex-1" />
 
-      {/* Mute button — shown when connected */}
-      {isConnected && (
-        <button
-          onClick={toggleMute}
-          className={`px-2 py-0.5 rounded-sm transition-colors ${
-            isMuted
-              ? 'bg-red/20 text-red hover:bg-red/30'
-              : 'bg-surface-raised text-text-dim hover:text-text hover:bg-surface-raised/80'
-          }`}
-        >
-          {isMuted ? 'UNMUTE' : 'MUTE'}
-        </button>
-      )}
+      {/* Mute */}
+      <button
+        onClick={toggleMute}
+        className={`px-2 py-0.5 rounded-sm transition-colors ${
+          isMuted
+            ? 'bg-red/20 text-red hover:bg-red/30'
+            : 'bg-surface-raised text-text-dim hover:text-text hover:bg-surface-raised/80'
+        }`}
+      >
+        {isMuted ? 'UNMUTE' : 'MUTE'}
+      </button>
 
-      {/* Leave button — shown when connected */}
-      {isConnected && (
-        <button
-          onClick={leave}
-          className="px-2 py-0.5 rounded-sm bg-red/20 text-red hover:bg-red/30 transition-colors"
-        >
-          LEAVE
-        </button>
-      )}
+      {/* Leave */}
+      <button
+        onClick={leave}
+        className="px-2 py-0.5 rounded-sm bg-red/20 text-red hover:bg-red/30 transition-colors"
+      >
+        LEAVE
+      </button>
     </div>
-  );
+  )
 }

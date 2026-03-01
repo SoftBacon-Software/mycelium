@@ -1,8 +1,10 @@
 import { Outlet, useLocation } from 'react-router-dom'
 import SideNav from './SideNav'
 import DirectiveBanner from '../components/directives/DirectiveBanner'
+import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useVoiceStore } from '../stores/voiceStore'
 import { useEffect, useMemo } from 'react'
 
 const routeTitles: Record<string, string> = {
@@ -32,6 +34,8 @@ export default function AppLayout() {
   const { lastRefresh, loading, refresh, instanceConfig } = useDashboardStore()
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
+  const voiceConnected = useVoiceStore((s) => s.isConnected)
+  const showFloatingVoice = voiceConnected && location.pathname !== '/channels'
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
@@ -94,10 +98,17 @@ export default function AppLayout() {
         </header>
 
         {/* Content area */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className={`flex-1 overflow-y-auto p-6 ${showFloatingVoice ? 'pb-16' : ''}`}>
           <DirectiveBanner />
           <Outlet />
         </main>
+
+        {/* Floating voice bar (hidden on /channels where VoicePanel handles it) */}
+        {showFloatingVoice && (
+          <div className="shrink-0">
+            <VoiceBar />
+          </div>
+        )}
       </div>
     </div>
   )
