@@ -22,7 +22,7 @@ var storage = multer.diskStorage({
 });
 var upload = multer({ storage: storage, limits: { fileSize: 50 * 1024 * 1024 } });
 import {
-  createAgent, getAgent, listAgents, updateAgentHeartbeat, deleteAgent,
+  createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent,
   createGame, listGames, getGame,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
@@ -47,17 +47,22 @@ import {
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
   createDvTeamChat, listDvTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones,
-  addTaskComment, getTaskComments, deleteTaskComment
+  addTaskComment, getTaskComments, deleteTaskComment,
+  createOutreachCampaign, getOutreachCampaign, listOutreachCampaigns, updateOutreachCampaign,
+  createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
+  deleteOutreachContact, countOutreachContacts, findOutreachContactByEmail
 } from '../db.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
 
-var HTML_ESCAPE_MAP = { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' };
+// Sanitize input: ensure string type, trim, handle null/undefined.
+// HTML entity escaping removed — frontend uses textContent which is XSS-safe.
+// Keeping function signature so all call sites continue to work.
 function escapeHtml(str) {
   if (!str) return '';
-  return String(str).replace(/[<>&"']/g, function (ch) { return HTML_ESCAPE_MAP[ch]; });
+  return String(str);
 }
 
 // ---- Mycelium: project ↔ game normalization ----
@@ -194,9 +199,24 @@ router.post('/agents/heartbeat', function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var status = req.body.status || 'online';
-  var workingOn = escapeHtml(req.body.working_on || '');
+  var workingOn = req.body.working_on || '';
+  // Read previous state to craft a meaningful event summary
+  var prev = getAgent(agentId);
+  var prevStatus = prev ? prev.status : 'offline';
+  var prevWorkingOn = prev ? (prev.working_on || '') : '';
   updateAgentHeartbeat(agentId, status, workingOn);
-  emitEvent('agent_heartbeat', agentId, null, agentId + ' is ' + status + (workingOn ? ': ' + workingOn : ''));
+  // Differentiate event summaries based on what changed
+  var summary;
+  if (prevStatus !== status && status === 'online') {
+    summary = agentId + ' came online' + (workingOn ? ': ' + workingOn : '');
+  } else if (prevStatus !== status && status === 'offline') {
+    summary = agentId + ' went offline';
+  } else if (workingOn && workingOn !== prevWorkingOn) {
+    summary = agentId + ': ' + workingOn;
+  } else {
+    summary = agentId + ' is ' + status + (workingOn ? ': ' + workingOn : '');
+  }
+  emitEvent('agent_heartbeat', agentId, null, summary);
   res.json({ ok: true, agent: agentId, status: status });
 });
 
@@ -931,6 +951,43 @@ router.delete('/admin/agents/:id', function (req, res) {
   res.json({ ok: true, deleted: req.params.id });
 });
 
+// Regenerate agent API key (admin only)
+router.put('/admin/agents/:id/key', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+  var hash = bcrypt.hashSync(apiKey, 10);
+  updateAgentKey(req.params.id, hash);
+  emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
+  res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
+});
+
+// Admin heartbeat for any agent
+router.put('/admin/agents/:id/heartbeat', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  var status = req.body.status || 'online';
+  var workingOn = req.body.working_on || '';
+  var prevStatus = agent.status;
+  var prevWorkingOn = agent.working_on || '';
+  updateAgentHeartbeat(req.params.id, status, workingOn);
+  // Differentiate event summaries
+  var summary;
+  if (prevStatus !== status && status === 'online') {
+    summary = req.params.id + ' came online' + (workingOn ? ': ' + workingOn : '');
+  } else if (prevStatus !== status && status === 'offline') {
+    summary = req.params.id + ' went offline';
+  } else if (workingOn && workingOn !== prevWorkingOn) {
+    summary = req.params.id + ': ' + workingOn;
+  } else {
+    summary = req.params.id + ' is ' + status + (workingOn ? ': ' + workingOn : '');
+  }
+  emitEvent('agent_heartbeat', req.params.id, null, summary);
+  res.json({ ok: true, agent: req.params.id, status: status });
+});
+
 // Full studio overview (for dashboard)
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
@@ -1352,6 +1409,297 @@ router.get('/drones/:id', function (req, res) {
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
   res.json(safe);
+});
+
+// ======== OUTREACH ========
+
+// -- Campaigns --
+router.get('/outreach/campaigns', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listOutreachCampaigns({ project: req.query.project || req.query.game, status: req.query.status }));
+});
+
+router.post('/outreach/campaigns', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body;
+  if (!b.project || !b.name) return res.status(400).json({ error: 'project and name required' });
+  var id = createOutreachCampaign(b.project, b.name, b.persona_prompt, b.game_facts,
+    typeof b.templates === 'string' ? b.templates : JSON.stringify(b.templates || {}),
+    typeof b.config === 'string' ? b.config : JSON.stringify(b.config || {}), who);
+  emitEvent('outreach_campaign_created', who, b.project, who + ' created outreach campaign: ' + b.name, { campaign_id: id });
+  res.json({ id: id, name: b.name });
+});
+
+router.put('/outreach/campaigns/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var campaign = getOutreachCampaign(parseInt(req.params.id));
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  var fields = {};
+  for (var k of ['name', 'persona_prompt', 'game_facts', 'status']) {
+    if (req.body[k] !== undefined) fields[k] = req.body[k];
+  }
+  if (req.body.templates !== undefined) fields.templates = typeof req.body.templates === 'string' ? req.body.templates : JSON.stringify(req.body.templates);
+  if (req.body.config !== undefined) fields.config = typeof req.body.config === 'string' ? req.body.config : JSON.stringify(req.body.config);
+  updateOutreachCampaign(campaign.id, fields);
+  res.json({ ok: true, id: campaign.id });
+});
+
+// -- Contacts --
+router.get('/outreach/contacts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listOutreachContacts({
+    project: req.query.project || req.query.game,
+    status: req.query.status,
+    type: req.query.type,
+    campaign_id: req.query.campaign_id ? parseInt(req.query.campaign_id) : undefined,
+    limit: req.query.limit ? parseInt(req.query.limit) : 50,
+    offset: req.query.offset ? parseInt(req.query.offset) : 0
+  }));
+});
+
+router.post('/outreach/contacts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body;
+  if (!b.project || !b.name) return res.status(400).json({ error: 'project and name required' });
+  if (b.email) {
+    var existing = findOutreachContactByEmail(b.project, b.email);
+    if (existing) return res.status(409).json({ error: 'Contact with this email already exists', existing_id: existing.id });
+  }
+  var id = createOutreachContact({ ...b, created_by: who, metadata: b.metadata ? (typeof b.metadata === 'string' ? b.metadata : JSON.stringify(b.metadata)) : '{}' });
+  emitEvent('outreach_contact_created', who, b.project, who + ' added outreach contact: ' + b.name, { contact_id: id });
+  res.json({ id: id });
+});
+
+router.put('/outreach/contacts/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  var b = req.body;
+  if (b.metadata && typeof b.metadata !== 'string') b.metadata = JSON.stringify(b.metadata);
+  updateOutreachContact(contact.id, b);
+  emitEvent('outreach_contact_updated', who, contact.project, who + ' updated contact #' + contact.id + (b.status ? ' to ' + b.status : ''), { contact_id: contact.id });
+  res.json({ ok: true, id: contact.id });
+});
+
+router.delete('/outreach/contacts/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  deleteOutreachContact(contact.id);
+  res.json({ ok: true, deleted: contact.id });
+});
+
+// -- Pipeline actions --
+
+// Discover contacts (YouTube creators + Hunter.io press)
+router.post('/outreach/discover', async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var campaignId = req.body.campaign_id;
+  if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
+  var campaign = getOutreachCampaign(campaignId);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+  try {
+    var config = JSON.parse(campaign.config || '{}');
+    var { discoverCreators, discoverPress } = await import('../outreach/discoverer.js');
+
+    var findExisting = function (key) {
+      // Check if contact with this notes/email already exists
+      var contacts = listOutreachContacts({ project: campaign.project, limit: 1000 });
+      return contacts.some(function (c) { return c.notes === key || c.email === key; });
+    };
+
+    var creators = [];
+    if (config.youtube_api_key && config.queries) {
+      creators = await discoverCreators(config, findExisting);
+    }
+
+    var press = [];
+    if (config.hunter_api_key && config.press_targets) {
+      press = await discoverPress(config, findExisting);
+    }
+
+    var created = 0;
+    for (var contact of [...creators, ...press]) {
+      createOutreachContact({ ...contact, project: campaign.project, campaign_id: campaignId, created_by: who });
+      created++;
+    }
+
+    emitEvent('outreach_discover', who, campaign.project,
+      who + ' discovered ' + created + ' contacts (' + creators.length + ' creators, ' + press.length + ' press)', { campaign_id: campaignId });
+    res.json({ ok: true, creators: creators.length, press: press.length, total: created });
+  } catch (e) {
+    res.status(500).json({ error: 'Discovery failed: ' + e.message });
+  }
+});
+
+// Research a contact (fetch latest content)
+router.post('/outreach/research/:id', async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
+  try {
+    var campaign = contact.campaign_id ? getOutreachCampaign(contact.campaign_id) : null;
+    var config = campaign ? JSON.parse(campaign.config || '{}') : {};
+    var { researchCreator, researchPress } = await import('../outreach/researcher.js');
+
+    var updates = contact.type === 'creator'
+      ? await researchCreator(contact, config.youtube_api_key)
+      : await researchPress(contact);
+
+    updates.status = 'researched';
+    updateOutreachContact(contact.id, updates);
+    res.json({ ok: true, id: contact.id, updates: updates });
+  } catch (e) {
+    res.status(500).json({ error: 'Research failed: ' + e.message });
+  }
+});
+
+// Personalize pitch for a contact (Claude-generated)
+router.post('/outreach/personalize/:id', async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
+  try {
+    var campaign = contact.campaign_id ? getOutreachCampaign(contact.campaign_id) : null;
+    if (!campaign) return res.status(400).json({ error: 'Contact has no campaign — cannot personalize' });
+    var config = JSON.parse(campaign.config || '{}');
+    var apiKey = config.anthropic_api_key || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(400).json({ error: 'anthropic_api_key required in campaign config or ANTHROPIC_API_KEY env' });
+
+    var { personalize } = await import('../outreach/personalizer.js');
+    var result = await personalize(contact, campaign, apiKey);
+
+    updateOutreachContact(contact.id, {
+      pitch_subject: result.pitch_subject,
+      pitch_body: result.pitch_body,
+      status: 'draft_ready'
+    });
+
+    res.json({ ok: true, id: contact.id, subject: result.pitch_subject, body_preview: (result.pitch_body || '').substring(0, 200) });
+  } catch (e) {
+    res.status(500).json({ error: 'Personalization failed: ' + e.message });
+  }
+});
+
+// Approve a pitch draft
+router.put('/outreach/approve/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (contact.status !== 'draft_ready') return res.status(400).json({ error: 'Contact status must be draft_ready, got ' + contact.status });
+
+  var fields = { status: 'approved' };
+  // Allow editing subject/body during approval
+  if (req.body.pitch_subject) fields.pitch_subject = req.body.pitch_subject;
+  if (req.body.pitch_body) fields.pitch_body = req.body.pitch_body;
+  updateOutreachContact(contact.id, fields);
+  res.json({ ok: true, id: contact.id, status: 'approved' });
+});
+
+// Send approved pitch via Gmail
+router.post('/outreach/send/:id', async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (contact.status !== 'approved') return res.status(400).json({ error: 'Contact must be approved before sending' });
+  if (!contact.email) return res.status(400).json({ error: 'Contact has no email address' });
+
+  try {
+    var campaign = contact.campaign_id ? getOutreachCampaign(contact.campaign_id) : null;
+    var config = campaign ? JSON.parse(campaign.config || '{}') : {};
+
+    var dryRun = config.dry_run !== undefined ? config.dry_run : true;
+    if (req.body.dry_run !== undefined) dryRun = req.body.dry_run;
+
+    if (dryRun) {
+      updateOutreachContact(contact.id, {
+        status: 'sent',
+        pitch_sent_at: new Date().toISOString(),
+        followup_due_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()
+      });
+      return res.json({ ok: true, id: contact.id, dry_run: true, would_send_to: contact.email });
+    }
+
+    var { sendEmail } = await import('../outreach/mailer.js');
+    var msgId = await sendEmail(config, contact.email, contact.pitch_subject, contact.pitch_body, config.sender_email);
+
+    updateOutreachContact(contact.id, {
+      status: 'sent',
+      pitch_sent_at: new Date().toISOString(),
+      followup_due_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()
+    });
+
+    emitEvent('outreach_pitch_sent', who, contact.project, who + ' sent pitch to ' + contact.name, { contact_id: contact.id, gmail_id: msgId });
+    res.json({ ok: true, id: contact.id, gmail_id: msgId });
+  } catch (e) {
+    res.status(500).json({ error: 'Send failed: ' + e.message });
+  }
+});
+
+// Send follow-up email
+router.post('/outreach/followup/:id', async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var contact = getOutreachContact(parseInt(req.params.id));
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  if (contact.status !== 'sent') return res.status(400).json({ error: 'Contact must be in sent status for follow-up' });
+
+  try {
+    var campaign = contact.campaign_id ? getOutreachCampaign(contact.campaign_id) : null;
+    var config = campaign ? JSON.parse(campaign.config || '{}') : {};
+    var templates = {};
+    try { templates = JSON.parse(campaign.templates || '{}'); } catch (e) { /* */ }
+
+    var followupTemplate = templates.followup || { subject: 'Re: ' + contact.pitch_subject, body: '' };
+    var firstName = contact.name ? contact.name.split(' ')[0] : '';
+    var subject = followupTemplate.subject.replace('{original_subject}', contact.pitch_subject);
+    var body = followupTemplate.body
+      .replace('{first_name}', firstName)
+      .replace('{sender_name}', config.sender_name || '');
+
+    var dryRun = config.dry_run !== undefined ? config.dry_run : true;
+    if (req.body.dry_run !== undefined) dryRun = req.body.dry_run;
+
+    if (!dryRun && contact.email) {
+      var { sendEmail } = await import('../outreach/mailer.js');
+      await sendEmail(config, contact.email, subject, body, config.sender_email);
+    }
+
+    updateOutreachContact(contact.id, {
+      status: 'followed_up',
+      followup_sent_at: new Date().toISOString()
+    });
+
+    res.json({ ok: true, id: contact.id, dry_run: dryRun, status: 'followed_up' });
+  } catch (e) {
+    res.status(500).json({ error: 'Follow-up failed: ' + e.message });
+  }
+});
+
+// -- Status summary --
+router.get('/outreach/status', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var project = req.query.project || req.query.game;
+  if (!project) return res.status(400).json({ error: 'project query param required' });
+  var counts = countOutreachContacts(project);
+  var campaigns = listOutreachCampaigns({ project: project, status: 'active' });
+  res.json({ project: project, contact_counts: counts, active_campaigns: campaigns.length });
 });
 
 export default router;

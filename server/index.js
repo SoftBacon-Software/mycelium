@@ -40,6 +40,16 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// Ensure all JSON responses use UTF-8 charset
+app.use(function (req, res, next) {
+  var origJson = res.json.bind(res);
+  res.json = function (data) {
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    return origJson(data);
+  };
+  next();
+});
+
 // ---- Mycelium Dashboard ----
 var dashboardPath = path.join(__dirname, '..', 'public', 'studio');
 if (fs.existsSync(dashboardPath)) {

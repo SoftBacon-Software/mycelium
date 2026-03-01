@@ -206,20 +206,57 @@ header h1 {
 
 /* ---- Agents ---- */
 .agent-card {
-  padding: 0.4rem 0.35rem; border-bottom: 1px solid rgba(168, 147, 120, 0.05);
-  transition: background 0.15s;
+  display: flex; gap: 0.5rem; align-items: flex-start;
+  padding: 0.5rem; border-radius: var(--radius);
+  border: 1px solid transparent; transition: all 0.2s;
+  margin-bottom: 0.3rem;
 }
-.agent-card:last-child { border-bottom: none; }
-.agent-card:hover { background: rgba(168, 147, 120, 0.04); }
+.agent-card:hover {
+  background: rgba(168, 147, 120, 0.04);
+  border-color: rgba(168, 147, 120, 0.08);
+}
+.agent-card.agent-online {
+  border-left: 2px solid var(--green);
+}
+.agent-card.agent-offline {
+  border-left: 2px solid var(--text-muted); opacity: 0.7;
+}
+.agent-avatar {
+  width: 32px; height: 32px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.agent-info { flex: 1; min-width: 0; }
+.agent-header { display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.1rem; }
 .agent-name {
   font-family: 'JetBrains Mono', monospace;
   font-weight: 600; font-size: 0.7rem; color: var(--text);
 }
-.agent-status { font-size: 0.6rem; }
-.agent-status.online { color: var(--green); }
-.agent-status.offline { color: var(--text-muted); }
-.agent-working { font-size: 0.6rem; color: var(--text-dim); margin-top: 0.15rem; }
-.agent-heartbeat { font-size: 0.55rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+.agent-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.agent-dot.online { background: var(--green); box-shadow: 0 0 4px var(--glow-green); }
+.agent-dot.offline { background: var(--text-muted); }
+.agent-project {
+  font-size: 0.55rem; color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.agent-working {
+  font-size: 0.6rem; color: var(--text-dim); margin-top: 0.2rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.agent-footer { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem; }
+.agent-heartbeat {
+  font-size: 0.5rem; color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+.agent-caps { display: flex; gap: 0.2rem; flex-wrap: wrap; }
+.agent-cap {
+  font-size: 0.45rem; padding: 0.05rem 0.3rem; border-radius: 9999px;
+  background: rgba(168, 147, 120, 0.06); color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace; text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
 
 /* ---- Events ---- */
 .event-item {
@@ -815,8 +852,23 @@ header h1 {
 .plan-step-check.blocked { border-color: var(--red); }
 .plan-step-check.skipped { background: var(--text-muted); border-color: var(--text-muted); color: #000; }
 .plan-step-content { flex: 1; min-width: 0; }
-.plan-step-title { font-weight: 600; }
+.plan-step-title { font-weight: 600; cursor: text; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; }
+.plan-step-title:hover { background: rgba(168, 147, 120, 0.06); }
 .plan-step-title.completed { text-decoration: line-through; color: var(--text-muted); }
+.plan-step-title.editing {
+  background: var(--bg); border: 1px solid var(--accent); padding: 0.2rem 0.3rem;
+  outline: none; color: var(--text); font-size: 0.75rem; font-weight: 600;
+  width: 100%; box-shadow: 0 0 0 3px var(--glow-accent);
+}
+.plan-step-status-label {
+  font-size: 0.5rem; font-family: 'JetBrains Mono', monospace; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 0.05rem 0.3rem; border-radius: 9999px; font-weight: 600;
+}
+.plan-step-status-label.pending { color: var(--text-muted); background: rgba(168, 147, 120, 0.06); }
+.plan-step-status-label.in_progress { color: var(--yellow); background: rgba(212, 168, 71, 0.1); }
+.plan-step-status-label.completed { color: var(--green); background: rgba(122, 158, 126, 0.1); }
+.plan-step-status-label.blocked { color: var(--red); background: rgba(196, 91, 62, 0.1); }
+.plan-step-status-label.skipped { color: var(--text-muted); background: rgba(168, 147, 120, 0.08); }
 .plan-step-links { font-size: 0.6rem; color: var(--text-muted); margin-top: 0.1rem; }
 .plan-step-links a { color: var(--blue); text-decoration: none; }
 .plan-step-links a:hover { text-decoration: underline; }

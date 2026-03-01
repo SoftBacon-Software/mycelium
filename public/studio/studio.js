@@ -476,16 +476,62 @@
     renderConcepts(data.concepts);
   }
 
+  function agentAvatarClass(id) {
+    if (id.indexOf('greatness') >= 0) return 'avatar-greatness';
+    if (id.indexOf('hijack') >= 0) return 'avatar-hijack';
+    if (id.indexOf('gpu') >= 0 || id.indexOf('drone') >= 0) return 'avatar-admin';
+    return 'avatar-user-default';
+  }
+
+  function agentInitials(name) {
+    var parts = name.split(/[\s-]+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }
+
   function renderAgents(agents) {
     var c = document.getElementById('agents-list');
     if (!agents || !agents.length) { c.textContent = 'No agents'; return; }
     clearAndAppend(c, agents.map(function (a) {
-      var card = el('div', { className: 'agent-card' });
-      var dot = a.status === 'online' ? '\u25CF ' : '\u25CB ';
-      card.appendChild(el('div', { className: 'agent-name', textContent: dot + a.name }));
-      card.appendChild(el('div', { className: 'agent-status ' + (a.status === 'online' ? 'online' : 'offline'), textContent: a.id + ' \u00B7 ' + a.game }));
-      if (a.working_on) card.appendChild(el('div', { className: 'agent-working', textContent: a.working_on }));
-      card.appendChild(el('div', { className: 'agent-heartbeat', textContent: timeAgo(a.last_heartbeat) }));
+      var isOnline = a.status === 'online';
+      var card = el('div', { className: 'agent-card ' + (isOnline ? 'agent-online' : 'agent-offline') });
+
+      // Avatar
+      var avatar = el('div', { className: 'agent-avatar ' + agentAvatarClass(a.id), textContent: agentInitials(a.name) });
+      card.appendChild(avatar);
+
+      // Info column
+      var info = el('div', { className: 'agent-info' });
+
+      // Header row: name + status dot
+      var header = el('div', { className: 'agent-header' });
+      header.appendChild(el('span', { className: 'agent-name', textContent: a.name }));
+      header.appendChild(el('span', { className: 'agent-dot ' + (isOnline ? 'online' : 'offline') }));
+      info.appendChild(header);
+
+      // Project identifier
+      var project = a.game || a.project || '';
+      info.appendChild(el('div', { className: 'agent-project', textContent: a.id + (project ? ' \u00B7 ' + project : '') }));
+
+      // Working on
+      if (a.working_on) info.appendChild(el('div', { className: 'agent-working', textContent: a.working_on }));
+
+      // Footer: heartbeat + capability badges
+      var footer = el('div', { className: 'agent-footer' });
+      footer.appendChild(el('span', { className: 'agent-heartbeat', textContent: timeAgo(a.last_heartbeat) }));
+
+      var caps = [];
+      try { caps = JSON.parse(a.capabilities || '[]'); } catch (e) {}
+      if (caps.length) {
+        var capsEl = el('div', { className: 'agent-caps' });
+        caps.forEach(function (cap) {
+          capsEl.appendChild(el('span', { className: 'agent-cap', textContent: cap }));
+        });
+        footer.appendChild(capsEl);
+      }
+      info.appendChild(footer);
+
+      card.appendChild(info);
       return card;
     }));
   }
@@ -1196,8 +1242,36 @@
         // Content
         var content = el('div', { className: 'plan-step-content' });
         var titleCls = 'plan-step-title' + (step.status === 'completed' ? ' completed' : '');
-        content.appendChild(el('div', { className: titleCls, textContent: step.title }));
-        if (step.assignee) content.appendChild(el('div', { className: 'plan-step-assignee', textContent: step.assignee }));
+        var titleEl = el('div', { className: titleCls, textContent: step.title });
+        titleEl.onclick = function (e) {
+          e.stopPropagation();
+          var input = document.createElement('input');
+          input.type = 'text'; input.value = step.title;
+          input.className = 'plan-step-title editing';
+          titleEl.replaceWith(input);
+          input.focus(); input.select();
+          function save() {
+            var newTitle = input.value.trim();
+            if (newTitle && newTitle !== step.title) {
+              apiPut('/plans/' + plan.id + '/steps/' + step.id, { title: newTitle }, function (err) {
+                if (err) alert('Error: ' + err.message);
+                showPlanDetail(plan.id); fetchOverview();
+              });
+            } else {
+              input.replaceWith(titleEl);
+            }
+          }
+          input.onblur = save;
+          input.onkeydown = function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); save(); } if (ev.key === 'Escape') input.replaceWith(titleEl); };
+        };
+        content.appendChild(titleEl);
+        // Status label + assignee row
+        var metaRow = el('div', { style: 'display:flex;gap:0.3rem;align-items:center;margin-top:0.1rem;' });
+        if (step.status !== 'pending') {
+          metaRow.appendChild(el('span', { className: 'plan-step-status-label ' + step.status, textContent: step.status === 'in_progress' ? 'in progress' : step.status }));
+        }
+        if (step.assignee) metaRow.appendChild(el('div', { className: 'plan-step-assignee', textContent: step.assignee }));
+        if (metaRow.children.length) content.appendChild(metaRow);
         // Links
         var linksText = [];
         if (step.linked_task_id) linksText.push('Task #' + step.linked_task_id);

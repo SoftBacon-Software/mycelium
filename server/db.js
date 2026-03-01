@@ -88,6 +88,10 @@ export function updateAgentHeartbeat(id, status, workingOn) {
     WHERE id = ?`).run(status || 'online', workingOn || '', id);
 }
 
+export function updateAgentKey(id, apiKeyHash) {
+  stmt('dvUpdateAgentKey', 'UPDATE dv_agents SET api_key_hash = ? WHERE id = ?').run(apiKeyHash, id);
+}
+
 export function deleteAgent(id) {
   stmt('dvDeleteAgent', 'DELETE FROM dv_agents WHERE id = ?').run(id);
 }
@@ -938,4 +942,94 @@ export function getDvOverview() {
     plans: plans,
     concepts: listConcepts({ limit: 100 })
   };
+}
+
+// =============== OUTREACH ===============
+
+// -- Outreach Campaigns --
+
+export function createOutreachCampaign(project, name, personaPrompt, gameFacts, templates, config, createdBy) {
+  var result = stmt('orCreateCampaign', `INSERT INTO dv_outreach_campaigns (project, name, persona_prompt, game_facts, templates, config, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(project, name, personaPrompt || '', gameFacts || '', templates || '{}', config || '{}', createdBy || '');
+  return result.id;
+}
+
+export function getOutreachCampaign(id) {
+  return stmt('orGetCampaign', 'SELECT * FROM dv_outreach_campaigns WHERE id = ?').get(id);
+}
+
+export function listOutreachCampaigns(filters) {
+  var where = ['1=1']; var params = [];
+  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  params.push(filters.limit || 50);
+  return db.prepare('SELECT * FROM dv_outreach_campaigns WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+}
+
+export function updateOutreachCampaign(id, fields) {
+  var sets = ["updated_at = datetime('now')"]; var values = [];
+  for (var key of ['name', 'persona_prompt', 'game_facts', 'templates', 'config', 'status']) {
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+  }
+  values.push(id);
+  return db.prepare('UPDATE dv_outreach_campaigns SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+// -- Outreach Contacts --
+
+export function createOutreachContact(fields) {
+  var result = db.prepare(`INSERT INTO dv_outreach_contacts
+    (project, campaign_id, type, name, email, outlet, tier, archetype, subscriber_count, status, last_content, notes, metadata, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(
+    fields.project, fields.campaign_id || null, fields.type || 'creator', fields.name,
+    fields.email || '', fields.outlet || '', fields.tier || '', fields.archetype || '',
+    fields.subscriber_count || 0, fields.status || 'discovered', fields.last_content || '',
+    fields.notes || '', fields.metadata || '{}', fields.created_by || ''
+  );
+  return result.id;
+}
+
+export function getOutreachContact(id) {
+  return stmt('orGetContact', 'SELECT * FROM dv_outreach_contacts WHERE id = ?').get(id);
+}
+
+export function listOutreachContacts(filters) {
+  var where = ['1=1']; var params = [];
+  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
+  if (filters.campaign_id) { where.push('campaign_id = ?'); params.push(filters.campaign_id); }
+  var limit = filters.limit || 50;
+  var offset = filters.offset || 0;
+  params.push(limit, offset);
+  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+}
+
+export function updateOutreachContact(id, fields) {
+  var sets = ["updated_at = datetime('now')"]; var values = [];
+  var allowed = ['name', 'email', 'outlet', 'tier', 'archetype', 'subscriber_count', 'status',
+    'pitch_subject', 'pitch_body', 'last_content', 'key_assigned', 'pitch_sent_at',
+    'followup_due_at', 'followup_sent_at', 'response_at', 'outcome', 'notes', 'metadata', 'campaign_id'];
+  for (var key of allowed) {
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+  }
+  values.push(id);
+  return db.prepare('UPDATE dv_outreach_contacts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+export function deleteOutreachContact(id) {
+  return db.prepare('DELETE FROM dv_outreach_contacts WHERE id = ?').run(id);
+}
+
+export function countOutreachContacts(project) {
+  var rows = db.prepare(
+    'SELECT status, COUNT(*) as count FROM dv_outreach_contacts WHERE project = ? GROUP BY status'
+  ).all(project);
+  var counts = {};
+  for (var r of rows) counts[r.status] = r.count;
+  return counts;
+}
+
+export function findOutreachContactByEmail(project, email) {
+  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE project = ? AND email = ?').get(project, email);
 }
