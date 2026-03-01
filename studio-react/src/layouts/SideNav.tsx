@@ -4,8 +4,9 @@ import { useDashboardStore } from '../stores/dashboardStore'
 
 const navItems = [
   { to: '/', label: 'Dashboard', abbr: 'Da' },
+  { to: '/channels', label: 'Channels', abbr: 'Ch' },
   { to: '/tasks', label: 'Tasks', abbr: 'Ta' },
-  { to: '/messages', label: 'Messages', abbr: 'Ms' },
+  { to: '/messages', label: 'Agent Comms', abbr: 'Ag' },
   { to: '/plans', label: 'Plans', abbr: 'Pl' },
   { to: '/bugs', label: 'Bugs', abbr: 'Bu' },
   { to: '/assets', label: 'Assets', abbr: 'As' },
