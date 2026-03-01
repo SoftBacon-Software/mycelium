@@ -242,8 +242,8 @@ header h1 {
   font-family: 'JetBrains Mono', monospace;
 }
 .agent-working {
-  font-size: 0.6rem; color: var(--text-dim); margin-top: 0.2rem;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 0.6rem; color: var(--text); opacity: 0.85; margin-top: 0.2rem;
+  line-height: 1.4;
 }
 .agent-footer { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem; }
 .agent-heartbeat {
