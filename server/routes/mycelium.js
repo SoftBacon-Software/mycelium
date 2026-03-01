@@ -1829,19 +1829,8 @@ router.delete('/drones/jobs/:id', function (req, res) {
   res.json({ ok: true, id: job.id, cancelled: true });
 });
 
-// Get single drone + recent jobs (must be after /drones/claim and /drones/jobs)
-router.get('/drones/:id', function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var agent = getAgent(req.params.id);
-  if (!agent || agent.game !== 'drone') return res.status(404).json({ error: 'Drone not found' });
-  var { api_key_hash, ...safe } = agent;
-  var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
-  safe.recent_jobs = recentJobs;
-  res.json(safe);
-});
-
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
+// Must be before /drones/:id to prevent :id from catching "artifacts"
 
 // Upload a drone artifact (persistent, no TTL)
 router.post('/drones/artifacts', artifactUpload.single('file'), function (req, res) {
@@ -1888,6 +1877,18 @@ router.delete('/drones/artifacts/:name', function (req, res) {
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
   fs.unlinkSync(filePath);
   res.json({ ok: true, deleted: name });
+});
+
+// Get single drone + recent jobs (must be after /drones/artifacts to prevent :id catching "artifacts")
+router.get('/drones/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var agent = getAgent(req.params.id);
+  if (!agent || agent.game !== 'drone') return res.status(404).json({ error: 'Drone not found' });
+  var { api_key_hash, ...safe } = agent;
+  var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
+  safe.recent_jobs = recentJobs;
+  res.json(safe);
 });
 
 // =============== APPROVALS ===============
