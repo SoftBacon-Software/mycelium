@@ -494,6 +494,7 @@ export function getBootPayload(agentId) {
     game_context: gameContext,
     context_keys: contextKeys,
     approval_queue: approvalQueue,
+    my_approvals: listPendingApprovalsByAgent(agentId),
     recent_events: recentEvents,
     open_bugs: openBugs,
     plans: allPlans,
@@ -908,6 +909,51 @@ export function initDioverse() {
 
 // -- Dioverse Hub admin overview --
 
+// =============== APPROVALS ===============
+
+var GATED_ACTIONS = ['deploy', 'outreach_send', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
+export { GATED_ACTIONS };
+
+export function createApproval(actionType, requestedBy, title, payload, project) {
+  var result = stmt('dvCreateApproval',
+    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project) VALUES (?, ?, ?, ?, ?) RETURNING id"
+  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), project || 'mycelium');
+  return result.id;
+}
+
+export function getApproval(id) {
+  return stmt('dvGetApproval', "SELECT * FROM dv_approvals WHERE id = ?").get(id);
+}
+
+export function listApprovals(filters) {
+  var where = ['1=1']; var params = [];
+  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters.action_type) { where.push('action_type = ?'); params.push(filters.action_type); }
+  if (filters.requested_by) { where.push('requested_by = ?'); params.push(filters.requested_by); }
+  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  var limit = filters.limit || 50;
+  params.push(limit);
+  return db.prepare('SELECT * FROM dv_approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+}
+
+export function decideApproval(id, status, decidedBy, reason) {
+  db.prepare(
+    "UPDATE dv_approvals SET status = ?, decided_by = ?, decided_at = datetime('now'), reason = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(status, decidedBy, reason || '', id);
+}
+
+export function markApprovalExecuted(id) {
+  db.prepare("UPDATE dv_approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
+}
+
+export function countPendingApprovals() {
+  return stmt('dvCountApprovals', "SELECT COUNT(*) as count FROM dv_approvals WHERE status = 'pending'").get();
+}
+
+export function listPendingApprovalsByAgent(agentId) {
+  return db.prepare("SELECT * FROM dv_approvals WHERE requested_by = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC").all(agentId);
+}
+
 export function getDvOverview() {
   var agents = listAgents();
   var events = listDvEvents({ limit: 50 });
@@ -939,6 +985,7 @@ export function getDvOverview() {
     projects: games,
     games: games,
     approval_queue: approvalQueue,
+    pending_approvals: listApprovals({ status: 'pending', limit: 50 }),
     pending_requests: pendingRequests,
     assets: assets,
     bugs: bugs,

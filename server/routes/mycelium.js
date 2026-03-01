@@ -50,7 +50,9 @@ import {
   addTaskComment, getTaskComments, deleteTaskComment,
   createOutreachCampaign, getOutreachCampaign, listOutreachCampaigns, updateOutreachCampaign,
   createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
-  deleteOutreachContact, countOutreachContacts, findOutreachContactByEmail
+  deleteOutreachContact, countOutreachContacts, findOutreachContactByEmail,
+  GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
+  markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent
 } from '../db.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -1409,6 +1411,86 @@ router.get('/drones/:id', function (req, res) {
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
   res.json(safe);
+});
+
+// =============== APPROVALS ===============
+
+// Request approval for a gated action
+router.post('/approvals', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var actionType = req.body.action_type;
+  if (!actionType || GATED_ACTIONS.indexOf(actionType) === -1) {
+    return res.status(400).json({ error: 'action_type must be one of: ' + GATED_ACTIONS.join(', ') });
+  }
+  var title = req.body.title;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  var payload = req.body.payload;
+  if (!payload) return res.status(400).json({ error: 'payload is required' });
+  var project = req.body.project || 'mycelium';
+  var id = createApproval(actionType, who, title, payload, project);
+  emitEvent('approval_requested', who, project,
+    who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
+  res.json({ id: id, status: 'pending', approval_required: true });
+});
+
+// List approvals
+router.get('/approvals', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var filters = {
+    status: req.query.status || undefined,
+    action_type: req.query.action_type || undefined,
+    requested_by: req.query.requested_by || undefined,
+    project: req.query.project || undefined,
+    limit: parseInt(req.query.limit) || 50
+  };
+  var approvals = listApprovals(filters);
+  approvals.forEach(function (a) { try { a.payload = JSON.parse(a.payload); } catch (e) {} });
+  res.json(approvals);
+});
+
+// Get single approval
+router.get('/approvals/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var approval = getApproval(parseInt(req.params.id));
+  if (!approval) return res.status(404).json({ error: 'Approval not found' });
+  try { approval.payload = JSON.parse(approval.payload); } catch (e) {}
+  res.json(approval);
+});
+
+// Approve or deny (admin only)
+router.put('/approvals/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var approval = getApproval(parseInt(req.params.id));
+  if (!approval) return res.status(404).json({ error: 'Approval not found' });
+  if (approval.status !== 'pending') return res.status(400).json({ error: 'Approval already ' + approval.status });
+  var newStatus = req.body.status;
+  if (newStatus !== 'approved' && newStatus !== 'denied') {
+    return res.status(400).json({ error: 'status must be approved or denied' });
+  }
+  var reason = req.body.reason || '';
+  var decidedBy = getAdminDisplayName(req);
+  decideApproval(approval.id, newStatus, decidedBy, reason);
+  emitEvent('approval_' + newStatus, decidedBy, approval.project,
+    decidedBy + ' ' + newStatus + ' [' + approval.action_type + '] ' + approval.title,
+    JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
+  res.json({ ok: true, id: approval.id, status: newStatus });
+});
+
+// Mark approved action as executed
+router.put('/approvals/:id/executed', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var approval = getApproval(parseInt(req.params.id));
+  if (!approval) return res.status(404).json({ error: 'Approval not found' });
+  if (approval.status !== 'approved') return res.status(400).json({ error: 'Approval is ' + approval.status + ', not approved' });
+  markApprovalExecuted(approval.id);
+  emitEvent('approval_executed', who, approval.project,
+    who + ' executed [' + approval.action_type + '] ' + approval.title,
+    JSON.stringify({ approval_id: approval.id }));
+  res.json({ ok: true, id: approval.id, status: 'executed' });
 });
 
 // ======== OUTREACH ========

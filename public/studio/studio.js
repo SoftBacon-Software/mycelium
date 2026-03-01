@@ -438,12 +438,14 @@
   }
 
   function checkNotifications(data) {
-    var approvals = (data.approval_queue || []).length;
+    var taskApprovals = (data.approval_queue || []).length;
+    var gateApprovals = (data.pending_approvals || []).length;
+    var approvals = taskApprovals + gateApprovals;
     var requests = (data.pending_requests || []).length;
     var bugs = data.bug_counts ? (data.bug_counts.open || 0) : 0;
 
     if (prevApprovalCount >= 0 && approvals > prevApprovalCount) {
-      showNotification('New Approval Needed', (approvals - prevApprovalCount) + ' task(s) awaiting approval');
+      showNotification('Approval Required', (approvals - prevApprovalCount) + ' action(s) need your approval');
     }
     if (prevRequestCount >= 0 && requests > prevRequestCount) {
       showNotification('New Request', (requests - prevRequestCount) + ' new blocking request(s)');
@@ -468,7 +470,7 @@
     renderTeamChat(data.team_chat);
     renderContext(data.context);
     renderGames(data.games);
-    renderApprovalQueue(data.approval_queue);
+    renderApprovals(data.pending_approvals, data.approval_queue);
     renderPendingRequests(data.pending_requests);
     renderContextKeys(data.context_keys);
     renderAssets(data.assets);
@@ -709,12 +711,51 @@
     });
   }
 
-  function renderApprovalQueue(queue) {
+  function renderApprovals(gateApprovals, taskApprovals) {
     var c = document.getElementById('approval-list');
     var countEl = document.getElementById('approval-count');
-    if (countEl) countEl.textContent = (queue && queue.length) ? queue.length : '';
-    if (!queue || !queue.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'Clear' })); return; }
-    clearAndAppend(c, queue.map(function (t) {
+    var gates = gateApprovals || [];
+    var tasks = taskApprovals || [];
+    var total = gates.length + tasks.length;
+    if (countEl) countEl.textContent = total || '';
+    if (!total) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'Clear' })); return; }
+
+    var tiles = [];
+
+    // Gate approvals first (high-risk agent actions)
+    gates.forEach(function (a) {
+      var tile = el('div', { className: 'queue-tile tile-approval tile-gate', onclick: function () { showApprovalDetail(a); } });
+      var row = el('div', { className: 'tile-row' });
+      row.appendChild(el('span', { className: 'tile-dot dot-approval' }));
+      row.appendChild(el('span', { className: 'approval-action-badge approval-action-' + a.action_type, textContent: a.action_type.replace('_', ' ') }));
+      row.appendChild(el('span', { className: 'tile-label', textContent: a.title }));
+      tile.appendChild(row);
+      var detail = el('div', { className: 'tile-detail' });
+      detail.appendChild(el('div', { className: 'tile-meta', textContent: a.requested_by + ' \u00B7 ' + a.project + ' \u00B7 ' + timeAgo(a.created_at) }));
+      var actions = el('div', { style: 'display:flex;gap:0.3rem;margin-top:0.2rem;' });
+      actions.appendChild(el('button', { className: 'tile-action tile-action-approve', textContent: 'Approve', onclick: function (e) {
+        e.stopPropagation();
+        apiPut('/approvals/' + a.id, { status: 'approved' }, function (err) {
+          if (err) { alert('Error: ' + err.message); return; }
+          fetchOverview();
+        });
+      }}));
+      actions.appendChild(el('button', { className: 'tile-action tile-action-deny', textContent: 'Deny', onclick: function (e) {
+        e.stopPropagation();
+        var reason = prompt('Reason for denial (optional):');
+        if (reason === null) return;
+        apiPut('/approvals/' + a.id, { status: 'denied', reason: reason }, function (err) {
+          if (err) { alert('Error: ' + err.message); return; }
+          fetchOverview();
+        });
+      }}));
+      detail.appendChild(actions);
+      tile.appendChild(detail);
+      tiles.push(tile);
+    });
+
+    // Legacy task approvals
+    tasks.forEach(function (t) {
       var tile = el('div', { className: 'queue-tile tile-approval', onclick: function () { showTaskDetail(t); } });
       tile.appendChild(el('div', { className: 'tile-row' }, [
         el('span', { className: 'tile-dot dot-approval' }),
@@ -724,8 +765,67 @@
       detail.appendChild(el('div', { className: 'tile-meta', textContent: t.game + ' \u00B7 ' + (t.assignee || '?') }));
       detail.appendChild(el('button', { className: 'tile-action tile-action-approve', textContent: 'Approve', onclick: function (e) { e.stopPropagation(); approveTask(t.id); } }));
       tile.appendChild(detail);
-      return tile;
-    }));
+      tiles.push(tile);
+    });
+
+    clearAndAppend(c, tiles);
+  }
+
+  function showApprovalDetail(a) {
+    var titleEl = document.getElementById('detail-title');
+    var body = document.getElementById('detail-body');
+    titleEl.textContent = 'Approval #' + a.id;
+    body.textContent = '';
+
+    // Action type + title
+    var header = el('div', { style: 'display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;' });
+    header.appendChild(el('span', { className: 'approval-action-badge approval-action-' + a.action_type, textContent: a.action_type.replace('_', ' ') }));
+    header.appendChild(el('span', { style: 'font-size:0.9rem;font-weight:700;color:var(--text);', textContent: a.title }));
+    body.appendChild(header);
+
+    // Meta grid
+    var meta = el('div', { className: 'detail-meta' });
+    [['Requested By', a.requested_by], ['Project', a.project], ['Status', a.status],
+     ['Created', a.created_at || '']].forEach(function (pair) {
+      meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: pair[0] + ': ' }), el('span', { textContent: pair[1] })]));
+    });
+    if (a.decided_by) {
+      meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: 'Decided By: ' }), el('span', { textContent: a.decided_by })]));
+      meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: 'Decided At: ' }), el('span', { textContent: a.decided_at || '' })]));
+    }
+    if (a.reason) {
+      meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: 'Reason: ' }), el('span', { textContent: a.reason })]));
+    }
+    body.appendChild(meta);
+
+    // Payload
+    var payloadData = typeof a.payload === 'string' ? a.payload : JSON.stringify(a.payload, null, 2);
+    var payloadSection = el('div', { className: 'detail-section' });
+    payloadSection.appendChild(el('label', { style: 'font-weight:600;color:var(--accent);margin-bottom:0.3rem;display:block;font-size:0.75rem;' }, 'Action Payload'));
+    payloadSection.appendChild(el('pre', { className: 'concept-detail-data', textContent: payloadData }));
+    body.appendChild(payloadSection);
+
+    // Approve / Deny buttons (if pending)
+    if (a.status === 'pending') {
+      var actions = el('div', { className: 'detail-actions', style: 'margin-top:0.5rem;' });
+      actions.appendChild(el('button', { className: 'btn-status active', style: 'background:var(--green);color:#000;', textContent: 'Approve', onclick: function () {
+        apiPut('/approvals/' + a.id, { status: 'approved' }, function (err) {
+          if (err) { alert('Error: ' + err.message); return; }
+          closeAllModals(); fetchOverview();
+        });
+      }}));
+      actions.appendChild(el('button', { className: 'btn-status', style: 'background:var(--red);color:#fff;margin-left:0.3rem;', textContent: 'Deny', onclick: function () {
+        var reason = prompt('Reason for denial (optional):');
+        if (reason === null) return;
+        apiPut('/approvals/' + a.id, { status: 'denied', reason: reason }, function (err) {
+          if (err) { alert('Error: ' + err.message); return; }
+          closeAllModals(); fetchOverview();
+        });
+      }}));
+      body.appendChild(actions);
+    }
+
+    openModal(modalTaskDetail);
   }
 
   function renderPendingRequests(reqs) {

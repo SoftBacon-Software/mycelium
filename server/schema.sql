@@ -299,3 +299,26 @@ CREATE INDEX IF NOT EXISTS idx_outreach_contacts_project ON dv_outreach_contacts
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON dv_outreach_contacts(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_campaign ON dv_outreach_contacts(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON dv_outreach_contacts(email);
+
+-- Approval gates (human-in-the-loop for agent actions)
+CREATE TABLE IF NOT EXISTS dv_approvals (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_type     TEXT NOT NULL,
+  requested_by    TEXT NOT NULL,
+  title           TEXT NOT NULL DEFAULT '',
+  payload         TEXT NOT NULL DEFAULT '{}',
+  status          TEXT NOT NULL DEFAULT 'pending',
+  reason          TEXT NOT NULL DEFAULT '',
+  admin_notes     TEXT NOT NULL DEFAULT '',
+  decided_by      TEXT,
+  decided_at      TEXT,
+  executed_at     TEXT,
+  project         TEXT NOT NULL DEFAULT 'mycelium',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dv_approvals_status ON dv_approvals(status);
+CREATE INDEX IF NOT EXISTS idx_dv_approvals_action ON dv_approvals(action_type);
+CREATE INDEX IF NOT EXISTS idx_dv_approvals_agent ON dv_approvals(requested_by);
+CREATE INDEX IF NOT EXISTS idx_dv_approvals_project ON dv_approvals(project);

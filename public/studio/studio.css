@@ -564,6 +564,27 @@ header h1 {
   background: var(--green); color: #000;
 }
 .tile-action-approve:hover { box-shadow: 0 0 8px var(--glow-green); }
+.tile-action-deny {
+  background: var(--red); color: #fff;
+}
+.tile-action-deny:hover { box-shadow: 0 0 8px rgba(196, 91, 62, 0.4); }
+
+/* Approval gate action type badges */
+.approval-action-badge {
+  font-size: 0.5rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 0.1rem 0.35rem; border-radius: 4px;
+  flex-shrink: 0; font-family: 'JetBrains Mono', monospace;
+}
+.approval-action-deploy { background: rgba(196, 91, 62, 0.2); color: var(--red); }
+.approval-action-outreach_send { background: rgba(94, 158, 160, 0.2); color: var(--blue); }
+.approval-action-git_push { background: rgba(155, 126, 171, 0.2); color: var(--purple); }
+.approval-action-plan_create { background: rgba(212, 168, 71, 0.2); color: var(--amber); }
+.approval-action-money_action { background: rgba(212, 168, 71, 0.25); color: var(--yellow); }
+.approval-action-delete { background: rgba(196, 91, 62, 0.25); color: var(--red); }
+.approval-action-external_comm { background: rgba(94, 158, 160, 0.15); color: var(--blue); }
+
+/* Gate tile highlight */
+.tile-gate { border-left: 2px solid var(--yellow); }
 
 /* Bug severity accents on hover */
 .tile-bug-critical:hover { box-shadow: 0 2px 12px rgba(196, 91, 62, 0.15), inset 0 0 0 1px rgba(196, 91, 62, 0.2); }
