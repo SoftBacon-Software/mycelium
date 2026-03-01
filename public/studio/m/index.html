@@ -1036,16 +1036,10 @@ html, body {
       item.appendChild(el('span', { className: 'event-dot' }));
 
       var text = el('span', { className: 'event-text' });
-      text.appendChild(el('span', { className: 'event-agent', textContent: ev.agent_id || 'system' }));
-      text.appendChild(document.createTextNode(' ' + (ev.event_type || '')));
-      if (ev.details) {
-        try {
-          var d = typeof ev.details === 'string' ? JSON.parse(ev.details) : ev.details;
-          var detail = d.title || d.task_title || '';
-          if (detail) {
-            text.appendChild(document.createTextNode(' \u2014 ' + detail));
-          }
-        } catch (e) {}
+      text.appendChild(el('span', { className: 'event-agent', textContent: ev.agent || 'system' }));
+      text.appendChild(document.createTextNode(' ' + (ev.type || '')));
+      if (ev.summary) {
+        text.appendChild(document.createTextNode(' — ' + ev.summary));
       }
       item.appendChild(text);
       item.appendChild(el('span', { className: 'event-time', textContent: timeAgo(ev.created_at) }));
