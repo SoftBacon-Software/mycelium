@@ -37,7 +37,7 @@ function OperatorCard({ operator }: { operator: Operator }) {
       )}
 
       {/* Linked agents */}
-      {operator.linked_agents.length > 0 && (
+      {Array.isArray(operator.linked_agents) && operator.linked_agents.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {operator.linked_agents.map((agentId, i) => (
             <span

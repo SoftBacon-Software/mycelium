@@ -206,6 +206,9 @@ export default function DashboardPage() {
             {agents.map((agent) => {
               const agentKey = agent.id.replace(/-claude$/, '')
               const avatarColor = agentAvatarColors[agentKey] || 'bg-accent/20 text-accent'
+              const caps: string[] = Array.isArray(agent.capabilities)
+                ? agent.capabilities
+                : (() => { try { return JSON.parse(agent.capabilities as unknown as string) } catch { return [] } })()
 
               return (
                 <div key={agent.id} className="bg-surface-raised rounded p-3 transition-all hover:ring-1 ring-border">
@@ -234,11 +237,11 @@ export default function DashboardPage() {
 
                   <div className="flex items-center justify-between pl-12">
                     <div className="flex flex-wrap gap-1">
-                      {agent.capabilities?.slice(0, 4).map((cap) => (
+                      {caps.slice(0, 4).map((cap: string) => (
                         <Badge key={cap} variant="muted">{cap}</Badge>
                       ))}
-                      {(agent.capabilities?.length || 0) > 4 && (
-                        <Badge variant="muted">+{agent.capabilities.length - 4}</Badge>
+                      {caps.length > 4 && (
+                        <Badge variant="muted">+{caps.length - 4}</Badge>
                       )}
                     </div>
                     <span className="text-xs text-text-muted font-mono shrink-0 ml-2">

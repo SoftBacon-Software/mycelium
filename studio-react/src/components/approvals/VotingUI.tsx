@@ -7,6 +7,14 @@ interface VotingUIProps {
   onVote: (vote: string, reason: string) => Promise<void>
 }
 
+function safeVotes(raw: unknown): Array<{ id: string; voter_id: string; vote: string; reason?: string }> {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) return p } catch { /* ignore */ }
+  }
+  return []
+}
+
 export default function VotingUI({ approval, onVote }: VotingUIProps) {
   const user = useAuthStore((s) => s.user)
   const [activeAction, setActiveAction] = useState<'approve' | 'reject' | null>(null)
@@ -14,8 +22,9 @@ export default function VotingUI({ approval, onVote }: VotingUIProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const votes = safeVotes(approval.votes)
   const userAlreadyVoted =
-    user && approval.votes?.some((v) => v.voter_id === user.username)
+    user && votes.some((v) => v.voter_id === user.username)
 
   async function handleSubmit() {
     if (!activeAction) return
@@ -42,9 +51,9 @@ export default function VotingUI({ approval, onVote }: VotingUIProps) {
   return (
     <div className="space-y-3">
       {/* Existing votes */}
-      {approval.votes && approval.votes.length > 0 && (
+      {votes.length > 0 && (
         <div className="space-y-1.5">
-          {approval.votes.map((vote) => (
+          {votes.map((vote) => (
             <div
               key={vote.id}
               className="flex items-start gap-2 text-sm"

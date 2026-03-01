@@ -33,7 +33,7 @@ interface DashboardState {
   pendingRequests: Message[];
   assets: Asset[];
   bugs: Bug[];
-  bugCounts: { open: number; in_progress: number; resolved: number; closed: number };
+  bugCounts: { open: number; in_progress: number; fixed: number; total: number };
   plans: Plan[];
   concepts: Concept[];
   operators: Operator[];
@@ -64,7 +64,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   pendingRequests: [],
   assets: [],
   bugs: [],
-  bugCounts: { open: 0, in_progress: 0, resolved: 0, closed: 0 },
+  bugCounts: { open: 0, in_progress: 0, fixed: 0, total: 0 },
   plans: [],
   concepts: [],
   operators: [],

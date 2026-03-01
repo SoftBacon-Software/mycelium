@@ -206,7 +206,7 @@ export interface Overview {
   pending_requests: Message[];
   assets: Asset[];
   bugs: Bug[];
-  bug_counts: { open: number; in_progress: number; resolved: number; closed: number };
+  bug_counts: { open: number; in_progress: number; fixed: number; total: number };
   plans: Plan[];
   concepts: Concept[];
   operators: Operator[];

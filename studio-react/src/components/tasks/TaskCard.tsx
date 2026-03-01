@@ -33,10 +33,20 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString()
 }
 
+function parseTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) return p } catch { /* ignore */ }
+    return raw.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  return []
+}
+
 export default function TaskCard({ task, onClick }: TaskCardProps) {
   const borderClass = priorityBorder[task.priority] || priorityBorder.normal
   const badgeVariant = priorityBadgeVariant[task.priority]
   const needsApprovalBadge = task.needs_approval && !task.approved_by
+  const tags = parseTags(task.tags)
 
   return (
     <button
@@ -58,7 +68,7 @@ export default function TaskCard({ task, onClick }: TaskCardProps) {
         {task.game && (
           <Badge variant="muted">{task.game}</Badge>
         )}
-        {task.tags?.slice(0, 2).map((tag) => (
+        {tags.slice(0, 2).map((tag) => (
           <Badge key={tag} variant="blue">{tag}</Badge>
         ))}
       </div>

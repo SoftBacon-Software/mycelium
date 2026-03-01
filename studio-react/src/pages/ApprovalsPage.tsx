@@ -7,6 +7,14 @@ import RiskBadge from '../components/approvals/RiskBadge'
 import QuorumBar from '../components/approvals/QuorumBar'
 import VotingUI from '../components/approvals/VotingUI'
 
+function safeVotes(raw: unknown): Array<{ id: string; voter_id: string; vote: string; reason?: string }> {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) return p } catch { /* ignore */ }
+  }
+  return []
+}
+
 type FilterTab = 'pending' | 'approved' | 'rejected' | 'all'
 
 const TABS: { key: FilterTab; label: string }[] = [
@@ -77,11 +85,12 @@ export default function ApprovalsPage() {
       await castVote(approval.id, vote, reason || null as any, user.username, 'operator')
 
       // Check if this vote meets quorum and auto-resolve
-      const currentVotes = (approval.votes?.length ?? 0) + 1
+      const existingVotes = safeVotes(approval.votes)
+      const currentVotes = existingVotes.length + 1
       if (currentVotes >= approval.quorum_required) {
         // Count approve/reject to determine decision
         const approveCount =
-          (approval.votes?.filter((v) => v.vote === 'approve').length ?? 0) +
+          existingVotes.filter((v) => v.vote === 'approve').length +
           (vote === 'approve' ? 1 : 0)
         const decision = approveCount > currentVotes / 2 ? 'approved' : 'rejected'
         await resolveApproval(approval.id, decision, user.username)
@@ -241,7 +250,7 @@ interface ApprovalCardProps {
 }
 
 function ApprovalCard({ approval, onVote }: ApprovalCardProps) {
-  const voteCount = approval.votes?.length ?? 0
+  const voteCount = safeVotes(approval.votes).length
 
   return (
     <div className="bg-surface-raised rounded-lg p-4 space-y-3">

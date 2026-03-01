@@ -573,7 +573,7 @@ export default function BugsPage() {
           const count =
             tab.key === 'all'
               ? bugs.length
-              : bugCounts[tab.key as keyof typeof bugCounts] ?? 0
+              : bugs.filter((b) => b.status === tab.key).length
 
           return (
             <button

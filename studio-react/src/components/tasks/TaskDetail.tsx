@@ -39,6 +39,15 @@ const priorityBadgeVariant: Record<string, 'red' | 'accent' | 'muted' | 'blue'> 
   low: 'blue',
 }
 
+function parseTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) return p } catch { /* ignore */ }
+    return raw.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  return []
+}
+
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleString(undefined, {
     month: 'short',
@@ -164,16 +173,19 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
           </div>
 
           {/* Tags */}
-          {task.tags && task.tags.length > 0 && (
-            <div>
-              <h3 className="text-xs uppercase tracking-wider text-text-muted font-medium mb-2">Tags</h3>
-              <div className="flex flex-wrap gap-1.5">
-                {task.tags.map((tag) => (
-                  <Badge key={tag} variant="blue">{tag}</Badge>
-                ))}
+          {(() => {
+            const tags = parseTags(task.tags)
+            return tags.length > 0 ? (
+              <div>
+                <h3 className="text-xs uppercase tracking-wider text-text-muted font-medium mb-2">Tags</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {tags.map((tag) => (
+                    <Badge key={tag} variant="blue">{tag}</Badge>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            ) : null
+          })()}
 
           {/* Dependencies */}
           {dependencies && dependencies.length > 0 && (

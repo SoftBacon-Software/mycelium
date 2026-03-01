@@ -23,7 +23,7 @@ export async function login(
   username: string,
   password: string,
 ): Promise<{ token: string; user: any }> {
-  const res = await apiPost<{ token: string; user: any }>('/auth/login', { username, password });
+  const res = await apiPost<{ token: string; user: any }>('/studio/login', { username, password });
   setToken(res.token);
   return res;
 }
@@ -39,7 +39,7 @@ export function isAuthenticated(): boolean {
 // Overview
 
 export function fetchOverview(): Promise<Overview> {
-  return apiGet<Overview>('/dashboard/overview');
+  return apiGet<Overview>('/admin/overview');
 }
 
 // Tasks
@@ -182,7 +182,7 @@ export function castVote(
   voterId: string,
   voterType: string,
 ): Promise<Vote> {
-  return apiPost<Vote>(`/approvals/${approvalId}/votes`, {
+  return apiPut<Vote>(`/approvals/${approvalId}/vote`, {
     vote,
     reason,
     voter_id: voterId,
@@ -195,16 +195,16 @@ export function resolveApproval(
   decision: string,
   resolvedBy: string,
 ): Promise<Approval> {
-  return apiPut<Approval>(`/approvals/${id}/resolve`, {
-    decision,
-    resolved_by: resolvedBy,
+  return apiPut<Approval>(`/approvals/${id}`, {
+    status: decision,
+    decided_by: resolvedBy,
   });
 }
 
 // Requests
 
 export function resolveRequest(id: string, response: string): Promise<Message> {
-  return apiPut<Message>(`/requests/${id}/resolve`, { response });
+  return apiPut<Message>(`/requests/${id}`, { status: 'resolved', response });
 }
 
 // Context
