@@ -10,22 +10,57 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
   task_created: 'accent',
   task_updated: 'blue',
   task_completed: 'green',
+  task_unblocked: 'green',
+  task_approved: 'green',
+  task_dependency: 'blue',
+  task_comment: 'blue',
   message_sent: 'green',
   message_received: 'green',
+  agent_boot: 'purple',
+  agent_heartbeat: 'muted',
+  agent_registered: 'purple',
+  agent_removed: 'red',
+  agent_key_regenerated: 'purple',
   heartbeat: 'muted',
   agent_online: 'purple',
   agent_offline: 'purple',
   agent_status: 'purple',
-  bug_filed: 'red',
+  bug_created: 'red',
   bug_updated: 'red',
+  bug_filed: 'red',
   bug_resolved: 'green',
   plan_created: 'purple',
   plan_updated: 'purple',
   plan_completed: 'green',
+  plan_step_completed: 'green',
+  plan_step_added: 'blue',
   asset_requested: 'accent',
   asset_completed: 'green',
+  asset_delivered: 'green',
+  asset_registered: 'accent',
   approval_created: 'accent',
+  approval_requested: 'accent',
   approval_resolved: 'green',
+  approval_executed: 'green',
+  approval_vote: 'blue',
+  approval_denied: 'red',
+  approval_approved: 'green',
+  channel_created: 'blue',
+  channel_message: 'green',
+  channel_deleted: 'red',
+  context_updated: 'muted',
+  context_key_updated: 'muted',
+  config_changed: 'muted',
+  admin_frozen: 'red',
+  admin_unfrozen: 'green',
+  request_resolved: 'green',
+  work_request: 'accent',
+  operator_created: 'blue',
+  operator_updated: 'blue',
+  concept_created: 'purple',
+  concept_updated: 'purple',
+  project_created: 'blue',
+  file_uploaded: 'accent',
 }
 
 // -- Agent avatar color mapping --
@@ -188,8 +223,11 @@ export default function DashboardPage() {
                 <Badge variant={getEventBadgeVariant(event.type)} className="shrink-0 mt-0.5">
                   {event.type.replace(/_/g, ' ')}
                 </Badge>
-                <span className="text-sm text-text-dim leading-snug flex-1 min-w-0 truncate group-hover:text-text transition-colors">
-                  {event.description}
+                <span className="text-sm text-text-dim leading-snug flex-1 min-w-0 group-hover:text-text transition-colors">
+                  {event.agent && (
+                    <span className="font-mono text-xs text-accent mr-1.5">{event.agent}</span>
+                  )}
+                  <span className="truncate">{event.summary}</span>
                 </span>
               </div>
             ))}
