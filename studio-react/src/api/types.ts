@@ -118,6 +118,7 @@ export interface Asset {
   assigned_to: string | null;
   file_path: string | null;
   download_url: string | null;
+  drone_job_id: number | null;
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown> | null;

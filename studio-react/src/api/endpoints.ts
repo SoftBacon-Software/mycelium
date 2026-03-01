@@ -18,6 +18,7 @@ import type {
   Channel,
   ChannelMember,
   ChannelMessage,
+  DroneJob,
 } from './types';
 
 // Auth
@@ -258,4 +259,30 @@ export function createChannel(data: { name: string; slug: string; type?: string;
 
 export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
   return apiGet<ChannelMember[]>(`/channels/${id}/members`);
+}
+
+// Drone Jobs
+
+export function createDroneJob(data: Partial<DroneJob>): Promise<DroneJob> {
+  return apiPost<DroneJob>('/drone-jobs', data);
+}
+
+export function updateDroneJob(id: number, data: Partial<DroneJob>): Promise<DroneJob> {
+  return apiPut<DroneJob>(`/drone-jobs/${id}`, data);
+}
+
+export function cancelDroneJob(id: number): Promise<DroneJob> {
+  return apiPut<DroneJob>(`/drone-jobs/${id}`, { status: 'cancelled' });
+}
+
+export function linkAssetsToJob(
+  assetIds: string[],
+  droneJobId: number,
+  status?: string,
+): Promise<{ ok: boolean; updated: number }> {
+  return apiPut<{ ok: boolean; updated: number }>('/assets/link-job', {
+    asset_ids: assetIds,
+    drone_job_id: droneJobId,
+    status,
+  });
 }
