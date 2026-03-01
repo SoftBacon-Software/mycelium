@@ -371,11 +371,7 @@
         loginScreen.style.display = 'none'; dashboard.style.display = '';
         updateUserDisplay();
         startPolling();
-        // Studio intro sound on session restore
-        document.addEventListener('click', function _introPlay() {
-          try { var _a = new Audio('studio_intro.mp3'); _a.volume = 0.5; _a.play().catch(function(){}); } catch(e) {}
-          document.removeEventListener('click', _introPlay);
-        }, { once: true });
+        // No intro sound on session restore — only on fresh login
       } else {
         authToken = ''; currentUser = null;
         sessionStorage.removeItem('dv_token');
