@@ -568,8 +568,12 @@ export function getBootPayload(agentId) {
 
   var since = agent.last_heartbeat || '2000-01-01';
   var newMessages = db.prepare(
-    "SELECT * FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type = 'message' AND created_at > ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND created_at > ? ORDER BY created_at DESC LIMIT 50"
   ).all(agentId, since);
+
+  var pendingDirectives = db.prepare(
+    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+  ).all(agentId);
 
   var capabilities = [];
   try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
@@ -612,6 +616,7 @@ export function getBootPayload(agentId) {
     tasks: myTasks,
     pending_requests: pendingRequests,
     new_messages: newMessages,
+    pending_directives: pendingDirectives,
     asset_requests: assetRequests,
     other_agents: otherAgents,
     game_context: gameContext,

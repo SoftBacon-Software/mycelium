@@ -53,6 +53,7 @@ import {
   deleteOutreachContact, countOutreachContacts, findOutreachContactByEmail,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
+  castApprovalVote, getApprovalVotes, countApprovalVotes,
   createOperator, getOperator, listOperators, updateOperator, deleteOperator,
   getInstanceConfig, setInstanceConfig, listInstanceConfig, deleteInstanceConfig
 } from '../db.js';
@@ -275,6 +276,12 @@ router.put('/agents/:id', function (req, res) {
   var fields = {};
   if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
   if (req.body.name !== undefined) fields.name = req.body.name;
+  // Admin-only fields
+  if (who === '__admin__') {
+    if (req.body.role !== undefined) fields.role = req.body.role;
+    if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
+    if (req.body.project !== undefined) fields.project = req.body.project;
+  }
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);
   res.json({ ok: true, id: req.params.id, updated: Object.keys(fields) });
@@ -593,6 +600,32 @@ router.put('/assets/:id', function (req, res) {
   res.json({ ok: true, id: asset.id });
 });
 
+router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var asset = getDvAsset(parseInt(req.params.id));
+  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  var filePath = req.file.path;
+  var downloadUrl = '/api/mycelium/assets/' + asset.id + '/download';
+  updateDvAsset(asset.id, { status: 'ready', file_path: filePath, download_url: downloadUrl, path: req.file.filename });
+  emitEvent('asset_uploaded', who, asset.game, 'Asset #' + asset.id + ' (' + asset.name + ') uploaded');
+  res.json({ ok: true, asset_id: asset.id, download_url: downloadUrl });
+});
+
+router.get('/assets/:id/download', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var asset = getDvAsset(parseInt(req.params.id));
+  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  if (!asset.file_path && !asset.path) return res.status(404).json({ error: 'No file attached to this asset' });
+
+  var filePath = asset.file_path || nodePath.join(FILES_DIR, asset.path);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
+  res.download(filePath);
+});
+
 // ======== EVENTS ========
 
 router.get('/events', function (req, res) {
@@ -710,6 +743,16 @@ router.post('/messages', function (req, res) {
   if (!agentId) return;
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
+
+  // Only admin and operators can send directives
+  var msgType = req.body.msg_type || 'message';
+  if (msgType === 'directive') {
+    var sender = req.body.from || agentId;
+    if (sender !== '__admin__' && sender.indexOf('-claude') !== -1) {
+      return res.status(403).json({ error: 'Only admin or operators can send directives' });
+    }
+  }
+
   var toAgent = req.body.to_agent || null;
   var threadId = req.body.thread_id || null;
   var game = req.body.game || null;
@@ -1574,7 +1617,9 @@ router.post('/approvals', function (req, res) {
   var payload = req.body.payload;
   if (!payload) return res.status(400).json({ error: 'payload is required' });
   var project = req.body.project || 'mycelium';
-  var id = createApproval(actionType, who, title, payload, project);
+  var riskTier = req.body.risk_tier;
+  var requiredApprovals = req.body.required_approvals;
+  var id = createApproval(actionType, who, title, payload, project, riskTier, requiredApprovals);
   emitEvent('approval_requested', who, project,
     who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
   res.json({ id: id, status: 'pending', approval_required: true });
@@ -1637,6 +1682,73 @@ router.put('/approvals/:id/executed', function (req, res) {
     who + ' executed [' + approval.action_type + '] ' + approval.title,
     JSON.stringify({ approval_id: approval.id }));
   res.json({ ok: true, id: approval.id, status: 'executed' });
+});
+
+// Vote on an approval (quorum-based)
+router.put('/approvals/:id/vote', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = req.headers['x-admin-key'] ? '__admin__' : 'studio_user';
+  var approval = getApproval(parseInt(req.params.id));
+  if (!approval) return res.status(404).json({ error: 'Approval not found' });
+  if (approval.status !== 'pending') return res.status(400).json({ error: 'Approval is already ' + approval.status });
+
+  var vote = req.body.vote || 'approve';
+  var notes = req.body.notes || '';
+  if (vote !== 'approve' && vote !== 'deny') return res.status(400).json({ error: 'vote must be approve or deny' });
+
+  // Any single deny = instant denial
+  if (vote === 'deny') {
+    castApprovalVote(approval.id, who, 'deny', notes);
+    decideApproval(approval.id, 'denied', who, notes || 'Denied by ' + who);
+    emitEvent('approval_denied', who, null, who + ' denied approval #' + approval.id + ': ' + approval.title);
+    return res.json({ ok: true, status: 'denied', message: 'Approval denied.' });
+  }
+
+  // Cast approve vote
+  castApprovalVote(approval.id, who, 'approve', notes);
+  var counts = countApprovalVotes(approval.id);
+
+  // Check if quorum reached
+  if (counts.approves >= approval.required_approvals) {
+    decideApproval(approval.id, 'approved', who, 'Quorum reached (' + counts.approves + '/' + approval.required_approvals + ')');
+    emitEvent('approval_approved', who, null, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)');
+    return res.json({ ok: true, status: 'approved', votes: counts, message: 'Quorum reached. Approval granted.' });
+  }
+
+  emitEvent('approval_vote', who, null, who + ' voted approve on #' + approval.id + ' (' + counts.approves + '/' + approval.required_approvals + ')');
+  res.json({ ok: true, status: 'pending', votes: counts, remaining: approval.required_approvals - counts.approves });
+});
+
+router.get('/approvals/:id/votes', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(getApprovalVotes(parseInt(req.params.id)));
+});
+
+// ======== WORK ROUTING ========
+
+router.post('/work/request', function (req, res) {
+  var who = checkAgent(req, res);
+  if (!who) return;
+
+  // Check if Claude Admin is frozen
+  var adminStatus = getInstanceConfig('admin_status');
+  if (adminStatus === 'frozen') {
+    return res.status(503).json({ error: 'Claude Admin is frozen. Work routing paused. Contact a human operator.' });
+  }
+
+  var { type, target, description, priority } = req.body;
+  if (!type) return res.status(400).json({ error: 'type required (task_request, asset_request, work_request)' });
+
+  // Create as a work_request message to Claude Admin
+  var adminAgentId = getInstanceConfig('admin_agent_id') || 'greatness-claude';
+  var msgId = createDvRequest(who, adminAgentId, null, null,
+    JSON.stringify({ type: type, target: target || null, description: description || '', priority: priority || 'normal' }),
+    JSON.stringify({ work_request: true, type: type })
+  );
+
+  emitEvent('work_request', who, null, who + ' requested work: ' + type + (target ? ' \u2192 ' + target : ''));
+  res.json({ ok: true, message_id: msgId, routed_to: adminAgentId });
 });
 
 // ======== OUTREACH ========
