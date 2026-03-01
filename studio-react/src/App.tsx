@@ -5,6 +5,7 @@ import AppLayout from './layouts/AppLayout'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import TasksPage from './pages/TasksPage'
+import ChannelsPage from './pages/ChannelsPage'
 import MessagesPage from './pages/MessagesPage'
 import PlansPage from './pages/PlansPage'
 import BugsPage from './pages/BugsPage'
@@ -31,6 +32,7 @@ export default function App() {
           element={isAuthenticated ? <AppLayout /> : <Navigate to="/login" replace />}
         >
           <Route index element={<DashboardPage />} />
+          <Route path="channels" element={<ChannelsPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="messages" element={<MessagesPage />} />
           <Route path="plans" element={<PlansPage />} />

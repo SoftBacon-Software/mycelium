@@ -16,6 +16,7 @@ import type {
   Concept,
   Operator,
   ConfigEntry,
+  Channel,
 } from '../api/types';
 
 interface DashboardState {
@@ -38,6 +39,8 @@ interface DashboardState {
   concepts: Concept[];
   operators: Operator[];
   instanceConfig: ConfigEntry[];
+  channels: Channel[];
+  channelCounts: { total: number; active: number; archived: number };
 
   // UI state
   loading: boolean;
@@ -69,6 +72,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   concepts: [],
   operators: [],
   instanceConfig: [],
+  channels: [],
+  channelCounts: { total: 0, active: 0, archived: 0 },
 
   // UI state defaults
   loading: false,
@@ -99,6 +104,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         concepts: data.concepts,
         operators: data.operators,
         instanceConfig: data.instance_config,
+        channels: data.channels || [],
+        channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
         loading: false,
         lastRefresh: new Date(),
       });

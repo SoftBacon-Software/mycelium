@@ -15,6 +15,9 @@ import type {
   Vote,
   Approval,
   ContextEntry,
+  Channel,
+  ChannelMember,
+  ChannelMessage,
 } from './types';
 
 // Auth
@@ -225,4 +228,34 @@ export function updateContextKey(
     `/context/keys/${encodeURIComponent(ns)}/${encodeURIComponent(key)}`,
     { value, updated_by: updatedBy },
   );
+}
+
+// Channels
+
+export function fetchChannels(): Promise<Channel[]> {
+  return apiGet<Channel[]>('/channels');
+}
+
+export function fetchChannelUnread(): Promise<Record<number, { name: string; slug: string; unread: number }>> {
+  return apiGet<Record<number, { name: string; slug: string; unread: number }>>('/channels/unread');
+}
+
+export function fetchChannelMessages(id: number, limit = 50, offset = 0): Promise<ChannelMessage[]> {
+  return apiGet<ChannelMessage[]>(`/channels/${id}/messages?limit=${limit}&offset=${offset}`);
+}
+
+export function sendChannelMessage(id: number, content: string, metadata?: string): Promise<{ ok: boolean; id: number; channel_id: number }> {
+  return apiPost<{ ok: boolean; id: number; channel_id: number }>(`/channels/${id}/messages`, { content, metadata });
+}
+
+export function markChannelRead(id: number, messageId?: number): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/channels/${id}/read`, messageId ? { message_id: messageId } : {});
+}
+
+export function createChannel(data: { name: string; slug: string; type?: string; description?: string }): Promise<{ id: number }> {
+  return apiPost<{ id: number }>('/channels', data);
+}
+
+export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
+  return apiGet<ChannelMember[]>(`/channels/${id}/members`);
 }

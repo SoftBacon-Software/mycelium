@@ -1,15 +1,15 @@
 import { Outlet, useLocation } from 'react-router-dom'
 import SideNav from './SideNav'
 import DirectiveBanner from '../components/directives/DirectiveBanner'
-import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useEffect, useMemo } from 'react'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
+  '/channels': 'Channels',
   '/tasks': 'Tasks',
-  '/messages': 'Messages',
+  '/messages': 'Agent Comms',
   '/plans': 'Plans',
   '/bugs': 'Bugs',
   '/assets': 'Assets',
@@ -52,9 +52,6 @@ export default function AppLayout() {
         <header className="flex items-center justify-between h-14 px-6 border-b border-border bg-surface shrink-0">
           {/* Left: page title */}
           <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
-
-          {/* Center: voice bar */}
-          <VoiceBar />
 
           {/* Right: controls */}
           <div className="flex items-center gap-4">
