@@ -423,7 +423,13 @@ export function listDvEvents(filters) {
 
 // -- Messages --
 
-export function createDvMessage(fromAgent, toAgent, threadId, game, content, metadata) {
+export function createDvMessage(fromAgent, toAgent, threadId, game, content, metadata, msgType) {
+  if (msgType && msgType !== 'message') {
+    var result = db.prepare(
+      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, msg_type) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', msgType);
+    return result.id;
+  }
   var result = stmt('dvCreateMessage', `INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata)
     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}');
   return result.id;

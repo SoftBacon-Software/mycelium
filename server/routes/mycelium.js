@@ -753,11 +753,11 @@ router.post('/messages', function (req, res) {
     }
   }
 
-  var toAgent = req.body.to_agent || null;
+  var toAgent = req.body.to_agent || req.body.to || null;
   var threadId = req.body.thread_id || null;
   var game = req.body.game || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createDvMessage(agentId, toAgent, threadId, game, content, metadata);
+  var id = createDvMessage(agentId, toAgent, threadId, game, content, metadata, msgType);
   var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
   emitEvent('message_sent', agentId, game, agentId + ' sent message' + target, { message_id: id });
   if (toAgent) {
