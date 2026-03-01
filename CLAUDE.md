@@ -50,6 +50,29 @@ package.json        # mycelium v1.0.0
 - **Concepts**: `dv_concepts` + `dv_project_concepts`. Shared characters, styles, rulesets across projects.
 - **Drone jobs**: `dv_drone_jobs` for GPU compute task queue.
 
+## Command Structure v2
+
+Mycelium uses a command structure where Claude Admin (greatness-claude) coordinates work.
+
+### Terminology
+- **Operators** (people): greatness (owner), hijack (ui_lead), unakron (member). Table: `dv_operators`.
+- **Agents** (Claude instances): greatness-claude (admin), hijack-claude (agent), unakron-gpu (drone). Linked to operators via `operator_id`.
+- **Directives**: Blocking messages (`msg_type='directive'`). Agent MUST respond before getting new work.
+- **Instance Config**: `dv_instance_config` — mode (developer/customer), admin status, risk tiers.
+
+### Risk-Tiered Approvals
+| Tier | Quorum | Actions |
+|------|--------|---------|
+| Low | Claude Admin alone | plan_create, context_change |
+| Medium | 1 human | deploy, git_push, delete |
+| High | 2+ humans | outreach_send, external_comm |
+| Critical | All humans | money_action, delete_agent, instance_config |
+
+Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
+
+### Kill Switch
+`PUT /admin/override` — any human operator can freeze/unfreeze Claude Admin. When frozen, work routing pauses.
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -85,9 +108,27 @@ package.json        # mycelium v1.0.0
 - `GET /projects/:projectId/concepts` — Get project's concepts
 
 ### Communication
-- `POST /messages` — Send message
+- `POST /messages` — Send message (supports `msg_type`: message, request, directive, info)
 - `POST /requests` — Blocking request to agent
-- `PUT /messages/:id/resolve` — Resolve request
+- `PUT /messages/:id/resolve` — Resolve request/directive
+
+### Operators & Command Structure
+- `GET /operators` — List operators (people)
+- `POST /operators` — Create operator (admin only)
+- `PUT /operators/:id` — Update operator (admin only)
+- `GET /admin/config` — Instance configuration
+- `PUT /admin/config/:key` — Update config (admin only)
+- `PUT /admin/override` — Kill switch: freeze/unfreeze Claude Admin
+- `POST /work/request` — Agent asks Claude Admin for work assignment
+
+### Approvals
+- `POST /approvals` — Request approval (with risk_tier, required_approvals)
+- `PUT /approvals/:id/vote` — Cast vote (approve/deny)
+- `GET /approvals/:id/votes` — View votes
+
+### Assets
+- `POST /assets/:id/upload` — Upload file to asset
+- `GET /assets/:id/download` — Download asset file
 
 ### Context & Bugs
 - `PUT /context/keys/:namespace/:key` — Store context
