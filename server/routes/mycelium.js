@@ -26,7 +26,21 @@ var storage = multer.diskStorage({
     cb(null, name);
   }
 });
-var upload = multer({ storage: storage, limits: { fileSize: 50 * 1024 * 1024 } });
+var upload = multer({ storage: storage, limits: { fileSize: 200 * 1024 * 1024 } });
+
+// Drone artifacts directory — persistent files (LoRA weights, models, etc.) that don't expire
+var ARTIFACTS_DIR = nodePath.join(DATA_DIR, 'drone_artifacts');
+if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+var artifactStorage = multer.diskStorage({
+  destination: function (req, file, cb) { cb(null, ARTIFACTS_DIR); },
+  filename: function (req, file, cb) {
+    // Use the provided name or fall back to original filename
+    var name = req.body.name || file.originalname;
+    name = name.replace(/[^a-zA-Z0-9_.\-]/g, '_');
+    cb(null, name);
+  }
+});
+var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
   createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createGame, listGames, getGame,
@@ -1418,7 +1432,9 @@ router.get('/files', function (req, res) {
     files = fs.readdirSync(FILES_DIR).map(function (f) {
       var stat = fs.statSync(nodePath.join(FILES_DIR, f));
       var expiresIn = Math.max(0, Math.round((FILE_TTL_MS - (now - stat.mtimeMs)) / 1000));
-      return { filename: f, size: stat.size, uploaded: stat.mtime.toISOString(), expires_in_seconds: expiresIn, url: 'https://willingsacrifice.com/api/dioverse/files/' + f };
+      var protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      var host = req.headers['x-forwarded-host'] || req.get('host');
+      return { filename: f, size: stat.size, uploaded: stat.mtime.toISOString(), expires_in_seconds: expiresIn, url: protocol + '://' + host + '/api/mycelium/files/' + f };
     });
   } catch (e) { /* empty */ }
   res.json(files);
@@ -1746,7 +1762,9 @@ router.post('/drones/jobs', function (req, res) {
   var inputData = req.body.input_data || {};
   var requires = req.body.requires || ['cpu'];
   var priority = parseInt(req.body.priority) || 0;
-  var id = createDroneJob(title, command, inputData, requires, who, priority);
+  var workspaceRepo = req.body.workspace_repo || null;
+  var workspaceBranch = req.body.workspace_branch || 'main';
+  var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch);
   emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id });
   res.json({ ok: true, id: id, title: title });
 });
@@ -1821,6 +1839,55 @@ router.get('/drones/:id', function (req, res) {
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
   res.json(safe);
+});
+
+// ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
+
+// Upload a drone artifact (persistent, no TTL)
+router.post('/drones/artifacts', artifactUpload.single('file'), function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
+  var protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  var host = req.headers['x-forwarded-host'] || req.get('host');
+  var baseUrl = protocol + '://' + host;
+  var url = baseUrl + '/api/mycelium/drones/artifacts/' + req.file.filename;
+  emitEvent('artifact_uploaded', getAdminDisplayName(req), 'drone', 'Uploaded drone artifact: ' + req.file.filename + ' (' + Math.round(req.file.size / 1024) + 'KB)');
+  res.json({ ok: true, name: req.file.filename, url: url, size: req.file.size });
+});
+
+// List drone artifacts
+router.get('/drones/artifacts', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  var host = req.headers['x-forwarded-host'] || req.get('host');
+  var baseUrl = protocol + '://' + host;
+  var artifacts = [];
+  try {
+    artifacts = fs.readdirSync(ARTIFACTS_DIR).map(function (f) {
+      var stat = fs.statSync(nodePath.join(ARTIFACTS_DIR, f));
+      return { name: f, size: stat.size, uploaded: stat.mtime.toISOString(), url: baseUrl + '/api/mycelium/drones/artifacts/' + f };
+    });
+  } catch (e) { /* empty */ }
+  res.json(artifacts);
+});
+
+// Download a drone artifact (public, no auth — wget/curl friendly)
+router.get('/drones/artifacts/:name', function (req, res) {
+  var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
+  var filePath = nodePath.join(ARTIFACTS_DIR, name);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
+  res.sendFile(filePath);
+});
+
+// Delete a drone artifact (admin only)
+router.delete('/drones/artifacts/:name', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
+  var filePath = nodePath.join(ARTIFACTS_DIR, name);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
+  fs.unlinkSync(filePath);
+  res.json({ ok: true, deleted: name });
 });
 
 // =============== APPROVALS ===============
