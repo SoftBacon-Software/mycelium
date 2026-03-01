@@ -52,7 +52,9 @@ import {
   createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
   deleteOutreachContact, countOutreachContacts, findOutreachContactByEmail,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
-  markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent
+  markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
+  createOperator, getOperator, listOperators, updateOperator, deleteOperator,
+  getInstanceConfig, setInstanceConfig, listInstanceConfig, deleteInstanceConfig
 } from '../db.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -970,6 +972,97 @@ router.delete('/studio/users/:id', function (req, res) {
   if (!user) return res.status(404).json({ error: 'User not found' });
   deleteStudioUser(user.id);
   res.json({ ok: true, deleted: user.username });
+});
+
+// ======== OPERATORS (people) ========
+
+router.get('/operators', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listOperators());
+});
+
+router.get('/operators/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var op = getOperator(req.params.id);
+  if (!op) return res.status(404).json({ error: 'Operator not found' });
+  res.json(op);
+});
+
+router.post('/operators', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var { id, display_name, role, responsibilities, email, studio_user_id } = req.body;
+  if (!id || !display_name) return res.status(400).json({ error: 'id and display_name required' });
+  if (getOperator(id)) return res.status(409).json({ error: 'Operator already exists' });
+  createOperator(id, display_name, role, responsibilities, email, studio_user_id);
+  emitEvent('operator_created', who, null, 'Operator ' + id + ' created');
+  res.json(getOperator(id));
+});
+
+router.put('/operators/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var op = getOperator(req.params.id);
+  if (!op) return res.status(404).json({ error: 'Operator not found' });
+  updateOperator(req.params.id, req.body);
+  emitEvent('operator_updated', who, null, 'Operator ' + req.params.id + ' updated');
+  res.json(getOperator(req.params.id));
+});
+
+router.delete('/operators/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  if (!getOperator(req.params.id)) return res.status(404).json({ error: 'Operator not found' });
+  deleteOperator(req.params.id);
+  emitEvent('operator_deleted', who, null, 'Operator ' + req.params.id + ' deleted');
+  res.json({ ok: true });
+});
+
+// ======== INSTANCE CONFIG ========
+
+router.get('/admin/config', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listInstanceConfig());
+});
+
+router.get('/admin/config/:key', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var val = getInstanceConfig(req.params.key);
+  if (val === null) return res.status(404).json({ error: 'Config key not found' });
+  res.json({ key: req.params.key, value: val });
+});
+
+router.put('/admin/config/:key', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var { value } = req.body;
+  if (value === undefined) return res.status(400).json({ error: 'value required' });
+  setInstanceConfig(req.params.key, typeof value === 'string' ? value : JSON.stringify(value), who);
+  emitEvent('config_changed', who, null, 'Config ' + req.params.key + ' updated');
+  res.json({ key: req.params.key, value: getInstanceConfig(req.params.key) });
+});
+
+// ======== KILL SWITCH ========
+
+router.put('/admin/override', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var action = req.body.action || 'freeze';
+  if (action === 'freeze') {
+    setInstanceConfig('admin_status', 'frozen', who);
+    emitEvent('admin_frozen', who, null, who + ' froze Claude Admin');
+    res.json({ ok: true, admin_status: 'frozen', message: 'Claude Admin frozen. All work assignments paused.' });
+  } else if (action === 'unfreeze') {
+    setInstanceConfig('admin_status', 'coordinator', who);
+    emitEvent('admin_unfrozen', who, null, who + ' unfroze Claude Admin');
+    res.json({ ok: true, admin_status: 'coordinator', message: 'Claude Admin unfrozen. Resuming operations.' });
+  } else {
+    res.status(400).json({ error: 'action must be freeze or unfreeze' });
+  }
 });
 
 // ======== ADMIN ========
