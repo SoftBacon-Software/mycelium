@@ -1,0 +1,6 @@
+node_modules/
+server/data/
+*.db
+.env
+.git/
+studio-react/node_modules/
