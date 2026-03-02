@@ -460,6 +460,36 @@ def categorize_error(stderr, exit_code, job, system_info):
         )
         return error
 
+    # Signal-killed process (Linux: negative exit code or 128+N)
+    signal_names = {
+        9: "SIGKILL (likely OOM-killed by OS)",
+        11: "SIGSEGV (segmentation fault — likely GPU OOM or driver crash)",
+        6: "SIGABRT (aborted)",
+        15: "SIGTERM (terminated)",
+        2: "SIGINT (interrupted)",
+    }
+    signal_num = None
+    if exit_code is not None and exit_code < 0:
+        signal_num = abs(exit_code)
+    elif exit_code is not None and exit_code > 128 and exit_code <= 159:
+        signal_num = exit_code - 128
+    elif exit_code is not None and exit_code > 200 and exit_code < 256:
+        # Python sys.exit(-N) wraps to 256-N
+        signal_num = 256 - exit_code
+
+    if signal_num and signal_num in signal_names:
+        error["error_type"] = "signal_killed"
+        error["message"] = f"Process killed by signal {signal_num}: {signal_names[signal_num]}"
+        if signal_num in (9, 11):
+            error["suggestion"] = (
+                f"GPU VRAM: {system_info.get('gpu_vram_gb', '?')} GB. "
+                "The process was killed, likely due to GPU/system memory exhaustion. "
+                "Try reducing batch size, image resolution, or closing other GPU processes."
+            )
+        else:
+            error["suggestion"] = f"Process received signal {signal_num}. Check system logs for details."
+        return error
+
     # Generic runtime error — include first meaningful stderr line
     meaningful_lines = [
         l.strip() for l in stderr.split("\n")
@@ -482,6 +512,21 @@ def categorize_error(stderr, exit_code, job, system_info):
 # ---------------------------------------------------------------------------
 # Job execution
 # ---------------------------------------------------------------------------
+
+def update_job_with_retry(api, job_id, fields, retries=3):
+    """Update job status with retries. Critical for ensuring failed jobs are marked failed."""
+    for attempt in range(retries):
+        try:
+            api.update_job(job_id, fields)
+            return True
+        except Exception as e:
+            status = fields.get("status", "unknown")
+            print(f"  WARNING: Failed to update job #{job_id} to '{status}' (attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(5 * (attempt + 1))
+    print(f"  ERROR: Could not update job #{job_id} after {retries} attempts. Job may be stuck in 'running'.")
+    return False
+
 
 def execute_job(api, job, system_info, work_dir=None):
     """Execute a job with full workspace setup and error handling.
@@ -581,6 +626,22 @@ def execute_job(api, job, system_info, work_dir=None):
         stderr = result.stderr[:MAX_OUTPUT_SIZE] if result.stderr else ""
 
         if result.returncode == 0:
+            # False-success guard: check stderr for crash indicators
+            # Wrapper scripts may swallow errors and exit 0
+            crash_indicators = [
+                "segmentation fault", "sigsegv", "sigkill",
+                "killed", "fatal error", "panic:",
+                "generation failed", "traceback (most recent call last)",
+            ]
+            stderr_check = stderr.lower()
+            false_success = any(ind in stderr_check for ind in crash_indicators)
+            if false_success:
+                error = categorize_error(stderr, -1, job, system_info)
+                error["stdout"] = stdout[-5000:]
+                error["stderr"] = stderr[-5000:]
+                error["false_success"] = True
+                error["message"] = "Process exited 0 but stderr indicates failure: " + error.get("message", "")
+                return False, error
             return True, {
                 "stdout": stdout[-10000:],
                 "exit_code": 0,
@@ -676,7 +737,7 @@ def run_drone(api, agent_id, capabilities, poll_interval, heartbeat_interval, wo
                 if success:
                     jobs_completed += 1
                     print(f"[Job #{job_id}] COMPLETED")
-                    api.update_job(job_id, {
+                    update_job_with_retry(api, job_id, {
                         "status": "completed",
                         "result_data": json.dumps(result_data),
                     })
@@ -692,7 +753,7 @@ def run_drone(api, agent_id, capabilities, poll_interval, heartbeat_interval, wo
                     if suggestion:
                         print(f"  Fix:        {suggestion[:200]}")
 
-                    api.update_job(job_id, {
+                    update_job_with_retry(api, job_id, {
                         "status": "failed",
                         "error": f"[{error_type}] {message}",
                         "result_data": json.dumps(result_data),
