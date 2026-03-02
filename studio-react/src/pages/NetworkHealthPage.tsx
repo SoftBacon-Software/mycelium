@@ -2,35 +2,10 @@ import { useEffect, useMemo } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
+import { parseTimestamp, timeAgo, formatTime } from '../utils/time'
 import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry } from '../api/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function parseTimestamp(dateStr: string): number {
-  if (dateStr.includes('T')) return new Date(dateStr).getTime()
-  return new Date(dateStr.replace(' ', 'T') + 'Z').getTime()
-}
-
-function timeAgo(dateStr: string | null): string {
-  if (!dateStr) return 'never'
-  const ts = parseTimestamp(dateStr)
-  if (isNaN(ts)) return '-'
-  const diff = Date.now() - ts
-  if (diff < 0) return 'just now'
-  if (diff < 60_000) return 'just now'
-  const minutes = Math.floor(diff / 60_000)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return `${Math.floor(days / 30)}mo ago`
-}
-
-function formatTimestamp(dateStr: string): string {
-  const d = new Date(dateStr)
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-}
 
 function getAgentInitials(name: string): string {
   const parts = name.split(/[-_ ]+/)
@@ -592,7 +567,7 @@ function RecentActivityFeed({ events }: { events: Event[] }) {
             className="flex items-start gap-3 py-1.5 px-2 rounded hover:bg-surface-raised/50 transition-colors group"
           >
             <span className="text-[11px] text-text-muted font-mono w-12 shrink-0 pt-0.5 tabular-nums">
-              {formatTimestamp(event.created_at)}
+              {formatTime(event.created_at)}
             </span>
             <Badge variant={getEventBadgeVariant(event.type)} className="shrink-0 mt-0.5">
               {event.type.replace(/_/g, ' ')}

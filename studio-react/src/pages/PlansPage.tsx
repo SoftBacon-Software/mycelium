@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { createPlan, updatePlan, updatePlanStep, fetchPlan } from '../api/endpoints'
 import { toast } from 'sonner'
+import { formatDateTime } from '../utils/time'
 import type { Plan, PlanStep } from '../api/types'
 import PlanCard from '../components/plans/PlanCard'
 import StepChecklist from '../components/plans/StepChecklist'
@@ -22,16 +23,6 @@ const priorityBadgeVariant: Record<string, 'red' | 'accent' | 'green' | 'muted' 
   high: 'red',
   medium: 'accent',
   low: 'green',
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 // ─── Create Plan Modal ───────────────────────────────────────────────────────
@@ -253,9 +244,9 @@ function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailP
 
         {/* Timestamps */}
         <div className="flex items-center gap-3 mt-2 text-xs text-text-muted">
-          <span>Created {formatDate(plan.created_at)}</span>
+          <span>Created {formatDateTime(plan.created_at)}</span>
           {plan.updated_at !== plan.created_at && (
-            <span>Updated {formatDate(plan.updated_at)}</span>
+            <span>Updated {formatDateTime(plan.updated_at)}</span>
           )}
         </div>
 

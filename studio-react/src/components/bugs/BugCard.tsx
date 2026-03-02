@@ -1,5 +1,6 @@
 import type { Bug } from '../../api/types'
 import Badge from '../shared/Badge'
+import { timeAgo } from '../../utils/time'
 
 interface BugCardProps {
   bug: Bug
@@ -37,20 +38,6 @@ const categoryBadgeVariant: Record<string, 'purple' | 'pink' | 'accent' | 'blue'
   other: 'default',
 }
 
-function timeAgo(dateStr: string): string {
-  const now = Date.now()
-  const then = new Date(dateStr).getTime()
-  const seconds = Math.floor((now - then) / 1000)
-
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return new Date(dateStr).toLocaleDateString()
-}
 
 export default function BugCard({ bug, onClick }: BugCardProps) {
   const barColor = severityBarColor[bug.severity] ?? severityBarColor.normal
