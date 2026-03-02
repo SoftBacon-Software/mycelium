@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { resolveRequest, sendMessage } from '../api/endpoints'
+import { toast } from 'sonner'
 import type { Message } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
@@ -267,9 +268,11 @@ export default function MessagesPage() {
           content: composeContent.trim(),
           msg_type: composeMsgType,
         })
+        toast.success('Message sent')
         setComposeContent('')
         await refresh()
       } catch (err) {
+        toast.error('Failed to send message')
         console.error('Failed to send message:', err)
       } finally {
         setSending(false)
@@ -283,8 +286,10 @@ export default function MessagesPage() {
       setResolvingId(id)
       try {
         await resolveRequest(id, 'resolved')
+        toast.success('Request resolved')
         await refresh()
       } catch (err) {
+        toast.error('Failed to resolve request')
         console.error('Failed to resolve request:', err)
       } finally {
         setResolvingId(null)

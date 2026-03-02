@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { fileBug, updateBug } from '../api/endpoints'
+import { toast } from 'sonner'
 import type { Bug } from '../api/types'
 import BugCard from '../components/bugs/BugCard'
 import ModalOverlay from '../components/modals/ModalOverlay'
@@ -77,9 +78,11 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
         filed_by: user?.username || 'operator',
         status: 'open',
       })
+      toast.success('Bug filed')
       await refresh()
       handleClose()
     } catch (err) {
+      toast.error('Failed to file bug')
       setError(err instanceof Error ? err.message : 'Failed to file bug')
     } finally {
       setSubmitting(false)
@@ -276,8 +279,10 @@ function BugDetail({ bug, onClose }: BugDetailProps) {
       setUpdating(true)
       try {
         await updateBug(bug.id, { status: newStatus })
+        toast.success('Bug status updated')
         await refresh()
       } catch (err) {
+        toast.error('Failed to update bug')
         console.error('Failed to update bug status:', err)
       } finally {
         setUpdating(false)

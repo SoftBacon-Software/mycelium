@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'sonner'
 import { useAuthStore } from './stores/authStore'
 import AppLayout from './layouts/AppLayout'
 import LoginPage from './pages/LoginPage'
@@ -30,6 +31,16 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: '#2A2420',
+            border: '1px solid #332B25',
+            color: '#F0E8DB',
+          },
+        }}
+      />
       <Routes>
         <Route
           path="/login"
