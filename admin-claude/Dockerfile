@@ -1,7 +1,7 @@
 FROM node:20-slim
 WORKDIR /app
-COPY package*.json ./
+COPY admin-claude/package*.json ./
 RUN npm ci --production
-COPY . .
+COPY admin-claude/ .
 EXPOSE 3003
 CMD ["node", "index.js"]
