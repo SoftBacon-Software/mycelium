@@ -9,6 +9,9 @@ export interface Agent {
   last_heartbeat: string;
   avatar_url: string | null;
   capabilities: string[];
+  agent_type: string;
+  llm_backend: string;
+  llm_model: string;
 }
 
 export interface Event {

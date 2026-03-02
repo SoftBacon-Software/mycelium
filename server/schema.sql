@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS dv_agents (
   working_on      TEXT NOT NULL DEFAULT '',
   last_heartbeat  TEXT,
   capabilities    TEXT NOT NULL DEFAULT '[]',
+  agent_type      TEXT NOT NULL DEFAULT 'agent',
+  llm_backend     TEXT NOT NULL DEFAULT '',
+  llm_model       TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

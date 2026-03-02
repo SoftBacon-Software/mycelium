@@ -260,10 +260,13 @@ router.post('/agents/heartbeat', function (req, res) {
   if (!agentId) return;
   var status = req.body.status || 'online';
   var workingOn = req.body.working_on || '';
-  // Allow avatar_url to be set via heartbeat
-  if (req.body.avatar_url !== undefined) {
-    updateAgent(agentId, { avatar_url: req.body.avatar_url });
-  }
+  // Allow agent metadata to be updated via heartbeat
+  var agentUpdates = {};
+  if (req.body.avatar_url !== undefined) agentUpdates.avatar_url = req.body.avatar_url;
+  if (req.body.llm_backend !== undefined) agentUpdates.llm_backend = req.body.llm_backend;
+  if (req.body.llm_model !== undefined) agentUpdates.llm_model = req.body.llm_model;
+  if (req.body.agent_type !== undefined) agentUpdates.agent_type = req.body.agent_type;
+  if (Object.keys(agentUpdates).length > 0) updateAgent(agentId, agentUpdates);
   // Read previous state to craft a meaningful event summary
   var prev = getAgent(agentId);
   var prevStatus = prev ? prev.status : 'offline';
@@ -1271,6 +1274,14 @@ router.post('/admin/agents', async function (req, res) {
   var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, projectId, hash, capabilities);
+  // Set optional LLM metadata
+  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type) {
+    updateAgent(id, {
+      llm_backend: req.body.llm_backend || '',
+      llm_model: req.body.llm_model || '',
+      agent_type: req.body.agent_type || 'agent'
+    });
+  }
   // Auto-add new agent to #general
   var generalChannel = getChannelBySlug('general');
   if (generalChannel) {

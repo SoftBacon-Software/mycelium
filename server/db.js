@@ -59,6 +59,9 @@ export function initDB() {
     ["dv_drone_jobs", "workspace_branch", "TEXT NOT NULL DEFAULT 'main'"],
     ["dv_assets", "drone_job_id", "INTEGER"],
     ["dv_assets", "prompt", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_agents", "llm_backend", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_agents", "llm_model", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_agents", "agent_type", "TEXT NOT NULL DEFAULT 'agent'"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -218,6 +221,9 @@ export function updateAgent(id, fields) {
   if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
   if (fields.operator_id !== undefined) { sets.push('operator_id = ?'); values.push(fields.operator_id); }
   if (fields.project !== undefined) { sets.push('project = ?'); values.push(fields.project); }
+  if (fields.llm_backend !== undefined) { sets.push('llm_backend = ?'); values.push(fields.llm_backend); }
+  if (fields.llm_model !== undefined) { sets.push('llm_model = ?'); values.push(fields.llm_model); }
+  if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
