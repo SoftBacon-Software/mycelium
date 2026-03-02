@@ -15,6 +15,7 @@ import type {
   Vote,
   Approval,
   ContextEntry,
+  Concept,
   Channel,
   ChannelMember,
   ChannelMessage,
@@ -213,6 +214,13 @@ export function resolveRequest(id: string, response: string): Promise<Message> {
 
 // Context
 
+export function fetchAllContextKeys(ns?: string): Promise<ContextEntry[]> {
+  const path = ns
+    ? `/context/keys/${encodeURIComponent(ns)}`
+    : '/context/keys';
+  return apiGet<ContextEntry[]>(path);
+}
+
 export function fetchContextKey(ns: string, key: string): Promise<ContextEntry> {
   return apiGet<ContextEntry>(
     `/context/keys/${encodeURIComponent(ns)}/${encodeURIComponent(key)}`,
@@ -222,13 +230,40 @@ export function fetchContextKey(ns: string, key: string): Promise<ContextEntry> 
 export function updateContextKey(
   ns: string,
   key: string,
-  value: unknown,
-  updatedBy: string,
+  data: unknown,
 ): Promise<ContextEntry> {
   return apiPut<ContextEntry>(
     `/context/keys/${encodeURIComponent(ns)}/${encodeURIComponent(key)}`,
-    { value, updated_by: updatedBy },
+    { data },
   );
+}
+
+export function deleteContextKey(ns: string, key: string): Promise<void> {
+  return apiDelete<void>(
+    `/context/keys/${encodeURIComponent(ns)}/${encodeURIComponent(key)}`,
+  );
+}
+
+// Concepts
+
+export function createConcept(data: { name: string; type: string; description?: string; data?: unknown }): Promise<Concept> {
+  return apiPost<Concept>('/concepts', data);
+}
+
+export function updateConcept(id: string, data: Partial<Concept>): Promise<Concept> {
+  return apiPut<Concept>(`/concepts/${id}`, data);
+}
+
+export function deleteConcept(id: string): Promise<void> {
+  return apiDelete<void>(`/concepts/${id}`);
+}
+
+export function linkConceptToProject(id: string, projectId: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/concepts/${id}/link`, { project_id: projectId });
+}
+
+export function unlinkConceptFromProject(id: string, projectId: string): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/concepts/${id}/link/${encodeURIComponent(projectId)}`);
 }
 
 // Channels
