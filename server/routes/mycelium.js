@@ -1252,6 +1252,7 @@ router.post('/plans/:id/steps', function (req, res) {
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var description = escapeHtml(req.body.description || '');
@@ -1272,7 +1273,8 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
-  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   if (!validateEnum(res, req.body.status, PLAN_STEP_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
@@ -1292,7 +1294,8 @@ router.delete('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
-  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   deleteDvPlanStep(parseIntParam(req.params.stepId));
   res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
 });
@@ -1301,7 +1304,8 @@ router.put('/plans/:id/reorder', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
-  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   var order = req.body.order;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
   reorderDvPlanSteps(parseIntParam(req.params.id), order);
