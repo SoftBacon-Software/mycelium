@@ -198,10 +198,13 @@ function checkAdmin(req, res) {
 }
 
 // Get display name for admin user (studio JWT display_name, or fallback)
+// X-Acting-As header lets admin key holders identify themselves (e.g. greatness-claude via MCP)
 function getAdminDisplayName(req) {
   var user = getStudioUser(req);
   if (user) return user.displayName || user.username;
-  return '__admin__';
+  var actingAs = req.headers['x-acting-as'];
+  if (actingAs) return actingAs;
+  return '__system__';
 }
 
 // Either agent or admin — returns display name / agent ID
@@ -211,7 +214,10 @@ function checkAgentOrAdmin(req, res) {
   if (user) return user.displayName || user.username;
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey === ADMIN_KEY) return '__admin__';
+  if (adminKey === ADMIN_KEY) {
+    var actingAs = req.headers['x-acting-as'];
+    return actingAs || '__system__';
+  }
   // Try agent key
   return checkAgent(req, res);
 }
@@ -226,7 +232,7 @@ function emitEvent(type, agentId, game, summary, data) {
 // Hard enforcement: blocks agents without an approved approval_id.
 function checkApprovalGate(req, who, actionType) {
   // Admin/studio users bypass gates
-  if (who === '__admin__' || !who || who.indexOf('-claude') === -1) return { ok: true };
+  if (who === '__admin__' || who === '__system__' || !who || who.indexOf('-claude') === -1) return { ok: true };
   var approvalId = req.body.approval_id || req.query.approval_id;
   if (!approvalId) {
     return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call studio_request_approval first.' };
