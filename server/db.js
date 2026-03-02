@@ -365,6 +365,7 @@ export function listDvTasks(filters) {
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.requester) { where.push('requester = ?'); params.push(filters.requester); }
+  if (filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
   var limit = filters.limit || 50;
   var offset = filters.offset || 0;
   params.push(limit, offset);
@@ -518,6 +519,10 @@ export function updateDvAsset(id, fields) {
   return db.prepare('UPDATE dv_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
+export function deleteDvAsset(id) {
+  return db.prepare('DELETE FROM dv_assets WHERE id = ?').run(id);
+}
+
 export function listAssetsByDroneJob(droneJobId) {
   return db.prepare('SELECT * FROM dv_assets WHERE drone_job_id = ?').all(droneJobId);
 }
@@ -592,6 +597,8 @@ export function listDvMessages(filters) {
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
   if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
+  if (filters.msg_type) { where.push('msg_type = ?'); params.push(filters.msg_type); }
+  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   var limit = filters.limit || 50;
   var offset = filters.offset || 0;
   params.push(limit, offset);
@@ -673,6 +680,8 @@ export function listDvBugs(filters) {
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.reporter) { where.push('reporter = ?'); params.push(filters.reporter); }
+  if (filters.severity) { where.push('severity = ?'); params.push(filters.severity); }
+  if (filters.category) { where.push('category = ?'); params.push(filters.category); }
   var limit = filters.limit || 50;
   var offset = filters.offset || 0;
   params.push(limit, offset);
@@ -688,6 +697,10 @@ export function updateDvBug(id, updates) {
   if (updates.severity !== undefined) { sets.push('severity = ?'); params.push(updates.severity); }
   params.push(id);
   db.prepare('UPDATE dv_bugs SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
+}
+
+export function deleteDvBug(id) {
+  return db.prepare('DELETE FROM dv_bugs WHERE id = ?').run(id);
 }
 
 export function countDvBugs() {
@@ -1156,22 +1169,25 @@ export function dispatchWebhook(event, agentId, data) {
     var whId = wh.id;
     var startTime = Date.now();
 
-    // Non-blocking fetch with 5s timeout — log delivery result
-    fetch(wh.url, {
-      method: 'POST',
-      headers: headers,
-      body: payload,
-      signal: AbortSignal.timeout(5000)
-    }).then(function (resp) {
-      var duration = Date.now() - startTime;
-      return resp.text().then(function (body) {
-        logWebhookDelivery(whId, event, agentId, payload, resp.status, body.substring(0, 1000), null, duration);
-      });
-    }).catch(function (err) {
-      var duration = Date.now() - startTime;
-      logWebhookDelivery(whId, event, agentId, payload, null, null, err.message, duration);
-      console.error('[webhook] Failed to dispatch to', wh.url, ':', err.message);
-    });
+    // Non-blocking fetch with 5s timeout and retry (up to 3 attempts)
+    (function deliverWithRetry(url, opts, attempt) {
+      fetch(url, Object.assign({}, opts, { signal: AbortSignal.timeout(5000) }))
+        .then(function (resp) {
+          var duration = Date.now() - startTime;
+          return resp.text().then(function (body) {
+            logWebhookDelivery(whId, event, agentId, payload, resp.status, body.substring(0, 1000), null, duration);
+          });
+        }).catch(function (err) {
+          var duration = Date.now() - startTime;
+          if (attempt < 3) {
+            var delay = Math.pow(2, attempt) * 1000; // 2s, 4s backoff
+            setTimeout(function () { deliverWithRetry(url, opts, attempt + 1); }, delay);
+          } else {
+            logWebhookDelivery(whId, event, agentId, payload, null, null, err.message + ' (after 3 attempts)', duration);
+            console.error('[webhook] Failed after 3 attempts to', url, ':', err.message);
+          }
+        });
+    })(wh.url, { method: 'POST', headers: headers, body: payload }, 1);
   }
 }
 

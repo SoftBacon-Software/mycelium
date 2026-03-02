@@ -50,14 +50,14 @@ import {
   approveDvTask, listTasksNeedingApproval,
   getDvContext, getAllDvContext, upsertDvContext,
   upsertDvContextKey, getDvContextKey, listDvContextKeys, deleteDvContextKey,
-  createDvAsset, getDvAsset, listDvAssets, updateDvAsset,
+  createDvAsset, getDvAsset, listDvAssets, updateDvAsset, deleteDvAsset,
   autoTaskFromAsset,
   createDvEvent, listDvEvents,
   createDvMessage, createDvRequest, getDvMessage,
   acknowledgeDvMessage, resolveDvMessage, listPendingRequests,
   listDvMessages, listDvThreads, bulkDeleteMessages,
   getBootPayload, getDvOverview,
-  createDvBug, getDvBug, listDvBugs, updateDvBug, countDvBugs,
+  createDvBug, getDvBug, listDvBugs, updateDvBug, deleteDvBug, countDvBugs,
   createDvPlan, getDvPlan, listDvPlans, updateDvPlan, deleteDvPlan,
   createDvPlanStep, updateDvPlanStep, deleteDvPlanStep, reorderDvPlanSteps,
   completeLinkedPlanSteps,
@@ -399,6 +399,7 @@ router.get('/tasks', function (req, res) {
     status: req.query.status,
     assignee: req.query.assignee,
     requester: req.query.requester,
+    priority: req.query.priority,
     limit: parseInt(req.query.limit) || 50,
     offset: parseInt(req.query.offset) || 0
   };
@@ -750,6 +751,16 @@ router.put('/assets/link-job', function (req, res) {
   res.json({ ok: true, updated: updated });
 });
 
+// Delete asset (admin only)
+router.delete('/assets/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var asset = getDvAsset(parseInt(req.params.id));
+  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  deleteDvAsset(asset.id);
+  emitEvent('asset_deleted', getAdminDisplayName(req), asset.project_id, 'Deleted asset #' + asset.id + ': ' + asset.name, { asset_id: asset.id });
+  res.json({ ok: true, id: asset.id });
+});
+
 // ======== EVENTS ========
 
 router.get('/events', function (req, res) {
@@ -856,6 +867,8 @@ router.get('/messages', function (req, res) {
     thread_id: req.query.thread,
     project_id: req.query.project_id,
     since: req.query.since,
+    msg_type: req.query.msg_type,
+    status: req.query.status,
     limit: parseInt(req.query.limit) || 50,
     offset: parseInt(req.query.offset) || 0,
     channel_id: req.query.channel_id ? parseInt(req.query.channel_id) : undefined
@@ -1655,6 +1668,8 @@ router.get('/bugs', function (req, res) {
   if (req.query.status) filters.status = req.query.status;
   if (req.query.assignee) filters.assignee = req.query.assignee;
   if (req.query.reporter) filters.reporter = req.query.reporter;
+  if (req.query.severity) filters.severity = req.query.severity;
+  if (req.query.category) filters.category = req.query.category;
   filters.limit = parseInt(req.query.limit) || 50;
   filters.offset = parseInt(req.query.offset) || 0;
   var bugs = listDvBugs(filters);
@@ -1692,6 +1707,16 @@ router.put('/bugs/:id', function (req, res) {
   if (bugTarget && (updates.assignee || updates.status)) {
     dispatchWebhook('bug_assigned', bugTarget, { bug_id: bug.id, title: bug.title, status: updates.status || bug.status });
   }
+  res.json({ ok: true, id: bug.id });
+});
+
+// Delete bug (admin only)
+router.delete('/bugs/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var bug = getDvBug(parseInt(req.params.id));
+  if (!bug) return res.status(404).json({ error: 'Bug not found' });
+  deleteDvBug(bug.id);
+  emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
   res.json({ ok: true, id: bug.id });
 });
 
