@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { initDB, resolveStaleRequests, pruneWebhookDeliveries } from './db.js';
+import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +60,24 @@ if (fs.existsSync(dashboardPath)) {
   app.use('/', express.static(dashboardPath));
   app.use('/studio', express.static(dashboardPath));
 }
+
+// ---- Health check (public, no auth) ----
+var serverStartTime = Date.now();
+app.get('/health', function (req, res) {
+  var dbOk = false;
+  try { getDB().prepare('SELECT 1').get(); dbOk = true; } catch (e) { /* */ }
+  var agentsOnline = 0;
+  try { agentsOnline = getDB().prepare("SELECT COUNT(*) as c FROM dv_agents WHERE status = 'online'").get().c; } catch (e) { /* */ }
+  var mem = process.memoryUsage();
+  res.json({
+    status: dbOk ? 'ok' : 'degraded',
+    uptime_seconds: Math.floor((Date.now() - serverStartTime) / 1000),
+    db_ok: dbOk,
+    agents_online: agentsOnline,
+    memory_usage_mb: Math.round(mem.rss / 1024 / 1024),
+    version: '1.0.0'
+  });
+});
 
 // ---- Public downloads (setup scripts, etc.) ----
 var publicRoot = path.join(__dirname, '..', 'public');
@@ -131,6 +149,50 @@ var server = app.listen(PORT, function () {
     console.error('Startup maintenance error:', e.message);
   }
 });
+
+// ---- SQLite backup system ----
+var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+var BACKUP_DIR = path.join(DATA_DIR, 'backups');
+var MAX_BACKUPS = 10;
+
+function runBackup() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    var now = new Date();
+    var ts = now.getFullYear() +
+      String(now.getMonth() + 1).padStart(2, '0') +
+      String(now.getDate()).padStart(2, '0') + '_' +
+      String(now.getHours()).padStart(2, '0') +
+      String(now.getMinutes()).padStart(2, '0') +
+      String(now.getSeconds()).padStart(2, '0');
+    var backupPath = path.join(BACKUP_DIR, 'mycelium_' + ts + '.db');
+    getDB().backup(backupPath).then(function () {
+      console.log('[backup] Created: ' + backupPath);
+      // Prune old backups (keep last MAX_BACKUPS)
+      try {
+        var files = fs.readdirSync(BACKUP_DIR)
+          .filter(function (f) { return f.startsWith('mycelium_') && f.endsWith('.db'); })
+          .sort();
+        while (files.length > MAX_BACKUPS) {
+          var oldest = files.shift();
+          fs.unlinkSync(path.join(BACKUP_DIR, oldest));
+          console.log('[backup] Pruned: ' + oldest);
+        }
+      } catch (e) {
+        console.error('[backup] Prune error:', e.message);
+      }
+    }).catch(function (e) {
+      console.error('[backup] Failed:', e.message);
+    });
+  } catch (e) {
+    console.error('[backup] Error:', e.message);
+  }
+}
+
+// Backup on startup
+runBackup();
+// Backup every 6 hours
+setInterval(runBackup, 6 * 60 * 60 * 1000);
 
 // Daily maintenance: stale requests + webhook log pruning (runs every 24h)
 setInterval(function () {

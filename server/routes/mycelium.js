@@ -2456,6 +2456,28 @@ router.put('/plugins/:name/disable', function (req, res) {
   res.json({ ok: true, name: req.params.name, enabled: 0 });
 });
 
+// ======== BACKUPS ========
+router.get('/admin/backups', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var routeDir = nodePath.dirname(new URL(import.meta.url).pathname);
+  var dataDir = process.env.DATA_DIR || nodePath.join(routeDir, '..', 'data');
+  var backupDir = nodePath.join(dataDir, 'backups');
+  try {
+    if (!fs.existsSync(backupDir)) return res.json({ backups: [] });
+    var files = fs.readdirSync(backupDir)
+      .filter(function (f) { return f.startsWith('mycelium_') && f.endsWith('.db'); })
+      .sort()
+      .reverse()
+      .map(function (f) {
+        var stat = fs.statSync(nodePath.join(backupDir, f));
+        return { name: f, size_mb: Math.round(stat.size / 1024 / 1024 * 10) / 10, created: stat.mtime.toISOString() };
+      });
+    res.json({ backups: files, count: files.length });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to list backups: ' + e.message });
+  }
+});
+
 // ======== API DOCS ========
 router.get('/docs', function (req, res) {
   var routes = [];
