@@ -119,10 +119,10 @@ function AssetDetailModal({ asset, onClose, onUpload, onDelete, onStatusChange }
             <Badge variant={statusBadgeVariant[asset.status] || 'default'}>{asset.type}</Badge>
           </div>
 
-          {/* Game + Requested by */}
+          {/* Project + Requested by */}
           <div className="flex items-center gap-3">
-            <label className="text-text-muted text-xs uppercase tracking-wider w-20 shrink-0">Game</label>
-            <span className="text-text-dim text-sm">{asset.game || '--'}</span>
+            <label className="text-text-muted text-xs uppercase tracking-wider w-20 shrink-0">Project</label>
+            <span className="text-text-dim text-sm">{asset.project_id || '--'}</span>
           </div>
           <div className="flex items-center gap-3">
             <label className="text-text-muted text-xs uppercase tracking-wider w-20 shrink-0">Requested</label>
@@ -251,12 +251,12 @@ export default function AssetsPage() {
 
   const [view, setView] = useState<ViewMode>('grid')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [gameFilter, setGameFilter] = useState<string>('all')
+  const [projectFilter, setProjectFilter] = useState<string>('all')
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
 
-  // Unique game values
-  const games = useMemo(() => {
-    const set = new Set(assets.map((a) => a.game).filter(Boolean))
+  // Unique project values
+  const projects = useMemo(() => {
+    const set = new Set(assets.map((a) => a.project_id).filter(Boolean))
     return Array.from(set).sort()
   }, [assets])
 
@@ -266,11 +266,11 @@ export default function AssetsPage() {
     if (statusFilter !== 'all') {
       result = result.filter((a) => a.status === statusFilter)
     }
-    if (gameFilter !== 'all') {
-      result = result.filter((a) => a.game === gameFilter)
+    if (projectFilter !== 'all') {
+      result = result.filter((a) => a.project_id === projectFilter)
     }
     return result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  }, [assets, statusFilter, gameFilter])
+  }, [assets, statusFilter, projectFilter])
 
   // Action handlers
   const handleUpload = useCallback(async (id: string, file: File) => {
@@ -344,15 +344,15 @@ export default function AssetsPage() {
             ))}
           </select>
 
-          {/* Game filter */}
-          {games.length > 0 && (
+          {/* Project filter */}
+          {projects.length > 0 && (
             <select
-              value={gameFilter}
-              onChange={(e) => setGameFilter(e.target.value)}
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
               className="bg-surface-raised border border-border rounded-sm px-2.5 py-1 text-xs text-text-dim focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              <option value="all">All Games</option>
-              {games.map((g) => (
+              <option value="all">All Projects</option>
+              {projects.map((g) => (
                 <option key={g} value={g}>
                   {g}
                 </option>
@@ -394,7 +394,7 @@ export default function AssetsPage() {
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Status</th>
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Name</th>
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Type</th>
-                <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Game</th>
+                <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Project</th>
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Requested By</th>
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Assigned To</th>
                 <th className="px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Created</th>
@@ -415,7 +415,7 @@ export default function AssetsPage() {
                   </td>
                   <td className="px-4 py-3 text-text font-medium truncate max-w-[200px]">{asset.name}</td>
                   <td className="px-4 py-3 text-text-dim">{asset.type}</td>
-                  <td className="px-4 py-3 text-text-dim">{asset.game || '--'}</td>
+                  <td className="px-4 py-3 text-text-dim">{asset.project_id || '--'}</td>
                   <td className="px-4 py-3 text-text-dim">{asset.requested_by}</td>
                   <td className="px-4 py-3 text-blue">{asset.assigned_to || '--'}</td>
                   <td className="px-4 py-3 text-text-muted text-xs">{formatDate(asset.created_at)}</td>

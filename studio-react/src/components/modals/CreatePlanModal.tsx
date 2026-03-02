@@ -8,7 +8,7 @@ interface CreatePlanModalProps {
   onClose: () => void
 }
 
-const GAME_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium', 'dioverse']
+const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const PRIORITY_OPTIONS = ['low', 'medium', 'high', 'critical']
 
 export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProps) {
@@ -16,7 +16,7 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [game, setGame] = useState('king-city')
+  const [projectId, setProjectId] = useState('king-city')
   const [priority, setPriority] = useState('medium')
   const [owner, setOwner] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -25,7 +25,7 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
   function resetForm() {
     setTitle('')
     setDescription('')
-    setGame('king-city')
+    setProjectId('king-city')
     setPriority('medium')
     setOwner('')
     setError(null)
@@ -47,7 +47,7 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
       await createPlan({
         title: title.trim(),
         description: description.trim(),
-        game,
+        project_id: projectId,
         priority,
         owner: owner.trim() || undefined,
         status: 'active',
@@ -100,18 +100,18 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
           />
         </div>
 
-        {/* Game / Priority */}
+        {/* Project / Priority */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">
-              Game
+              Project
             </label>
             <select
-              value={game}
-              onChange={(e) => setGame(e.target.value)}
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
               className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
             >
-              {GAME_OPTIONS.map((g) => (
+              {PROJECT_OPTIONS.map((g) => (
                 <option key={g} value={g}>
                   {g}
                 </option>

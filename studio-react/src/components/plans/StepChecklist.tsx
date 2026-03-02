@@ -26,7 +26,8 @@ interface StepChecklistProps {
   onStepUpdate: (stepId: string, data: Partial<PlanStep>) => void
 }
 
-export default function StepChecklist({ steps, planId, onStepUpdate }: StepChecklistProps) {
+export default function StepChecklist({ steps, planId: _planId, onStepUpdate }: StepChecklistProps) {
+  void _planId
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
   const [updatingStep, setUpdatingStep] = useState<string | null>(null)
 

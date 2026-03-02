@@ -18,7 +18,7 @@ export default function TasksPage() {
   const { tasks, loading, refresh } = useDashboardStore()
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [doneCollapsed, setDoneCollapsed] = useState(true)
-  const [filterGame, setFilterGame] = useState('')
+  const [filterProject, setFilterProject] = useState('')
   const [filterAssignee, setFilterAssignee] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
 
@@ -26,7 +26,7 @@ export default function TasksPage() {
     refresh()
   }, [refresh])
 
-  // Collect unique games for the filter dropdown
+  // Collect unique projects for the filter dropdown
   const allTasks = useMemo(() => [
     ...tasks.open,
     ...tasks.in_progress,
@@ -34,19 +34,19 @@ export default function TasksPage() {
     ...tasks.done,
   ], [tasks])
 
-  const games = useMemo(() => {
-    const set = new Set(allTasks.map((t) => t.game).filter(Boolean))
+  const projects = useMemo(() => {
+    const set = new Set(allTasks.map((t) => t.project_id).filter(Boolean))
     return Array.from(set).sort()
   }, [allTasks])
 
   // Filter logic
   const filterTasks = useCallback((list: Task[]): Task[] => {
     return list.filter((t) => {
-      if (filterGame && t.game !== filterGame) return false
+      if (filterProject && t.project_id !== filterProject) return false
       if (filterAssignee && !(t.assignee || '').toLowerCase().includes(filterAssignee.toLowerCase())) return false
       return true
     })
-  }, [filterGame, filterAssignee])
+  }, [filterProject, filterAssignee])
 
   const filteredColumns = useMemo(() => ({
     open: filterTasks(tasks.open),
@@ -81,12 +81,12 @@ export default function TasksPage() {
         <div className="flex items-center gap-3 flex-wrap">
           {/* Filters */}
           <select
-            value={filterGame}
-            onChange={(e) => setFilterGame(e.target.value)}
+            value={filterProject}
+            onChange={(e) => setFilterProject(e.target.value)}
             className="bg-surface-raised border border-border rounded px-2.5 py-1.5 text-xs text-text-dim focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer min-w-[120px]"
           >
-            <option value="">All games</option>
-            {games.map((g) => (
+            <option value="">All projects</option>
+            {projects.map((g) => (
               <option key={g} value={g}>{g}</option>
             ))}
           </select>
@@ -212,7 +212,7 @@ function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState('normal')
-  const [game, setGame] = useState('king-city')
+  const [projectId, setProjectId] = useState('king-city')
   const [assignee, setAssignee] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -228,7 +228,7 @@ function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
         title: title.trim(),
         description: description.trim(),
         priority,
-        game,
+        project_id: projectId,
         assignee: assignee.trim() || null,
         status: 'open',
       })
@@ -299,11 +299,11 @@ function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
               </div>
 
               <div>
-                <label className="text-xs text-text-muted block mb-1">Game</label>
+                <label className="text-xs text-text-muted block mb-1">Project</label>
                 <input
                   type="text"
-                  value={game}
-                  onChange={(e) => setGame(e.target.value)}
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
                   className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
                   placeholder="king-city"
                 />

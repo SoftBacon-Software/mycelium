@@ -1,4 +1,4 @@
-// =============== DIOVERSE HUB — Distributed Game Studio API ===============
+// =============== MYCELIUM — Distributed Development Platform API ===============
 import { Router } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -43,7 +43,7 @@ var artifactStorage = multer.diskStorage({
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
   createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
-  createGame, listGames, getGame,
+  createProject, listProjects, getProject,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
   approveDvTask, listTasksNeedingApproval,
@@ -102,42 +102,26 @@ function escapeHtml(str) {
   return String(str);
 }
 
-// ---- Mycelium: project ↔ game normalization ----
-// Accept "project" as alias for "game" in requests. Return both in responses.
-// DB stays "game" internally — this is a translation layer.
+// ---- Mycelium: project_id normalization (backward compat) ----
+// DB column is project_id. Accept "project_id", "project", or "game" from clients.
+// Normalizes to project_id in req.body and req.query.
 
-// Normalize incoming: accept project OR game in body/query
 function normalizeProjectField(req, res, next) {
-  if (req.body && req.body.project !== undefined && req.body.game === undefined) {
-    req.body.game = req.body.project;
-  }
-  if (req.query && req.query.project !== undefined && req.query.game === undefined) {
-    req.query.game = req.query.project;
-  }
-  // Wrap res.json to enrich outgoing data with "project" alongside "game"
-  var originalJson = res.json.bind(res);
-  res.json = function (data) { return originalJson(addProjectField(data)); };
-  next();
-}
-
-// Recursively add "project" field wherever "game" appears in response data
-function addProjectField(obj) {
-  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) return obj.map(addProjectField);
-  var result = {};
-  for (var key in obj) {
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-    if (key === 'game') {
-      result.game = obj.game;
-      result.project = obj.game;
-    } else if (key === 'games') {
-      result.games = addProjectField(obj.games);
-      result.projects = result.games;
-    } else {
-      result[key] = addProjectField(obj[key]);
+  // Body: accept project_id, project, or game — normalize to project_id
+  if (req.body) {
+    if (req.body.project_id === undefined) {
+      if (req.body.project !== undefined) req.body.project_id = req.body.project;
+      else if (req.body.game !== undefined) req.body.project_id = req.body.game;
     }
   }
-  return result;
+  // Query: accept project_id, project, or game — normalize to project_id
+  if (req.query) {
+    if (req.query.project_id === undefined) {
+      if (req.query.project !== undefined) req.query.project_id = req.query.project;
+      else if (req.query.game !== undefined) req.query.project_id = req.query.game;
+    }
+  }
+  next();
 }
 
 // ---- Auth middleware ----
@@ -223,8 +207,8 @@ function checkAgentOrAdmin(req, res) {
 }
 
 // ---- Event helper ----
-function emitEvent(type, agentId, game, summary, data) {
-  createDvEvent(type, agentId || '', game || null, summary || '', JSON.stringify(data || {}));
+function emitEvent(type, agentId, projectId, summary, data) {
+  createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
 }
 
 // ---- Approval gate helpers ----
@@ -249,7 +233,7 @@ function checkApprovalGate(req, who, actionType) {
 
 var router = Router();
 
-// Apply project↔game normalization + response enrichment to all routes
+// Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
 
 // ======== BOOT ========
@@ -405,7 +389,7 @@ router.get('/tasks', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
-    game: req.query.game,
+    project_id: req.query.project_id,
     status: req.query.status,
     assignee: req.query.assignee,
     requester: req.query.requester,
@@ -421,10 +405,10 @@ router.post('/tasks', function (req, res) {
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var description = escapeHtml(req.body.description || '');
-  var game = escapeHtml(req.body.game || 'dioverse');
+  var projectId = escapeHtml(req.body.project_id || '');
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
-  var id = createDvTask(title, description, game, agentId, priority, tags);
+  var id = createDvTask(title, description, projectId, agentId, priority, tags);
   // Auto-create channel for task
   var taskMembers = [agentId];
   if (req.body.assignee) taskMembers.push(req.body.assignee);
@@ -434,7 +418,7 @@ router.post('/tasks', function (req, res) {
   if (req.body.assignee) updates.assignee = req.body.assignee;
   if (req.body.needs_approval) updates.needs_approval = 1;
   if (Object.keys(updates).length > 0) updateDvTask(id, updates);
-  emitEvent('task_created', agentId, game, agentId + ' created task: ' + title, { task_id: id });
+  emitEvent('task_created', agentId, projectId, agentId + ' created task: ' + title, { task_id: id });
   if (req.body.assignee) {
     dispatchWebhook('task_created', req.body.assignee, { task_id: id, title: title });
   }
@@ -475,23 +459,23 @@ router.put('/tasks/:id', function (req, res) {
     if (unblocked.length > 0) {
       result.unblocked = unblocked;
       for (var uid of unblocked) {
-        emitEvent('task_unblocked', agentId, task.game, 'Task #' + uid + ' unblocked by completion of #' + task.id, { task_id: uid, completed_task_id: task.id });
+        emitEvent('task_unblocked', agentId, task.project_id, 'Task #' + uid + ' unblocked by completion of #' + task.id, { task_id: uid, completed_task_id: task.id });
       }
     }
     // Auto-deliver linked asset
     if (task.linked_asset_id) {
       updateDvAsset(task.linked_asset_id, { status: 'delivered' });
-      emitEvent('asset_delivered', agentId, task.game, 'Asset #' + task.linked_asset_id + ' auto-delivered (task #' + task.id + ' done)', { asset_id: task.linked_asset_id, task_id: task.id });
+      emitEvent('asset_delivered', agentId, task.project_id, 'Asset #' + task.linked_asset_id + ' auto-delivered (task #' + task.id + ' done)', { asset_id: task.linked_asset_id, task_id: task.id });
     }
     // Auto-complete linked plan steps
     var planResult = completeLinkedPlanSteps(task.id);
     if (planResult.steps_completed > 0) {
       result.plan_steps_completed = planResult.steps_completed;
-      emitEvent('plan_step_completed', agentId, task.game, planResult.steps_completed + ' plan step(s) auto-completed by task #' + task.id, { task_id: task.id, steps: planResult.steps_completed });
+      emitEvent('plan_step_completed', agentId, task.project_id, planResult.steps_completed + ' plan step(s) auto-completed by task #' + task.id, { task_id: task.id, steps: planResult.steps_completed });
     }
     if (planResult.plans_completed.length > 0) {
       for (var pid of planResult.plans_completed) {
-        emitEvent('plan_completed', agentId, task.game, 'Plan #' + pid + ' auto-completed (all steps done)', { plan_id: pid, task_id: task.id });
+        emitEvent('plan_completed', agentId, task.project_id, 'Plan #' + pid + ' auto-completed (all steps done)', { plan_id: pid, task_id: task.id });
       }
       result.plans_completed = planResult.plans_completed;
     }
@@ -501,14 +485,14 @@ router.put('/tasks/:id', function (req, res) {
         var linkedReq = getDvMessage(task.request_id);
         if (linkedReq && linkedReq.status !== 'resolved') {
           resolveDvMessage(task.request_id, agentId);
-          emitEvent('request_resolved', agentId, task.game, 'Request #' + task.request_id + ' auto-resolved (task #' + task.id + ' done)', { message_id: task.request_id, task_id: task.id });
+          emitEvent('request_resolved', agentId, task.project_id, 'Request #' + task.request_id + ' auto-resolved (task #' + task.id + ' done)', { message_id: task.request_id, task_id: task.id });
         }
       } catch (e) { /* non-critical */ }
     }
   }
 
   if (fields.status) {
-    emitEvent('task_' + fields.status, agentId, task.game, agentId + ' set task #' + task.id + ' to ' + fields.status, { task_id: task.id });
+    emitEvent('task_' + fields.status, agentId, task.project_id, agentId + ' set task #' + task.id + ' to ' + fields.status, { task_id: task.id });
   }
   // Webhook: notify assignee when task is assigned or updated
   var targetAgent = fields.assignee || task.assignee;
@@ -540,7 +524,7 @@ router.put('/tasks/:id/approve', function (req, res) {
   if (!task.needs_approval) return res.status(400).json({ error: 'Task does not require approval' });
   if (task.approved_by) return res.status(400).json({ error: 'Task already approved by ' + task.approved_by });
   approveDvTask(task.id, '__admin__');
-  emitEvent('task_approved', '__admin__', task.game, 'Admin approved task #' + task.id + ': ' + task.title, { task_id: task.id });
+  emitEvent('task_approved', '__admin__', task.project_id, 'Admin approved task #' + task.id + ': ' + task.title, { task_id: task.id });
   res.json({ ok: true, id: task.id, approved: true });
 });
 
@@ -563,7 +547,7 @@ router.post('/tasks/:id/comments', function (req, res) {
   var content = escapeHtml(req.body.content);
   if (!content) return res.status(400).json({ error: 'content is required' });
   var comment = addTaskComment(task.id, author, content);
-  emitEvent('task_comment', who, task.game, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
+  emitEvent('task_comment', who, task.project_id, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
   res.json(comment);
 });
 
@@ -579,7 +563,7 @@ router.delete('/tasks/:id/comments/:commentId', function (req, res) {
 
 // ======== CONTEXT ========
 
-// Namespaced context (must be before :game param route)
+// Namespaced context (must be before :projectId param route)
 router.get('/context/keys', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -618,30 +602,30 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
 });
 
-// Legacy per-game context
+// Legacy per-project context
 router.get('/context', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(getAllDvContext());
 });
 
-router.get('/context/:game', function (req, res) {
+router.get('/context/:projectId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var ctx = getDvContext(req.params.game);
-  if (!ctx) return res.json({ game: req.params.game, data: '{}', updated_at: null, updated_by: '' });
+  var ctx = getDvContext(req.params.projectId);
+  if (!ctx) return res.json({ project_id: req.params.projectId, data: '{}', updated_at: null, updated_by: '' });
   res.json(ctx);
 });
 
-router.put('/context/:game', function (req, res) {
+router.put('/context/:projectId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var data = req.body.data;
   if (data === undefined) return res.status(400).json({ error: 'data field is required' });
   var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-  upsertDvContext(req.params.game, dataStr, agentId);
-  emitEvent('context_updated', agentId, req.params.game, agentId + ' updated context for ' + req.params.game);
-  res.json({ ok: true, game: req.params.game });
+  upsertDvContext(req.params.projectId, dataStr, agentId);
+  emitEvent('context_updated', agentId, req.params.projectId, agentId + ' updated context for ' + req.params.projectId);
+  res.json({ ok: true, project_id: req.params.projectId });
 });
 
 // ======== ASSETS ========
@@ -650,7 +634,7 @@ router.get('/assets', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
-    game: req.query.game,
+    project_id: req.query.project_id,
     type: req.query.type,
     status: req.query.status,
     limit: parseInt(req.query.limit) || 50,
@@ -665,22 +649,22 @@ router.post('/assets', function (req, res) {
   var name = escapeHtml(req.body.name);
   if (!name) return res.status(400).json({ error: 'name is required' });
   var type = req.body.type || 'sprite';
-  var game = req.body.game || 'shared';
+  var projectId = req.body.project_id || 'shared';
   var status = req.body.status || 'requested';
   var assetPath = req.body.path || '';
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createDvAsset(name, type, game, status, assetPath, metadata, agentId);
-  emitEvent('asset_registered', agentId, game, agentId + ' registered asset: ' + name, { asset_id: id });
+  var id = createDvAsset(name, type, projectId, status, assetPath, metadata, agentId);
+  emitEvent('asset_registered', agentId, projectId, agentId + ' registered asset: ' + name, { asset_id: id });
 
   var result = { id: id, name: name };
 
   // Auto-create task for asset requests
   if (status === 'requested') {
-    var taskResult = autoTaskFromAsset(id, game, agentId);
+    var taskResult = autoTaskFromAsset(id, projectId, agentId);
     if (taskResult) {
       result.task_id = taskResult.task_id;
       result.assigned_to = taskResult.assignee;
-      emitEvent('task_created', agentId, game, 'Auto-task for asset ' + name + ' assigned to ' + (taskResult.assignee || 'unassigned'), { asset_id: id, task_id: taskResult.task_id });
+      emitEvent('task_created', agentId, projectId, 'Auto-task for asset ' + name + ' assigned to ' + (taskResult.assignee || 'unassigned'), { asset_id: id, task_id: taskResult.task_id });
     }
   }
 
@@ -711,7 +695,7 @@ router.put('/assets/:id', function (req, res) {
   if (req.body.prompt !== undefined) fields.prompt = req.body.prompt;
   updateDvAsset(asset.id, fields);
   if (fields.status) {
-    emitEvent('asset_' + fields.status, agentId, asset.game, agentId + ' set asset ' + asset.name + ' to ' + fields.status, { asset_id: asset.id });
+    emitEvent('asset_' + fields.status, agentId, asset.project_id, agentId + ' set asset ' + asset.name + ' to ' + fields.status, { asset_id: asset.id });
   }
   res.json({ ok: true, id: asset.id });
 });
@@ -726,7 +710,7 @@ router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
   var filePath = req.file.path;
   var downloadUrl = '/api/mycelium/assets/' + asset.id + '/download';
   updateDvAsset(asset.id, { status: 'ready', file_path: filePath, download_url: downloadUrl, path: req.file.filename });
-  emitEvent('asset_uploaded', who, asset.game, 'Asset #' + asset.id + ' (' + asset.name + ') uploaded');
+  emitEvent('asset_uploaded', who, asset.project_id, 'Asset #' + asset.id + ' (' + asset.name + ') uploaded');
   res.json({ ok: true, asset_id: asset.id, download_url: downloadUrl });
 });
 
@@ -767,7 +751,7 @@ router.get('/events', function (req, res) {
   if (!who) return;
   var filters = {
     since: req.query.since,
-    game: req.query.game,
+    project_id: req.query.project_id,
     type: req.query.type,
     agent: req.query.agent,
     limit: parseInt(req.query.limit) || 50,
@@ -780,10 +764,10 @@ router.post('/events', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var type = req.body.type || 'custom';
-  var game = req.body.game || null;
+  var projectId = req.body.project_id || null;
   var summary = escapeHtml(req.body.summary || '');
   var data = req.body.data ? JSON.stringify(req.body.data) : '{}';
-  var id = createDvEvent(type, agentId, game, summary, data);
+  var id = createDvEvent(type, agentId, projectId, summary, data);
   res.json({ id: id });
 });
 
@@ -802,11 +786,11 @@ router.post('/requests', function (req, res) {
   if (!content) return res.status(400).json({ error: 'content is required' });
   var toAgent = req.body.to_agent || null;
   var threadId = req.body.thread_id || null;
-  var game = req.body.game || null;
+  var projectId = req.body.project_id || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createDvRequest(agentId, toAgent, threadId, game, content, metadata);
+  var id = createDvRequest(agentId, toAgent, threadId, projectId, content, metadata);
   var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
-  emitEvent('request_created', agentId, game, agentId + ' sent request' + target, { message_id: id });
+  emitEvent('request_created', agentId, projectId, agentId + ' sent request' + target, { message_id: id });
   if (toAgent) {
     dispatchWebhook('request_created', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
   }
@@ -816,10 +800,10 @@ router.post('/requests', function (req, res) {
   // Auto-create task if requested
   if (req.body.auto_task && toAgent) {
     var title = escapeHtml(req.body.task_title || content.substring(0, 80));
-    var taskId = createDvTask(title, content, game || 'dioverse', agentId, req.body.priority || 'normal', '[]');
+    var taskId = createDvTask(title, content, projectId || '', agentId, req.body.priority || 'normal', '[]');
     updateDvTask(taskId, { assignee: toAgent, request_id: id });
     result.task_id = taskId;
-    emitEvent('task_created', agentId, game, 'Auto-task from request: ' + title + ' → ' + toAgent, { task_id: taskId, message_id: id });
+    emitEvent('task_created', agentId, projectId, 'Auto-task from request: ' + title + ' \u2192 ' + toAgent, { task_id: taskId, message_id: id });
   }
 
   res.json(result);
@@ -837,16 +821,16 @@ router.put('/requests/:id', function (req, res) {
 
   if (status === 'acknowledged' || status === 'ack') {
     acknowledgeDvMessage(msg.id);
-    emitEvent('request_acknowledged', agentId, msg.game, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
+    emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
     return res.json({ ok: true, id: msg.id, status: 'acknowledged' });
   }
 
   if (status === 'resolved' || status === 'completed' || status === 'done') {
     resolveDvMessage(msg.id, agentId);
-    emitEvent('request_resolved', agentId, msg.game, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
+    emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
     var result = { ok: true, id: msg.id, status: 'resolved' };
     if (req.body.response) {
-      var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.game, req.body.response, '{}');
+      var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
       result.response_id = responseId;
     }
     return res.json(result);
@@ -864,7 +848,7 @@ router.get('/messages', function (req, res) {
     from_agent: req.query.from,
     to_agent: req.query.to,
     thread_id: req.query.thread,
-    game: req.query.game,
+    project_id: req.query.project_id,
     since: req.query.since,
     limit: parseInt(req.query.limit) || 50,
     offset: parseInt(req.query.offset) || 0,
@@ -890,7 +874,7 @@ router.post('/messages', function (req, res) {
 
   var toAgent = req.body.to_agent || req.body.to || null;
   var threadId = req.body.thread_id || null;
-  var game = req.body.game || null;
+  var projectId = req.body.project_id || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
   // Route to channel
   var channelId = req.body.channel_id ? parseInt(req.body.channel_id) : null;
@@ -903,9 +887,9 @@ router.post('/messages', function (req, res) {
     var general = getChannelBySlug('general');
     if (general) channelId = general.id;
   }
-  var id = createDvMessage(agentId, toAgent, threadId, game, content, metadata, msgType, channelId);
+  var id = createDvMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId);
   var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
-  emitEvent('message_sent', agentId, game, agentId + ' sent message' + target, { message_id: id });
+  emitEvent('message_sent', agentId, projectId, agentId + ' sent message' + target, { message_id: id });
   if (toAgent) {
     dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
   }
@@ -918,7 +902,7 @@ router.put('/messages/:id/ack', function (req, res) {
   var msg = getDvMessage(parseInt(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
   acknowledgeDvMessage(msg.id);
-  emitEvent('request_acknowledged', agentId, msg.game, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
+  emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
   res.json({ ok: true, id: msg.id, status: 'acknowledged' });
 });
 
@@ -928,13 +912,13 @@ router.put('/messages/:id/resolve', function (req, res) {
   var msg = getDvMessage(parseInt(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
   resolveDvMessage(msg.id, agentId);
-  emitEvent('request_resolved', agentId, msg.game, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
+  emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
 
   var result = { ok: true, id: msg.id, status: 'resolved' };
 
   // Optionally send a response message back
   if (req.body.response) {
-    var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.game, req.body.response, '{}');
+    var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
     result.response_id = responseId;
   }
 
@@ -964,7 +948,7 @@ router.get('/plans', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
-    game: req.query.game,
+    project_id: req.query.project_id,
     status: req.query.status,
     owner: req.query.owner,
     limit: parseInt(req.query.limit) || 50,
@@ -980,17 +964,17 @@ router.post('/plans', function (req, res) {
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var description = escapeHtml(req.body.description || '');
-  var game = escapeHtml(req.body.game || 'dioverse');
+  var projectId = escapeHtml(req.body.project_id || '');
   var owner = escapeHtml(req.body.owner || '');
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
-  var id = createDvPlan(title, description, game, owner, priority, tags, agentId);
+  var id = createDvPlan(title, description, projectId, owner, priority, tags, agentId);
   // Auto-create channel for plan
   var planMembers = [];
   if (owner) planMembers.push(owner);
   autoCreateEntityChannel('plan', id, '#plan-' + id + ': ' + title, agentId, planMembers);
-  emitEvent('plan_created', agentId, game, agentId + ' created plan: ' + title, { plan_id: id });
-  dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, game: game, owner: owner });
+  emitEvent('plan_created', agentId, projectId, agentId + ' created plan: ' + title, { plan_id: id });
+  dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, project_id: projectId, owner: owner });
   var result = { id: id, title: title };
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
@@ -1016,10 +1000,10 @@ router.put('/plans/:id', function (req, res) {
   if (req.body.owner !== undefined) fields.owner = escapeHtml(req.body.owner);
   if (req.body.priority !== undefined) fields.priority = req.body.priority;
   if (req.body.tags !== undefined) fields.tags = req.body.tags;
-  if (req.body.game !== undefined) fields.game = escapeHtml(req.body.game);
+  if (req.body.project_id !== undefined) fields.project_id = escapeHtml(req.body.project_id);
   updateDvPlan(plan.id, fields);
   if (fields.status) {
-    emitEvent('plan_' + fields.status, agentId, plan.game, agentId + ' set plan #' + plan.id + ' to ' + fields.status, { plan_id: plan.id });
+    emitEvent('plan_' + fields.status, agentId, plan.project_id, agentId + ' set plan #' + plan.id + ' to ' + fields.status, { plan_id: plan.id });
   }
   res.json({ ok: true, id: plan.id });
 });
@@ -1032,7 +1016,7 @@ router.delete('/plans/:id', function (req, res) {
   var plan = getDvPlan(parseInt(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   deleteDvPlan(plan.id);
-  emitEvent('plan_deleted', who, plan.game, who + ' deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
+  emitEvent('plan_deleted', who, plan.project_id, who + ' deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
   var result = { ok: true, deleted: plan.id };
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
@@ -1057,7 +1041,7 @@ router.post('/plans/:id/steps', function (req, res) {
   if (req.body.linked_branch !== undefined) updates.linked_branch = req.body.linked_branch;
   if (req.body.linked_pr_url !== undefined) updates.linked_pr_url = req.body.linked_pr_url;
   if (Object.keys(updates).length > 0) updateDvPlanStep(stepId, updates);
-  emitEvent('plan_step_added', agentId, plan.game, agentId + ' added step to plan #' + plan.id + ': ' + title, { plan_id: plan.id, step_id: stepId });
+  emitEvent('plan_step_added', agentId, plan.project_id, agentId + ' added step to plan #' + plan.id + ': ' + title, { plan_id: plan.id, step_id: stepId });
   res.json({ id: stepId, plan_id: plan.id });
 });
 
@@ -1278,15 +1262,15 @@ router.post('/admin/agents', async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   var name = req.body.name;
-  var game = req.body.game;
-  if (!id || !name || !game) return res.status(400).json({ error: 'id, name, and game are required' });
+  var projectId = req.body.project_id;
+  if (!id || !name || !projectId) return res.status(400).json({ error: 'id, name, and project_id are required' });
   // Check if exists
   if (getAgent(id)) return res.status(409).json({ error: 'Agent ' + id + ' already exists' });
   // Generate API key
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
   var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
-  createAgent(id, name, game, hash, capabilities);
+  createAgent(id, name, projectId, hash, capabilities);
   // Auto-add new agent to #general
   var generalChannel = getChannelBySlug('general');
   if (generalChannel) {
@@ -1380,12 +1364,12 @@ router.get('/admin/ops', function (req, res) {
 router.get('/projects', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listGames());
+  res.json(listProjects());
 });
 router.get('/games', function (req, res) { // backward compat
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listGames());
+  res.json(listProjects());
 });
 
 // Create project (admin only)
@@ -1393,8 +1377,8 @@ router.post('/projects', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { id, name, description, repo_url } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'id and name required' });
-  createGame(id, name, description || '', repo_url || '');
-  var project = getGame(id);
+  createProject(id, name, description || '', repo_url || '');
+  var project = getProject(id);
   emitEvent('project_created', getAdminDisplayName(req), id, 'Project created: ' + name);
   res.json(project);
 });
@@ -1480,8 +1464,8 @@ router.post('/concepts/:id/link', function (req, res) {
   if (!who) return;
   var concept = getConcept(parseInt(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
-  var projectId = req.body.project || req.body.game;
-  if (!projectId) return res.status(400).json({ error: 'project is required' });
+  var projectId = req.body.project_id;
+  if (!projectId) return res.status(400).json({ error: 'project_id is required' });
   linkConceptToProject(projectId, concept.id, who);
   emitEvent('concept_linked', who, projectId, 'Linked concept "' + concept.name + '" to project ' + projectId);
   res.json({ ok: true, concept_id: concept.id, project: projectId });
@@ -1577,7 +1561,8 @@ var VALID_BUG_SEVERITIES = ['low', 'normal', 'high', 'critical'];
 router.post('/bugs', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var { game, title, description, category, severity, assignee, diagnostic_data } = req.body;
+  var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
+  var projectId = project_id;
   if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
   if (category && VALID_BUG_CATEGORIES.indexOf(category) === -1) {
     return res.status(400).json({ error: 'Invalid category. Valid: ' + VALID_BUG_CATEGORIES.join(', ') });
@@ -1589,22 +1574,22 @@ router.post('/bugs', function (req, res) {
   if (diagnostic_data) {
     diagStr = typeof diagnostic_data === 'string' ? diagnostic_data : JSON.stringify(diagnostic_data);
   }
-  var id = createDvBug(game, title, description, category, severity, who, assignee, diagStr);
+  var id = createDvBug(projectId, title, description, category, severity, who, assignee, diagStr);
   // Auto-create channel for bug
   var bugMembers = [who];
   if (assignee) bugMembers.push(assignee);
   autoCreateEntityChannel('bug', id, '#bug-' + id + ': ' + title, who, bugMembers);
-  emitEvent('bug_created', who, game || 'dioverse', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
-  dispatchWebhook('bug_created', who, { bug_id: id, title: title, game: game, severity: severity, reporter: who, assignee: assignee });
+  emitEvent('bug_created', who, projectId || '', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
+  dispatchWebhook('bug_created', who, { bug_id: id, title: title, project_id: projectId, severity: severity, reporter: who, assignee: assignee });
   res.json({ ok: true, id: id });
 });
 
-// GET /bugs — list bugs (agent or admin, optional filters: game, status, assignee)
+// GET /bugs — list bugs (agent or admin, optional filters: project_id, status, assignee)
 router.get('/bugs', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {};
-  if (req.query.game) filters.game = req.query.game;
+  if (req.query.project_id) filters.project_id = req.query.project_id;
   if (req.query.status) filters.status = req.query.status;
   if (req.query.assignee) filters.assignee = req.query.assignee;
   if (req.query.reporter) filters.reporter = req.query.reporter;
@@ -1637,7 +1622,7 @@ router.put('/bugs/:id', function (req, res) {
   if (req.body.severity !== undefined) updates.severity = req.body.severity;
   updateDvBug(bug.id, updates);
   if (updates.status) {
-    emitEvent('bug_updated', who, bug.game, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
+    emitEvent('bug_updated', who, bug.project_id, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
   }
   dispatchWebhook('bug_updated', who, { bug_id: bug.id, title: bug.title, updates: updates });
   // Webhook: notify assignee when bug is assigned
@@ -1876,7 +1861,7 @@ router.get('/webhooks/deliveries', function (req, res) {
 
 // ======== DRONES ========
 
-// List all drones (agents with game='drone') with diagnostics
+// List all drones (agents with project_id='drone') with diagnostics
 router.get('/drones', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -2121,7 +2106,7 @@ router.get('/drones/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agent = getAgent(req.params.id);
-  if (!agent || agent.game !== 'drone') return res.status(404).json({ error: 'Drone not found' });
+  if (!agent || agent.project_id !== 'drone') return res.status(404).json({ error: 'Drone not found' });
   var { api_key_hash, ...safe } = agent;
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
@@ -2310,7 +2295,7 @@ router.post('/work/request', function (req, res) {
 router.get('/outreach/campaigns', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listOutreachCampaigns({ project: req.query.project || req.query.game, status: req.query.status }));
+  res.json(listOutreachCampaigns({ project: req.query.project_id, status: req.query.status }));
 });
 
 router.post('/outreach/campaigns', function (req, res) {
@@ -2345,7 +2330,7 @@ router.get('/outreach/contacts', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listOutreachContacts({
-    project: req.query.project || req.query.game,
+    project: req.query.project_id,
     status: req.query.status,
     type: req.query.type,
     campaign_id: req.query.campaign_id ? parseInt(req.query.campaign_id) : undefined,
@@ -2602,8 +2587,8 @@ router.post('/outreach/followup/:id', async function (req, res) {
 router.get('/outreach/status', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var project = req.query.project || req.query.game;
-  if (!project) return res.status(400).json({ error: 'project query param required' });
+  var project = req.query.project_id;
+  if (!project) return res.status(400).json({ error: 'project_id query param required' });
   var counts = countOutreachContacts(project);
   var campaigns = listOutreachCampaigns({ project: project, status: 'active' });
   res.json({ project: project, contact_counts: counts, active_campaigns: campaigns.length });

@@ -18,11 +18,11 @@ const STATUS_TABS: { key: StatusFilter; label: string; color: string }[] = [
 ]
 
 const SEVERITY_OPTIONS = ['all', 'critical', 'high', 'normal', 'low']
-const GAME_OPTIONS_FILTER = ['all', 'willing-sacrifice', 'king-city', 'mycelium', 'dioverse']
+const PROJECT_OPTIONS_FILTER = ['all', 'willing-sacrifice', 'king-city', 'mycelium']
 
 // ─── File Bug Modal ──────────────────────────────────────────────────────────
 
-const GAME_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium', 'dioverse']
+const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const SEVERITY_CHOICES = ['normal', 'high', 'critical', 'low']
 const CATEGORY_OPTIONS = ['other', 'gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance']
 
@@ -37,7 +37,7 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [game, setGame] = useState('king-city')
+  const [projectId, setProjectId] = useState('king-city')
   const [severity, setSeverity] = useState('normal')
   const [category, setCategory] = useState('other')
   const [assignee, setAssignee] = useState('')
@@ -47,7 +47,7 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
   function resetForm() {
     setTitle('')
     setDescription('')
-    setGame('king-city')
+    setProjectId('king-city')
     setSeverity('normal')
     setCategory('other')
     setAssignee('')
@@ -70,7 +70,7 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
       await fileBug({
         title: title.trim(),
         description: description.trim(),
-        game,
+        project_id: projectId,
         severity,
         category,
         assignee: assignee.trim() || null,
@@ -125,18 +125,18 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
           />
         </div>
 
-        {/* Game / Severity */}
+        {/* Project / Severity */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">
-              Game
+              Project
             </label>
             <select
-              value={game}
-              onChange={(e) => setGame(e.target.value)}
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
               className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
             >
-              {GAME_OPTIONS.map((g) => (
+              {PROJECT_OPTIONS.map((g) => (
                 <option key={g} value={g}>{g}</option>
               ))}
             </select>
@@ -404,8 +404,8 @@ function BugDetail({ bug, onClose }: BugDetailProps) {
               <MetaField label="Filed by">
                 <span className="text-sm text-text">{bug.filed_by}</span>
               </MetaField>
-              <MetaField label="Game">
-                <span className="text-sm text-text font-mono">{bug.game}</span>
+              <MetaField label="Project">
+                <span className="text-sm text-text font-mono">{bug.project_id}</span>
               </MetaField>
               <MetaField label="Severity badge">
                 <Badge variant={severityBadgeVariant[editSeverity] ?? 'muted'}>
@@ -471,7 +471,7 @@ export default function BugsPage() {
   const { bugs, bugCounts, loading, refresh } = useDashboardStore()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('open')
   const [severityFilter, setSeverityFilter] = useState('all')
-  const [gameFilter, setGameFilter] = useState('all')
+  const [projectFilter, setProjectFilter] = useState('all')
   const [selectedBug, setSelectedBug] = useState<Bug | null>(null)
   const [showFileBug, setShowFileBug] = useState(false)
 
@@ -488,13 +488,13 @@ export default function BugsPage() {
     if (severityFilter !== 'all') {
       result = result.filter((b) => b.severity === severityFilter)
     }
-    if (gameFilter !== 'all') {
-      result = result.filter((b) => b.game === gameFilter)
+    if (projectFilter !== 'all') {
+      result = result.filter((b) => b.project_id === projectFilter)
     }
     return result.sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     )
-  }, [bugs, statusFilter, severityFilter, gameFilter])
+  }, [bugs, statusFilter, severityFilter, projectFilter])
 
   // Keep selected bug in sync with store data
   useEffect(() => {
@@ -543,15 +543,15 @@ export default function BugsPage() {
             ))}
           </select>
 
-          {/* Game filter */}
+          {/* Project filter */}
           <select
-            value={gameFilter}
-            onChange={(e) => setGameFilter(e.target.value)}
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
             className="bg-surface-raised border border-border rounded-sm px-2.5 py-1.5 text-xs text-text-dim focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer min-w-[100px]"
           >
-            {GAME_OPTIONS_FILTER.map((g) => (
+            {PROJECT_OPTIONS_FILTER.map((g) => (
               <option key={g} value={g}>
-                {g === 'all' ? 'All Games' : g}
+                {g === 'all' ? 'All Projects' : g}
               </option>
             ))}
           </select>

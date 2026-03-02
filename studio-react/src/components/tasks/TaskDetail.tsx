@@ -153,8 +153,8 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
               <MetaField label="Assignee">
                 <span className="text-sm text-text">{task.assignee || 'Unassigned'}</span>
               </MetaField>
-              <MetaField label="Game">
-                <span className="text-sm text-text font-mono">{task.game}</span>
+              <MetaField label="Project">
+                <span className="text-sm text-text font-mono">{task.project_id}</span>
               </MetaField>
               {project && (
                 <MetaField label="Project">

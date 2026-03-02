@@ -89,10 +89,10 @@ export default function PlanCard({ plan, onClick, isSelected = false }: PlanCard
           {plan.owner && (
             <span className="text-text-muted text-xs truncate">{plan.owner}</span>
           )}
-          {plan.game && (
+          {plan.project_id && (
             <>
               <span className="text-text-muted text-xs">&middot;</span>
-              <span className="text-text-muted text-xs truncate">{plan.game}</span>
+              <span className="text-text-muted text-xs truncate">{plan.project_id}</span>
             </>
           )}
         </div>

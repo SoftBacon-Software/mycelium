@@ -71,7 +71,7 @@ export default function ThreadPanel({ message, onClose }: ThreadPanelProps) {
       await sendMessage({
         from_agent: '__admin__',
         to_agent: message.from_agent,
-        game: message.game,
+        project_id: message.project_id,
         content,
         thread_id: threadId,
         msg_type: 'message',
@@ -84,7 +84,7 @@ export default function ThreadPanel({ message, onClose }: ThreadPanelProps) {
     } finally {
       setSending(false)
     }
-  }, [replyContent, sending, message.from_agent, message.game, threadId, loadThread, refresh])
+  }, [replyContent, sending, message.from_agent, message.project_id, threadId, loadThread, refresh])
 
   const replyCount = threadMessages.length
 

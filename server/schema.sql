@@ -1,11 +1,11 @@
--- =============== MYCELIUM — Platform Schema ===============
+-- =============== MYCELIUM -- Platform Schema ===============
 -- Distributed development platform. The printing press of ideas.
 
--- Registered agents (Claude instances, bots, etc.)
+-- Registered agents (AI instances, bots, etc.)
 CREATE TABLE IF NOT EXISTS dv_agents (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
-  game            TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
   api_key_hash    TEXT NOT NULL,
   status          TEXT NOT NULL DEFAULT 'offline',
   working_on      TEXT NOT NULL DEFAULT '',
@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS dv_agents (
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Projects registry (was "games")
-CREATE TABLE IF NOT EXISTS dv_games (
+-- Projects registry
+CREATE TABLE IF NOT EXISTS dv_projects (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
   description     TEXT NOT NULL DEFAULT '',
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS dv_tasks (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   title           TEXT NOT NULL,
   description     TEXT NOT NULL DEFAULT '',
-  game            TEXT NOT NULL DEFAULT 'dioverse',
+  project_id      TEXT NOT NULL DEFAULT '',
   requester       TEXT NOT NULL,
   assignee        TEXT,
   status          TEXT NOT NULL DEFAULT 'open',
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS dv_tasks (
 
 -- Per-project context snapshots (legacy)
 CREATE TABLE IF NOT EXISTS dv_context (
-  game            TEXT PRIMARY KEY,
+  project_id      TEXT PRIMARY KEY,
   data            TEXT NOT NULL DEFAULT '{}',
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by      TEXT NOT NULL DEFAULT ''
@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS dv_context (
 CREATE TABLE IF NOT EXISTS dv_assets (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   name            TEXT NOT NULL,
-  type            TEXT NOT NULL DEFAULT 'sprite',
-  game            TEXT NOT NULL DEFAULT 'shared',
+  type            TEXT NOT NULL DEFAULT 'asset',
+  project_id      TEXT NOT NULL DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'requested',
   path            TEXT NOT NULL DEFAULT '',
   metadata        TEXT NOT NULL DEFAULT '{}',
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS dv_events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   type            TEXT NOT NULL,
   agent           TEXT NOT NULL DEFAULT '',
-  game            TEXT,
+  project_id      TEXT,
   summary         TEXT NOT NULL DEFAULT '',
   data            TEXT NOT NULL DEFAULT '{}',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS dv_messages (
   from_agent      TEXT NOT NULL,
   to_agent        TEXT,
   thread_id       TEXT,
-  game            TEXT,
+  project_id      TEXT,
   content         TEXT NOT NULL,
   metadata        TEXT NOT NULL DEFAULT '{}',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS dv_context_keys (
 -- Bug tracking
 CREATE TABLE IF NOT EXISTS dv_bugs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  game            TEXT NOT NULL DEFAULT 'dioverse',
+  project_id      TEXT NOT NULL DEFAULT '',
   title           TEXT NOT NULL,
   description     TEXT NOT NULL,
   category        TEXT NOT NULL DEFAULT 'other',
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS dv_plans (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   title        TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
-  game         TEXT NOT NULL DEFAULT 'dioverse',
+  project_id   TEXT NOT NULL DEFAULT '',
   status       TEXT NOT NULL DEFAULT 'draft',
   owner        TEXT NOT NULL DEFAULT '',
   priority     TEXT NOT NULL DEFAULT 'normal',
@@ -219,10 +219,10 @@ CREATE INDEX IF NOT EXISTS idx_task_comments_task ON dv_task_comments(task_id);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_status ON dv_tasks(status);
-CREATE INDEX IF NOT EXISTS idx_dv_tasks_game ON dv_tasks(game);
+CREATE INDEX IF NOT EXISTS idx_dv_tasks_project ON dv_tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_assignee ON dv_tasks(assignee);
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_updated ON dv_tasks(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dv_assets_game ON dv_assets(game);
+CREATE INDEX IF NOT EXISTS idx_dv_assets_project ON dv_assets(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_assets_status ON dv_assets(status);
 CREATE INDEX IF NOT EXISTS idx_dv_events_created ON dv_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dv_events_type ON dv_events(type);
@@ -233,9 +233,9 @@ CREATE INDEX IF NOT EXISTS idx_dv_messages_thread ON dv_messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_dv_messages_created ON dv_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dv_context_keys_ns ON dv_context_keys(namespace);
 CREATE INDEX IF NOT EXISTS idx_dv_bugs_status ON dv_bugs(status);
-CREATE INDEX IF NOT EXISTS idx_dv_bugs_game ON dv_bugs(game);
+CREATE INDEX IF NOT EXISTS idx_dv_bugs_project ON dv_bugs(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_plans_status ON dv_plans(status);
-CREATE INDEX IF NOT EXISTS idx_dv_plans_game ON dv_plans(game);
+CREATE INDEX IF NOT EXISTS idx_dv_plans_project ON dv_plans(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_plans_owner ON dv_plans(owner);
 CREATE INDEX IF NOT EXISTS idx_dv_plan_steps_plan ON dv_plan_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_dv_plan_steps_task ON dv_plan_steps(linked_task_id);
@@ -254,10 +254,10 @@ CREATE INDEX IF NOT EXISTS idx_dv_project_concepts_concept ON dv_project_concept
 -- Outreach campaigns (per-project config for press/creator outreach)
 CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  project         TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
   name            TEXT NOT NULL,
   persona_prompt  TEXT NOT NULL DEFAULT '',
-  game_facts      TEXT NOT NULL DEFAULT '',
+  project_facts   TEXT NOT NULL DEFAULT '',
   templates       TEXT NOT NULL DEFAULT '{}',
   config          TEXT NOT NULL DEFAULT '{}',
   status          TEXT NOT NULL DEFAULT 'active',
@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (
 -- Outreach contacts (press, creators, influencers)
 CREATE TABLE IF NOT EXISTS dv_outreach_contacts (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  project         TEXT NOT NULL,
+  project_id      TEXT NOT NULL,
   campaign_id     INTEGER REFERENCES dv_outreach_campaigns(id),
   type            TEXT NOT NULL DEFAULT 'creator',
   name            TEXT NOT NULL,
@@ -295,9 +295,9 @@ CREATE TABLE IF NOT EXISTS dv_outreach_contacts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_project ON dv_outreach_campaigns(project);
+CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_project ON dv_outreach_campaigns(project_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_status ON dv_outreach_campaigns(status);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_project ON dv_outreach_contacts(project);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_project ON dv_outreach_contacts(project_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON dv_outreach_contacts(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_campaign ON dv_outreach_contacts(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON dv_outreach_contacts(email);
@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS dv_approvals (
   decided_by      TEXT,
   decided_at      TEXT,
   executed_at     TEXT,
-  project         TEXT NOT NULL DEFAULT 'mycelium',
+  project_id      TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS dv_approvals (
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_status ON dv_approvals(status);
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_action ON dv_approvals(action_type);
 CREATE INDEX IF NOT EXISTS idx_dv_approvals_agent ON dv_approvals(requested_by);
-CREATE INDEX IF NOT EXISTS idx_dv_approvals_project ON dv_approvals(project);
+CREATE INDEX IF NOT EXISTS idx_dv_approvals_project ON dv_approvals(project_id);
 
 -- Operators (human team members)
 CREATE TABLE IF NOT EXISTS dv_operators (
