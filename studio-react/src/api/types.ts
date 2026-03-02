@@ -34,6 +34,9 @@ export interface Task {
   needs_approval: boolean;
   approved_by: string | null;
   approved_at: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  repo: string | null;
   created_at: string;
   updated_at: string;
   metadata: Record<string, unknown> | null;
@@ -149,6 +152,9 @@ export interface PlanStep {
   description: string;
   status: string;
   assignee: string | null;
+  linked_task_id: number | null;
+  linked_branch: string | null;
+  linked_pr_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -249,6 +255,13 @@ export interface DroneJob {
   created_at: string;
   workspace_repo: string | null;
   workspace_branch: string;
+}
+
+export interface ThreadSummary {
+  thread_id: string;
+  message_count: number;
+  last_message_at: string;
+  last_sender: string;
 }
 
 export interface DroneArtifact {
