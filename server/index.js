@@ -158,9 +158,10 @@ var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 var BACKUP_DIR = path.join(DATA_DIR, 'backups');
 var MAX_BACKUPS = 10;
 
-function runBackup() {
+async function runBackup() {
   try {
-    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    // Ensure backup directory exists (async, non-blocking)
+    await fs.promises.mkdir(BACKUP_DIR, { recursive: true });
     var now = new Date();
     var ts = now.getFullYear() +
       String(now.getMonth() + 1).padStart(2, '0') +
@@ -169,24 +170,21 @@ function runBackup() {
       String(now.getMinutes()).padStart(2, '0') +
       String(now.getSeconds()).padStart(2, '0');
     var backupPath = path.join(BACKUP_DIR, 'mycelium_' + ts + '.db');
-    getDB().backup(backupPath).then(function () {
-      console.log('[backup] Created: ' + backupPath);
-      // Prune old backups (keep last MAX_BACKUPS)
-      try {
-        var files = fs.readdirSync(BACKUP_DIR)
-          .filter(function (f) { return f.startsWith('mycelium_') && f.endsWith('.db'); })
-          .sort();
-        while (files.length > MAX_BACKUPS) {
-          var oldest = files.shift();
-          fs.unlinkSync(path.join(BACKUP_DIR, oldest));
-          console.log('[backup] Pruned: ' + oldest);
-        }
-      } catch (e) {
-        console.error('[backup] Prune error:', e.message);
+    await getDB().backup(backupPath);
+    console.log('[backup] Created: ' + backupPath);
+    // Prune old backups (keep last MAX_BACKUPS) — all async, non-blocking
+    try {
+      var files = (await fs.promises.readdir(BACKUP_DIR))
+        .filter(function (f) { return f.startsWith('mycelium_') && f.endsWith('.db'); })
+        .sort();
+      while (files.length > MAX_BACKUPS) {
+        var oldest = files.shift();
+        await fs.promises.unlink(path.join(BACKUP_DIR, oldest));
+        console.log('[backup] Pruned: ' + oldest);
       }
-    }).catch(function (e) {
-      console.error('[backup] Failed:', e.message);
-    });
+    } catch (e) {
+      console.error('[backup] Prune error:', e.message);
+    }
   } catch (e) {
     console.error('[backup] Error:', e.message);
   }
