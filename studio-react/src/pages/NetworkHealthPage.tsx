@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
-import { parseTimestamp, timeAgo, formatTime } from '../utils/time'
+import { timeAgo, formatTime } from '../utils/time'
 import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry } from '../api/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

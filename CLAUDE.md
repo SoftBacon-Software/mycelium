@@ -87,7 +87,13 @@ Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
 ### Agents & Boot
 - `GET /boot/:agentId` — Full context (tasks, requests, messages, bugs, plans, concepts)
 - `GET /admin/overview` — Full dashboard data (admin only)
-- `POST /agents/heartbeat` — Update agent status and working_on
+- `POST /agents/heartbeat` — Update agent status and working_on. Admin can heartbeat on behalf of any agent by passing `agent_id` in body with `X-Admin-Key`.
+- `GET /work/:agentId` — Prioritized work queue. Add `?auto_claim=true` to auto-claim top item.
+
+### Auto-Coordination
+- **Auto-dispatch**: When a task completes or an agent heartbeats as idle, the server automatically finds unassigned plan steps or tasks and assigns them to idle agents via directives.
+- **Work-pull**: Agents call `GET /work/:agentId?auto_claim=true` to self-assign the next priority item from their queue. Returns `{ queue, claimed }`.
+- **Priority order**: directives > requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > bugs
 
 ### Tasks
 - `GET /tasks` — List tasks (filter: `?game=`, `?status=`, `?assignee=`)
