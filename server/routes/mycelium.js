@@ -68,7 +68,7 @@ import {
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
   createDvTeamChat, listDvTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
   addTaskComment, getTaskComments, deleteTaskComment,
   createOutreachCampaign, getOutreachCampaign, listOutreachCampaigns, updateOutreachCampaign,
   createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
@@ -2022,15 +2022,29 @@ router.put('/drones/jobs/:id', function (req, res) {
   res.json({ ok: true, id: job.id });
 });
 
-// Cancel pending drone job (admin only)
+// Cancel/delete drone job (admin only — works on any status)
 router.delete('/drones/jobs/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var job = getDroneJob(parseInt(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
-  if (job.status !== 'pending') return res.status(400).json({ error: 'Can only cancel pending jobs' });
-  updateDroneJob(job.id, { status: 'cancelled', completed_at: new Date().toISOString() });
-  emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id, { job_id: job.id });
+  updateDroneJob(job.id, { status: 'cancelled', completed_at: job.completed_at || new Date().toISOString() });
+  emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id + ' (was: ' + job.status + ')', { job_id: job.id });
   res.json({ ok: true, id: job.id, cancelled: true });
+});
+
+// Bulk cleanup: cancel old done/failed jobs (admin only)
+// DELETE /drones/jobs?older_than_days=7&status=failed
+router.delete('/drones/jobs', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var days = parseInt(req.query.older_than_days) || 0; // 0 = all matching
+  var statusFilter = req.query.status || 'failed'; // failed, done, or both
+  var statuses = statusFilter === 'both' ? ['failed', 'done'] : [statusFilter];
+  if (statuses.some(function (s) { return s !== 'failed' && s !== 'done'; })) {
+    return res.status(400).json({ error: 'status must be failed, done, or both' });
+  }
+  var jobs = bulkCancelDroneJobs(statuses, days);
+  emitEvent('drone_jobs_cleanup', getAdminDisplayName(req), 'drone', 'Bulk cancelled ' + jobs.length + ' ' + statusFilter + ' drone jobs', { count: jobs.length });
+  res.json({ ok: true, cancelled: jobs.length, jobs: jobs.map(function (j) { return { id: j.id, title: j.title }; }) });
 });
 
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
