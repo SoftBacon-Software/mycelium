@@ -282,10 +282,10 @@ export async function checkGitHubPRs() {
           if (reviewData.reviewed) { console.log('[github] PR #' + pr.number + ' already reviewed — skipping'); continue; }
         }
 
-        // Fetch the diff
+        // Fetch the diff via API (pr.diff_url can 404 on private repos)
         console.log('[github] Fetching diff for PR #' + pr.number);
-        var diffResponse = await fetch(pr.diff_url, {
-          headers: { 'Authorization': 'token ' + GITHUB_TOKEN }
+        var diffResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls/' + pr.number, {
+          headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3.diff' }
         });
         if (!diffResponse.ok) { console.log('[github] Failed to fetch diff: HTTP ' + diffResponse.status); continue; }
         var diff = await diffResponse.text();
