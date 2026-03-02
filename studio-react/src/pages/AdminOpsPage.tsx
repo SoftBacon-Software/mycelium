@@ -1,23 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchAdminOps, resolveRequest, cancelDroneJob, createDroneJob } from '../api/endpoints'
+import { timeAgo } from '../utils/time'
 import type { AdminOps } from '../api/types'
 import Badge from '../components/shared/Badge'
-
-function parseTimestamp(dateStr: string): number {
-  if (dateStr.includes('T')) return new Date(dateStr).getTime()
-  return new Date(dateStr.replace(' ', 'T') + 'Z').getTime()
-}
-
-function timeAgo(dateStr: string): string {
-  const ts = parseTimestamp(dateStr)
-  if (isNaN(ts)) return '-'
-  const diff = Date.now() - ts
-  if (diff < 60000) return 'just now'
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago'
-  return Math.floor(diff / 86400000) + 'd ago'
-}
 
 function truncate(str: string, len = 80): string {
   return str.length > len ? str.slice(0, len) + '...' : str

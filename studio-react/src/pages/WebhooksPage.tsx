@@ -1,24 +1,10 @@
 import { Fragment, useEffect, useState, useMemo, useCallback } from 'react'
 import { fetchWebhookDeliveries } from '../api/endpoints'
+import { timeAgo, formatFullTimestamp } from '../utils/time'
 import type { WebhookDelivery } from '../api/types'
 import Badge from '../components/shared/Badge'
 
 const PAGE_SIZE = 50
-
-function parseTimestamp(dateStr: string): number {
-  if (dateStr.includes('T')) return new Date(dateStr).getTime()
-  return new Date(dateStr.replace(' ', 'T') + 'Z').getTime()
-}
-
-function timeAgo(dateStr: string): string {
-  const ts = parseTimestamp(dateStr)
-  if (isNaN(ts)) return '-'
-  const diff = Date.now() - ts
-  if (diff < 60000) return 'just now'
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago'
-  return Math.floor(diff / 86400000) + 'd ago'
-}
 
 function statusColor(code: number | null): string {
   if (code === null) return 'text-text-muted'
@@ -225,7 +211,7 @@ export default function WebhooksPage() {
                         <div className="flex items-center gap-4 text-xs text-text-muted">
                           <span>Webhook ID: <span className="font-mono text-text-dim">{d.webhook_id}</span></span>
                           <span>Delivery ID: <span className="font-mono text-text-dim">{d.id}</span></span>
-                          <span>{new Date(parseTimestamp(d.created_at)).toLocaleString()}</span>
+                          <span>{formatFullTimestamp(d.created_at)}</span>
                         </div>
                       </div>
                     </td>
