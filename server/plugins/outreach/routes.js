@@ -2,6 +2,12 @@
 import { Router } from 'express';
 import createOutreachDB from './db.js';
 
+// Parse an integer route parameter safely — returns null instead of NaN.
+function parseIntParam(val) {
+  var n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 export default function (core) {
   var router = Router();
   var db = createOutreachDB(core.db);
@@ -30,7 +36,7 @@ export default function (core) {
   router.put('/campaigns/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var campaign = db.getCampaign(parseInt(req.params.id));
+    var campaign = db.getCampaign(parseIntParam(req.params.id));
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
     var fields = {};
     for (var k of ['name', 'persona_prompt', 'project_facts', 'status']) {
@@ -74,7 +80,7 @@ export default function (core) {
   router.put('/contacts/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     var b = req.body;
     if (b.metadata && typeof b.metadata !== 'string') b.metadata = JSON.stringify(b.metadata);
@@ -86,7 +92,7 @@ export default function (core) {
   router.delete('/contacts/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     db.deleteContact(contact.id);
     res.json({ ok: true, deleted: contact.id });
@@ -140,7 +146,7 @@ export default function (core) {
   router.post('/research/:id', async function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     try {
@@ -164,7 +170,7 @@ export default function (core) {
   router.post('/personalize/:id', async function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     try {
@@ -193,7 +199,7 @@ export default function (core) {
   router.put('/approve/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (contact.status !== 'draft_ready') return res.status(400).json({ error: 'Contact status must be draft_ready, got ' + contact.status });
 
@@ -208,7 +214,7 @@ export default function (core) {
   router.post('/send/:id', async function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (contact.status !== 'approved') return res.status(400).json({ error: 'Contact must be approved before sending' });
     if (!contact.email) return res.status(400).json({ error: 'Contact has no email address' });
@@ -256,7 +262,7 @@ export default function (core) {
   router.post('/followup/:id', async function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var contact = db.getContact(parseInt(req.params.id));
+    var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (contact.status !== 'sent') return res.status(400).json({ error: 'Contact must be in sent status for follow-up' });
 

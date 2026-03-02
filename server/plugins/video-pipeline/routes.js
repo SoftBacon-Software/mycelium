@@ -2,6 +2,12 @@ import { Router } from 'express';
 import createVideoDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
+// Parse an integer route parameter safely — returns null instead of NaN.
+function parseIntParam(val) {
+  var n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 var WSAC_SETUP = 'pip install anthropic pyyaml requests';
 
@@ -33,7 +39,7 @@ export default function (core) {
   router.get('/sessions/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
     session.clips = db.listClips(session.id, {});
     session.stats = db.getSessionStats(session.id);
@@ -44,7 +50,9 @@ export default function (core) {
   router.put('/sessions/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    db.updateSession(parseInt(req.params.id), req.body);
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.updateSession(id, req.body);
     res.json({ ok: true });
   });
 
@@ -52,7 +60,9 @@ export default function (core) {
   router.delete('/sessions/:id', function (req, res) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
-    db.deleteSession(parseInt(req.params.id));
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.deleteSession(id);
     res.json({ ok: true });
   });
 
@@ -62,16 +72,20 @@ export default function (core) {
   router.get('/sessions/:id/clips', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    res.json(db.listClips(parseInt(req.params.id), { tier: req.query.tier, status: req.query.status }));
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    res.json(db.listClips(id, { tier: req.query.tier, status: req.query.status }));
   });
 
   // POST /sessions/:id/clips — Bulk add clips (from detection results)
   router.post('/sessions/:id/clips', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
     var clips = req.body.clips;
     if (!Array.isArray(clips)) return res.status(400).json({ error: 'clips array required' });
-    var count = db.bulkCreateClips(parseInt(req.params.id), clips);
+    var count = db.bulkCreateClips(id, clips);
     res.json({ ok: true, count: count });
   });
 
@@ -79,7 +93,9 @@ export default function (core) {
   router.put('/clips/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    db.updateClip(parseInt(req.params.id), req.body);
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.updateClip(id, req.body);
     res.json({ ok: true });
   });
 
@@ -89,7 +105,7 @@ export default function (core) {
   router.post('/sessions/:id/detect', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     var useVision = req.body.use_vision !== false;
@@ -126,7 +142,7 @@ export default function (core) {
   router.post('/sessions/:id/assemble', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     var clips = db.listClips(session.id, { status: 'detected' });
@@ -160,7 +176,7 @@ export default function (core) {
   router.post('/sessions/:id/export', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     var platforms = req.body.platforms || ['tiktok', 'twitter', 'youtube_shorts'];
@@ -193,7 +209,7 @@ export default function (core) {
   router.post('/sessions/:id/captions', async function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     var clips = db.listClips(session.id, { status: req.body.clip_status || 'detected' });
@@ -219,7 +235,7 @@ export default function (core) {
   router.get('/sessions/:id/status', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var session = db.getSession(parseInt(req.params.id));
+    var session = db.getSession(parseIntParam(req.params.id));
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     var status = {

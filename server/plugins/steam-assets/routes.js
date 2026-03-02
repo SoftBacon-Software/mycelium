@@ -2,6 +2,12 @@ import { Router } from 'express';
 import createSteamDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
+// Parse an integer route parameter safely — returns null instead of NaN.
+function parseIntParam(val) {
+  var n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 
 // Default game facts for Willing Sacrifice store copy generation
@@ -42,7 +48,7 @@ export default function (core) {
   router.get('/assets/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var asset = db.getAsset(parseInt(req.params.id));
+    var asset = db.getAsset(parseIntParam(req.params.id));
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
     // Include drone job status if linked
     if (asset.drone_job_id) {
@@ -56,7 +62,9 @@ export default function (core) {
   router.delete('/assets/:id', function (req, res) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
-    db.deleteAsset(parseInt(req.params.id));
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.deleteAsset(id);
     res.json({ ok: true });
   });
 
