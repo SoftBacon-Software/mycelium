@@ -4,3 +4,4 @@ server/data/
 .env
 public/studio/assets/
 public/studio/index.html
+.worktrees/
