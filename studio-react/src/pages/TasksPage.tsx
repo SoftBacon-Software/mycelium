@@ -210,10 +210,11 @@ interface CreateTaskModalProps {
 }
 
 function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
+  const projects = useDashboardStore((s) => s.projects)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState('normal')
-  const [projectId, setProjectId] = useState('king-city')
+  const [projectId, setProjectId] = useState(() => projects[0]?.id ?? '')
   const [assignee, setAssignee] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -303,13 +304,15 @@ function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
 
               <div>
                 <label className="text-xs text-text-muted block mb-1">Project</label>
-                <input
-                  type="text"
+                <select
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
-                  className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
-                  placeholder="king-city"
-                />
+                  className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text-dim focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                  ))}
+                </select>
               </div>
             </div>
 

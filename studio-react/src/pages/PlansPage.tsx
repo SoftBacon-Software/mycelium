@@ -128,7 +128,7 @@ function CreatePlanModal({ onClose, onCreated }: CreatePlanModalProps) {
                   type="text"
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
-                  placeholder="e.g. king-city"
+                  placeholder="project-id"
                   className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>

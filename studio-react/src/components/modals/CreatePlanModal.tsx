@@ -8,15 +8,15 @@ interface CreatePlanModalProps {
   onClose: () => void
 }
 
-const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const PRIORITY_OPTIONS = ['low', 'medium', 'high', 'critical']
 
 export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProps) {
   const refresh = useDashboardStore((s) => s.refresh)
+  const projects = useDashboardStore((s) => s.projects)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [projectId, setProjectId] = useState('king-city')
+  const [projectId, setProjectId] = useState(() => projects[0]?.id ?? '')
   const [priority, setPriority] = useState('medium')
   const [owner, setOwner] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -25,7 +25,7 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
   function resetForm() {
     setTitle('')
     setDescription('')
-    setProjectId('king-city')
+    setProjectId(projects[0]?.id ?? '')
     setPriority('medium')
     setOwner('')
     setError(null)
@@ -111,9 +111,9 @@ export default function CreatePlanModal({ isOpen, onClose }: CreatePlanModalProp
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
             >
-              {PROJECT_OPTIONS.map((g) => (
-                <option key={g} value={g}>
-                  {g}
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name || p.id}
                 </option>
               ))}
             </select>
