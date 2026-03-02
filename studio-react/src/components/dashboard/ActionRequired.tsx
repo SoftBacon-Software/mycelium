@@ -3,15 +3,8 @@ import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../../stores/dashboardStore'
 import { createDroneJob } from '../../api/endpoints'
 import Badge from '../shared/Badge'
+import { timeAgo } from '../../utils/time'
 import type { Message, DroneJob, Bug, Approval } from '../../api/types'
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  if (diff < 60000) return 'just now'
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago'
-  return Math.floor(diff / 86400000) + 'd ago'
-}
 
 function truncate(str: string, len = 60): string {
   return str.length > len ? str.slice(0, len) + '…' : str

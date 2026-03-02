@@ -1,5 +1,6 @@
 import type { Concept } from '../../api/types'
 import Badge from '../shared/Badge'
+import { timeAgo } from '../../utils/time'
 
 interface ConceptCardProps {
   concept: Concept
@@ -24,17 +25,6 @@ const typeBadgeVariant: Record<string, 'purple' | 'accent' | 'blue' | 'green' | 
   custom: 'muted',
 }
 
-function timeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return new Date(dateStr).toLocaleDateString()
-}
 
 export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
   const barColor = typeBarColor[concept.type] ?? typeBarColor.custom

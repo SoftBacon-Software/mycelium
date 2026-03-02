@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
 import SummaryCard from '../components/dashboard/SummaryCard'
 import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
@@ -81,22 +82,6 @@ function getAgentInitials(name: string): string {
   const parts = name.split(/[-_ ]+/)
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   return name.slice(0, 2).toUpperCase()
-}
-
-function formatTimestamp(dateStr: string): string {
-  const d = new Date(dateStr)
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-}
-
-function formatTimeAgo(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
 }
 
 function getEventBadgeVariant(type: string): 'accent' | 'blue' | 'green' | 'muted' | 'purple' | 'red' {

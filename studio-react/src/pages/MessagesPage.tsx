@@ -3,25 +3,16 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { resolveRequest, sendMessage } from '../api/endpoints'
 import { toast } from 'sonner'
 import type { Message } from '../api/types'
-import { Avatar, formatTime } from '../components/messages/ChatMessage'
+import { Avatar } from '../components/messages/ChatMessage'
+import { formatTime, formatDateLabel, parseTimestamp } from '../utils/time'
 import Badge from '../components/shared/Badge'
 import ThreadPanel from '../components/messages/ThreadPanel'
 
 // ─── Date separator ──────────────────────────────────────────────────────────
 
-function formatDateLabel(iso: string): string {
-  const d = new Date(iso)
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-
-  if (d.toDateString() === today.toDateString()) return 'Today'
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
-}
-
 function isSameDay(a: string, b: string): boolean {
-  return new Date(a).toDateString() === new Date(b).toDateString()
+  const fmt = (s: string) => new Date(parseTimestamp(s)).toLocaleDateString('en-US', { timeZone: 'America/Chicago' })
+  return fmt(a) === fmt(b)
 }
 
 function DateSeparator({ date }: { date: string }) {
@@ -241,7 +232,7 @@ export default function MessagesPage() {
     const ms = (hours[timeRange] ?? 3) * 3600000
     const cutoff = Date.now() - ms
     return all.filter((m) => {
-      const t = m.created_at.includes('T') ? new Date(m.created_at).getTime() : new Date(m.created_at.replace(' ', 'T') + 'Z').getTime()
+      const t = parseTimestamp(m.created_at)
       return t >= cutoff
     })
   }, [messages, timeRange])

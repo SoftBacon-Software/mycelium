@@ -5,6 +5,7 @@ import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChann
 import type { Channel, ChannelMessage } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
+import { formatDateLabel } from '../utils/time'
 import { useVoice } from '../hooks/useVoice'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -27,16 +28,6 @@ const TRUNCATE_LENGTH = 300
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function formatDateLabel(iso: string): string {
-  const d = new Date(iso)
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
-
-  if (d.toDateString() === today.toDateString()) return 'Today'
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
-}
 
 function isSameDay(a: string, b: string): boolean {
   return new Date(a).toDateString() === new Date(b).toDateString()
