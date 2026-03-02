@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
 import SummaryCard from '../components/dashboard/SummaryCard'
+import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 
@@ -236,6 +237,9 @@ export default function DashboardPage() {
           icon="context"
         />
       </div>
+
+      {/* Action Required */}
+      <ActionRequired />
 
       {/* Middle row: Activity + Agents */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
