@@ -1316,7 +1316,27 @@ router.put('/admin/agents/:id/heartbeat', function (req, res) {
     summary = req.params.id + ' is ' + status + (workingOn ? ': ' + workingOn : '');
   }
   emitEvent('agent_heartbeat', req.params.id, null, summary);
+
+  // Also create savepoint from admin heartbeat
+  createSavepoint(req.params.id, {
+    working_on: workingOn
+  });
+  pruneSavepoints(req.params.id, 100);
+
   res.json({ ok: true, agent: req.params.id, status: status });
+});
+
+// Admin create savepoint with notes (for handoffs)
+router.post('/agents/:id/savepoint', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  createSavepoint(req.params.id, {
+    working_on: agent.working_on || '',
+    notes: req.body.notes || null
+  });
+  var sp = getLatestSavepoint(req.params.id);
+  res.json({ ok: true, savepoint_id: sp.id });
 });
 
 // Full studio overview (for dashboard)
