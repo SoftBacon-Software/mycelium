@@ -7,9 +7,20 @@ export var WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 export var GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 export var PORT = parseInt(process.env.PORT) || 3003;
 export var AGENT_ID = 'admin-claude';
-export var MODEL = 'claude-sonnet-4-6'; // Sonnet for fast/cheap triage
 
-// Rate limiting: max Claude API calls per minute
+// LLM backend: 'anthropic' (cloud) or 'ollama' (local)
+export var LLM_BACKEND = process.env.LLM_BACKEND || 'anthropic';
+export var OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+export var OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+
+// Anthropic model (only used when LLM_BACKEND=anthropic)
+export var MODEL = process.env.MODEL || 'claude-sonnet-4-6';
+
+// Mode: 'webhook' (needs public URL) or 'poll' (pull from API, no public URL needed)
+export var MODE = process.env.MODE || 'webhook';
+export var POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 30000; // 30s default
+
+// Rate limiting: max LLM calls per minute
 export var MAX_CLAUDE_CALLS_PER_MIN = parseInt(process.env.MAX_CLAUDE_CALLS_PER_MIN) || 30;
 
 // GitHub repos to watch for PRs

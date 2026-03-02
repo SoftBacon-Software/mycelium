@@ -1,14 +1,17 @@
 {
   "name": "admin-claude",
-  "version": "1.0.0",
-  "description": "Mycelium admin automation — webhook-driven Claude service for judgment calls",
+  "version": "1.1.0",
+  "description": "Mycelium admin automation — supports cloud (Anthropic) and local (Ollama) LLM backends",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:local": "MODE=poll LLM_BACKEND=ollama node index.js"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "express": "^4.21.0"
+  },
+  "optionalDependencies": {
     "@anthropic-ai/sdk": "^0.39.0"
   }
 }
