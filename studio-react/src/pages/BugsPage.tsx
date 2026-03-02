@@ -19,11 +19,9 @@ const STATUS_TABS: { key: StatusFilter; label: string; color: string }[] = [
 ]
 
 const SEVERITY_OPTIONS = ['all', 'critical', 'high', 'normal', 'low']
-const PROJECT_OPTIONS_FILTER = ['all', 'willing-sacrifice', 'king-city', 'mycelium']
 
 // ─── File Bug Modal ──────────────────────────────────────────────────────────
 
-const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const SEVERITY_CHOICES = ['normal', 'high', 'critical', 'low']
 const CATEGORY_OPTIONS = ['other', 'gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance']
 
@@ -34,11 +32,12 @@ interface FileBugModalProps {
 
 function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
   const refresh = useDashboardStore((s) => s.refresh)
+  const projects = useDashboardStore((s) => s.projects)
   const user = useAuthStore((s) => s.user)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [projectId, setProjectId] = useState('king-city')
+  const [projectId, setProjectId] = useState(() => projects[0]?.id ?? '')
   const [severity, setSeverity] = useState('normal')
   const [category, setCategory] = useState('other')
   const [assignee, setAssignee] = useState('')
@@ -48,7 +47,7 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
   function resetForm() {
     setTitle('')
     setDescription('')
-    setProjectId('king-city')
+    setProjectId(projects[0]?.id ?? '')
     setSeverity('normal')
     setCategory('other')
     setAssignee('')
@@ -139,8 +138,8 @@ function FileBugModal({ isOpen, onClose }: FileBugModalProps) {
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
             >
-              {PROJECT_OPTIONS.map((g) => (
-                <option key={g} value={g}>{g}</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name || p.id}</option>
               ))}
             </select>
           </div>
@@ -473,7 +472,7 @@ function MetaField({ label, children }: { label: string; children: React.ReactNo
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function BugsPage() {
-  const { bugs, bugCounts, loading, refresh } = useDashboardStore()
+  const { bugs, bugCounts, loading, refresh, projects } = useDashboardStore()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('open')
   const [severityFilter, setSeverityFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all')
@@ -554,9 +553,10 @@ export default function BugsPage() {
             onChange={(e) => setProjectFilter(e.target.value)}
             className="bg-surface-raised border border-border rounded-sm px-2.5 py-1.5 text-xs text-text-dim focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer min-w-[100px]"
           >
-            {PROJECT_OPTIONS_FILTER.map((g) => (
-              <option key={g} value={g}>
-                {g === 'all' ? 'All Projects' : g}
+            <option value="all">All Projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id}
               </option>
             ))}
           </select>

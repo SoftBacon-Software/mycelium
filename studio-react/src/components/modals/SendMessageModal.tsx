@@ -8,14 +8,14 @@ interface SendMessageModalProps {
   onClose: () => void
 }
 
-const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const MSG_TYPES = ['message', 'request', 'directive']
 
 export default function SendMessageModal({ isOpen, onClose }: SendMessageModalProps) {
   const refresh = useDashboardStore((s) => s.refresh)
+  const projects = useDashboardStore((s) => s.projects)
 
   const [msgType, setMsgType] = useState('message')
-  const [projectId, setProjectId] = useState('king-city')
+  const [projectId, setProjectId] = useState(() => projects[0]?.id ?? '')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [content, setContent] = useState('')
@@ -25,7 +25,7 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
 
   function resetForm() {
     setMsgType('message')
-    setProjectId('king-city')
+    setProjectId(projects[0]?.id ?? '')
     setFrom('')
     setTo('')
     setContent('')
@@ -111,9 +111,9 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
             onChange={(e) => setProjectId(e.target.value)}
             className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
           >
-            {PROJECT_OPTIONS.map((g) => (
-              <option key={g} value={g}>
-                {g}
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id}
               </option>
             ))}
           </select>
