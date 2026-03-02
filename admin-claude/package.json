@@ -1,0 +1,14 @@
+{
+  "name": "admin-claude",
+  "version": "1.0.0",
+  "description": "Mycelium admin automation — webhook-driven Claude service for judgment calls",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "@anthropic-ai/sdk": "^0.39.0"
+  }
+}
