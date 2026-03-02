@@ -249,10 +249,12 @@ async function handleApprovalRequested(data) {
 // Poll open PRs, review with Claude, post comments.
 
 export async function checkGitHubPRs() {
-  if (!GITHUB_TOKEN) return;
+  console.log('[github] Starting PR check. Token set:', !!GITHUB_TOKEN, 'Repos:', GITHUB_REPOS);
+  if (!GITHUB_TOKEN) { console.log('[github] No token — skipping'); return; }
   await setStatus('Checking GitHub PRs');
 
   for (var repo of GITHUB_REPOS) {
+    console.log('[github] Checking repo:', repo);
     try {
       var prsResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls?state=open&per_page=10', {
         headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
