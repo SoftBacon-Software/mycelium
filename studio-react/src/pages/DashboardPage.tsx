@@ -119,6 +119,8 @@ const quickLinks = [
   { to: '/assets', label: 'Assets', desc: 'Art pipeline', color: 'text-accent' },
   { to: '/drones', label: 'Drones', desc: 'GPU compute', color: 'text-blue' },
   { to: '/approvals', label: 'Approvals', desc: 'Review queue', color: 'text-green' },
+  { to: '/concepts', label: 'Concepts', desc: 'Shared concepts', color: 'text-purple' },
+  { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
 ]
 
 export default function DashboardPage() {
@@ -132,6 +134,8 @@ export default function DashboardPage() {
     plans,
     assets,
     droneJobs,
+    concepts,
+    contextKeys,
     loading,
     refresh,
   } = useDashboardStore()
@@ -144,6 +148,8 @@ export default function DashboardPage() {
   const totalTasks = tasks.open.length + tasks.in_progress.length
   const activePlans = plans.filter((p) => p.status === 'active' || p.status === 'in_progress').length
   const activeDroneJobs = droneJobs.filter((j) => j.status === 'pending' || j.status === 'claimed').length
+  const characterCount = concepts.filter((c) => c.type === 'character').length
+  const contextNamespaces = new Set(contextKeys.map((k) => k.namespace)).size
   const recentEvents = events.slice(0, 20)
 
   return (
@@ -165,7 +171,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-3">
         <SummaryCard
           title="Agents"
           value={`${onlineAgents}/${agents.length}`}
@@ -214,6 +220,20 @@ export default function DashboardPage() {
           subtitle={`${droneJobs.length} total jobs`}
           color="blue"
           icon="drones"
+        />
+        <SummaryCard
+          title="Concepts"
+          value={concepts.length}
+          subtitle={`${characterCount} characters`}
+          color="purple"
+          icon="concepts"
+        />
+        <SummaryCard
+          title="Context"
+          value={contextKeys.length}
+          subtitle={`${contextNamespaces} namespaces`}
+          color="muted"
+          icon="context"
         />
       </div>
 
