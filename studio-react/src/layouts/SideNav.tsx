@@ -14,6 +14,8 @@ const navItems = [
   { to: '/operators', label: 'Operators', abbr: 'Op' },
   { to: '/approvals', label: 'Approvals', abbr: 'Ap' },
   { to: '/drones', label: 'Drones', abbr: 'Dr' },
+  { to: '/concepts', label: 'Concepts', abbr: 'Co' },
+  { to: '/context', label: 'Context', abbr: 'Cx' },
 ] as const
 
 export default function SideNav() {

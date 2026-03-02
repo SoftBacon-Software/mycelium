@@ -23,6 +23,8 @@ const iconMap: Record<string, string> = {
   plans: '\u{1F4D0}',
   assets: '\u{1F3A8}',
   drones: '\u2699\uFE0F',
+  concepts: '\u{1F9E9}',
+  context: '\u{1F511}',
 }
 
 export default function SummaryCard({ title, value, subtitle, color = 'accent', icon }: SummaryCardProps) {
