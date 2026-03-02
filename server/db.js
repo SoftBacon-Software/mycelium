@@ -62,6 +62,9 @@ export function initDB() {
     ["dv_agents", "llm_backend", "TEXT NOT NULL DEFAULT ''"],
     ["dv_agents", "llm_model", "TEXT NOT NULL DEFAULT ''"],
     ["dv_agents", "agent_type", "TEXT NOT NULL DEFAULT 'agent'"],
+    ["dv_projects", "org_id", "TEXT NOT NULL DEFAULT ''"],
+    ["dv_projects", "type", "TEXT NOT NULL DEFAULT 'software'"],
+    ["dv_projects", "status", "TEXT NOT NULL DEFAULT 'active'"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -285,17 +288,59 @@ export function deleteInstanceConfig(key) {
 
 // -- Projects --
 
-export function createProject(id, name, description, repoUrl) {
-  stmt('dvCreateProject', `INSERT OR IGNORE INTO dv_projects (id, name, description, repo_url)
-    VALUES (?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '');
+// -- Organizations --
+
+export function createOrg(id, name, description, ownerId) {
+  stmt('dvCreateOrg', `INSERT OR IGNORE INTO dv_organizations (id, name, description, owner_id)
+    VALUES (?, ?, ?, ?)`).run(id, name, description || '', ownerId || '');
 }
 
-export function listProjects() {
+export function listOrgs() {
+  return stmt('dvListOrgs', 'SELECT * FROM dv_organizations ORDER BY created_at').all();
+}
+
+export function getOrg(id) {
+  return stmt('dvGetOrg', 'SELECT * FROM dv_organizations WHERE id = ?').get(id);
+}
+
+export function updateOrg(id, fields) {
+  var sets = []; var values = [];
+  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
+  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
+  if (fields.plan !== undefined) { sets.push('plan = ?'); values.push(fields.plan); }
+  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare('UPDATE dv_organizations SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+// -- Projects --
+
+export function createProject(id, name, description, repoUrl, orgId, type) {
+  stmt('dvCreateProject', `INSERT OR IGNORE INTO dv_projects (id, name, description, repo_url, org_id, type)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '', orgId || '', type || 'software');
+}
+
+export function listProjects(orgId) {
+  if (orgId) return db.prepare('SELECT * FROM dv_projects WHERE org_id = ? ORDER BY created_at').all(orgId);
   return stmt('dvListProjects', 'SELECT * FROM dv_projects ORDER BY created_at').all();
 }
 
 export function getProject(id) {
   return stmt('dvGetProject', 'SELECT * FROM dv_projects WHERE id = ?').get(id);
+}
+
+export function updateProject(id, fields) {
+  var sets = []; var values = [];
+  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
+  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
+  if (fields.repo_url !== undefined) { sets.push('repo_url = ?'); values.push(fields.repo_url); }
+  if (fields.org_id !== undefined) { sets.push('org_id = ?'); values.push(fields.org_id); }
+  if (fields.type !== undefined) { sets.push('type = ?'); values.push(fields.type); }
+  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare('UPDATE dv_projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Tasks --
@@ -1552,6 +1597,7 @@ export function getDvOverview() {
     })(),
     channels: allChannels,
     channel_counts: { total: allChannels.length, active: activeChannelCount, archived: archivedChannelCount },
+    organizations: listOrgs(),
     operators: listOperators(),
     instance_config: listInstanceConfig(),
     drones: listDrones(),

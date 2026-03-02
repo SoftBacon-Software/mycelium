@@ -17,12 +17,26 @@ CREATE TABLE IF NOT EXISTS dv_agents (
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Organizations (multi-tenant)
+CREATE TABLE IF NOT EXISTS dv_organizations (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  owner_id        TEXT NOT NULL DEFAULT '',
+  plan            TEXT NOT NULL DEFAULT 'free',
+  status          TEXT NOT NULL DEFAULT 'active',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Projects registry
 CREATE TABLE IF NOT EXISTS dv_projects (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
   description     TEXT NOT NULL DEFAULT '',
+  org_id          TEXT NOT NULL DEFAULT '',
   repo_url        TEXT NOT NULL DEFAULT '',
+  type            TEXT NOT NULL DEFAULT 'software',
+  status          TEXT NOT NULL DEFAULT 'active',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -253,6 +267,10 @@ CREATE INDEX IF NOT EXISTS idx_dv_concepts_type ON dv_concepts(type);
 CREATE INDEX IF NOT EXISTS idx_dv_concepts_name ON dv_concepts(name);
 CREATE INDEX IF NOT EXISTS idx_dv_project_concepts_project ON dv_project_concepts(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_project_concepts_concept ON dv_project_concepts(concept_id);
+CREATE INDEX IF NOT EXISTS idx_dv_organizations_status ON dv_organizations(status);
+CREATE INDEX IF NOT EXISTS idx_dv_projects_org ON dv_projects(org_id);
+CREATE INDEX IF NOT EXISTS idx_dv_projects_status ON dv_projects(status);
+CREATE INDEX IF NOT EXISTS idx_dv_projects_type ON dv_projects(type);
 
 -- Outreach campaigns (per-project config for press/creator outreach)
 CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (

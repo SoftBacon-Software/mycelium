@@ -83,11 +83,25 @@ export interface ContextKey {
   updated_at: string;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  plan: string;
+  status: string;
+  created_at: string;
+}
+
 export interface Project {
   id: string;
-  title: string;
+  name: string;
   description: string;
+  org_id: string;
+  repo_url: string;
+  type: string;
   status: string;
+  created_at: string;
 }
 
 export interface Vote {
@@ -314,6 +328,7 @@ export interface Overview {
   bug_counts: { open: number; in_progress: number; fixed: number; total: number };
   plans: Plan[];
   concepts: Concept[];
+  organizations: Organization[];
   operators: Operator[];
   instance_config: ConfigEntry[];
   channels: Channel[];

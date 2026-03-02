@@ -43,7 +43,8 @@ var artifactStorage = multer.diskStorage({
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
   createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
-  createProject, listProjects, getProject,
+  createOrg, listOrgs, getOrg, updateOrg,
+  createProject, listProjects, getProject, updateProject,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
   approveDvTask, listTasksNeedingApproval,
@@ -1371,27 +1372,75 @@ router.get('/admin/ops', function (req, res) {
   res.json(getAdminOps());
 });
 
-// List projects
+// =============== ORGANIZATIONS ===============
+
+router.get('/orgs', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listOrgs());
+});
+
+router.post('/orgs', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { id, name, description } = req.body;
+  if (!id || !name) return res.status(400).json({ error: 'id and name required' });
+  createOrg(id, name, description || '', getAdminDisplayName(req));
+  var org = getOrg(id);
+  emitEvent('org_created', getAdminDisplayName(req), '', 'Organization created: ' + name);
+  res.json(org);
+});
+
+router.get('/orgs/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var org = getOrg(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+  org.projects = listProjects(req.params.id);
+  res.json(org);
+});
+
+router.put('/orgs/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var org = getOrg(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+  updateOrg(req.params.id, req.body);
+  res.json(getOrg(req.params.id));
+});
+
+// =============== PROJECTS ===============
+
+// List projects (optional ?org_id= filter)
 router.get('/projects', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listProjects());
-});
-router.get('/games', function (req, res) { // backward compat
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  res.json(listProjects());
+  res.json(listProjects(req.query.org_id));
 });
 
 // Create project (admin only)
 router.post('/projects', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var { id, name, description, repo_url } = req.body;
+  var { id, name, description, repo_url, org_id, type } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'id and name required' });
-  createProject(id, name, description || '', repo_url || '');
+  createProject(id, name, description || '', repo_url || '', org_id || '', type || 'software');
   var project = getProject(id);
   emitEvent('project_created', getAdminDisplayName(req), id, 'Project created: ' + name);
   res.json(project);
+});
+
+router.get('/projects/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  res.json(project);
+});
+
+router.put('/projects/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  updateProject(req.params.id, req.body);
+  res.json(getProject(req.params.id));
 });
 
 // =============== SHARED CONCEPTS ===============
