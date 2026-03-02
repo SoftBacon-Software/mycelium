@@ -6,6 +6,22 @@ import { ask, askJson } from './claude.js';
 import { apiGet, apiPost, apiPut } from './api.js';
 import { AGENT_ID, GITHUB_TOKEN, GITHUB_REPOS } from './config.js';
 
+// Update heartbeat so dashboard shows what admin-claude is doing
+async function setStatus(workingOn) {
+  try {
+    await apiPut('/admin/agents/' + AGENT_ID + '/heartbeat', {
+      status: 'online',
+      working_on: workingOn
+    });
+  } catch (err) {
+    // Non-critical
+  }
+}
+
+async function resetStatus() {
+  return setStatus('Listening for webhooks');
+}
+
 // ---- Event Router ----
 
 export async function handleEvent(event, data, agentId) {
@@ -33,6 +49,8 @@ export async function handleEvent(event, data, agentId) {
 
 async function handleRequestCreated(data) {
   if (!data.message_id) return;
+  var fromAgent = data.from || 'unknown';
+  await setStatus('Responding to request from ' + fromAgent);
 
   // Fetch the full request message
   var msg;
@@ -83,6 +101,7 @@ async function handleRequestCreated(data) {
   } catch (err) {
     console.error('[request] Failed to resolve:', err.message);
   }
+  await resetStatus();
 }
 
 // ---- Handler: bug_created ----
@@ -90,6 +109,7 @@ async function handleRequestCreated(data) {
 
 async function handleBugCreated(data) {
   if (!data.bug_id) return;
+  await setStatus('Triaging bug #' + data.bug_id);
 
   // Fetch the full bug
   var bug;
@@ -142,6 +162,7 @@ async function handleBugCreated(data) {
       console.error('[bug] Failed to update bug #' + bug.id + ':', err.message);
     }
   }
+  await resetStatus();
 }
 
 // ---- Handler: drone_job_exhausted ----
@@ -150,6 +171,7 @@ async function handleBugCreated(data) {
 async function handleDroneJobExhausted(data) {
   var jobId = data.job_id || data.original_job_id;
   if (!jobId) return;
+  await setStatus('Escalating failed drone job #' + jobId);
 
   var requester = data.requester || 'greatness-claude';
   var title = data.title || 'Unknown job';
@@ -171,6 +193,7 @@ async function handleDroneJobExhausted(data) {
   } catch (err) {
     console.error('[drone] Failed to escalate:', err.message);
   }
+  await resetStatus();
 }
 
 // ---- Handler: approval_requested ----
@@ -178,6 +201,7 @@ async function handleDroneJobExhausted(data) {
 
 async function handleApprovalRequested(data) {
   if (!data.approval_id) return;
+  await setStatus('Processing approval #' + data.approval_id);
 
   var approval;
   try {
@@ -218,6 +242,7 @@ async function handleApprovalRequested(data) {
       console.error('[approval] Failed to escalate:', err.message);
     }
   }
+  await resetStatus();
 }
 
 // ---- Periodic: GitHub PR check ----
@@ -225,6 +250,7 @@ async function handleApprovalRequested(data) {
 
 export async function checkGitHubPRs() {
   if (!GITHUB_TOKEN) return;
+  await setStatus('Checking GitHub PRs');
 
   for (var repo of GITHUB_REPOS) {
     try {
@@ -267,6 +293,7 @@ export async function checkGitHubPRs() {
 
         if (isUiHeavy) {
           // Flag for human review
+          await setStatus('Flagging UI-heavy PR #' + pr.number + ' for human review');
           await apiPost('/messages', {
             from_agent: AGENT_ID,
             to_agent: null,
@@ -275,6 +302,7 @@ export async function checkGitHubPRs() {
           });
         } else {
           // Code-only: Claude reviews
+          await setStatus('Reviewing PR #' + pr.number + ': ' + pr.title.substring(0, 40));
           var truncatedDiff = diff.substring(0, 15000); // Limit diff size for API
           var review = await ask(
             'Review this pull request diff. Focus on: bugs, logic errors, security issues, and code quality. ' +
@@ -312,4 +340,5 @@ export async function checkGitHubPRs() {
       console.error('[github] Error checking PRs for ' + repo + ':', err.message);
     }
   }
+  await resetStatus();
 }
