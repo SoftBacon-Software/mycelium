@@ -272,6 +272,17 @@ CREATE INDEX IF NOT EXISTS idx_dv_projects_org ON dv_projects(org_id);
 CREATE INDEX IF NOT EXISTS idx_dv_projects_status ON dv_projects(status);
 CREATE INDEX IF NOT EXISTS idx_dv_projects_type ON dv_projects(type);
 
+-- Additional performance indexes
+CREATE INDEX IF NOT EXISTS idx_dv_agents_project ON dv_agents(project_id);
+CREATE INDEX IF NOT EXISTS idx_dv_tasks_requester ON dv_tasks(requester);
+CREATE INDEX IF NOT EXISTS idx_dv_tasks_project_status ON dv_tasks(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_dv_bugs_severity ON dv_bugs(severity);
+CREATE INDEX IF NOT EXISTS idx_dv_bugs_assignee ON dv_bugs(assignee);
+CREATE INDEX IF NOT EXISTS idx_dv_messages_project ON dv_messages(project_id);
+CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_agent ON dv_webhook_deliveries(agent_id);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_outlet ON dv_outreach_contacts(outlet);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_tier ON dv_outreach_contacts(tier);
+
 -- Outreach campaigns (per-project config for press/creator outreach)
 CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
