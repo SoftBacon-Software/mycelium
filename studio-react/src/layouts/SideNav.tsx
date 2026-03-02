@@ -18,6 +18,8 @@ const navItems = [
   { to: '/context', label: 'Context', abbr: 'Cx' },
   { to: '/webhooks', label: 'Webhooks', abbr: 'Wh' },
   { to: '/ops', label: 'Admin Ops', abbr: 'Ao' },
+  { to: '/health', label: 'Network Health', abbr: 'Nh' },
+  { to: '/onboarding', label: 'Onboarding', abbr: 'Ob' },
 ] as const
 
 export default function SideNav() {
