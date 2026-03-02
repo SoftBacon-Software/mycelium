@@ -24,6 +24,7 @@ import type {
   DroneJob,
   ThreadSummary,
   WebhookDelivery,
+  Plugin,
 } from './types';
 
 // Auth
@@ -373,4 +374,18 @@ export function linkAssetsToJob(
     drone_job_id: droneJobId,
     status,
   });
+}
+
+// Plugins
+
+export function fetchPlugins(): Promise<Plugin[]> {
+  return apiGet<Plugin[]>('/plugins');
+}
+
+export function enablePlugin(name: string): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/enable`, {});
+}
+
+export function disablePlugin(name: string): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/disable`, {});
 }

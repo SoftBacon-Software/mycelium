@@ -1,0 +1,12 @@
+{
+  "name": "social-posting",
+  "version": "1.0.0",
+  "displayName": "Social Posting",
+  "description": "Dio-voiced social media posting — caption generation, scheduling, and publishing to TikTok/Twitter (Buffer) and Instagram (Graph API).",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/social",
+  "schema": "schema.sql",
+  "gatedActions": ["social_publish"],
+  "mcpTools": "mcp-tools.json"
+}

@@ -311,6 +311,19 @@ export interface AdminOps {
   open_prs: { number: number; title: string; url: string; author: string; created_at: string }[]
 }
 
+export interface Plugin {
+  name: string
+  display_name: string
+  description: string
+  version: string
+  author: string
+  enabled: number
+  route_prefix: string
+  mcp_tool_count: number
+  installed_at: string
+  updated_at: string
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
@@ -335,4 +348,5 @@ export interface Overview {
   channel_counts: { total: number; active: number; archived: number };
   drones: Agent[];
   drone_jobs: DroneJob[];
+  plugins: Plugin[];
 }

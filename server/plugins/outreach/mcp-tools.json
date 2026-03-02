@@ -1,0 +1,88 @@
+[
+  {
+    "name": "studio_outreach_status",
+    "description": "Get outreach pipeline status for a project — contact counts per status, active campaigns.",
+    "schema": {
+      "project": { "type": "string", "description": "Project ID (e.g. willing-sacrifice)", "required": true }
+    },
+    "endpoint": { "method": "GET", "path": "/outreach/status", "queryMap": { "project": "project_id" } }
+  },
+  {
+    "name": "studio_outreach_contacts",
+    "description": "List outreach contacts. Filter by project, status, type.",
+    "schema": {
+      "project": { "type": "string", "description": "Filter by project" },
+      "status": { "type": "string", "description": "Filter by status (discovered, researched, draft_ready, approved, sent, followed_up, replied, covered, closed)" },
+      "type": { "type": "string", "description": "Filter by type (creator, press)" },
+      "limit": { "type": "number", "description": "Max results (default 50)" }
+    },
+    "endpoint": { "method": "GET", "path": "/outreach/contacts", "queryMap": { "project": "project_id", "status": "status", "type": "type", "limit": "limit" } }
+  },
+  {
+    "name": "studio_outreach_campaign",
+    "description": "Create or update an outreach campaign for a project.",
+    "schema": {
+      "action": { "type": "string", "enum": ["create", "update"], "description": "create or update", "required": true },
+      "project": { "type": "string", "description": "Project ID (required for create)" },
+      "name": { "type": "string", "description": "Campaign name (required for create)" },
+      "campaign_id": { "type": "number", "description": "Campaign ID (required for update)" },
+      "persona_prompt": { "type": "string", "description": "System prompt for Claude pitch generation" },
+      "project_facts": { "type": "string", "description": "Project facts for Claude to reference" },
+      "templates": { "type": "string", "description": "JSON string of email templates" },
+      "config": { "type": "string", "description": "JSON string of campaign config (API keys, search queries, limits)" }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/campaigns" }
+  },
+  {
+    "name": "studio_outreach_discover",
+    "description": "Run contact discovery for a campaign — searches YouTube for creators and Hunter.io for press contacts.",
+    "schema": {
+      "campaign_id": { "type": "number", "description": "Campaign ID to run discovery for", "required": true }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/discover" }
+  },
+  {
+    "name": "studio_outreach_research",
+    "description": "Research a contact — fetch their latest YouTube video or press article.",
+    "schema": {
+      "contact_id": { "type": "number", "description": "Contact ID to research", "required": true }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/research/:contact_id" }
+  },
+  {
+    "name": "studio_outreach_personalize",
+    "description": "Generate a Claude-personalized pitch for a contact using their campaign persona and templates.",
+    "schema": {
+      "contact_id": { "type": "number", "description": "Contact ID to personalize pitch for", "required": true }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/personalize/:contact_id" }
+  },
+  {
+    "name": "studio_outreach_approve",
+    "description": "Approve a draft pitch for sending. Optionally edit subject/body.",
+    "schema": {
+      "contact_id": { "type": "number", "description": "Contact ID to approve", "required": true },
+      "pitch_subject": { "type": "string", "description": "Override subject (optional)" },
+      "pitch_body": { "type": "string", "description": "Override body (optional)" }
+    },
+    "endpoint": { "method": "PUT", "path": "/outreach/approve/:contact_id" }
+  },
+  {
+    "name": "studio_outreach_send",
+    "description": "Send an approved pitch to a contact via Gmail. Set dry_run=false to actually send.",
+    "schema": {
+      "contact_id": { "type": "number", "description": "Contact ID to send pitch to", "required": true },
+      "dry_run": { "type": "boolean", "description": "If true (default), simulate without sending" }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/send/:contact_id" }
+  },
+  {
+    "name": "studio_outreach_followup",
+    "description": "Send a follow-up email to a contact whose pitch was sent but not replied to.",
+    "schema": {
+      "contact_id": { "type": "number", "description": "Contact ID to follow up with", "required": true },
+      "dry_run": { "type": "boolean", "description": "If true (default), simulate without sending" }
+    },
+    "endpoint": { "method": "POST", "path": "/outreach/followup/:contact_id" }
+  }
+]

@@ -8,7 +8,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { initDB, resolveStaleRequests, pruneWebhookDeliveries } from './db.js';
-import myceliumRoutes from './routes/mycelium.js';
+import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 3002;
@@ -25,6 +25,9 @@ if (!process.env.ADMIN_KEY) {
 
 // Initialize database
 initDB();
+
+// Load plugins (after DB init, before routes are used)
+await initPlugins();
 
 var app = express();
 

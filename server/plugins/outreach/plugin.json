@@ -1,0 +1,12 @@
+{
+  "name": "outreach",
+  "version": "1.0.0",
+  "displayName": "Outreach Pipeline",
+  "description": "Press/creator outreach with YouTube discovery, Claude personalization, and Gmail delivery.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/outreach",
+  "schema": "schema.sql",
+  "gatedActions": ["outreach_send"],
+  "mcpTools": "mcp-tools.json"
+}

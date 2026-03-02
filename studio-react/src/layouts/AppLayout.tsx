@@ -25,6 +25,7 @@ const routeTitles: Record<string, string> = {
   '/ops': 'Admin Ops',
   '/health': 'Network Health',
   '/onboarding': 'Onboarding',
+  '/plugins': 'Plugins',
 }
 
 function formatTime(date: Date | null): string {

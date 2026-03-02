@@ -1,0 +1,120 @@
+[
+  {
+    "name": "studio_video_create_session",
+    "description": "Create a new video processing session from gameplay footage and event logs.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string", "description": "Project ID" },
+        "title": { "type": "string", "description": "Session title (e.g. 'Playtest March 2 - Warrior run')" },
+        "footage_url": { "type": "string", "description": "URL or path to raw footage file" },
+        "event_log_url": { "type": "string", "description": "URL or path to Godot JSONL event log" }
+      },
+      "required": ["project_id", "title"]
+    },
+    "endpoint": { "method": "POST", "path": "/video/sessions", "bodyMap": { "project_id": "project_id", "title": "title", "footage_url": "footage_url", "event_log_url": "event_log_url" } }
+  },
+  {
+    "name": "studio_video_list_sessions",
+    "description": "List video processing sessions, optionally filtered by project or status.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "detecting", "assembling", "exporting", "complete", "failed"] }
+      }
+    },
+    "endpoint": { "method": "GET", "path": "/video/sessions", "queryMap": { "project_id": "project_id", "status": "status" } }
+  },
+  {
+    "name": "studio_video_get_session",
+    "description": "Get full details of a video session including clips and stats.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer", "description": "Session ID" }
+      },
+      "required": ["session_id"]
+    },
+    "endpoint": { "method": "GET", "path": "/video/sessions/{session_id}" }
+  },
+  {
+    "name": "studio_video_detect",
+    "description": "Submit a highlight detection drone job for a video session. Parses event logs and optionally uses Claude Vision to find highlights in footage.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer", "description": "Session ID" },
+        "use_vision": { "type": "boolean", "description": "Use Claude Vision for frame analysis (costs more, finds visual highlights)" },
+        "priority": { "type": "integer", "description": "Job priority (higher = claimed sooner)" }
+      },
+      "required": ["session_id"]
+    },
+    "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/detect", "bodyMap": { "use_vision": "use_vision", "priority": "priority" } }
+  },
+  {
+    "name": "studio_video_assemble",
+    "description": "Submit an assembly drone job — cuts clips from footage, mixes Dio narration audio, adds text overlays and subtitles.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer", "description": "Session ID" },
+        "tts_url": { "type": "string", "description": "TTS server URL (default: http://127.0.0.1:5099/tts)" },
+        "priority": { "type": "integer" }
+      },
+      "required": ["session_id"]
+    },
+    "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/assemble", "bodyMap": { "tts_url": "tts_url", "priority": "priority" } }
+  },
+  {
+    "name": "studio_video_export",
+    "description": "Submit an export drone job — re-encodes assembled clips for specific platforms (TikTok 9:16, Twitter 16:9, YouTube Shorts, etc.).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer", "description": "Session ID" },
+        "platforms": { "type": "array", "items": { "type": "string" }, "description": "Target platforms (tiktok, twitter, youtube_shorts, instagram)" },
+        "priority": { "type": "integer" }
+      },
+      "required": ["session_id"]
+    },
+    "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/export", "bodyMap": { "platforms": "platforms", "priority": "priority" } }
+  },
+  {
+    "name": "studio_video_session_status",
+    "description": "Get the status of a video session including drone job progress for detect/assemble/export stages.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer", "description": "Session ID" }
+      },
+      "required": ["session_id"]
+    },
+    "endpoint": { "method": "GET", "path": "/video/sessions/{session_id}/status" }
+  },
+  {
+    "name": "studio_video_add_clips",
+    "description": "Bulk add detected clips to a session (typically called by detection drone job on completion).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "integer" },
+        "clips": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "clip_id": { "type": "string" },
+              "tier": { "type": "string", "enum": ["S", "A", "B", "C"] },
+              "event_type": { "type": "string" },
+              "start_sec": { "type": "number" },
+              "end_sec": { "type": "number" }
+            }
+          }
+        }
+      },
+      "required": ["session_id", "clips"]
+    },
+    "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/clips", "bodyMap": { "clips": "clips" } }
+  }
+]

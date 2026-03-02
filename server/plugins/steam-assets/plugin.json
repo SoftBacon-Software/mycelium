@@ -1,0 +1,12 @@
+{
+  "name": "steam-assets",
+  "version": "1.0.0",
+  "displayName": "Steam Assets",
+  "description": "Steam store page generation — BBCode copy, curated screenshots, and segmented trailers. Lightweight copy runs in-process; screenshots and trailers submit drone jobs.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/steam",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}
