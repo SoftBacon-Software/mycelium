@@ -103,6 +103,14 @@ function asyncHandler(fn) {
   };
 }
 
+// Parse an integer route/query parameter safely.
+// Returns null (not NaN) when the value is missing or non-numeric,
+// preventing NaN from propagating into DB prepared statements.
+function parseIntParam(val) {
+  var n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
 // but API serves data to any client. Escape on write to protect all consumers.
@@ -254,7 +262,7 @@ function checkApprovalGate(req, who, actionType) {
   if (!approvalId) {
     return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call studio_request_approval first.' };
   }
-  var approval = getApproval(parseInt(approvalId));
+  var approval = getApproval(parseIntParam(approvalId));
   if (!approval) return { ok: false, error: 'Approval #' + approvalId + ' not found' };
   if (approval.status !== 'approved') return { ok: false, error: 'Approval #' + approvalId + ' is ' + approval.status + ', not approved' };
   if (approval.action_type !== actionType) return { ok: false, error: 'Approval #' + approvalId + ' is for ' + approval.action_type + ', not ' + actionType };
@@ -571,7 +579,7 @@ router.post('/tasks', function (req, res) {
 router.get('/tasks/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 });
@@ -579,7 +587,7 @@ router.get('/tasks/:id', function (req, res) {
 router.put('/tasks/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id)) return;
   var fields = {};
@@ -655,8 +663,8 @@ router.put('/tasks/:id', function (req, res) {
 router.post('/tasks/:id/dependency', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var taskId = parseInt(req.params.id);
-  var blockedById = parseInt(req.body.blocked_by);
+  var taskId = parseIntParam(req.params.id);
+  var blockedById = parseIntParam(req.body.blocked_by);
   if (!blockedById) return res.status(400).json({ error: 'blocked_by (task ID) is required' });
   if (taskId === blockedById) return res.status(400).json({ error: 'A task cannot block itself' });
   var ok = setTaskDependency(taskId, blockedById);
@@ -668,7 +676,7 @@ router.post('/tasks/:id/dependency', function (req, res) {
 // Task approval (admin only)
 router.put('/tasks/:id/approve', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!task.needs_approval) return res.status(400).json({ error: 'Task does not require approval' });
   if (task.approved_by) return res.status(400).json({ error: 'Task already approved by ' + task.approved_by });
@@ -682,7 +690,7 @@ router.put('/tasks/:id/approve', function (req, res) {
 router.get('/tasks/:id/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(getTaskComments(task.id));
 });
@@ -690,7 +698,7 @@ router.get('/tasks/:id/comments', function (req, res) {
 router.post('/tasks/:id/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   var author = escapeHtml(req.body.author || who);
   var content = escapeHtml(req.body.content);
@@ -703,12 +711,12 @@ router.post('/tasks/:id/comments', function (req, res) {
 router.delete('/tasks/:id/comments/:commentId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseInt(req.params.id));
+  var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id)) return;
-  var deleted = deleteTaskComment(parseInt(req.params.commentId));
+  var deleted = deleteTaskComment(parseIntParam(req.params.commentId));
   if (!deleted) return res.status(404).json({ error: 'Comment not found' });
-  res.json({ ok: true, deleted: parseInt(req.params.commentId) });
+  res.json({ ok: true, deleted: parseIntParam(req.params.commentId) });
 });
 
 // ======== CONTEXT ========
@@ -824,7 +832,7 @@ router.post('/assets', function (req, res) {
 router.get('/assets/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseInt(req.params.id));
+  var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   res.json(asset);
 });
@@ -832,7 +840,7 @@ router.get('/assets/:id', function (req, res) {
 router.put('/assets/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var asset = getDvAsset(parseInt(req.params.id));
+  var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   var fields = {};
   if (req.body.status !== undefined) fields.status = req.body.status;
@@ -853,7 +861,7 @@ router.put('/assets/:id', function (req, res) {
 router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseInt(req.params.id));
+  var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -867,7 +875,7 @@ router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
 router.get('/assets/:id/download', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseInt(req.params.id));
+  var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   if (!asset.file_path && !asset.path) return res.status(404).json({ error: 'No file attached to this asset' });
 
@@ -897,7 +905,7 @@ router.put('/assets/link-job', function (req, res) {
 // Delete asset (admin only)
 router.delete('/assets/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var asset = getDvAsset(parseInt(req.params.id));
+  var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   deleteDvAsset(asset.id);
   emitEvent('asset_deleted', getAdminDisplayName(req), asset.project_id, 'Deleted asset #' + asset.id + ': ' + asset.name, { asset_id: asset.id });
@@ -972,7 +980,7 @@ router.post('/requests', function (req, res) {
 router.put('/requests/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseInt(req.params.id));
+  var msg = getDvMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Request not found' });
   if (msg.msg_type !== 'request') return res.status(400).json({ error: 'Message #' + msg.id + ' is not a request' });
 
@@ -1014,7 +1022,7 @@ router.get('/messages', function (req, res) {
     status: req.query.status,
     limit: parseInt(req.query.limit) || 50,
     offset: parseInt(req.query.offset) || 0,
-    channel_id: req.query.channel_id ? parseInt(req.query.channel_id) : undefined
+    channel_id: req.query.channel_id ? parseIntParam(req.query.channel_id) : undefined
   };
   res.json(listDvMessages(filters));
 });
@@ -1039,7 +1047,7 @@ router.post('/messages', function (req, res) {
   var projectId = req.body.project_id || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
   // Route to channel
-  var channelId = req.body.channel_id ? parseInt(req.body.channel_id) : null;
+  var channelId = req.body.channel_id ? parseIntParam(req.body.channel_id) : null;
   if (!channelId && toAgent) {
     // DM: auto-create DM channel
     channelId = getOrCreateDmChannel(agentId, toAgent, 'agent', 'agent');
@@ -1061,7 +1069,7 @@ router.post('/messages', function (req, res) {
 router.put('/messages/:id/ack', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseInt(req.params.id));
+  var msg = getDvMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
   acknowledgeDvMessage(msg.id);
   emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
@@ -1071,7 +1079,7 @@ router.put('/messages/:id/ack', function (req, res) {
 router.put('/messages/:id/resolve', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseInt(req.params.id));
+  var msg = getDvMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
   resolveDvMessage(msg.id, agentId);
   emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
@@ -1145,7 +1153,7 @@ router.post('/plans', function (req, res) {
 router.get('/plans/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   res.json(plan);
 });
@@ -1153,7 +1161,7 @@ router.get('/plans/:id', function (req, res) {
 router.put('/plans/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var fields = {};
@@ -1176,7 +1184,7 @@ router.delete('/plans/:id', function (req, res) {
   if (!who) return;
   var gate = checkApprovalGate(req, who, 'delete');
   if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   deleteDvPlan(plan.id);
@@ -1191,7 +1199,7 @@ router.delete('/plans/:id', function (req, res) {
 router.post('/plans/:id/steps', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
@@ -1212,7 +1220,7 @@ router.post('/plans/:id/steps', function (req, res) {
 router.put('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (plan && !checkProjectScope(req, res, plan.project_id)) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
@@ -1223,29 +1231,29 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (req.body.linked_branch !== undefined) fields.linked_branch = req.body.linked_branch;
   if (req.body.linked_pr_url !== undefined) fields.linked_pr_url = req.body.linked_pr_url;
   if (req.body.phase !== undefined) fields.phase = escapeHtml(req.body.phase);
-  updateDvPlanStep(parseInt(req.params.stepId), fields);
-  dispatchWebhook('plan_step_updated', agentId, { plan_id: parseInt(req.params.id), step_id: parseInt(req.params.stepId), fields: fields });
-  res.json({ ok: true, step_id: parseInt(req.params.stepId) });
+  updateDvPlanStep(parseIntParam(req.params.stepId), fields);
+  dispatchWebhook('plan_step_updated', agentId, { plan_id: parseIntParam(req.params.id), step_id: parseIntParam(req.params.stepId), fields: fields });
+  res.json({ ok: true, step_id: parseIntParam(req.params.stepId) });
 });
 
 router.delete('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (plan && !checkProjectScope(req, res, plan.project_id)) return;
-  deleteDvPlanStep(parseInt(req.params.stepId));
-  res.json({ ok: true, deleted: parseInt(req.params.stepId) });
+  deleteDvPlanStep(parseIntParam(req.params.stepId));
+  res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
 });
 
 router.put('/plans/:id/reorder', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseInt(req.params.id));
+  var plan = getDvPlan(parseIntParam(req.params.id));
   if (plan && !checkProjectScope(req, res, plan.project_id)) return;
   var order = req.body.order;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
-  reorderDvPlanSteps(parseInt(req.params.id), order);
-  res.json({ ok: true, plan_id: parseInt(req.params.id) });
+  reorderDvPlanSteps(parseIntParam(req.params.id), order);
+  res.json({ ok: true, plan_id: parseIntParam(req.params.id) });
 });
 
 // ======== STUDIO AUTH ========
@@ -1316,7 +1324,7 @@ router.get('/studio/users', function (req, res) {
 // Update studio user password (admin only)
 router.put('/studio/users/:id/password', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var user = getStudioUserById(parseInt(req.params.id));
+  var user = getStudioUserById(parseIntParam(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
   var newPassword = req.body.password || '';
   if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
@@ -1328,7 +1336,7 @@ router.put('/studio/users/:id/password', asyncHandler(async function (req, res) 
 // Delete studio user (admin only)
 router.delete('/studio/users/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var user = getStudioUserById(parseInt(req.params.id));
+  var user = getStudioUserById(parseIntParam(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
   deleteStudioUser(user.id);
   res.json({ ok: true, deleted: user.username });
@@ -1630,7 +1638,7 @@ router.get('/concepts', function (req, res) {
 router.get('/concepts/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var concept = getConcept(parseInt(req.params.id));
+  var concept = getConcept(parseIntParam(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   concept.projects = getConceptProjects(concept.id);
   try { concept.data = JSON.parse(concept.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + concept.id + '):', e.message); }
@@ -1659,7 +1667,7 @@ router.post('/concepts', function (req, res) {
 router.put('/concepts/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var concept = getConcept(parseInt(req.params.id));
+  var concept = getConcept(parseIntParam(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   updateConcept(concept.id, req.body);
   var updated = getConcept(concept.id);
@@ -1675,7 +1683,7 @@ router.delete('/concepts/:id', function (req, res) {
   if (!who) return;
   var gate = checkApprovalGate(req, who, 'delete');
   if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
-  var concept = getConcept(parseInt(req.params.id));
+  var concept = getConcept(parseIntParam(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   deleteConcept(concept.id);
   emitEvent('concept_deleted', who, null, who + ' deleted concept: ' + concept.name);
@@ -1688,7 +1696,7 @@ router.delete('/concepts/:id', function (req, res) {
 router.post('/concepts/:id/link', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var concept = getConcept(parseInt(req.params.id));
+  var concept = getConcept(parseIntParam(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   var projectId = req.body.project_id;
   if (!projectId) return res.status(400).json({ error: 'project_id is required' });
@@ -1701,7 +1709,7 @@ router.post('/concepts/:id/link', function (req, res) {
 router.delete('/concepts/:id/link/:projectId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  unlinkConceptFromProject(req.params.projectId, parseInt(req.params.id));
+  unlinkConceptFromProject(req.params.projectId, parseIntParam(req.params.id));
   res.json({ ok: true });
 });
 
@@ -1832,7 +1840,7 @@ router.get('/bugs', function (req, res) {
 router.get('/bugs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var bug = getDvBug(parseInt(req.params.id));
+  var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   res.json(bug);
 });
@@ -1841,7 +1849,7 @@ router.get('/bugs/:id', function (req, res) {
 router.put('/bugs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var bug = getDvBug(parseInt(req.params.id));
+  var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   if (!checkProjectScope(req, res, bug.project_id)) return;
   var updates = {};
@@ -1865,7 +1873,7 @@ router.put('/bugs/:id', function (req, res) {
 // Delete bug (admin only)
 router.delete('/bugs/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var bug = getDvBug(parseInt(req.params.id));
+  var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   deleteDvBug(bug.id);
   emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
@@ -1950,7 +1958,7 @@ router.post('/channels', function (req, res) {
 router.get('/channels/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var members = listChannelMembers(channel.id);
   channel.members = members;
@@ -1962,7 +1970,7 @@ router.get('/channels/:id', function (req, res) {
 router.put('/channels/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var fields = {};
   if (req.body.name !== undefined) fields.name = escapeHtml(req.body.name);
@@ -1975,7 +1983,7 @@ router.put('/channels/:id', function (req, res) {
 // DELETE /channels/:id — delete channel (admin only)
 router.delete('/channels/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   deleteChannel(channel.id);
   emitEvent('channel_deleted', getAdminDisplayName(req), null, 'Deleted channel ' + channel.name, { channel_id: channel.id });
@@ -1987,7 +1995,7 @@ router.delete('/channels/:id', function (req, res) {
 router.get('/channels/:id/members', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   res.json(listChannelMembers(channel.id));
 });
@@ -1995,7 +2003,7 @@ router.get('/channels/:id/members', function (req, res) {
 router.post('/channels/:id/members', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var userId = req.body.user_id;
   if (!userId) return res.status(400).json({ error: 'user_id is required' });
@@ -2006,7 +2014,7 @@ router.post('/channels/:id/members', function (req, res) {
 router.delete('/channels/:id/members/:userId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var removed = removeChannelMember(channel.id, req.params.userId);
   res.json({ ok: true, removed: removed });
@@ -2017,11 +2025,11 @@ router.delete('/channels/:id/members/:userId', function (req, res) {
 router.get('/channels/:id/messages', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var filters = {
-    before: req.query.before ? parseInt(req.query.before) : undefined,
-    after: req.query.after ? parseInt(req.query.after) : undefined,
+    before: req.query.before ? parseIntParam(req.query.before) : undefined,
+    after: req.query.after ? parseIntParam(req.query.after) : undefined,
     limit: parseInt(req.query.limit) || 50
   };
   var messages;
@@ -2038,7 +2046,7 @@ router.get('/channels/:id/messages', function (req, res) {
 router.post('/channels/:id/messages', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
@@ -2053,7 +2061,7 @@ router.post('/channels/:id/messages', function (req, res) {
 router.put('/channels/:id/read', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var channel = getChannel(parseInt(req.params.id));
+  var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var messageId = req.body.message_id || getLatestChannelMessageId(channel.id);
   markChannelRead(channel.id, who, messageId);
@@ -2081,7 +2089,7 @@ router.get('/webhooks', function (req, res) {
 // DELETE /webhooks/:id — remove a webhook
 router.delete('/webhooks/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  deleteDvWebhook(parseInt(req.params.id));
+  deleteDvWebhook(parseIntParam(req.params.id));
   res.json({ ok: true });
 });
 
@@ -2090,7 +2098,7 @@ router.get('/webhooks/deliveries', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var filters = {
     event: req.query.event || undefined,
-    webhook_id: req.query.webhook_id ? parseInt(req.query.webhook_id) : undefined,
+    webhook_id: req.query.webhook_id ? parseIntParam(req.query.webhook_id) : undefined,
     error_only: req.query.error_only === 'true',
     limit: parseInt(req.query.limit) || 50,
     offset: parseInt(req.query.offset) || 0
@@ -2168,7 +2176,7 @@ router.get('/drones/jobs', function (req, res) {
 router.get('/drones/jobs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var job = getDroneJob(parseInt(req.params.id));
+  var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   res.json(job);
 });
@@ -2177,7 +2185,7 @@ router.get('/drones/jobs/:id', function (req, res) {
 router.put('/drones/jobs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var job = getDroneJob(parseInt(req.params.id));
+  var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   // Only the assigned drone, the requester, or an admin can update a job
   var isAdmin = req.headers['x-admin-key'] === ADMIN_KEY || !!getStudioUser(req);
@@ -2266,7 +2274,7 @@ router.put('/drones/jobs/:id', function (req, res) {
 // Cancel/delete drone job (admin only — works on any status)
 router.delete('/drones/jobs/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var job = getDroneJob(parseInt(req.params.id));
+  var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   updateDroneJob(job.id, { status: 'cancelled', completed_at: job.completed_at || new Date().toISOString() });
   emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id + ' (was: ' + job.status + ')', { job_id: job.id });
@@ -2422,7 +2430,7 @@ router.get('/approvals', function (req, res) {
 router.get('/approvals/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var approval = getApproval(parseInt(req.params.id));
+  var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
   try { approval.payload = JSON.parse(approval.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + approval.id + '):', e.message); }
   res.json(approval);
@@ -2431,7 +2439,7 @@ router.get('/approvals/:id', function (req, res) {
 // Approve or deny (admin only)
 router.put('/approvals/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var approval = getApproval(parseInt(req.params.id));
+  var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
   if (approval.status !== 'pending') return res.status(400).json({ error: 'Approval already ' + approval.status });
   var newStatus = req.body.status;
@@ -2451,7 +2459,7 @@ router.put('/approvals/:id', function (req, res) {
 router.put('/approvals/:id/executed', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var approval = getApproval(parseInt(req.params.id));
+  var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
   if (approval.status !== 'approved') return res.status(400).json({ error: 'Approval is ' + approval.status + ', not approved' });
   markApprovalExecuted(approval.id);
@@ -2465,7 +2473,7 @@ router.put('/approvals/:id/executed', function (req, res) {
 router.put('/approvals/:id/vote', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = req.headers['x-admin-key'] ? '__admin__' : 'studio_user';
-  var approval = getApproval(parseInt(req.params.id));
+  var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
   if (approval.status !== 'pending') return res.status(400).json({ error: 'Approval is already ' + approval.status });
 
@@ -2499,7 +2507,7 @@ router.put('/approvals/:id/vote', function (req, res) {
 router.get('/approvals/:id/votes', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(getApprovalVotes(parseInt(req.params.id)));
+  res.json(getApprovalVotes(parseIntParam(req.params.id)));
 });
 
 // ======== WORK ROUTING ========
