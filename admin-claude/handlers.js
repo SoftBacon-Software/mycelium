@@ -31,6 +31,8 @@ export async function handleEvent(event, data, agentId) {
   switch (event) {
     case 'request_created':
       return handleRequestCreated(data);
+    case 'message_sent':
+      return handleMessageSent(data);
     case 'bug_created':
       return handleBugCreated(data);
     case 'drone_job_exhausted':
@@ -41,6 +43,79 @@ export async function handleEvent(event, data, agentId) {
       // Log but don't process other events
       break;
   }
+}
+
+// ---- Handler: message_sent ----
+// Handles messages, directives, and requests sent TO admin-claude.
+// Directives MUST be responded to. Requests get helpful responses. Regular messages get acknowledged if actionable.
+
+async function handleMessageSent(data) {
+  if (!data.message_id) return;
+
+  // Fetch recent messages to find the one we got notified about
+  var msg;
+  try {
+    var msgs = await apiGet('/messages?limit=20&to_agent=' + encodeURIComponent(AGENT_ID));
+    msg = msgs.find(function (m) { return m.id === data.message_id || m.id === parseInt(data.message_id); });
+  } catch (err) {
+    console.error('[message] Failed to fetch messages:', err.message);
+  }
+
+  // Fall back to webhook data if we can't find the message
+  if (!msg) {
+    // Use webhook data directly — but we can't determine msg_type, so skip
+    console.log('[message] Could not find message #' + data.message_id + ' in recent messages — skipping');
+    return;
+  }
+
+  // Skip if already resolved
+  if (msg.resolved_at) return;
+
+  var isDirective = msg.msg_type === 'directive';
+  var isRequest = msg.msg_type === 'request';
+
+  if (!isDirective && !isRequest) return; // Skip regular messages and info
+
+  var fromAgent = msg.from_agent || data.from || 'unknown';
+  await setStatus((isDirective ? 'Responding to directive' : 'Responding to request') + ' from ' + fromAgent);
+
+  // Get network context for a better response
+  var ops;
+  try { ops = await apiGet('/admin/ops'); } catch (err) { ops = {}; }
+
+  var context = (isDirective ? 'DIRECTIVE' : 'Request') + ' from: ' + fromAgent + '\n' +
+    'Content: ' + msg.content + '\n' +
+    'Current unassigned tasks: ' + (ops.unassigned_tasks ? ops.unassigned_tasks.length : 0) + '\n' +
+    'Current open bugs: ' + (ops.unassigned_bugs ? ops.unassigned_bugs.length : 0) + '\n' +
+    'Failed drone jobs: ' + (ops.failed_drone_jobs ? ops.failed_drone_jobs.length : 0);
+
+  var prompt = isDirective
+    ? 'A human operator sent you a DIRECTIVE — this is a priority command that MUST be acted on. ' +
+      'Read the directive carefully and respond with what you will do or have done. Be specific and actionable. ' +
+      'If the directive requires actions you cannot take (like deploying code), say exactly what needs to happen and who should do it.'
+    : 'An agent sent a request that needs a response. Draft a helpful, concise response. ' +
+      'If they are asking for work, suggest available tasks or bugs they could claim. ' +
+      'If they are asking a question, answer directly. Be actionable, not vague.';
+
+  var response = await ask(prompt, context);
+
+  // Resolve the message and send follow-up
+  try {
+    await apiPut('/messages/' + msg.id + '/resolve', {
+      resolved_by: AGENT_ID,
+      response: response
+    });
+    await apiPost('/messages', {
+      from_agent: AGENT_ID,
+      to_agent: fromAgent,
+      content: response,
+      msg_type: 'message'
+    });
+    console.log('[message] Resolved ' + msg.msg_type + ' #' + msg.id + ' from ' + fromAgent + ': ' + response.substring(0, 100));
+  } catch (err) {
+    console.error('[message] Failed to resolve #' + msg.id + ':', err.message);
+  }
+  await resetStatus();
 }
 
 // ---- Handler: request_created ----
