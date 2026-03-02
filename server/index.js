@@ -108,6 +108,15 @@ if (fs.existsSync(dashboardPath)) {
   });
 }
 
+// ---- Global error handler ----
+// Catches unhandled errors from sync and async route handlers.
+// Returns generic 500 to clients (no stack trace leak).
+app.use(function (err, req, res, _next) {
+  console.error('[ERROR]', req.method, req.originalUrl, '-', err.stack || err.message || err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Internal server error' });
+});
+
 var server = app.listen(PORT, function () {
   console.log('Mycelium running on port ' + PORT + ' — mycelium.fyi');
 
