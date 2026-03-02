@@ -485,7 +485,7 @@ export async function checkGitHubPRs() {
 
         if (contextKey && contextKey.data) {
           var reviewData;
-          try { reviewData = JSON.parse(contextKey.data); } catch (e) { reviewData = {}; }
+          try { reviewData = JSON.parse(contextKey.data); } catch (e) { console.warn('[github] JSON parse failed for PR review context (pr: ' + pr.number + '):', e.message); reviewData = {}; }
           if (reviewData.reviewed) { console.log('[github] PR #' + pr.number + ' already reviewed — skipping'); continue; }
         }
 
