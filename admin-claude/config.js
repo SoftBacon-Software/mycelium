@@ -39,13 +39,15 @@ export var SAFE_ACTIONS = [
   'assign_bug',
   'send_message',
   'update_bug_severity',
-  'approve_low_risk'
+  'approve_low_risk',
+  'approve_medium_risk',
+  'merge_pr'
 ];
 
-// Actions that require human escalation
+// Actions that require human escalation (dashboard Approvals page)
 export var GATED_ACTIONS = [
-  'approve_medium_risk',
   'approve_high_risk',
+  'approve_critical_risk',
   'deploy',
   'delete_anything',
   'modify_agent_config'

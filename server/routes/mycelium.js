@@ -54,7 +54,7 @@ import {
   createDvEvent, listDvEvents,
   createDvMessage, createDvRequest, getDvMessage,
   acknowledgeDvMessage, resolveDvMessage, listPendingRequests,
-  listDvMessages, listDvThreads,
+  listDvMessages, listDvThreads, bulkDeleteMessages,
   getBootPayload, getDvOverview,
   createDvBug, getDvBug, listDvBugs, updateDvBug, countDvBugs,
   createDvPlan, getDvPlan, listDvPlans, updateDvPlan, deleteDvPlan,
@@ -945,6 +945,17 @@ router.get('/messages/threads', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listDvThreads(parseInt(req.query.limit) || 20));
+});
+
+// Admin-only bulk message cleanup
+router.delete('/messages/bulk', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var from = req.query.from;
+  var to = req.query.to;
+  var content_like = req.query.content_like;
+  if (!from && !to && !content_like) return res.status(400).json({ error: 'Specify at least one filter: from, to, content_like' });
+  var deleted = bulkDeleteMessages({ from: from, to: to, content_like: content_like });
+  res.json({ deleted: deleted });
 });
 
 // ======== PLANS ========
