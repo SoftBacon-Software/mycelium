@@ -264,8 +264,10 @@ export async function checkGitHubPRs() {
         continue;
       }
       var prs = await prsResponse.json();
+      console.log('[github] Found', prs.length, 'open PRs in', repo);
 
       for (var pr of prs) {
+        console.log('[github] Processing PR #' + pr.number + ': ' + pr.title);
         // Check if already reviewed via context keys
         var contextKey;
         try {
@@ -277,15 +279,17 @@ export async function checkGitHubPRs() {
         if (contextKey && contextKey.data) {
           var reviewData;
           try { reviewData = JSON.parse(contextKey.data); } catch (e) { reviewData = {}; }
-          if (reviewData.reviewed) continue; // Already reviewed
+          if (reviewData.reviewed) { console.log('[github] PR #' + pr.number + ' already reviewed — skipping'); continue; }
         }
 
         // Fetch the diff
+        console.log('[github] Fetching diff for PR #' + pr.number);
         var diffResponse = await fetch(pr.diff_url, {
           headers: { 'Authorization': 'token ' + GITHUB_TOKEN }
         });
-        if (!diffResponse.ok) continue;
+        if (!diffResponse.ok) { console.log('[github] Failed to fetch diff: HTTP ' + diffResponse.status); continue; }
         var diff = await diffResponse.text();
+        console.log('[github] Diff size:', diff.length, 'chars');
 
         // Check if UI-heavy (>50% tsx/css changes)
         var lines = diff.split('\n');
@@ -304,6 +308,7 @@ export async function checkGitHubPRs() {
           });
         } else {
           // Code-only: Claude reviews
+          console.log('[github] Calling Claude to review PR #' + pr.number);
           await setStatus('Reviewing PR #' + pr.number + ': ' + pr.title.substring(0, 40));
           var truncatedDiff = diff.substring(0, 15000); // Limit diff size for API
           var review = await ask(
