@@ -237,7 +237,12 @@ export default function (core) {
 
     // Check approval gate for publishing
     var gate = core.checkApprovalGate(req, who, 'social_publish');
-    if (gate && !gate.ok) return res.status(403).json(gate);
+    if (gate && !gate.ok) {
+      var gateMsg = gate.soft
+        ? 'Social publishing requires approval. Use studio_request_approval with action_type=social_publish first.'
+        : (gate.error || 'Publishing not permitted');
+      return core.apiError(res, 403, gateMsg, { approval_required: true });
+    }
 
     // Get account credentials
     var account = post.account_id ? db.getAccount(post.account_id) : null;
