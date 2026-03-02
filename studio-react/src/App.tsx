@@ -13,6 +13,8 @@ import AssetsPage from './pages/AssetsPage'
 import OperatorsPage from './pages/OperatorsPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import DronesPage from './pages/DronesPage'
+import ConceptsPage from './pages/ConceptsPage'
+import ContextPage from './pages/ContextPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -42,6 +44,8 @@ export default function App() {
           <Route path="operators" element={<OperatorsPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="drones" element={<DronesPage />} />
+          <Route path="concepts" element={<ConceptsPage />} />
+          <Route path="context" element={<ContextPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
