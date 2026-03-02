@@ -264,7 +264,7 @@ export default function (core) {
       var campaign = contact.campaign_id ? db.getCampaign(contact.campaign_id) : null;
       var config = campaign ? JSON.parse(campaign.config || '{}') : {};
       var templates = {};
-      try { templates = JSON.parse(campaign.templates || '{}'); } catch (e) { /* */ }
+      try { templates = JSON.parse(campaign.templates || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for campaign.templates (campaign: ' + (campaign && campaign.id) + '):', e.message); }
 
       var followupTemplate = templates.followup || { subject: 'Re: ' + contact.pitch_subject, body: '' };
       var firstName = contact.name ? contact.name.split(' ')[0] : '';
