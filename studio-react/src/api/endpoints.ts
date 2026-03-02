@@ -100,6 +100,10 @@ export function sendTeamChat(
 
 // Plans
 
+export function fetchPlan(id: string): Promise<Plan> {
+  return apiGet<Plan>(`/plans/${id}`);
+}
+
 export function createPlan(data: Partial<Plan>): Promise<Plan> {
   return apiPost<Plan>('/plans', data);
 }
@@ -148,7 +152,7 @@ export async function uploadAsset(id: string, file: File): Promise<Asset> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`/api/dioverse/assets/${id}/upload`, {
+  const res = await fetch(`/api/mycelium/assets/${id}/upload`, {
     method: 'POST',
     headers,
     body: formData,

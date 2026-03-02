@@ -1,15 +1,17 @@
-// Typed fetch wrapper for Mycelium Dioverse API
+// Typed fetch wrapper for Mycelium API
 
-const API_BASE = '/api/dioverse';
+const API_BASE = '/api/mycelium';
 const TOKEN_KEY = 'mycelium_token';
 
 export class ApiError extends Error {
+  status: number;
   constructor(
-    public status: number,
+    status: number,
     message: string,
   ) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
   }
 }
 

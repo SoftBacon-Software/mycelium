@@ -78,8 +78,8 @@ export default function AssetCard({ asset, onUpload, onDelete, onStatusChange, o
 
         {/* Meta row */}
         <div className="flex items-center gap-2 flex-wrap text-xs text-text-muted mt-auto">
-          {asset.game && (
-            <Badge variant="default">{asset.game}</Badge>
+          {asset.project_id && (
+            <Badge variant="default">{asset.project_id}</Badge>
           )}
           <span>by {asset.requested_by}</span>
           {asset.drone_job_id && (

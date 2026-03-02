@@ -1,9 +1,9 @@
-// Mycelium Dioverse API types
+// Mycelium API types
 
 export interface Agent {
   id: string;
   name: string;
-  game: string;
+  project_id: string;
   status: string;
   working_on: string | null;
   last_heartbeat: string;
@@ -15,7 +15,7 @@ export interface Event {
   id: string;
   type: string;
   agent: string;
-  game: string;
+  project_id: string;
   summary: string;
   data: string;
   created_at: string;
@@ -25,7 +25,7 @@ export interface Task {
   id: string;
   title: string;
   description: string;
-  game: string;
+  project_id: string;
   status: string;
   priority: string;
   assignee: string | null;
@@ -46,14 +46,13 @@ export interface Message {
   id: string;
   from_agent: string;
   to_agent: string;
-  game: string;
+  project_id: string;
   content: string;
   msg_type: string;
   status: string;
   created_at: string;
   metadata: Record<string, unknown> | null;
   thread_id: string | null;
-  project: string | null;
 }
 
 export interface TeamChat {
@@ -118,7 +117,7 @@ export interface Asset {
   type: string;
   prompt: string;
   status: string;
-  game: string;
+  project_id: string;
   requested_by: string;
   assigned_to: string | null;
   file_path: string | null;
@@ -133,7 +132,7 @@ export interface Bug {
   id: string;
   title: string;
   description: string;
-  game: string;
+  project_id: string;
   severity: string;
   status: string;
   category: string;
@@ -163,13 +162,14 @@ export interface Plan {
   id: string;
   title: string;
   description: string;
-  game: string;
+  project_id: string;
   status: string;
   priority: string;
   owner: string;
   created_at: string;
   updated_at: string;
   steps?: PlanStep[];
+  progress?: { total: number; completed: number; percent: number };
 }
 
 export interface Concept {
@@ -303,7 +303,6 @@ export interface Overview {
   context: ContextEntry[];
   context_keys: ContextKey[];
   projects: Project[];
-  games: Project[];
   approval_queue: Task[];
   pending_approvals: Approval[];
   pending_requests: Message[];

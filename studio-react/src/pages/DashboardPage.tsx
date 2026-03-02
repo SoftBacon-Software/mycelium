@@ -161,7 +161,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-text">Dashboard</h1>
-          <p className="text-sm text-text-muted mt-0.5">Mycelium Dioverse overview</p>
+          <p className="text-sm text-text-muted mt-0.5">Mycelium overview</p>
         </div>
         <button
           type="button"
@@ -305,7 +305,7 @@ export default function DashboardPage() {
                         <StatusDot status={agent.status as 'online' | 'offline' | 'busy'} />
                       </div>
                       <p className="text-xs text-text-muted font-mono truncate">
-                        {agent.id} / {agent.game}
+                        {agent.id} / {agent.project_id}
                       </p>
                     </div>
                   </div>

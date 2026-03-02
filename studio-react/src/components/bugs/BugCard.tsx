@@ -89,8 +89,8 @@ export default function BugCard({ bug, onClick }: BugCardProps) {
           <Badge variant={statusBadgeVariant[bug.status] ?? 'default'}>
             {bug.status.replace('_', ' ')}
           </Badge>
-          {bug.game && (
-            <Badge variant="muted">{bug.game}</Badge>
+          {bug.project_id && (
+            <Badge variant="muted">{bug.project_id}</Badge>
           )}
         </div>
 

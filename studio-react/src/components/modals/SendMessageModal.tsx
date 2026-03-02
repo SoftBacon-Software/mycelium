@@ -8,14 +8,14 @@ interface SendMessageModalProps {
   onClose: () => void
 }
 
-const GAME_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium', 'dioverse']
+const PROJECT_OPTIONS = ['willing-sacrifice', 'king-city', 'mycelium']
 const MSG_TYPES = ['message', 'request', 'directive']
 
 export default function SendMessageModal({ isOpen, onClose }: SendMessageModalProps) {
   const refresh = useDashboardStore((s) => s.refresh)
 
   const [msgType, setMsgType] = useState('message')
-  const [game, setGame] = useState('king-city')
+  const [projectId, setProjectId] = useState('king-city')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [content, setContent] = useState('')
@@ -25,7 +25,7 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
 
   function resetForm() {
     setMsgType('message')
-    setGame('king-city')
+    setProjectId('king-city')
     setFrom('')
     setTo('')
     setContent('')
@@ -49,7 +49,7 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
       await sendMessage({
         from_agent: from.trim(),
         to_agent: to.trim(),
-        game,
+        project_id: projectId,
         content: content.trim(),
         msg_type: msgType,
       })
@@ -58,7 +58,7 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
         await createTask({
           title: content.trim().slice(0, 80),
           description: content.trim(),
-          game,
+          project_id: projectId,
           assignee: to.trim(),
           status: 'open',
           priority: 'normal',
@@ -101,17 +101,17 @@ export default function SendMessageModal({ isOpen, onClose }: SendMessageModalPr
           </select>
         </div>
 
-        {/* Game */}
+        {/* Project */}
         <div>
           <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">
-            Game
+            Project
           </label>
           <select
-            value={game}
-            onChange={(e) => setGame(e.target.value)}
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
             className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
           >
-            {GAME_OPTIONS.map((g) => (
+            {PROJECT_OPTIONS.map((g) => (
               <option key={g} value={g}>
                 {g}
               </option>

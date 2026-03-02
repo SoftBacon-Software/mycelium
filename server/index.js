@@ -66,7 +66,6 @@ app.get('/setup-admin.ps1', function (req, res) {
 
 // ---- API routes ----
 app.use('/api/mycelium', myceliumRoutes);
-app.use('/api/dioverse', myceliumRoutes);  // backward compat alias
 
 // ---- Voice REST endpoints ----
 var voicePeers = new Map();

@@ -1,6 +1,6 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { createPlan, updatePlan, updatePlanStep } from '../api/endpoints'
+import { createPlan, updatePlan, updatePlanStep, fetchPlan } from '../api/endpoints'
 import type { Plan, PlanStep } from '../api/types'
 import PlanCard from '../components/plans/PlanCard'
 import StepChecklist from '../components/plans/StepChecklist'
@@ -15,13 +15,6 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'draft', label: 'Draft' },
 ]
-
-const statusBadgeVariant: Record<string, 'green' | 'blue' | 'accent' | 'muted' | 'default'> = {
-  active: 'green',
-  completed: 'blue',
-  draft: 'accent',
-  cancelled: 'muted',
-}
 
 const priorityBadgeVariant: Record<string, 'red' | 'accent' | 'green' | 'muted' | 'default'> = {
   critical: 'red',
@@ -50,7 +43,7 @@ interface CreatePlanModalProps {
 function CreatePlanModal({ onClose, onCreated }: CreatePlanModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [game, setGame] = useState('')
+  const [projectId, setProjectId] = useState('')
   const [priority, setPriority] = useState('medium')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -64,7 +57,7 @@ function CreatePlanModal({ onClose, onCreated }: CreatePlanModalProps) {
       await createPlan({
         title: title.trim(),
         description: description.trim(),
-        game: game.trim() || undefined,
+        project_id: projectId.trim() || undefined,
         priority,
         status: 'active',
       })
@@ -135,12 +128,12 @@ function CreatePlanModal({ onClose, onCreated }: CreatePlanModalProps) {
             <div className="flex items-center gap-4">
               <div className="flex-1">
                 <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">
-                  Game
+                  Project
                 </label>
                 <input
                   type="text"
-                  value={game}
-                  onChange={(e) => setGame(e.target.value)}
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
                   placeholder="e.g. king-city"
                   className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-ring"
                 />
@@ -248,9 +241,9 @@ function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailP
             </span>
           )}
 
-          {plan.game && (
+          {plan.project_id && (
             <span className="text-text-muted">
-              Game: <span className="text-text-dim">{plan.game}</span>
+              Project: <span className="text-text-dim">{plan.project_id}</span>
             </span>
           )}
         </div>
@@ -304,13 +297,13 @@ export default function PlansPage() {
   const refresh = useDashboardStore((s) => s.refresh)
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [gameFilter, setGameFilter] = useState<string>('all')
+  const [projectFilter, setProjectFilter] = useState<string>('all')
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
-  // Unique games
-  const games = useMemo(() => {
-    const set = new Set(plans.map((p) => p.game).filter(Boolean))
+  // Unique projects
+  const projects = useMemo(() => {
+    const set = new Set(plans.map((p) => p.project_id).filter(Boolean))
     return Array.from(set).sort()
   }, [plans])
 
@@ -320,19 +313,29 @@ export default function PlansPage() {
     if (statusFilter !== 'all') {
       result = result.filter((p) => p.status === statusFilter)
     }
-    if (gameFilter !== 'all') {
-      result = result.filter((p) => p.game === gameFilter)
+    if (projectFilter !== 'all') {
+      result = result.filter((p) => p.project_id === projectFilter)
     }
     return result.sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     )
-  }, [plans, statusFilter, gameFilter])
+  }, [plans, statusFilter, projectFilter])
 
-  // Selected plan (always get latest from store)
-  const selectedPlan = useMemo(
-    () => plans.find((p) => p.id === selectedPlanId) ?? null,
-    [plans, selectedPlanId],
-  )
+  // Selected plan — fetch full plan (with steps) from API
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
+  useEffect(() => {
+    if (!selectedPlanId) {
+      setSelectedPlan(null)
+      return
+    }
+    let cancelled = false
+    fetchPlan(selectedPlanId).then((plan) => {
+      if (!cancelled) setSelectedPlan(plan)
+    }).catch(() => {
+      if (!cancelled) setSelectedPlan(null)
+    })
+    return () => { cancelled = true }
+  }, [selectedPlanId, plans])
 
   // Handlers
   const handleStepUpdate = useCallback(
@@ -340,6 +343,9 @@ export default function PlansPage() {
       try {
         await updatePlanStep(planId, stepId, data)
         await refresh()
+        // Refetch full plan to update steps
+        const updated = await fetchPlan(planId)
+        setSelectedPlan(updated)
       } catch (err) {
         console.error('Failed to update step:', err)
       }
@@ -352,6 +358,9 @@ export default function PlansPage() {
       try {
         await updatePlan(planId, { status })
         await refresh()
+        // Refetch full plan
+        const updated = await fetchPlan(planId)
+        setSelectedPlan(updated)
       } catch (err) {
         console.error('Failed to update plan status:', err)
       }
@@ -390,15 +399,15 @@ export default function PlansPage() {
             ))}
           </div>
 
-          {/* Game filter */}
-          {games.length > 0 && (
+          {/* Project filter */}
+          {projects.length > 0 && (
             <select
-              value={gameFilter}
-              onChange={(e) => setGameFilter(e.target.value)}
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
               className="bg-surface-raised border border-border rounded-sm px-2.5 py-1 text-xs text-text-dim focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              <option value="all">All Games</option>
-              {games.map((g) => (
+              <option value="all">All Projects</option>
+              {projects.map((g) => (
                 <option key={g} value={g}>
                   {g}
                 </option>

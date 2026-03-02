@@ -69,6 +69,9 @@ export function initDB() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_channel ON dv_messages(channel_id)'); } catch (e) {}
 
+  // Migration: rename game -> project_id columns for enterprise-ready schema
+  migrateGameToProjectId();
+
   // Seed operators (if table is empty)
   var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
   if (opCount.c === 0) {
@@ -116,6 +119,57 @@ export function initDB() {
   console.log('Mycelium DB initialized at ' + DB_PATH);
 }
 
+// Migration: rename game -> project_id columns for enterprise-ready schema
+function migrateGameToProjectId() {
+  var tables = [
+    ['dv_agents', 'game', 'project_id'],
+    ['dv_tasks', 'game', 'project_id'],
+    ['dv_context', 'game', 'project_id'],
+    ['dv_assets', 'game', 'project_id'],
+    ['dv_events', 'game', 'project_id'],
+    ['dv_messages', 'game', 'project_id'],
+    ['dv_bugs', 'game', 'project_id'],
+    ['dv_plans', 'game', 'project_id'],
+    ['dv_approvals', 'project', 'project_id'],
+    ['dv_outreach_campaigns', 'project', 'project_id'],
+    ['dv_outreach_contacts', 'project', 'project_id'],
+  ];
+  for (var [table, oldCol, newCol] of tables) {
+    try {
+      var info = db.prepare("PRAGMA table_info(" + table + ")").all();
+      var hasOld = info.some(function(c) { return c.name === oldCol; });
+      var hasNew = info.some(function(c) { return c.name === newCol; });
+      if (hasOld && !hasNew) {
+        db.prepare("ALTER TABLE " + table + " RENAME COLUMN " + oldCol + " TO " + newCol).run();
+        console.log('[migration] Renamed ' + table + '.' + oldCol + ' -> ' + newCol);
+      }
+    } catch (e) {
+      console.error('[migration] Error renaming ' + table + '.' + oldCol + ':', e.message);
+    }
+  }
+  // Rename dv_games table to dv_projects
+  try {
+    var gamesTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='dv_games'").all();
+    if (gamesTables.length > 0) {
+      db.prepare("ALTER TABLE dv_games RENAME TO dv_projects").run();
+      console.log('[migration] Renamed table dv_games -> dv_projects');
+    }
+  } catch (e) {
+    console.error('[migration] Error renaming dv_games:', e.message);
+  }
+  // Rename game_facts to project_facts in outreach_campaigns
+  try {
+    var info = db.prepare("PRAGMA table_info(dv_outreach_campaigns)").all();
+    var hasOld = info.some(function(c) { return c.name === 'game_facts'; });
+    if (hasOld) {
+      db.prepare("ALTER TABLE dv_outreach_campaigns RENAME COLUMN game_facts TO project_facts").run();
+      console.log('[migration] Renamed dv_outreach_campaigns.game_facts -> project_facts');
+    }
+  } catch (e) {
+    console.error('[migration] Error renaming game_facts:', e.message);
+  }
+}
+
 // Prepared statement cache
 var _stmts = {};
 function stmt(key, sql) {
@@ -127,9 +181,9 @@ function stmt(key, sql) {
 
 // -- Agents --
 
-export function createAgent(id, name, game, apiKeyHash, capabilities) {
-  stmt('dvCreateAgent', `INSERT INTO dv_agents (id, name, game, api_key_hash, capabilities)
-    VALUES (?, ?, ?, ?, ?)`).run(id, name, game, apiKeyHash, capabilities || '[]');
+export function createAgent(id, name, projectId, apiKeyHash, capabilities) {
+  stmt('dvCreateAgent', `INSERT INTO dv_agents (id, name, project_id, api_key_hash, capabilities)
+    VALUES (?, ?, ?, ?, ?)`).run(id, name, projectId, apiKeyHash, capabilities || '[]');
 }
 
 export function getAgent(id) {
@@ -141,7 +195,7 @@ export function getAgentByKeyHash(apiKeyHash) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents2', 'SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAgents2', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
@@ -223,26 +277,26 @@ export function deleteInstanceConfig(key) {
   stmt('dvDeleteConfig', 'DELETE FROM dv_instance_config WHERE key = ?').run(key);
 }
 
-// -- Games --
+// -- Projects --
 
-export function createGame(id, name, description, repoUrl) {
-  stmt('dvCreateGame', `INSERT OR IGNORE INTO dv_games (id, name, description, repo_url)
+export function createProject(id, name, description, repoUrl) {
+  stmt('dvCreateProject', `INSERT OR IGNORE INTO dv_projects (id, name, description, repo_url)
     VALUES (?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '');
 }
 
-export function listGames() {
-  return stmt('dvListGames', 'SELECT * FROM dv_games ORDER BY created_at').all();
+export function listProjects() {
+  return stmt('dvListProjects', 'SELECT * FROM dv_projects ORDER BY created_at').all();
 }
 
-export function getGame(id) {
-  return stmt('dvGetGame', 'SELECT * FROM dv_games WHERE id = ?').get(id);
+export function getProject(id) {
+  return stmt('dvGetProject', 'SELECT * FROM dv_projects WHERE id = ?').get(id);
 }
 
 // -- Tasks --
 
-export function createDvTask(title, description, game, requester, priority, tags) {
-  var result = stmt('dvCreateTask', `INSERT INTO dv_tasks (title, description, game, requester, priority, tags)
-    VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(title, description || '', game || 'dioverse', requester, priority || 'normal', tags || '[]');
+export function createDvTask(title, description, projectId, requester, priority, tags) {
+  var result = stmt('dvCreateTask', `INSERT INTO dv_tasks (title, description, project_id, requester, priority, tags)
+    VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(title, description || '', projectId || '', requester, priority || 'normal', tags || '[]');
   return result.id;
 }
 
@@ -253,7 +307,7 @@ export function getDvTask(id) {
 export function listDvTasks(filters) {
   var where = ['1=1'];
   var params = [];
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.requester) { where.push('requester = ?'); params.push(filters.requester); }
@@ -356,25 +410,25 @@ export function deleteTaskComment(commentId) {
 
 // -- Context --
 
-export function getDvContext(game) {
-  return stmt('dvGetContext', 'SELECT * FROM dv_context WHERE game = ?').get(game);
+export function getDvContext(projectId) {
+  return stmt('dvGetContext', 'SELECT * FROM dv_context WHERE project_id = ?').get(projectId);
 }
 
 export function getAllDvContext() {
   return stmt('dvGetAllContext', 'SELECT * FROM dv_context ORDER BY updated_at DESC').all();
 }
 
-export function upsertDvContext(game, data, agentId) {
-  stmt('dvUpsertContext', `INSERT INTO dv_context (game, data, updated_by, updated_at)
+export function upsertDvContext(projectId, data, agentId) {
+  stmt('dvUpsertContext', `INSERT INTO dv_context (project_id, data, updated_by, updated_at)
     VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(game) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`).run(game, data, agentId);
+    ON CONFLICT(project_id) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`).run(projectId, data, agentId);
 }
 
 // -- Assets --
 
-export function createDvAsset(name, type, game, status, path, metadata, requester) {
-  var result = stmt('dvCreateAsset', `INSERT INTO dv_assets (name, type, game, status, path, metadata, requester)
-    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(name, type || 'sprite', game || 'shared', status || 'requested', path || '', metadata || '{}', requester || '');
+export function createDvAsset(name, type, projectId, status, assetPath, metadata, requester) {
+  var result = stmt('dvCreateAsset', `INSERT INTO dv_assets (name, type, project_id, status, path, metadata, requester)
+    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(name, type || 'sprite', projectId || 'shared', status || 'requested', assetPath || '', metadata || '{}', requester || '');
   return result.id;
 }
 
@@ -385,7 +439,7 @@ export function getDvAsset(id) {
 export function listDvAssets(filters) {
   var where = ['1=1'];
   var params = [];
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   var limit = filters.limit || 50;
@@ -416,9 +470,9 @@ export function listAssetsByDroneJob(droneJobId) {
 
 // -- Events --
 
-export function createDvEvent(type, agent, game, summary, data) {
-  var result = stmt('dvCreateEvent', `INSERT INTO dv_events (type, agent, game, summary, data)
-    VALUES (?, ?, ?, ?, ?) RETURNING id`).get(type, agent || '', game || null, summary || '', data || '{}');
+export function createDvEvent(type, agent, projectId, summary, data) {
+  var result = stmt('dvCreateEvent', `INSERT INTO dv_events (type, agent, project_id, summary, data)
+    VALUES (?, ?, ?, ?, ?) RETURNING id`).get(type, agent || '', projectId || null, summary || '', data || '{}');
   return result.id;
 }
 
@@ -426,7 +480,7 @@ export function listDvEvents(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.agent) { where.push('agent = ?'); params.push(filters.agent); }
   var limit = filters.limit || 50;
@@ -437,23 +491,23 @@ export function listDvEvents(filters) {
 
 // -- Messages --
 
-export function createDvMessage(fromAgent, toAgent, threadId, game, content, metadata, msgType, channelId) {
+export function createDvMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId) {
   if (msgType && msgType !== 'message') {
     var result = db.prepare(
-      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, msg_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-    ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', msgType, channelId || null);
+      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', msgType, channelId || null);
     return result.id;
   }
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}', channelId || null);
+    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', channelId || null);
   return result.id;
 }
 
-export function createDvRequest(fromAgent, toAgent, threadId, game, content, metadata) {
+export function createDvRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, game, content, metadata, msg_type, status) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending') RETURNING id"
-  ).get(fromAgent, toAgent || null, threadId || null, game || null, content, metadata || '{}');
+    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending') RETURNING id"
+  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}');
   return result.id;
 }
 
@@ -481,7 +535,7 @@ export function listDvMessages(filters) {
   if (filters.from_agent) { where.push('from_agent = ?'); params.push(filters.from_agent); }
   if (filters.to_agent) { where.push('(to_agent = ? OR to_agent IS NULL)'); params.push(filters.to_agent); }
   if (filters.thread_id) { where.push('thread_id = ?'); params.push(filters.thread_id); }
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
   if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
   var limit = filters.limit || 50;
@@ -545,12 +599,12 @@ export function deleteDvContextKey(namespace, key) {
   db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
 }
 
-// -- Dioverse Bugs --
+// -- Bugs --
 
-export function createDvBug(game, title, description, category, severity, reporter, assignee, diagnosticData) {
+export function createDvBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {
   var result = db.prepare(
-    "INSERT INTO dv_bugs (game, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(game || 'dioverse', title, description, category || 'other', severity || 'normal', reporter || 'admin', assignee || null, diagnosticData || null);
+    "INSERT INTO dv_bugs (project_id, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(projectId || '', title, description, category || 'other', severity || 'normal', reporter || 'admin', assignee || null, diagnosticData || null);
   return result.id;
 }
 
@@ -561,7 +615,7 @@ export function getDvBug(id) {
 export function listDvBugs(filters) {
   var where = ['1=1'];
   var params = [];
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.reporter) { where.push('reporter = ?'); params.push(filters.reporter); }
@@ -618,23 +672,20 @@ export function getBootPayload(agentId) {
   }
 
   var otherAgents = db.prepare(
-    "SELECT id, name, game, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? ORDER BY created_at"
+    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? ORDER BY created_at"
   ).all(agentId);
 
-  var gameContext = getDvContext(agent.game);
-  var contextKeys = listDvContextKeys(agent.game);
+  var projectContext = getDvContext(agent.project_id);
+  var contextKeys = listDvContextKeys(agent.project_id);
 
   var approvalQueue = listTasksNeedingApproval();
   var recentEvents = listDvEvents({ limit: 20 });
   var openBugs = listDvBugs({ status: 'open', limit: 20 });
 
-  // Active/draft plans for agent's game
-  var myPlans = listDvPlans({ game: agent.game, limit: 20 });
-  // Also include dioverse-scoped plans
-  var dioPlans = listDvPlans({ game: 'dioverse', limit: 20 });
-  var allPlans = myPlans.concat(dioPlans.filter(function (p) { return !myPlans.some(function (mp) { return mp.id === p.id; }); }));
+  // Active/draft plans for agent's project
+  var myPlans = listDvPlans({ project_id: agent.project_id, limit: 20 });
   // Enrich with full steps for active/draft plans
-  for (var pl of allPlans) {
+  for (var pl of myPlans) {
     if (pl.status === 'active' || pl.status === 'draft') {
       var full = getDvPlan(pl.id);
       if (full) pl.steps = full.steps;
@@ -662,13 +713,13 @@ export function getBootPayload(agentId) {
     pending_directives: pendingDirectives,
     asset_requests: assetRequests,
     other_agents: otherAgents,
-    game_context: gameContext,
+    project_context: projectContext,
     context_keys: contextKeys,
     approval_queue: approvalQueue,
     my_approvals: listPendingApprovalsByAgent(agentId),
     recent_events: recentEvents,
     open_bugs: openBugs,
-    plans: allPlans,
+    plans: myPlans,
     channels: myChannels,
     unread_counts: unreadMap,
     server_time: new Date().toISOString()
@@ -680,7 +731,7 @@ export function getBootPayload(agentId) {
 var _autoTaskFromAsset = null;
 
 export function initDioverseTransactions() {
-  _autoTaskFromAsset = db.transaction(function (assetId, game, requester) {
+  _autoTaskFromAsset = db.transaction(function (assetId, projectId, requester) {
     var agents = db.prepare("SELECT id FROM dv_agents WHERE capabilities LIKE '%assets%'").all();
     var assignee = agents.length > 0 ? agents[0].id : null;
 
@@ -689,8 +740,8 @@ export function initDioverseTransactions() {
 
     var taskId = createDvTask(
       'Generate asset: ' + asset.name,
-      'Auto-created from asset request #' + assetId + '. Type: ' + asset.type + '. Game: ' + game,
-      game,
+      'Auto-created from asset request #' + assetId + '. Type: ' + asset.type + '. Project: ' + projectId,
+      projectId,
       requester,
       'normal',
       JSON.stringify(['auto', 'assets'])
@@ -702,17 +753,17 @@ export function initDioverseTransactions() {
   });
 }
 
-export function autoTaskFromAsset(assetId, game, requester) {
+export function autoTaskFromAsset(assetId, projectId, requester) {
   if (!_autoTaskFromAsset) return null;
-  return _autoTaskFromAsset(assetId, game, requester);
+  return _autoTaskFromAsset(assetId, projectId, requester);
 }
 
 // -- Plans --
 
-export function createDvPlan(title, description, game, owner, priority, tags, createdBy) {
+export function createDvPlan(title, description, projectId, owner, priority, tags, createdBy) {
   var result = db.prepare(
-    "INSERT INTO dv_plans (title, description, game, owner, priority, tags, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(title, description || '', game || 'dioverse', owner || '', priority || 'normal', tags || '[]', createdBy || '');
+    "INSERT INTO dv_plans (title, description, project_id, owner, priority, tags, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(title, description || '', projectId || '', owner || '', priority || 'normal', tags || '[]', createdBy || '');
   return result.id;
 }
 
@@ -730,7 +781,7 @@ export function getDvPlan(id) {
 export function listDvPlans(filters) {
   var where = ['1=1'];
   var params = [];
-  if (filters.game) { where.push('game = ?'); params.push(filters.game); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.owner) { where.push('owner = ?'); params.push(filters.owner); }
   if (filters.exclude_status) { where.push('status != ?'); params.push(filters.exclude_status); }
@@ -761,7 +812,7 @@ export function updateDvPlan(id, fields) {
   if (fields.owner !== undefined) { sets.push('owner = ?'); values.push(fields.owner); }
   if (fields.priority !== undefined) { sets.push('priority = ?'); values.push(fields.priority); }
   if (fields.tags !== undefined) { sets.push('tags = ?'); values.push(typeof fields.tags === 'string' ? fields.tags : JSON.stringify(fields.tags)); }
-  if (fields.game !== undefined) { sets.push('game = ?'); values.push(fields.game); }
+  if (fields.project_id !== undefined) { sets.push('project_id = ?'); values.push(fields.project_id); }
   values.push(id);
   return db.prepare('UPDATE dv_plans SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
@@ -1255,7 +1306,7 @@ export function listDroneJobs(filters) {
 }
 
 export function listDrones() {
-  return db.prepare("SELECT id, name, game, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents WHERE game = 'drone' ORDER BY created_at").all();
+  return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents WHERE project_id = 'drone' ORDER BY created_at").all();
 }
 
 export function bulkCancelDroneJobs(statuses, olderThanDays) {
@@ -1324,16 +1375,16 @@ export function getProjectConcepts(projectId) {
 }
 
 export function getConceptProjects(conceptId) {
-  return stmt('dvGetConceptProjects', `SELECT g.*, pc.linked_at, pc.linked_by
-    FROM dv_games g JOIN dv_project_concepts pc ON g.id = pc.project_id
-    WHERE pc.concept_id = ? ORDER BY g.name`).all(conceptId);
+  return stmt('dvGetConceptProjects', `SELECT p.*, pc.linked_at, pc.linked_by
+    FROM dv_projects p JOIN dv_project_concepts pc ON p.id = pc.project_id
+    WHERE pc.concept_id = ? ORDER BY p.name`).all(conceptId);
 }
 
-// -- Dioverse Hub init (seed default games + admin user) --
+// -- Dioverse Hub init (seed default projects + admin user) --
 
 export function initDioverse() {
-  createGame('willing-sacrifice', 'Willing Sacrifice', 'Autobattler RPG where Dio is the arena master');
-  createGame('king-city', 'King City', 'Zombie survival town builder where Dio appears as a chibi narrator');
+  createProject('willing-sacrifice', 'Willing Sacrifice', 'Autobattler RPG where Dio is the arena master');
+  createProject('king-city', 'King City', 'Zombie survival town builder where Dio appears as a chibi narrator');
 }
 
 // -- Dioverse Hub admin overview --
@@ -1343,10 +1394,10 @@ export function initDioverse() {
 var GATED_ACTIONS = ['deploy', 'outreach_send', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
 export { GATED_ACTIONS };
 
-export function createApproval(actionType, requestedBy, title, payload, project, riskTier, requiredApprovals) {
+export function createApproval(actionType, requestedBy, title, payload, projectId, riskTier, requiredApprovals) {
   var result = stmt('dvCreateApproval2',
-    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), project || 'mycelium', riskTier || 'medium', requiredApprovals || 1);
+    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), projectId || 'mycelium', riskTier || 'medium', requiredApprovals || 1);
   return result.id;
 }
 
@@ -1359,7 +1410,7 @@ export function listApprovals(filters) {
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.action_type) { where.push('action_type = ?'); params.push(filters.action_type); }
   if (filters.requested_by) { where.push('requested_by = ?'); params.push(filters.requested_by); }
-  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   var limit = filters.limit || 50;
   params.push(limit);
   return db.prepare('SELECT * FROM dv_approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
@@ -1456,7 +1507,7 @@ export function getDvOverview() {
   var messages = listDvMessages({ limit: 30 });
   var context = getAllDvContext();
   var contextKeys = listDvContextKeys();
-  var games = listGames();
+  var projects = listProjects();
   var approvalQueue = listTasksNeedingApproval();
   var pendingRequests = db.prepare(
     "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 20"
@@ -1477,8 +1528,7 @@ export function getDvOverview() {
     team_chat: teamChat,
     context: context,
     context_keys: contextKeys,
-    projects: games,
-    games: games,
+    projects: projects,
     approval_queue: approvalQueue,
     pending_approvals: listApprovals({ status: 'pending', limit: 50 }),
     pending_requests: pendingRequests,
@@ -1507,9 +1557,9 @@ export function getDvOverview() {
 
 // -- Outreach Campaigns --
 
-export function createOutreachCampaign(project, name, personaPrompt, gameFacts, templates, config, createdBy) {
-  var result = stmt('orCreateCampaign', `INSERT INTO dv_outreach_campaigns (project, name, persona_prompt, game_facts, templates, config, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(project, name, personaPrompt || '', gameFacts || '', templates || '{}', config || '{}', createdBy || '');
+export function createOutreachCampaign(projectId, name, personaPrompt, projectFacts, templates, config, createdBy) {
+  var result = stmt('orCreateCampaign', `INSERT INTO dv_outreach_campaigns (project_id, name, persona_prompt, project_facts, templates, config, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(projectId, name, personaPrompt || '', projectFacts || '', templates || '{}', config || '{}', createdBy || '');
   return result.id;
 }
 
@@ -1519,7 +1569,7 @@ export function getOutreachCampaign(id) {
 
 export function listOutreachCampaigns(filters) {
   var where = ['1=1']; var params = [];
-  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   params.push(filters.limit || 50);
   return db.prepare('SELECT * FROM dv_outreach_campaigns WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
@@ -1527,7 +1577,7 @@ export function listOutreachCampaigns(filters) {
 
 export function updateOutreachCampaign(id, fields) {
   var sets = ["updated_at = datetime('now')"]; var values = [];
-  for (var key of ['name', 'persona_prompt', 'game_facts', 'templates', 'config', 'status']) {
+  for (var key of ['name', 'persona_prompt', 'project_facts', 'templates', 'config', 'status']) {
     if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
   }
   values.push(id);
@@ -1538,9 +1588,9 @@ export function updateOutreachCampaign(id, fields) {
 
 export function createOutreachContact(fields) {
   var result = db.prepare(`INSERT INTO dv_outreach_contacts
-    (project, campaign_id, type, name, email, outlet, tier, archetype, subscriber_count, status, last_content, notes, metadata, created_by)
+    (project_id, campaign_id, type, name, email, outlet, tier, archetype, subscriber_count, status, last_content, notes, metadata, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(
-    fields.project, fields.campaign_id || null, fields.type || 'creator', fields.name,
+    fields.project_id, fields.campaign_id || null, fields.type || 'creator', fields.name,
     fields.email || '', fields.outlet || '', fields.tier || '', fields.archetype || '',
     fields.subscriber_count || 0, fields.status || 'discovered', fields.last_content || '',
     fields.notes || '', fields.metadata || '{}', fields.created_by || ''
@@ -1554,7 +1604,7 @@ export function getOutreachContact(id) {
 
 export function listOutreachContacts(filters) {
   var where = ['1=1']; var params = [];
-  if (filters.project) { where.push('project = ?'); params.push(filters.project); }
+  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.campaign_id) { where.push('campaign_id = ?'); params.push(filters.campaign_id); }
@@ -1580,17 +1630,17 @@ export function deleteOutreachContact(id) {
   return db.prepare('DELETE FROM dv_outreach_contacts WHERE id = ?').run(id);
 }
 
-export function countOutreachContacts(project) {
+export function countOutreachContacts(projectId) {
   var rows = db.prepare(
-    'SELECT status, COUNT(*) as count FROM dv_outreach_contacts WHERE project = ? GROUP BY status'
-  ).all(project);
+    'SELECT status, COUNT(*) as count FROM dv_outreach_contacts WHERE project_id = ? GROUP BY status'
+  ).all(projectId);
   var counts = {};
   for (var r of rows) counts[r.status] = r.count;
   return counts;
 }
 
-export function findOutreachContactByEmail(project, email) {
-  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE project = ? AND email = ?').get(project, email);
+export function findOutreachContactByEmail(projectId, email) {
+  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE project_id = ? AND email = ?').get(projectId, email);
 }
 
 // ======== AGENT SAVEPOINTS ========

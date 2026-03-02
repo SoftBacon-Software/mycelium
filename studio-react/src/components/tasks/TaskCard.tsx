@@ -65,8 +65,8 @@ export default function TaskCard({ task, onClick }: TaskCardProps) {
         {needsApprovalBadge && (
           <Badge variant="red">approval</Badge>
         )}
-        {task.game && (
-          <Badge variant="muted">{task.game}</Badge>
+        {task.project_id && (
+          <Badge variant="muted">{task.project_id}</Badge>
         )}
         {tags.slice(0, 2).map((tag) => (
           <Badge key={tag} variant="blue">{tag}</Badge>
