@@ -581,6 +581,207 @@ html, body {
   font-size: 14px;
 }
 
+/* ---- WORK TAB ---- */
+.work-subtabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  border: 1px solid rgba(168, 147, 120, 0.08);
+}
+.work-subtab {
+  flex: 1;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+.work-subtab.active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+.work-subtab .subtab-count {
+  display: inline-block;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  font-size: 10px;
+  min-width: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+}
+.work-subtab.active .subtab-count {
+  background: rgba(0,0,0,0.25);
+}
+.work-panel { display: none; }
+.work-panel.active { display: block; }
+
+/* Task cards */
+.task-card {
+  background: var(--surface);
+  border: 1px solid rgba(168, 147, 120, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  transition: all 0.2s;
+}
+.task-card:active { background: rgba(168, 147, 120, 0.04); }
+.task-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.task-priority {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.task-priority.high, .task-priority.urgent { background: var(--glow-red); color: var(--red); }
+.task-priority.medium { background: var(--glow-accent); color: var(--accent); }
+.task-priority.low { background: rgba(168, 147, 120, 0.1); color: var(--text-muted); }
+.task-status-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.task-status-badge.open { background: rgba(168, 147, 120, 0.1); color: var(--text-muted); }
+.task-status-badge.in_progress { background: var(--glow-accent); color: var(--accent); }
+.task-status-badge.review { background: rgba(155, 126, 171, 0.15); color: var(--purple); }
+.task-status-badge.done { background: var(--glow-green); color: var(--green); }
+.task-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.35;
+}
+.task-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+.task-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.task-action-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(168, 147, 120, 0.12);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.task-action-btn:active { background: var(--surface-hover); }
+.task-action-btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+.task-detail {
+  display: none;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(168, 147, 120, 0.06);
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.task-detail.visible { display: block; }
+
+/* Bug cards */
+.bug-card {
+  background: var(--surface);
+  border: 1px solid rgba(168, 147, 120, 0.06);
+  border-left: 3px solid var(--red);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.bug-card:active { background: rgba(168, 147, 120, 0.04); }
+.bug-severity {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.bug-severity.critical { background: var(--glow-red); color: var(--red); }
+.bug-severity.high { background: rgba(196, 91, 62, 0.12); color: #D97042; }
+.bug-severity.normal { background: var(--glow-accent); color: var(--accent); }
+.bug-severity.low { background: rgba(168, 147, 120, 0.1); color: var(--text-muted); }
+
+/* Approval cards */
+.approval-card {
+  background: var(--surface);
+  border: 1px solid rgba(168, 147, 120, 0.06);
+  border-left: 3px solid var(--amber);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.approval-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.approval-btn {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.approval-btn:active { opacity: 0.7; }
+.approval-btn.approve { background: var(--green); color: #fff; }
+.approval-btn.deny { background: var(--red); color: #fff; }
+
+/* Request cards */
+.request-card {
+  background: var(--surface);
+  border: 1px solid rgba(168, 147, 120, 0.06);
+  border-left: 3px solid var(--purple);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.request-resolve-input {
+  width: 100%;
+  margin-top: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(168, 147, 120, 0.1);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+}
+.request-resolve-input:focus { border-color: var(--accent); }
+
 /* ---- VOICE TAB ---- */
 .voice-hero {
   text-align: center;
@@ -757,6 +958,18 @@ html, body {
       </div>
     </div>
 
+    <!-- WORK TAB -->
+    <div class="tab-panel" id="panel-work">
+      <div class="work-subtabs">
+        <div class="work-subtab active" data-work="tasks">Tasks <span class="subtab-count" id="work-tasks-count">0</span></div>
+        <div class="work-subtab" data-work="bugs">Bugs <span class="subtab-count" id="work-bugs-count">0</span></div>
+        <div class="work-subtab" data-work="approvals">Approvals <span class="subtab-count" id="work-approvals-count">0</span></div>
+      </div>
+      <div class="work-panel active" id="work-tasks"></div>
+      <div class="work-panel" id="work-bugs"></div>
+      <div class="work-panel" id="work-approvals"></div>
+    </div>
+
     <!-- VOICE TAB -->
     <div class="tab-panel" id="panel-voice">
       <div class="voice-hero">
@@ -777,6 +990,11 @@ html, body {
       <span class="tab-icon">&#x1F916;</span>
       Agents
     </div>
+    <div class="tab-item" data-tab="work">
+      <span class="tab-icon">&#x1F4CB;</span>
+      Work
+      <span class="tab-badge" id="work-badge" style="display:none"></span>
+    </div>
     <div class="tab-item" data-tab="chat">
       <span class="tab-icon">&#x1F4AC;</span>
       Chat
@@ -796,6 +1014,7 @@ html, body {
 
   var API_BASE = '/api/dioverse';
   var authToken = sessionStorage.getItem('mycelium_token');
+  var currentUser = null;
   var pollTimer = null;
   var lastData = null;
 
@@ -906,6 +1125,7 @@ html, body {
       return r.json();
     }).then(function (data) {
       authToken = data.token;
+      currentUser = data.user || null;
       sessionStorage.setItem('mycelium_token', authToken);
       showApp();
     }).catch(function (err) {
@@ -956,6 +1176,17 @@ html, body {
     });
   });
 
+  // Work subtabs
+  document.querySelectorAll('.work-subtab').forEach(function (st) {
+    st.addEventListener('click', function () {
+      document.querySelectorAll('.work-subtab').forEach(function (s) { s.classList.remove('active'); });
+      st.classList.add('active');
+      var target = st.getAttribute('data-work');
+      document.querySelectorAll('.work-panel').forEach(function (p) { p.classList.remove('active'); });
+      document.getElementById('work-' + target).classList.add('active');
+    });
+  });
+
   // ---- Refresh ----
   document.getElementById('btn-refresh').addEventListener('click', function () {
     fetchOverview();
@@ -989,6 +1220,9 @@ html, body {
     renderTeamChat(data.team_chat);
     renderMessages(data.messages);
     updateAgentSelector(data.agents);
+    renderTasks(data.tasks);
+    renderBugs(data.bugs);
+    renderApprovals(data.pending_approvals, data.messages);
   }
 
   // ---- Stats ----
@@ -996,15 +1230,16 @@ html, body {
     var c = document.getElementById('stats-row');
     var t = data.tasks || {};
     var openTasks = (t.open || []).length + (t.in_progress || []).length + (t.review || []).length;
-    var approvals = (data.approval_queue || []).length;
+    var approvals = (data.pending_approvals || []).filter(function (a) { return a.status === 'pending'; }).length;
+    var openBugs = (data.bugs || []).filter(function (b) { return b.status === 'open' || b.status === 'in_progress'; }).length;
     var msgs = (data.messages || []).filter(function (m) {
       return m.msg_type === 'request' && m.status !== 'completed';
     }).length;
     clearEl(c);
     [
       { val: openTasks, label: 'Tasks' },
-      { val: approvals, label: 'Approvals' },
-      { val: msgs, label: 'Requests' }
+      { val: openBugs, label: 'Bugs' },
+      { val: approvals + msgs, label: 'Actions' }
     ].forEach(function (s) {
       var card = el('div', { className: 'stat-card' }, [
         el('div', { className: 'stat-val', textContent: String(s.val) }),
@@ -1078,6 +1313,281 @@ html, body {
       item.appendChild(el('span', { className: 'event-time', textContent: timeAgo(ev.created_at) }));
       c.appendChild(item);
     });
+  }
+
+  // ---- Tasks ----
+  function apiPut(path, body, cb) {
+    var h = authHeaders();
+    h['Content-Type'] = 'application/json';
+    fetch(API_BASE + path, { method: 'PUT', headers: h, body: JSON.stringify(body) })
+      .then(function (r) {
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || r.status); });
+        return r.json();
+      })
+      .then(function (d) { cb(null, d); })
+      .catch(function (e) { cb(e); });
+  }
+
+  var expandedTasks = {};
+
+  function renderTasks(tasks) {
+    var c = document.getElementById('work-tasks');
+    var countEl = document.getElementById('work-tasks-count');
+    clearEl(c);
+    if (!tasks) { countEl.textContent = '0'; c.appendChild(el('div', { className: 'empty-state', textContent: 'No tasks' })); return; }
+
+    // Flatten task groups
+    var all = [];
+    var statusOrder = ['in_progress', 'open', 'review', 'done'];
+    statusOrder.forEach(function (status) {
+      var list = tasks[status] || [];
+      list.forEach(function (t) { t._status = status; all.push(t); });
+    });
+
+    var active = all.filter(function (t) { return t._status !== 'done'; });
+    countEl.textContent = String(active.length);
+
+    // Update badge
+    var badge = document.getElementById('work-badge');
+    var totalActive = active.length;
+    if (totalActive > 0) { badge.textContent = totalActive; badge.style.display = ''; }
+    else { badge.style.display = 'none'; }
+
+    if (!all.length) { c.appendChild(el('div', { className: 'empty-state', textContent: 'No tasks' })); return; }
+
+    // Only show non-done tasks by default, plus last 5 done
+    var doneList = all.filter(function (t) { return t._status === 'done'; });
+    var visibleDone = doneList.slice(0, 5);
+    var visible = active.concat(visibleDone);
+
+    visible.forEach(function (t) {
+      var card = el('div', { className: 'task-card' });
+
+      var header = el('div', { className: 'task-card-header' });
+      if (t.priority) header.appendChild(el('span', { className: 'task-priority ' + t.priority, textContent: t.priority }));
+      header.appendChild(el('span', { className: 'task-status-badge ' + t._status, textContent: t._status.replace('_', ' ') }));
+      card.appendChild(header);
+
+      var title = el('div', { className: 'task-title', textContent: t.title || t.description || 'Untitled' });
+      title.addEventListener('click', function () {
+        expandedTasks[t.id] = !expandedTasks[t.id];
+        var detail = card.querySelector('.task-detail');
+        if (detail) detail.classList.toggle('visible', !!expandedTasks[t.id]);
+      });
+      card.appendChild(title);
+
+      var meta = el('div', { className: 'task-meta' });
+      if (t.assignee) meta.appendChild(el('span', { textContent: t.assignee }));
+      if (t.game) meta.appendChild(el('span', { textContent: t.game }));
+      meta.appendChild(el('span', { textContent: '#' + t.id }));
+      card.appendChild(meta);
+
+      // Detail section (expandable)
+      if (t.description && t.description !== t.title) {
+        var detail = el('div', { className: 'task-detail' + (expandedTasks[t.id] ? ' visible' : ''), textContent: t.description });
+        card.appendChild(detail);
+      }
+
+      // Action buttons
+      if (t._status !== 'done') {
+        var actions = el('div', { className: 'task-actions' });
+        var nextStatuses = {
+          'open': [{ label: 'Start', status: 'in_progress', primary: true }],
+          'in_progress': [{ label: 'Review', status: 'review' }, { label: 'Done', status: 'done', primary: true }],
+          'review': [{ label: 'Done', status: 'done', primary: true }, { label: 'Reopen', status: 'in_progress' }]
+        };
+        var available = nextStatuses[t._status] || [];
+        available.forEach(function (a) {
+          var btn = el('button', { className: 'task-action-btn' + (a.primary ? ' primary' : ''), textContent: a.label });
+          btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            btn.textContent = '...';
+            btn.disabled = true;
+            apiPut('/tasks/' + t.id, { status: a.status }, function (err) {
+              if (err) { btn.textContent = 'Error'; return; }
+              fetchOverview();
+            });
+          });
+          actions.appendChild(btn);
+        });
+        card.appendChild(actions);
+      }
+
+      c.appendChild(card);
+    });
+  }
+
+  // ---- Bugs ----
+  function renderBugs(bugs) {
+    var c = document.getElementById('work-bugs');
+    var countEl = document.getElementById('work-bugs-count');
+    clearEl(c);
+    if (!bugs || !bugs.length) { countEl.textContent = '0'; c.appendChild(el('div', { className: 'empty-state', textContent: 'No bugs' })); return; }
+
+    var open = bugs.filter(function (b) { return b.status === 'open' || b.status === 'in_progress'; });
+    countEl.textContent = String(open.length);
+
+    // Show open/in_progress first, then last 3 fixed
+    var fixed = bugs.filter(function (b) { return b.status !== 'open' && b.status !== 'in_progress'; }).slice(0, 3);
+    var visible = open.concat(fixed);
+
+    visible.forEach(function (b) {
+      var card = el('div', { className: 'bug-card' });
+
+      var header = el('div', { className: 'task-card-header' });
+      header.appendChild(el('span', { className: 'bug-severity ' + (b.severity || 'normal'), textContent: b.severity || 'normal' }));
+      if (b.category) header.appendChild(el('span', { className: 'task-status-badge open', textContent: b.category }));
+      header.appendChild(el('span', { className: 'task-status-badge ' + (b.status || 'open'), textContent: b.status || 'open' }));
+      card.appendChild(header);
+
+      card.appendChild(el('div', { className: 'task-title', textContent: b.title || 'Untitled bug' }));
+
+      var meta = el('div', { className: 'task-meta' });
+      if (b.assignee) meta.appendChild(el('span', { textContent: b.assignee }));
+      if (b.reported_by) meta.appendChild(el('span', { textContent: 'by ' + b.reported_by }));
+      meta.appendChild(el('span', { textContent: '#' + b.id }));
+      card.appendChild(meta);
+
+      if (b.description) {
+        var desc = el('div', { className: 'task-detail', textContent: b.description });
+        card.addEventListener('click', function () { desc.classList.toggle('visible'); });
+        card.appendChild(desc);
+      }
+
+      // Actions for open bugs
+      if (b.status === 'open' || b.status === 'in_progress') {
+        var actions = el('div', { className: 'task-actions' });
+        if (b.status === 'open') {
+          var claimBtn = el('button', { className: 'task-action-btn primary', textContent: 'Claim' });
+          claimBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            claimBtn.textContent = '...';
+            apiPut('/bugs/' + b.id, { status: 'in_progress' }, function (err) {
+              if (err) { claimBtn.textContent = 'Error'; return; }
+              fetchOverview();
+            });
+          });
+          actions.appendChild(claimBtn);
+        }
+        var fixBtn = el('button', { className: 'task-action-btn' + (b.status === 'in_progress' ? ' primary' : ''), textContent: 'Fixed' });
+        fixBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          fixBtn.textContent = '...';
+          apiPut('/bugs/' + b.id, { status: 'fixed' }, function (err) {
+            if (err) { fixBtn.textContent = 'Error'; return; }
+            fetchOverview();
+          });
+        });
+        actions.appendChild(fixBtn);
+        card.appendChild(actions);
+      }
+
+      c.appendChild(card);
+    });
+  }
+
+  // ---- Approvals & Requests ----
+  function renderApprovals(approvals, messages) {
+    var c = document.getElementById('work-approvals');
+    var countEl = document.getElementById('work-approvals-count');
+    clearEl(c);
+
+    var pendingApprovals = (approvals || []).filter(function (a) { return a.status === 'pending'; });
+    var pendingRequests = (messages || []).filter(function (m) { return m.msg_type === 'request' && m.status !== 'completed'; });
+    var total = pendingApprovals.length + pendingRequests.length;
+    countEl.textContent = String(total);
+
+    if (total === 0) {
+      c.appendChild(el('div', { className: 'empty-state', textContent: 'No pending approvals or requests' }));
+      return;
+    }
+
+    // Approvals
+    if (pendingApprovals.length > 0) {
+      c.appendChild(el('div', { className: 'section-label', textContent: 'Approvals' }));
+      pendingApprovals.forEach(function (a) {
+        var card = el('div', { className: 'approval-card' });
+
+        var header = el('div', { className: 'task-card-header' });
+        header.appendChild(el('span', { className: 'task-priority high', textContent: a.action_type || 'action' }));
+        header.appendChild(el('span', { className: 'task-title', textContent: a.title || 'Approval needed' }));
+        card.appendChild(header);
+
+        var meta = el('div', { className: 'task-meta' });
+        if (a.requested_by) meta.appendChild(el('span', { textContent: 'from ' + a.requested_by }));
+        meta.appendChild(el('span', { textContent: timeAgo(a.created_at) }));
+        card.appendChild(meta);
+
+        if (a.payload) {
+          var payloadText = a.payload;
+          try { payloadText = JSON.stringify(JSON.parse(a.payload), null, 2); } catch (e) {}
+          var desc = el('div', { className: 'task-detail', textContent: payloadText });
+          card.addEventListener('click', function () { desc.classList.toggle('visible'); });
+          card.appendChild(desc);
+        }
+
+        var btns = el('div', { className: 'approval-btns' });
+        var approveBtn = el('button', { className: 'approval-btn approve', textContent: 'Approve' });
+        approveBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          approveBtn.textContent = '...';
+          apiPut('/approvals/' + a.id + '/vote', { vote: 'approve' }, function (err) {
+            if (err) { approveBtn.textContent = 'Error'; return; }
+            fetchOverview();
+          });
+        });
+        btns.appendChild(approveBtn);
+        var denyBtn = el('button', { className: 'approval-btn deny', textContent: 'Deny' });
+        denyBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          denyBtn.textContent = '...';
+          apiPut('/approvals/' + a.id + '/vote', { vote: 'deny' }, function (err) {
+            if (err) { denyBtn.textContent = 'Error'; return; }
+            fetchOverview();
+          });
+        });
+        btns.appendChild(denyBtn);
+        card.appendChild(btns);
+
+        c.appendChild(card);
+      });
+    }
+
+    // Pending requests
+    if (pendingRequests.length > 0) {
+      c.appendChild(el('div', { className: 'section-label', textContent: 'Pending Requests' }));
+      pendingRequests.forEach(function (m) {
+        var card = el('div', { className: 'request-card' });
+
+        card.appendChild(el('div', { className: 'task-title', textContent: m.content }));
+
+        var meta = el('div', { className: 'task-meta' });
+        if (m.from_agent) meta.appendChild(el('span', { textContent: 'from ' + m.from_agent }));
+        if (m.to_agent) meta.appendChild(el('span', { textContent: 'to ' + m.to_agent }));
+        meta.appendChild(el('span', { textContent: timeAgo(m.created_at) }));
+        card.appendChild(meta);
+
+        var input = el('input', { className: 'request-resolve-input', type: 'text', placeholder: 'Response...' });
+        card.appendChild(input);
+
+        var actions = el('div', { className: 'task-actions' });
+        var resolveBtn = el('button', { className: 'task-action-btn primary', textContent: 'Resolve' });
+        resolveBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var response = input.value.trim();
+          if (!response) { input.style.borderColor = 'var(--red)'; return; }
+          resolveBtn.textContent = '...';
+          apiPut('/messages/' + m.id + '/resolve', { response: response }, function (err) {
+            if (err) { resolveBtn.textContent = 'Error'; return; }
+            fetchOverview();
+          });
+        });
+        actions.appendChild(resolveBtn);
+        card.appendChild(actions);
+
+        c.appendChild(card);
+      });
+    }
   }
 
   // ---- Team Chat ----
