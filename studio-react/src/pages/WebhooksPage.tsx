@@ -1,12 +1,19 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { Fragment, useEffect, useState, useMemo, useCallback } from 'react'
 import { fetchWebhookDeliveries } from '../api/endpoints'
 import type { WebhookDelivery } from '../api/types'
 import Badge from '../components/shared/Badge'
 
 const PAGE_SIZE = 50
 
+function parseTimestamp(dateStr: string): number {
+  if (dateStr.includes('T')) return new Date(dateStr).getTime()
+  return new Date(dateStr.replace(' ', 'T') + 'Z').getTime()
+}
+
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr + 'Z').getTime()
+  const ts = parseTimestamp(dateStr)
+  if (isNaN(ts)) return '-'
+  const diff = Date.now() - ts
   if (diff < 60000) return 'just now'
   if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
   if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago'
@@ -166,9 +173,8 @@ export default function WebhooksPage() {
               </tr>
             )}
             {deliveries.map((d) => (
-              <>
+              <Fragment key={d.id}>
                 <tr
-                  key={d.id}
                   onClick={() => setExpandedId(expandedId === d.id ? null : d.id)}
                   className="border-b border-border/50 cursor-pointer hover:bg-surface-raised/50 transition-colors"
                 >
@@ -219,13 +225,13 @@ export default function WebhooksPage() {
                         <div className="flex items-center gap-4 text-xs text-text-muted">
                           <span>Webhook ID: <span className="font-mono text-text-dim">{d.webhook_id}</span></span>
                           <span>Delivery ID: <span className="font-mono text-text-dim">{d.id}</span></span>
-                          <span>{new Date(d.created_at + 'Z').toLocaleString()}</span>
+                          <span>{new Date(parseTimestamp(d.created_at)).toLocaleString()}</span>
                         </div>
                       </div>
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
         </table>
