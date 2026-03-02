@@ -86,7 +86,8 @@ import {
   autoCreateEntityChannel, getOrCreateDmChannel,
   createSavepoint, getLatestSavepoint, getSavepointHistory,
   updateSavepointNotes, computeSavepointDiff, pruneSavepoints,
-  listPluginRecords, getPluginRecord, updatePluginEnabled, getDB
+  listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
+  getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
 
@@ -261,6 +262,52 @@ function checkApprovalGate(req, who, actionType) {
   return { ok: true, approval: approval };
 }
 
+// ---- Auto-dispatch: push work to idle agents ----
+function dispatchWorkToIdleAgents(triggerContext) {
+  var idleAgents = getIdleAgents();
+  if (idleAgents.length === 0) return [];
+
+  var dispatched = [];
+  var claimedTaskIds = [];
+
+  for (var agent of idleAgents) {
+    // Skip if agent already has assigned open/in_progress tasks
+    var agentTasks = listDvTasks({ assignee: agent.id, status: 'open' });
+    var inProgress = listDvTasks({ assignee: agent.id, status: 'in_progress' });
+    if (inProgress.length > 0) continue; // already working
+    if (agentTasks.length > 0) continue; // has queued work
+
+    // Try to find work: plan steps first, then unassigned tasks
+    var step = getNextUnassignedPlanStep();
+    if (step) {
+      // Assign plan step
+      updateDvPlanStep(step.id, { assignee: agent.id, status: 'pending' });
+      var content = 'AUTO-DISPATCH: Plan step assigned. Plan: "' + step.plan_title + '", Step: "' + step.title + '" (step #' + step.id + ', plan #' + step.plan_id + '). Claim and start working.';
+      createDvMessage('__system__', agent.id, null, null, content, JSON.stringify({ auto_dispatch: true, plan_step_id: step.id, plan_id: step.plan_id, trigger: triggerContext }), 'directive', null);
+      emitEvent('auto_dispatch', '__system__', null, 'Auto-dispatched plan step "' + step.title + '" to ' + agent.id, { agent_id: agent.id, plan_step_id: step.id, trigger: triggerContext });
+      dispatched.push({ agent: agent.id, type: 'plan_step', id: step.id, title: step.title });
+      continue;
+    }
+
+    var task = getNextUnassignedTask(claimedTaskIds);
+    if (task) {
+      // Assign task
+      updateDvTask(task.id, { assignee: agent.id });
+      claimedTaskIds.push(task.id);
+      var content = 'AUTO-DISPATCH: Task #' + task.id + ' assigned: "' + task.title + '". ' + (task.description || '').substring(0, 300);
+      createDvMessage('__system__', agent.id, null, task.project_id, content, JSON.stringify({ auto_dispatch: true, task_id: task.id, trigger: triggerContext }), 'directive', null);
+      emitEvent('auto_dispatch', '__system__', task.project_id, 'Auto-dispatched task #' + task.id + ' to ' + agent.id, { agent_id: agent.id, task_id: task.id, trigger: triggerContext });
+      dispatched.push({ agent: agent.id, type: 'task', id: task.id, title: task.title });
+      continue;
+    }
+
+    // No work available — stop checking more agents
+    break;
+  }
+
+  return dispatched;
+}
+
 // ---- Router ----
 
 var router = Router();
@@ -285,11 +332,59 @@ router.get('/boot/:agentId', function (req, res) {
   res.json(payload);
 });
 
+// ======== WORK PULL ========
+
+router.get('/work/:agentId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var agentId = req.params.agentId;
+  var payload = getBootPayload(agentId);
+  if (!payload) return res.status(404).json({ error: 'Agent not found' });
+  var queue = payload.work_queue || [];
+
+  // Auto-claim: grab the top item and assign it
+  if (req.query.auto_claim === 'true' && queue.length > 0) {
+    var top = queue[0];
+    var claimed = null;
+
+    if (top.type === 'directive' || top.type === 'request') {
+      // Directives and requests aren't claimable — just return them
+      claimed = top;
+    } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
+      updateDvPlanStep(top.id, { assignee: agentId, status: 'in_progress' });
+      emitEvent('work_claimed', agentId, null, agentId + ' auto-claimed plan step: ' + top.title, { plan_step_id: top.id, plan_id: top.plan_id });
+      claimed = top;
+      claimed.claimed = true;
+    } else if (top.type === 'task') {
+      updateDvTask(top.id, { assignee: agentId, status: 'in_progress' });
+      var fullTask = getDvTask(top.id);
+      emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed task #' + top.id + ': ' + top.title, { task_id: top.id });
+      claimed = { ...top, description: fullTask ? fullTask.description : '', claimed: true };
+    } else if (top.type === 'bug' || top.type === 'bug_unassigned') {
+      updateDvBug(top.id, { assignee: agentId, status: 'in_progress' });
+      emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed bug #' + top.id + ': ' + top.title, { bug_id: top.id });
+      claimed = top;
+      claimed.claimed = true;
+    }
+
+    return res.json({ ok: true, queue: queue, claimed: claimed });
+  }
+
+  res.json({ ok: true, queue: queue });
+});
+
 // ======== AGENTS ========
 
 router.post('/agents/heartbeat', function (req, res) {
-  var agentId = checkAgent(req, res);
-  if (!agentId) return;
+  var agentId;
+  // Admin can heartbeat on behalf of any agent via agent_id body field
+  var adminKey = req.headers['x-admin-key'];
+  if (adminKey && adminKey === ADMIN_KEY && req.body.agent_id) {
+    agentId = req.body.agent_id;
+  } else {
+    agentId = checkAgent(req, res);
+    if (!agentId) return;
+  }
   var status = req.body.status || 'online';
   var workingOn = req.body.working_on || '';
   // Allow agent metadata to be updated via heartbeat
@@ -323,10 +418,10 @@ router.post('/agents/heartbeat', function (req, res) {
 
   // Write savepoint on every heartbeat
   var messagesAcked = [];
-  try { messagesAcked = JSON.parse(req.body.messages_acked || '[]'); } catch (e) { /* */ }
+  try { messagesAcked = JSON.parse(req.body.messages_acked || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for messages_acked (agent: ' + agentId + '):', e.message); }
   var sessionId = req.body.session_id || null;
   var stateSnapshot = {};
-  try { stateSnapshot = JSON.parse(req.body.state_snapshot || '{}'); } catch (e) { /* */ }
+  try { stateSnapshot = JSON.parse(req.body.state_snapshot || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for state_snapshot (agent: ' + agentId + '):', e.message); }
 
   createSavepoint(agentId, {
     session_id: sessionId,
@@ -337,7 +432,17 @@ router.post('/agents/heartbeat', function (req, res) {
   // Prune old savepoints (keep last 100)
   pruneSavepoints(agentId, 100);
 
-  res.json({ ok: true, agent: agentId, status: status });
+  var response = { ok: true, agent: agentId, status: status };
+
+  // Auto-dispatch: if agent just came online or is idle with no work, try to assign
+  if (!workingOn && (status === 'online' || status === 'idle')) {
+    try {
+      var dispatched = dispatchWorkToIdleAgents('heartbeat:' + agentId);
+      if (dispatched.length > 0) response.auto_dispatched = dispatched;
+    } catch (e) { /* non-critical */ }
+  }
+
+  res.json(response);
 });
 
 // ======== SAVEPOINTS ========
@@ -528,6 +633,11 @@ router.put('/tasks/:id', function (req, res) {
         }
       } catch (e) { /* non-critical */ }
     }
+    // Auto-dispatch: push work to any idle agents
+    try {
+      var dispatched = dispatchWorkToIdleAgents('task_completed:#' + task.id);
+      if (dispatched.length > 0) result.auto_dispatched = dispatched;
+    } catch (e) { /* non-critical */ }
   }
 
   if (fields.status) {
@@ -1511,7 +1621,7 @@ router.get('/concepts', function (req, res) {
   // Attach linked projects to each concept
   concepts.forEach(function (c) {
     c.projects = getConceptProjects(c.id);
-    try { c.data = JSON.parse(c.data); } catch (e) {}
+    try { c.data = JSON.parse(c.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + c.id + '):', e.message); }
   });
   res.json(concepts);
 });
@@ -1523,7 +1633,7 @@ router.get('/concepts/:id', function (req, res) {
   var concept = getConcept(parseInt(req.params.id));
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   concept.projects = getConceptProjects(concept.id);
-  try { concept.data = JSON.parse(concept.data); } catch (e) {}
+  try { concept.data = JSON.parse(concept.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + concept.id + '):', e.message); }
   res.json(concept);
 });
 
@@ -1540,7 +1650,7 @@ router.post('/concepts', function (req, res) {
   var id = createConcept(name, type, description, data, who);
   emitEvent('concept_created', who, null, 'Created concept: ' + name + ' (' + (type || 'custom') + ')');
   var concept = getConcept(id);
-  try { concept.data = JSON.parse(concept.data); } catch (e) {}
+  try { concept.data = JSON.parse(concept.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + id + '):', e.message); }
   concept.projects = [];
   res.json(concept);
 });
@@ -1553,7 +1663,7 @@ router.put('/concepts/:id', function (req, res) {
   if (!concept) return res.status(404).json({ error: 'Concept not found' });
   updateConcept(concept.id, req.body);
   var updated = getConcept(concept.id);
-  try { updated.data = JSON.parse(updated.data); } catch (e) {}
+  try { updated.data = JSON.parse(updated.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + concept.id + '):', e.message); }
   updated.projects = getConceptProjects(updated.id);
   emitEvent('concept_updated', who, null, 'Updated concept: ' + updated.name);
   res.json(updated);
@@ -1601,7 +1711,7 @@ router.get('/projects/:projectId/concepts', function (req, res) {
   if (!who) return;
   var concepts = getProjectConcepts(req.params.projectId);
   concepts.forEach(function (c) {
-    try { c.data = JSON.parse(c.data); } catch (e) {}
+    try { c.data = JSON.parse(c.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + c.id + '):', e.message); }
   });
   res.json(concepts);
 });
@@ -2004,7 +2114,7 @@ router.get('/drones', function (req, res) {
         d.system_info = snapshot.system_info || null;
         d.warnings = snapshot.warnings || [];
         d.worker_version = snapshot.worker_version || null;
-      } catch (e) { /* */ }
+      } catch (e) { console.warn('[mycelium] JSON parse failed for state_snapshot (drone: ' + d.id + '):', e.message); }
     }
     return d;
   });
@@ -2109,7 +2219,7 @@ router.put('/drones/jobs/:id', function (req, res) {
     // Smart retry logic for failed drone jobs
     if (fields.status === 'failed') {
       var inputData = {};
-      try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { /* */ }
+      try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for input_data (job: ' + job.id + '):', e.message); }
       var retryCount = inputData._retry_count || 0;
       var failedDrones = inputData._failed_drones || [];
       var originalJobId = inputData._original_job_id || job.id;
@@ -2247,14 +2357,14 @@ router.get('/drones/:id', function (req, res) {
       safe.system_info = snapshot.system_info || null;
       safe.warnings = snapshot.warnings || [];
       safe.worker_version = snapshot.worker_version || null;
-    } catch (e) { /* */ }
+    } catch (e) { console.warn('[mycelium] JSON parse failed for state_snapshot (drone: ' + req.params.id + '):', e.message); }
   }
   // Error summary from recent failed jobs
   var failedJobs = recentJobs.filter(function (j) { return j.status === 'failed'; });
   if (failedJobs.length > 0) {
     safe.error_summary = failedJobs.slice(0, 5).map(function (j) {
       var resultData = {};
-      try { resultData = JSON.parse(j.result_data || '{}'); } catch (e) { /* */ }
+      try { resultData = JSON.parse(j.result_data || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for result_data (job: ' + j.id + '):', e.message); }
       return {
         job_id: j.id,
         title: j.title,
@@ -2304,7 +2414,7 @@ router.get('/approvals', function (req, res) {
     limit: parseInt(req.query.limit) || 50
   };
   var approvals = listApprovals(filters);
-  approvals.forEach(function (a) { try { a.payload = JSON.parse(a.payload); } catch (e) {} });
+  approvals.forEach(function (a) { try { a.payload = JSON.parse(a.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + a.id + '):', e.message); } });
   res.json(approvals);
 });
 
@@ -2314,7 +2424,7 @@ router.get('/approvals/:id', function (req, res) {
   if (!who) return;
   var approval = getApproval(parseInt(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
-  try { approval.payload = JSON.parse(approval.payload); } catch (e) {}
+  try { approval.payload = JSON.parse(approval.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + approval.id + '):', e.message); }
   res.json(approval);
 });
 

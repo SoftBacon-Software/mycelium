@@ -386,14 +386,14 @@ export function setTaskDependency(taskId, blockedById) {
   if (!task || !blocker) return false;
 
   var blockedBy = [];
-  try { blockedBy = JSON.parse(task.blocked_by || '[]'); } catch (e) { /* */ }
+  try { blockedBy = JSON.parse(task.blocked_by || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocked_by (task: ' + taskId + '):', e.message); }
   if (blockedBy.indexOf(blockedById) === -1) {
     blockedBy.push(blockedById);
     db.prepare("UPDATE dv_tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(blockedBy), taskId);
   }
 
   var blocks = [];
-  try { blocks = JSON.parse(blocker.blocks || '[]'); } catch (e) { /* */ }
+  try { blocks = JSON.parse(blocker.blocks || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocks (task: ' + blockedById + '):', e.message); }
   if (blocks.indexOf(taskId) === -1) {
     blocks.push(taskId);
     db.prepare("UPDATE dv_tasks SET blocks = ? WHERE id = ?").run(JSON.stringify(blocks), blockedById);
@@ -405,14 +405,14 @@ export function resolveTaskDependencies(completedTaskId) {
   var task = getDvTask(completedTaskId);
   if (!task) return [];
   var blocks = [];
-  try { blocks = JSON.parse(task.blocks || '[]'); } catch (e) { /* */ }
+  try { blocks = JSON.parse(task.blocks || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocks (task: ' + completedTaskId + '):', e.message); }
 
   var unblocked = [];
   for (var blockedId of blocks) {
     var blocked = getDvTask(blockedId);
     if (!blocked) continue;
     var deps = [];
-    try { deps = JSON.parse(blocked.blocked_by || '[]'); } catch (e) { /* */ }
+    try { deps = JSON.parse(blocked.blocked_by || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocked_by (task: ' + blockedId + '):', e.message); }
     deps = deps.filter(function (d) { return d !== completedTaskId; });
     db.prepare("UPDATE dv_tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(deps), blockedId);
     if (deps.length === 0) unblocked.push(blockedId);
@@ -717,7 +717,7 @@ export function getBootPayload(agentId) {
   ).all(agentId);
 
   var capabilities = [];
-  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
+  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for agent.capabilities (agent: ' + agentId + '):', e.message); }
   var assetRequests = [];
   if (capabilities.indexOf('assets') !== -1) {
     assetRequests = db.prepare(
@@ -797,7 +797,7 @@ export function getBootPayload(agentId) {
 // Build a role contract from agent fields + context keys
 function buildRoleContract(agent, agentId) {
   var capabilities = [];
-  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
+  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for agent.capabilities (agent: ' + agentId + '):', e.message); }
 
   var contract = {
     agent_id: agentId,
@@ -909,6 +909,49 @@ function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, p
   queue.sort(function (a, b) { return a.priority - b.priority; });
 
   return queue;
+}
+
+// -- Auto-dispatch: find idle agents and assign them work --
+
+export function getIdleAgents() {
+  // Agents that are online/idle, not drones, heartbeat within last 30 minutes
+  return db.prepare(`
+    SELECT id, name, project_id, status, working_on, capabilities, role
+    FROM dv_agents
+    WHERE status IN ('online', 'idle')
+      AND role != 'drone'
+      AND last_heartbeat > datetime('now', '-30 minutes')
+    ORDER BY last_heartbeat DESC
+  `).all();
+}
+
+export function getNextUnassignedTask(excludeIds) {
+  // Find highest priority open task not assigned to anyone
+  var exclude = excludeIds && excludeIds.length > 0
+    ? ' AND id NOT IN (' + excludeIds.map(() => '?').join(',') + ')'
+    : '';
+  var params = excludeIds && excludeIds.length > 0 ? [...excludeIds] : [];
+  return db.prepare(
+    `SELECT * FROM dv_tasks
+     WHERE status = 'open' AND (assignee IS NULL OR assignee = '')
+     ${exclude}
+     ORDER BY priority DESC, created_at ASC
+     LIMIT 1`
+  ).get(...params) || null;
+}
+
+export function getNextUnassignedPlanStep() {
+  // Find next unassigned pending plan step from an active plan
+  return db.prepare(
+    `SELECT s.*, p.title as plan_title
+     FROM dv_plan_steps s
+     JOIN dv_plans p ON p.id = s.plan_id
+     WHERE p.status = 'active'
+       AND s.status = 'pending'
+       AND (s.assignee IS NULL OR s.assignee = '')
+     ORDER BY s.step_order ASC
+     LIMIT 1`
+  ).get() || null;
 }
 
 // -- Auto-task from asset request --
@@ -1139,7 +1182,7 @@ export function dispatchWebhook(event, agentId, data) {
 
   for (var wh of webhooks) {
     var events = [];
-    try { events = JSON.parse(wh.events); } catch (e) { continue; }
+    try { events = JSON.parse(wh.events); } catch (e) { console.warn('[mycelium] JSON parse failed for webhook.events (webhook: ' + wh.id + '):', e.message); continue; }
     if (events.indexOf(event) === -1 && events.indexOf('*') === -1) continue;
 
     var payload = JSON.stringify({
@@ -1455,7 +1498,7 @@ export function claimDroneJob(droneId, capabilities) {
   ).all();
   for (var job of pending) {
     var reqs = [];
-    try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { reqs = ['cpu']; }
+    try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
     var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
     if (matched) {
       var result = db.prepare(
@@ -1728,7 +1771,7 @@ export function getDvOverview() {
       var c = listConcepts({ limit: 100 });
       c.forEach(function (con) {
         con.projects = getConceptProjects(con.id);
-        try { con.data = JSON.parse(con.data); } catch (e) {}
+        try { con.data = JSON.parse(con.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + con.id + '):', e.message); }
       });
       return c;
     })(),
@@ -1821,13 +1864,13 @@ export function computeSavepointDiff(agentId) {
   if (!savepoint) return { has_savepoint: false };
 
   var ackedIds = [];
-  try { ackedIds = JSON.parse(savepoint.messages_acked || '[]'); } catch (e) { /* */ }
+  try { ackedIds = JSON.parse(savepoint.messages_acked || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for savepoint.messages_acked (agent: ' + agentId + '):', e.message); }
 
   var ctxVersions = {};
-  try { ctxVersions = JSON.parse(savepoint.context_versions || '{}'); } catch (e) { /* */ }
+  try { ctxVersions = JSON.parse(savepoint.context_versions || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for savepoint.context_versions (agent: ' + agentId + '):', e.message); }
 
   var snapshot = {};
-  try { snapshot = JSON.parse(savepoint.state_snapshot || '{}'); } catch (e) { /* */ }
+  try { snapshot = JSON.parse(savepoint.state_snapshot || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for savepoint.state_snapshot (agent: ' + agentId + '):', e.message); }
 
   // Messages the agent hasn't seen (not in acked list, sent after savepoint)
   var newMessages = db.prepare(

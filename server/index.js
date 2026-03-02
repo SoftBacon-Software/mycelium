@@ -239,7 +239,7 @@ wss.on('connection', function (ws) {
         me.muted = !!msg.muted;
         broadcast({ type: 'peer_updated', peer: me }, null);
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.warn('[mycelium] WebSocket JSON parse failed (peer: ' + peerId + '):', e.message); }
   });
 
   ws.on('close', function () {

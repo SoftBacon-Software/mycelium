@@ -64,7 +64,7 @@ export async function personalize(contact, campaign, anthropicApiKey) {
 
   // Fill template
   var templates = {};
-  try { templates = JSON.parse(campaign.templates || '{}'); } catch (e) { /* */ }
+  try { templates = JSON.parse(campaign.templates || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for campaign.templates (campaign: ' + (campaign.id || 'unknown') + '):', e.message); }
 
   // Determine template key
   var templateKey = contact.type === 'creator'
