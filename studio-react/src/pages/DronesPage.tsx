@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { cancelDroneJob, createDroneJob } from '../api/endpoints'
 import type { DroneJob } from '../api/types'
 
 const statusColors: Record<string, string> = {
@@ -38,8 +39,34 @@ export default function DronesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [artifacts, setArtifacts] = useState<{ name: string; size: number; uploaded: string; url: string }[]>([])
 
+  const [actionLoading, setActionLoading] = useState<number | null>(null)
+
   useEffect(() => {
     refresh()
+  }, [refresh])
+
+  const handleCancel = useCallback(async (jobId: number) => {
+    setActionLoading(jobId)
+    try {
+      await cancelDroneJob(jobId)
+      await refresh()
+    } catch (err) { console.error('Cancel failed:', err) }
+    finally { setActionLoading(null) }
+  }, [refresh])
+
+  const handleRetry = useCallback(async (job: DroneJob) => {
+    setActionLoading(job.id)
+    try {
+      await createDroneJob({
+        title: job.title,
+        command: job.command,
+        requires: job.requires,
+        priority: job.priority,
+        input_data: job.input_data,
+      })
+      await refresh()
+    } catch (err) { console.error('Retry failed:', err) }
+    finally { setActionLoading(null) }
   }, [refresh])
 
   // Fetch artifacts separately (not in overview)
@@ -181,6 +208,27 @@ export default function DronesPage() {
                         </pre>
                       </div>
                     )}
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 pt-1">
+                      {job.status === 'pending' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleCancel(job.id) }}
+                          disabled={actionLoading === job.id}
+                          className="px-3 py-1 rounded text-xs font-medium bg-red/10 text-red hover:bg-red/20 transition-colors disabled:opacity-50"
+                        >
+                          {actionLoading === job.id ? '...' : 'Cancel'}
+                        </button>
+                      )}
+                      {job.status === 'failed' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRetry(job) }}
+                          disabled={actionLoading === job.id}
+                          className="px-3 py-1 rounded text-xs font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+                        >
+                          {actionLoading === job.id ? '...' : 'Retry'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

@@ -1486,3 +1486,128 @@ export function countOutreachContacts(project) {
 export function findOutreachContactByEmail(project, email) {
   return db.prepare('SELECT * FROM dv_outreach_contacts WHERE project = ? AND email = ?').get(project, email);
 }
+
+// ======== AGENT SAVEPOINTS ========
+
+export function createSavepoint(agentId, data) {
+  return db.prepare(
+    `INSERT INTO dv_agent_savepoints (agent_id, session_id, heartbeat_at, working_on, state_snapshot, messages_acked, context_versions, notes)
+     VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?)`
+  ).run(
+    agentId,
+    data.session_id || null,
+    data.working_on || '',
+    JSON.stringify(data.state_snapshot || {}),
+    JSON.stringify(data.messages_acked || []),
+    JSON.stringify(data.context_versions || {}),
+    data.notes || null
+  );
+}
+
+export function getLatestSavepoint(agentId) {
+  return db.prepare(
+    'SELECT * FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1'
+  ).get(agentId);
+}
+
+export function getSavepointHistory(agentId, limit) {
+  return db.prepare(
+    'SELECT id, agent_id, session_id, heartbeat_at, working_on, notes, created_at FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT ?'
+  ).all(agentId, limit || 10);
+}
+
+export function updateSavepointNotes(agentId, notes) {
+  var latest = getLatestSavepoint(agentId);
+  if (!latest) return null;
+  db.prepare('UPDATE dv_agent_savepoints SET notes = ? WHERE id = ?').run(notes, latest.id);
+  return latest.id;
+}
+
+export function computeSavepointDiff(agentId) {
+  var savepoint = getLatestSavepoint(agentId);
+  if (!savepoint) return { has_savepoint: false };
+
+  var ackedIds = [];
+  try { ackedIds = JSON.parse(savepoint.messages_acked || '[]'); } catch (e) { /* */ }
+
+  var ctxVersions = {};
+  try { ctxVersions = JSON.parse(savepoint.context_versions || '{}'); } catch (e) { /* */ }
+
+  var snapshot = {};
+  try { snapshot = JSON.parse(savepoint.state_snapshot || '{}'); } catch (e) { /* */ }
+
+  // Messages the agent hasn't seen (not in acked list, sent after savepoint)
+  var newMessages = db.prepare(
+    "SELECT * FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND id NOT IN (SELECT value FROM json_each(?)) AND created_at > ? ORDER BY created_at ASC LIMIT 100"
+  ).all(agentId, JSON.stringify(ackedIds), savepoint.heartbeat_at);
+
+  // Tasks that changed since savepoint
+  var tasksChanged = db.prepare(
+    "SELECT * FROM dv_tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ? ORDER BY updated_at DESC LIMIT 50"
+  ).all(agentId, savepoint.heartbeat_at);
+
+  // Context keys that changed since savepoint
+  var contextChanged = db.prepare(
+    "SELECT * FROM dv_context_keys WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 50"
+  ).all(savepoint.heartbeat_at);
+
+  // Plans that changed since savepoint
+  var plansChanged = db.prepare(
+    "SELECT p.* FROM dv_plans p WHERE p.updated_at > ? ORDER BY p.updated_at DESC LIMIT 20"
+  ).all(savepoint.heartbeat_at);
+
+  // Bugs that changed since savepoint
+  var bugsChanged = db.prepare(
+    "SELECT * FROM dv_bugs WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 20"
+  ).all(savepoint.heartbeat_at);
+
+  // Drone jobs that changed since savepoint
+  var droneJobsChanged = db.prepare(
+    "SELECT * FROM dv_drone_jobs WHERE (started_at > ? OR completed_at > ? OR created_at > ?) ORDER BY created_at DESC LIMIT 20"
+  ).all(savepoint.heartbeat_at, savepoint.heartbeat_at, savepoint.heartbeat_at);
+
+  // Events since savepoint
+  var eventsSince = db.prepare(
+    "SELECT * FROM dv_events WHERE created_at > ? ORDER BY created_at DESC LIMIT 50"
+  ).all(savepoint.heartbeat_at);
+
+  return {
+    has_savepoint: true,
+    savepoint_id: savepoint.id,
+    savepoint_at: savepoint.heartbeat_at,
+    session_id: savepoint.session_id,
+    was_working_on: savepoint.working_on,
+    notes: savepoint.notes,
+    previous_state: snapshot,
+    changes: {
+      new_messages: newMessages,
+      tasks_changed: tasksChanged,
+      context_changed: contextChanged,
+      plans_changed: plansChanged,
+      bugs_changed: bugsChanged,
+      drone_jobs_changed: droneJobsChanged,
+      events_since: eventsSince.length
+    },
+    summary: {
+      messages: newMessages.length,
+      tasks: tasksChanged.length,
+      context: contextChanged.length,
+      plans: plansChanged.length,
+      bugs: bugsChanged.length,
+      drone_jobs: droneJobsChanged.length,
+      events: eventsSince.length,
+      time_since: savepoint.heartbeat_at
+    }
+  };
+}
+
+export function pruneSavepoints(agentId, keepCount) {
+  // Keep only the most recent N savepoints per agent
+  var count = keepCount || 50;
+  var cutoff = db.prepare(
+    'SELECT heartbeat_at FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1 OFFSET ?'
+  ).get(agentId, count);
+  if (cutoff) {
+    db.prepare('DELETE FROM dv_agent_savepoints WHERE agent_id = ? AND heartbeat_at < ?').run(agentId, cutoff.heartbeat_at);
+  }
+}

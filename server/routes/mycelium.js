@@ -83,7 +83,9 @@ import {
   markChannelRead, getUnreadCounts, getLatestChannelMessageId,
   listChannelMessages, createChannelMessage,
   listGeneralChannelMessages, listTeamChatChannelMessages,
-  autoCreateEntityChannel, getOrCreateDmChannel
+  autoCreateEntityChannel, getOrCreateDmChannel,
+  createSavepoint, getLatestSavepoint, getSavepointHistory,
+  updateSavepointNotes, computeSavepointDiff, pruneSavepoints
 } from '../db.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -253,6 +255,8 @@ router.get('/boot/:agentId', function (req, res) {
   }
   var payload = getBootPayload(agentId);
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
+  // Attach savepoint diff
+  payload.savepoint = computeSavepointDiff(agentId);
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
@@ -285,7 +289,57 @@ router.post('/agents/heartbeat', function (req, res) {
     summary = agentId + ' is ' + status + (workingOn ? ': ' + workingOn : '');
   }
   emitEvent('agent_heartbeat', agentId, null, summary);
+
+  // Write savepoint on every heartbeat
+  var messagesAcked = [];
+  try { messagesAcked = JSON.parse(req.body.messages_acked || '[]'); } catch (e) { /* */ }
+  var sessionId = req.body.session_id || null;
+  var stateSnapshot = {};
+  try { stateSnapshot = JSON.parse(req.body.state_snapshot || '{}'); } catch (e) { /* */ }
+
+  createSavepoint(agentId, {
+    session_id: sessionId,
+    working_on: workingOn,
+    state_snapshot: stateSnapshot,
+    messages_acked: messagesAcked
+  });
+  // Prune old savepoints (keep last 100)
+  pruneSavepoints(agentId, 100);
+
   res.json({ ok: true, agent: agentId, status: status });
+});
+
+// ======== SAVEPOINTS ========
+
+router.get('/agents/:id/savepoint', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var savepoint = getLatestSavepoint(req.params.id);
+  if (!savepoint) return res.json({ has_savepoint: false });
+  res.json(savepoint);
+});
+
+router.get('/agents/:id/savepoints', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 10;
+  res.json(getSavepointHistory(req.params.id, limit));
+});
+
+router.get('/agents/:id/savepoint/diff', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(computeSavepointDiff(req.params.id));
+});
+
+router.put('/agents/:id/savepoint/notes', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var notes = req.body.notes;
+  if (!notes) return res.status(400).json({ error: 'notes required' });
+  var savepointId = updateSavepointNotes(req.params.id, notes);
+  if (!savepointId) return res.status(404).json({ error: 'No savepoint found for agent' });
+  emitEvent('savepoint_notes', '__admin__', null, 'Admin left notes for ' + req.params.id + ': ' + notes.substring(0, 100));
+  res.json({ ok: true, savepoint_id: savepointId });
 });
 
 router.get('/agents', function (req, res) {
