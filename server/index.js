@@ -22,6 +22,9 @@ if (!process.env.ADMIN_KEY) {
   console.error('FATAL: ADMIN_KEY environment variable is required.');
   process.exit(1);
 }
+if (!process.env.TURN_SECRET) {
+  console.warn('[mycelium] TURN_SECRET not set — using default OpenRelay secret. Set TURN_SECRET env var for production.');
+}
 
 // Initialize database
 initDB();
@@ -101,7 +104,7 @@ app.get('/api/voice/peers', function (req, res) {
 });
 
 app.get('/api/voice/turn-credentials', function (req, res) {
-  var secret = 'openrelayprojectsecret';
+  var secret = process.env.TURN_SECRET || 'openrelayprojectsecret';
   var expiry = Math.floor(Date.now() / 1000) + 24 * 3600;
   var username = expiry + ':studiouser';
   var hmac = crypto.createHmac('sha1', secret);
