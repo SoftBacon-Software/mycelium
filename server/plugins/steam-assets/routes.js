@@ -2,12 +2,6 @@ import { Router } from 'express';
 import createSteamDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
-// Parse an integer route parameter safely — returns null instead of NaN.
-function parseIntParam(val) {
-  var n = parseInt(val, 10);
-  return isNaN(n) ? null : n;
-}
-
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 
 // Default game facts for Willing Sacrifice store copy generation
@@ -29,6 +23,8 @@ var DEFAULT_GAME_FACTS = {
 export default function (core) {
   var router = Router();
   var db = createSteamDB(core.db);
+  // Use shared helpers from core — single source of truth for error format.
+  var { apiError, parseIntParam } = core;
 
   // ── Asset CRUD ──
 
@@ -49,7 +45,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var asset = db.getAsset(parseIntParam(req.params.id));
-    if (!asset) return res.status(404).json({ error: 'Asset not found' });
+    if (!asset) return apiError(res, 404, 'Asset not found');
     // Include drone job status if linked
     if (asset.drone_job_id) {
       var job = getDroneJob(asset.drone_job_id);
@@ -63,7 +59,7 @@ export default function (core) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     db.deleteAsset(id);
     res.json({ ok: true });
   });
@@ -102,7 +98,7 @@ export default function (core) {
     if (!who) return;
     var projectId = req.body.project_id || 'willing-sacrifice';
     var footageUrl = req.body.footage_url;
-    if (!footageUrl) return res.status(400).json({ error: 'footage_url required' });
+    if (!footageUrl) return apiError(res, 400, 'footage_url required');
 
     var count = req.body.count || 10;
     var categories = req.body.categories || ['combat', 'loot', 'builds', 'pvp', 'exploration', 'ui'];
@@ -143,7 +139,7 @@ export default function (core) {
     if (!who) return;
     var projectId = req.body.project_id || 'willing-sacrifice';
     var footageUrl = req.body.footage_url;
-    if (!footageUrl) return res.status(400).json({ error: 'footage_url required' });
+    if (!footageUrl) return apiError(res, 400, 'footage_url required');
 
     var maxDuration = req.body.max_duration || 120;
     var videoSessionId = req.body.video_session_id;

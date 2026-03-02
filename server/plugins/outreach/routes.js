@@ -2,27 +2,14 @@
 import { Router } from 'express';
 import createOutreachDB from './db.js';
 
-// Parse an integer route parameter safely — returns null instead of NaN.
-function parseIntParam(val) {
-  var n = parseInt(val, 10);
-  return isNaN(n) ? null : n;
-}
-
-// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
-function validateEnum(res, value, allowed, fieldName) {
-  if (value !== undefined && allowed.indexOf(value) === -1) {
-    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
-    return false;
-  }
-  return true;
-}
-
 var CAMPAIGN_STATUSES = ['active', 'paused', 'completed'];
 var CONTACT_STATUSES = ['discovered', 'researched', 'draft_ready', 'approved', 'sent', 'followed_up', 'replied', 'covered', 'closed'];
 
 export default function (core) {
   var router = Router();
   var db = createOutreachDB(core.db);
+  // Use shared helpers from core — single source of truth for error format.
+  var { apiError, parseIntParam, validateEnum } = core;
 
   // -- Campaigns --
   router.get('/campaigns', function (req, res) {
@@ -35,9 +22,9 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var b = req.body;
-    if (!b.project_id && !b.project) return res.status(400).json({ error: 'project_id and name required' });
+    if (!b.project_id && !b.project) return apiError(res, 400, 'project_id and name required');
     var projectId = b.project_id || b.project;
-    if (!b.name) return res.status(400).json({ error: 'project_id and name required' });
+    if (!b.name) return apiError(res, 400, 'project_id and name required');
     var id = db.createCampaign(projectId, b.name, b.persona_prompt, b.project_facts,
       typeof b.templates === 'string' ? b.templates : JSON.stringify(b.templates || {}),
       typeof b.config === 'string' ? b.config : JSON.stringify(b.config || {}), who);
@@ -49,7 +36,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var campaign = db.getCampaign(parseIntParam(req.params.id));
-    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (!campaign) return apiError(res, 404, 'Campaign not found');
     if (!validateEnum(res, req.body.status, CAMPAIGN_STATUSES, 'status')) return;
     var fields = {};
     for (var k of ['name', 'persona_prompt', 'project_facts', 'status']) {
@@ -80,10 +67,10 @@ export default function (core) {
     if (!who) return;
     var b = req.body;
     var projectId = b.project_id || b.project;
-    if (!projectId || !b.name) return res.status(400).json({ error: 'project_id and name required' });
+    if (!projectId || !b.name) return apiError(res, 400, 'project_id and name required');
     if (b.email) {
       var existing = db.findContactByEmail(projectId, b.email);
-      if (existing) return res.status(409).json({ error: 'Contact with this email already exists', existing_id: existing.id });
+      if (existing) return apiError(res, 409, 'Contact with this email already exists', { existing_id: existing.id });
     }
     var id = db.createContact({ ...b, project_id: projectId, created_by: who, metadata: b.metadata ? (typeof b.metadata === 'string' ? b.metadata : JSON.stringify(b.metadata)) : '{}' });
     core.emitEvent('outreach_contact_created', who, projectId, who + ' added outreach contact: ' + b.name, { contact_id: id });
@@ -94,7 +81,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
     if (!validateEnum(res, req.body.status, CONTACT_STATUSES, 'status')) return;
     var b = req.body;
     if (b.metadata && typeof b.metadata !== 'string') b.metadata = JSON.stringify(b.metadata);
@@ -107,7 +94,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
     db.deleteContact(contact.id);
     res.json({ ok: true, deleted: contact.id });
   });
@@ -119,9 +106,9 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var campaignId = req.body.campaign_id;
-    if (!campaignId) return res.status(400).json({ error: 'campaign_id required' });
+    if (!campaignId) return apiError(res, 400, 'campaign_id required');
     var campaign = db.getCampaign(campaignId);
-    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (!campaign) return apiError(res, 404, 'Campaign not found');
 
     try {
       var config = JSON.parse(campaign.config || '{}');
@@ -152,7 +139,7 @@ export default function (core) {
         who + ' discovered ' + created + ' contacts (' + creators.length + ' creators, ' + press.length + ' press)', { campaign_id: campaignId });
       res.json({ ok: true, creators: creators.length, press: press.length, total: created });
     } catch (e) {
-      res.status(500).json({ error: 'Discovery failed: ' + e.message });
+      apiError(res, 500, 'Discovery failed: ' + e.message);
     }
   });
 
@@ -161,7 +148,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
 
     try {
       var campaign = contact.campaign_id ? db.getCampaign(contact.campaign_id) : null;
@@ -176,7 +163,7 @@ export default function (core) {
       db.updateContact(contact.id, updates);
       res.json({ ok: true, id: contact.id, updates: updates });
     } catch (e) {
-      res.status(500).json({ error: 'Research failed: ' + e.message });
+      apiError(res, 500, 'Research failed: ' + e.message);
     }
   });
 
@@ -185,14 +172,14 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
 
     try {
       var campaign = contact.campaign_id ? db.getCampaign(contact.campaign_id) : null;
-      if (!campaign) return res.status(400).json({ error: 'Contact has no campaign — cannot personalize' });
+      if (!campaign) return apiError(res, 400, 'Contact has no campaign — cannot personalize');
       var config = JSON.parse(campaign.config || '{}');
       var apiKey = config.anthropic_api_key || process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) return res.status(400).json({ error: 'anthropic_api_key required in campaign config or ANTHROPIC_API_KEY env' });
+      if (!apiKey) return apiError(res, 400, 'anthropic_api_key required in campaign config or ANTHROPIC_API_KEY env');
 
       var { personalize } = await import('./lib/personalizer.js');
       var result = await personalize(contact, campaign, apiKey);
@@ -205,7 +192,7 @@ export default function (core) {
 
       res.json({ ok: true, id: contact.id, subject: result.pitch_subject, body_preview: (result.pitch_body || '').substring(0, 200) });
     } catch (e) {
-      res.status(500).json({ error: 'Personalization failed: ' + e.message });
+      apiError(res, 500, 'Personalization failed: ' + e.message);
     }
   });
 
@@ -214,8 +201,8 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    if (contact.status !== 'draft_ready') return res.status(400).json({ error: 'Contact status must be draft_ready, got ' + contact.status });
+    if (!contact) return apiError(res, 404, 'Contact not found');
+    if (contact.status !== 'draft_ready') return apiError(res, 400, 'Contact status must be draft_ready, got ' + contact.status);
 
     var fields = { status: 'approved' };
     if (req.body.pitch_subject) fields.pitch_subject = req.body.pitch_subject;
@@ -229,9 +216,9 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    if (contact.status !== 'approved') return res.status(400).json({ error: 'Contact must be approved before sending' });
-    if (!contact.email) return res.status(400).json({ error: 'Contact has no email address' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
+    if (contact.status !== 'approved') return apiError(res, 400, 'Contact must be approved before sending');
+    if (!contact.email) return apiError(res, 400, 'Contact has no email address');
 
     try {
       var campaign = contact.campaign_id ? db.getCampaign(contact.campaign_id) : null;
@@ -243,8 +230,8 @@ export default function (core) {
       // Hard gate: agents cannot send real emails without approval
       if (!dryRun) {
         var gate = core.checkApprovalGate(req, who, 'outreach_send');
-        if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
-        if (!gate.ok && gate.soft) return res.status(403).json({ error: 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', approval_required: true });
+        if (!gate.ok && !gate.soft) return apiError(res, 403, gate.error, { approval_required: true });
+        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', { approval_required: true });
       }
 
       if (dryRun) {
@@ -268,7 +255,7 @@ export default function (core) {
       core.emitEvent('outreach_pitch_sent', who, contact.project_id, who + ' sent pitch to ' + contact.name, { contact_id: contact.id, gmail_id: msgId });
       res.json({ ok: true, id: contact.id, gmail_id: msgId });
     } catch (e) {
-      res.status(500).json({ error: 'Send failed: ' + e.message });
+      apiError(res, 500, 'Send failed: ' + e.message);
     }
   });
 
@@ -277,8 +264,8 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
-    if (!contact) return res.status(404).json({ error: 'Contact not found' });
-    if (contact.status !== 'sent') return res.status(400).json({ error: 'Contact must be in sent status for follow-up' });
+    if (!contact) return apiError(res, 404, 'Contact not found');
+    if (contact.status !== 'sent') return apiError(res, 400, 'Contact must be in sent status for follow-up');
 
     try {
       var campaign = contact.campaign_id ? db.getCampaign(contact.campaign_id) : null;
@@ -298,8 +285,8 @@ export default function (core) {
 
       if (!dryRun) {
         var gate = core.checkApprovalGate(req, who, 'outreach_send');
-        if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
-        if (!gate.ok && gate.soft) return res.status(403).json({ error: 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', approval_required: true });
+        if (!gate.ok && !gate.soft) return apiError(res, 403, gate.error, { approval_required: true });
+        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', { approval_required: true });
       }
 
       if (!dryRun && contact.email) {
@@ -314,7 +301,7 @@ export default function (core) {
 
       res.json({ ok: true, id: contact.id, dry_run: dryRun, status: 'followed_up' });
     } catch (e) {
-      res.status(500).json({ error: 'Follow-up failed: ' + e.message });
+      apiError(res, 500, 'Follow-up failed: ' + e.message);
     }
   });
 
@@ -323,7 +310,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var project = req.query.project_id;
-    if (!project) return res.status(400).json({ error: 'project_id query param required' });
+    if (!project) return apiError(res, 400, 'project_id query param required');
     var counts = db.countContacts(project);
     var campaigns = db.listCampaigns({ project_id: project, status: 'active' });
     res.json({ project: project, contact_counts: counts, active_campaigns: campaigns.length });

@@ -2,21 +2,6 @@ import { Router } from 'express';
 import createSocialDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
-// Parse an integer route parameter safely — returns null instead of NaN.
-function parseIntParam(val) {
-  var n = parseInt(val, 10);
-  return isNaN(n) ? null : n;
-}
-
-// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
-function validateEnum(res, value, allowed, fieldName) {
-  if (value !== undefined && allowed.indexOf(value) === -1) {
-    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
-    return false;
-  }
-  return true;
-}
-
 var POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed'];
 
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
@@ -57,6 +42,8 @@ var DEFAULT_WINDOWS = {
 export default function (core) {
   var router = Router();
   var db = createSocialDB(core.db);
+  // Use shared helpers from core — single source of truth for error format.
+  var { apiError, parseIntParam, validateEnum } = core;
 
   // ── Account Management ──
 
@@ -65,7 +52,7 @@ export default function (core) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
     var { project_id, platform, account_name, credentials, config } = req.body;
-    if (!project_id || !platform) return res.status(400).json({ error: 'project_id and platform required' });
+    if (!project_id || !platform) return apiError(res, 400, 'project_id and platform required');
     var id = db.createAccount(project_id, platform, account_name, credentials, config);
     res.json({ ok: true, id: id });
   });
@@ -88,7 +75,7 @@ export default function (core) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     db.updateAccount(id, req.body);
     res.json({ ok: true });
   });
@@ -98,7 +85,7 @@ export default function (core) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     db.deleteAccount(id);
     res.json({ ok: true });
   });
@@ -110,7 +97,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var { event_type, metadata, platform } = req.body;
-    if (!event_type || !platform) return res.status(400).json({ error: 'event_type and platform required' });
+    if (!event_type || !platform) return apiError(res, 400, 'event_type and platform required');
 
     var metaStr = Object.entries(metadata || {}).map(function (e) { return e[0] + ': ' + e[1]; }).join(', ');
     var prompt = 'Write a caption for a ' + event_type + ' highlight clip.\n' +
@@ -135,7 +122,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var fields = req.body;
-    if (!fields.project_id || !fields.platform) return res.status(400).json({ error: 'project_id and platform required' });
+    if (!fields.project_id || !fields.platform) return apiError(res, 400, 'project_id and platform required');
     fields.created_by = who;
     var id = db.createPost(fields);
     core.emitEvent('social_post_created', who, fields.project_id,
@@ -161,7 +148,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var post = db.getPost(parseIntParam(req.params.id));
-    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (!post) return apiError(res, 404, 'Post not found');
     if (post.drone_job_id) {
       var job = getDroneJob(post.drone_job_id);
       if (job) post.drone_job = { id: job.id, status: job.status, error: job.error };
@@ -174,7 +161,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     if (!validateEnum(res, req.body.status, POST_STATUSES, 'status')) return;
     db.updatePost(id, req.body);
     res.json({ ok: true });
@@ -185,7 +172,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     db.deletePost(id);
     res.json({ ok: true });
   });
@@ -204,8 +191,8 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var post = db.getPost(parseIntParam(req.params.id));
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.status !== 'draft') return res.status(400).json({ error: 'Only draft posts can be scheduled' });
+    if (!post) return apiError(res, 404, 'Post not found');
+    if (post.status !== 'draft') return apiError(res, 400, 'Only draft posts can be scheduled');
 
     var scheduledAt = req.body.scheduled_at;
     if (!scheduledAt) {
@@ -231,9 +218,9 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var post = db.getPost(parseIntParam(req.params.id));
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (!post.caption) return res.status(400).json({ error: 'Post has no caption' });
-    if (!post.media_url) return res.status(400).json({ error: 'Post has no media_url' });
+    if (!post) return apiError(res, 404, 'Post not found');
+    if (!post.caption) return apiError(res, 400, 'Post has no caption');
+    if (!post.media_url) return apiError(res, 400, 'Post has no media_url');
 
     // Check approval gate for publishing
     var gate = core.checkApprovalGate(req, who, 'social_publish');
@@ -241,7 +228,7 @@ export default function (core) {
       var gateMsg = gate.soft
         ? 'Social publishing requires approval. Use studio_request_approval with action_type=social_publish first.'
         : (gate.error || 'Publishing not permitted');
-      return core.apiError(res, 403, gateMsg, { approval_required: true });
+      return apiError(res, 403, gateMsg, { approval_required: true });
     }
 
     // Get account credentials
