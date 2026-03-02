@@ -384,7 +384,7 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
                 >
                   <option value="">Select project...</option>
                   {availableProjects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.title || p.id}</option>
+                    <option key={p.id} value={p.id}>{p.name || p.id}</option>
                   ))}
                 </select>
                 <button
