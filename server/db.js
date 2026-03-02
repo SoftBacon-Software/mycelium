@@ -789,6 +789,7 @@ export function getBootPayload(agentId) {
     channels: myChannels,
     unread_counts: unreadMap,
     plugins: listPluginRecords().filter(function (p) { return p.enabled; }),
+    team_agents: otherAgents.filter(function (a) { return a.project_id === agent.project_id; }),
     server_time: new Date().toISOString()
   };
 }
