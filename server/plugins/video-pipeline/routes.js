@@ -8,6 +8,18 @@ function parseIntParam(val) {
   return isNaN(n) ? null : n;
 }
 
+// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
+function validateEnum(res, value, allowed, fieldName) {
+  if (value !== undefined && allowed.indexOf(value) === -1) {
+    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
+    return false;
+  }
+  return true;
+}
+
+var SESSION_STATUSES = ['pending', 'detecting', 'assembling', 'exporting', 'completed', 'failed'];
+var CLIP_STATUSES = ['detected', 'assembled', 'exported'];
+
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 var WSAC_SETUP = 'pip install anthropic pyyaml requests';
 
@@ -52,6 +64,7 @@ export default function (core) {
     if (!who) return;
     var id = parseIntParam(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (!validateEnum(res, req.body.status, SESSION_STATUSES, 'status')) return;
     db.updateSession(id, req.body);
     res.json({ ok: true });
   });
@@ -95,6 +108,7 @@ export default function (core) {
     if (!who) return;
     var id = parseIntParam(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (!validateEnum(res, req.body.status, CLIP_STATUSES, 'status')) return;
     db.updateClip(id, req.body);
     res.json({ ok: true });
   });
