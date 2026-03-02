@@ -20,7 +20,10 @@ export function initDB() {
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
 
-  // Run platform schema
+  // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
+  migrateGameToProjectId();
+
+  // Run platform schema (creates new tables if needed, indexes reference project_id)
   var schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
 
@@ -68,9 +71,6 @@ export function initDB() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_type ON dv_messages(msg_type)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_channel ON dv_messages(channel_id)'); } catch (e) {}
-
-  // Migration: rename game -> project_id columns for enterprise-ready schema
-  migrateGameToProjectId();
 
   // Seed operators (if table is empty)
   var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
