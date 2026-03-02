@@ -11,6 +11,7 @@ import type {
   PlanStep,
   Bug,
   Asset,
+  Organization,
   Operator,
   ConfigEntry,
   Vote,
@@ -165,6 +166,20 @@ export async function uploadAsset(id: string, file: File): Promise<Asset> {
   }
 
   return res.json() as Promise<Asset>;
+}
+
+// Organizations
+
+export function fetchOrganizations(): Promise<Organization[]> {
+  return apiGet<Organization[]>('/orgs');
+}
+
+export function createOrganization(data: { id: string; name: string; description?: string }): Promise<Organization> {
+  return apiPost<Organization>('/orgs', data);
+}
+
+export function updateOrganization(id: string, data: Partial<Organization>): Promise<Organization> {
+  return apiPut<Organization>(`/orgs/${id}`, data);
 }
 
 // Operators
