@@ -885,8 +885,9 @@ export function deleteDvWebhook(id) {
 }
 
 export function dispatchWebhook(event, agentId, data) {
+  // Query webhooks for the target agent AND __global__ (admin-claude receives all events)
   var webhooks = db.prepare(
-    "SELECT * FROM dv_webhooks WHERE active = 1 AND agent_id = ?"
+    "SELECT * FROM dv_webhooks WHERE active = 1 AND (agent_id = ? OR agent_id = '__global__')"
   ).all(agentId);
 
   for (var wh of webhooks) {
@@ -907,16 +908,54 @@ export function dispatchWebhook(event, agentId, data) {
       headers['X-Webhook-Signature'] = sig;
     }
 
-    // Non-blocking fetch with 5s timeout
+    var whId = wh.id;
+    var startTime = Date.now();
+
+    // Non-blocking fetch with 5s timeout — log delivery result
     fetch(wh.url, {
       method: 'POST',
       headers: headers,
       body: payload,
       signal: AbortSignal.timeout(5000)
+    }).then(function (resp) {
+      var duration = Date.now() - startTime;
+      return resp.text().then(function (body) {
+        logWebhookDelivery(whId, event, agentId, payload, resp.status, body.substring(0, 1000), null, duration);
+      });
     }).catch(function (err) {
+      var duration = Date.now() - startTime;
+      logWebhookDelivery(whId, event, agentId, payload, null, null, err.message, duration);
       console.error('[webhook] Failed to dispatch to', wh.url, ':', err.message);
     });
   }
+}
+
+function logWebhookDelivery(webhookId, event, agentId, payload, statusCode, responseBody, error, durationMs) {
+  try {
+    db.prepare(
+      "INSERT INTO dv_webhook_deliveries (webhook_id, event, agent_id, payload, status_code, response_body, error, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(webhookId, event, agentId, payload, statusCode, responseBody, error, durationMs);
+  } catch (e) {
+    console.error('[webhook-log] Failed to log delivery:', e.message);
+  }
+}
+
+export function listWebhookDeliveries(filters) {
+  var where = ['1=1'];
+  var params = [];
+  if (filters.event) { where.push('event = ?'); params.push(filters.event); }
+  if (filters.webhook_id) { where.push('webhook_id = ?'); params.push(filters.webhook_id); }
+  if (filters.error_only) { where.push('error IS NOT NULL'); }
+  var limit = Math.min(filters.limit || 50, 200);
+  var offset = filters.offset || 0;
+  params.push(limit, offset);
+  return db.prepare('SELECT * FROM dv_webhook_deliveries WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+}
+
+export function pruneWebhookDeliveries(keepDays) {
+  var days = keepDays || 7;
+  var result = db.prepare("DELETE FROM dv_webhook_deliveries WHERE created_at < datetime('now', '-' || ? || ' days')").run(days);
+  return result.changes;
 }
 
 // -- Team Chat (human-only messages) --
@@ -1338,6 +1377,49 @@ export function countApprovalVotes(approvalId) {
     "SELECT SUM(CASE WHEN vote = 'approve' THEN 1 ELSE 0 END) as approves, SUM(CASE WHEN vote = 'deny' THEN 1 ELSE 0 END) as denies FROM dv_approval_votes WHERE approval_id = ?"
   ).get(approvalId);
   return { approves: row.approves || 0, denies: row.denies || 0 };
+}
+
+export function getAdminOps() {
+  var pendingRequests = db.prepare(
+    "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  var unassignedTasks = db.prepare(
+    "SELECT * FROM dv_tasks WHERE assignee IS NULL AND status IN ('open', 'in_progress') ORDER BY updated_at DESC LIMIT 50"
+  ).all();
+  var unassignedBugs = db.prepare(
+    "SELECT * FROM dv_bugs WHERE assignee IS NULL AND status = 'open' ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  var failedDroneJobs = db.prepare(
+    "SELECT * FROM dv_drone_jobs WHERE status = 'failed' ORDER BY completed_at DESC LIMIT 50"
+  ).all();
+  var pendingApprovals = db.prepare(
+    "SELECT * FROM dv_approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT 50"
+  ).all();
+  var staleRequests = db.prepare(
+    "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-1 day') ORDER BY created_at ASC LIMIT 50"
+  ).all();
+  return {
+    pending_requests: pendingRequests,
+    unassigned_tasks: unassignedTasks,
+    unassigned_bugs: unassignedBugs,
+    failed_drone_jobs: failedDroneJobs,
+    pending_approvals: pendingApprovals,
+    stale_requests: staleRequests,
+    open_prs: []
+  };
+}
+
+export function resolveStaleRequests(hoursOld) {
+  var hours = hoursOld || 72;
+  var stale = db.prepare(
+    "SELECT id FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-' || ? || ' hours')"
+  ).all(hours);
+  for (var req of stale) {
+    db.prepare(
+      "UPDATE dv_messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = 'system', content = content || '\n\n[Auto-resolved: request was pending for over ' || ? || ' hours]' WHERE id = ?"
+    ).run(hours, req.id);
+  }
+  return stale.length;
 }
 
 export function getDvOverview() {

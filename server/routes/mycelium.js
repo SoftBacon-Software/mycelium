@@ -65,6 +65,8 @@ import {
   createConcept, getConcept, listConcepts, updateConcept, deleteConcept,
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
+  listWebhookDeliveries, pruneWebhookDeliveries,
+  getAdminOps, resolveStaleRequests,
   createDvTeamChat, listDvTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob,
   addTaskComment, getTaskComments, deleteTaskComment,
@@ -289,6 +291,10 @@ router.post('/agents/heartbeat', function (req, res) {
     summary = agentId + ' is ' + status + (workingOn ? ': ' + workingOn : '');
   }
   emitEvent('agent_heartbeat', agentId, null, summary);
+  // Webhook: notify when agent status actually changes
+  if (prevStatus !== status) {
+    dispatchWebhook('agent_status_changed', agentId, { agent_id: agentId, previous_status: prevStatus, new_status: status, working_on: workingOn });
+  }
 
   // Write savepoint on every heartbeat
   var messagesAcked = [];
@@ -967,6 +973,7 @@ router.post('/plans', function (req, res) {
   if (owner) planMembers.push(owner);
   autoCreateEntityChannel('plan', id, '#plan-' + id + ': ' + title, agentId, planMembers);
   emitEvent('plan_created', agentId, game, agentId + ' created plan: ' + title, { plan_id: id });
+  dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, game: game, owner: owner });
   var result = { id: id, title: title };
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
@@ -1050,6 +1057,7 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (req.body.linked_pr_url !== undefined) fields.linked_pr_url = req.body.linked_pr_url;
   if (req.body.phase !== undefined) fields.phase = escapeHtml(req.body.phase);
   updateDvPlanStep(parseInt(req.params.stepId), fields);
+  dispatchWebhook('plan_step_updated', agentId, { plan_id: parseInt(req.params.id), step_id: parseInt(req.params.stepId), fields: fields });
   res.json({ ok: true, step_id: parseInt(req.params.stepId) });
 });
 
@@ -1345,6 +1353,12 @@ router.get('/admin/overview', function (req, res) {
   res.json(getDvOverview());
 });
 
+// Actionable items needing decisions (admin only)
+router.get('/admin/ops', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  res.json(getAdminOps());
+});
+
 // List projects
 router.get('/projects', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
@@ -1564,6 +1578,7 @@ router.post('/bugs', function (req, res) {
   if (assignee) bugMembers.push(assignee);
   autoCreateEntityChannel('bug', id, '#bug-' + id + ': ' + title, who, bugMembers);
   emitEvent('bug_created', who, game || 'dioverse', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
+  dispatchWebhook('bug_created', who, { bug_id: id, title: title, game: game, severity: severity, reporter: who, assignee: assignee });
   res.json({ ok: true, id: id });
 });
 
@@ -1607,6 +1622,7 @@ router.put('/bugs/:id', function (req, res) {
   if (updates.status) {
     emitEvent('bug_updated', who, bug.game, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
   }
+  dispatchWebhook('bug_updated', who, { bug_id: bug.id, title: bug.title, updates: updates });
   // Webhook: notify assignee when bug is assigned
   var bugTarget = updates.assignee || bug.assignee;
   if (bugTarget && (updates.assignee || updates.status)) {
@@ -1828,6 +1844,19 @@ router.delete('/webhooks/:id', function (req, res) {
   res.json({ ok: true });
 });
 
+// GET /webhooks/deliveries — delivery log for debugging (admin only)
+router.get('/webhooks/deliveries', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var filters = {
+    event: req.query.event || undefined,
+    webhook_id: req.query.webhook_id ? parseInt(req.query.webhook_id) : undefined,
+    error_only: req.query.error_only === 'true',
+    limit: parseInt(req.query.limit) || 50,
+    offset: parseInt(req.query.offset) || 0
+  };
+  res.json(listWebhookDeliveries(filters));
+});
+
 // ======== DRONES ========
 
 // List all drones (agents with game='drone')
@@ -1863,6 +1892,7 @@ router.post('/drones/jobs', function (req, res) {
   var workspaceBranch = req.body.workspace_branch || 'main';
   var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch);
   emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id });
+  dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who });
   res.json({ ok: true, id: id, title: title });
 });
 
@@ -1911,6 +1941,13 @@ router.put('/drones/jobs/:id', function (req, res) {
   updateDroneJob(job.id, fields);
   if (fields.status) {
     emitEvent('drone_job_' + fields.status, who, 'drone', who + ' set drone job #' + job.id + ' to ' + fields.status, { job_id: job.id, drone_id: job.drone_id });
+    // Webhook dispatches for completed/failed
+    if (fields.status === 'done') {
+      dispatchWebhook('drone_job_completed', job.requester, { job_id: job.id, title: job.title, drone_id: job.drone_id, result_url: fields.result_url });
+    }
+    if (fields.status === 'failed') {
+      dispatchWebhook('drone_job_failed', job.requester, { job_id: job.id, title: job.title, drone_id: job.drone_id, error: fields.error });
+    }
     // Auto-update linked assets when job completes
     if (fields.status === 'done' || fields.status === 'failed') {
       var linkedAssets = listAssetsByDroneJob(job.id);
@@ -1920,6 +1957,49 @@ router.put('/drones/jobs/:id', function (req, res) {
       }
       if (linkedAssets.length > 0) {
         emitEvent('assets_status_updated', who, null, linkedAssets.length + ' assets set to ' + assetStatus + ' (job #' + job.id + ' ' + fields.status + ')', { job_id: job.id, asset_count: linkedAssets.length });
+      }
+    }
+    // Smart retry logic for failed drone jobs
+    if (fields.status === 'failed') {
+      var inputData = {};
+      try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { /* */ }
+      var retryCount = inputData._retry_count || 0;
+      var failedDrones = inputData._failed_drones || [];
+      var originalJobId = inputData._original_job_id || job.id;
+      var failedDroneId = job.drone_id;
+
+      if (retryCount < 2) {
+        // Retry on same drone (up to 3 attempts: 0, 1, 2)
+        var retryInput = Object.assign({}, inputData, {
+          _retry_count: retryCount + 1,
+          _failed_drones: failedDrones,
+          _original_job_id: originalJobId
+        });
+        var retryId = createDroneJob(job.title + ' (retry ' + (retryCount + 1) + ')', job.command, retryInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch);
+        emitEvent('drone_job_retry', who, 'drone', 'Auto-retry #' + (retryCount + 1) + ' for job #' + originalJobId + ' -> new job #' + retryId, { original_job_id: originalJobId, retry_job_id: retryId, retry_count: retryCount + 1 });
+      } else {
+        // 3 failures on this drone — add to failed list, check if all drones exhausted
+        if (failedDroneId && failedDrones.indexOf(failedDroneId) === -1) {
+          failedDrones.push(failedDroneId);
+        }
+        var allDrones = listDrones();
+        var allDroneIds = allDrones.map(function (d) { return d.id; });
+        var allExhausted = allDroneIds.length > 0 && allDroneIds.every(function (did) { return failedDrones.indexOf(did) !== -1; });
+
+        if (allExhausted) {
+          // All drones have failed this job — emit exhausted event, don't retry
+          emitEvent('drone_job_exhausted', who, 'drone', 'All drones exhausted for job #' + originalJobId + ' — escalating', { original_job_id: originalJobId, failed_drones: failedDrones });
+          dispatchWebhook('drone_job_exhausted', job.requester, { job_id: job.id, original_job_id: originalJobId, title: job.title, failed_drones: failedDrones, error: fields.error });
+        } else {
+          // Reset retry count, put back in queue for next drone
+          var resetInput = Object.assign({}, inputData, {
+            _retry_count: 0,
+            _failed_drones: failedDrones,
+            _original_job_id: originalJobId
+          });
+          var requeueId = createDroneJob(job.title + ' (requeue)', job.command, resetInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch);
+          emitEvent('drone_job_requeue', who, 'drone', 'Job #' + originalJobId + ' requeued as #' + requeueId + ' after 3 failures on ' + failedDroneId, { original_job_id: originalJobId, requeue_job_id: requeueId, failed_drone: failedDroneId });
+        }
       }
     }
   }
@@ -2021,6 +2101,7 @@ router.post('/approvals', function (req, res) {
   var id = createApproval(actionType, who, title, payload, project, riskTier, requiredApprovals);
   emitEvent('approval_requested', who, project,
     who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
+  dispatchWebhook('approval_requested', who, { approval_id: id, action_type: actionType, title: title, risk_tier: riskTier, requested_by: who });
   res.json({ id: id, status: 'pending', approval_required: true });
 });
 
