@@ -2456,6 +2456,26 @@ router.put('/plugins/:name/disable', function (req, res) {
   res.json({ ok: true, name: req.params.name, enabled: 0 });
 });
 
+// ======== API DOCS ========
+router.get('/docs', function (req, res) {
+  var routes = [];
+  router.stack.forEach(function (layer) {
+    if (!layer.route) return;
+    var route = layer.route;
+    var methods = Object.keys(route.methods).map(function (m) { return m.toUpperCase(); });
+    // Detect auth by scanning handler source for checkAdmin/checkAgent calls
+    var handlerSrc = route.stack.map(function (s) { return s.handle.toString().substring(0, 200); }).join(' ');
+    var auth = 'public';
+    if (handlerSrc.indexOf('checkAdmin') !== -1 && handlerSrc.indexOf('checkAgentOrAdmin') === -1) auth = 'admin';
+    else if (handlerSrc.indexOf('checkAgentOrAdmin') !== -1) auth = 'agent-or-admin';
+    else if (handlerSrc.indexOf('checkAgent') !== -1) auth = 'agent';
+    methods.forEach(function (method) {
+      routes.push({ method: method, path: route.path, auth: auth });
+    });
+  });
+  res.json({ routes: routes, count: routes.length });
+});
+
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
 export async function initPlugins() {
