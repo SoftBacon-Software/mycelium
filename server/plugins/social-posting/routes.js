@@ -8,6 +8,17 @@ function parseIntParam(val) {
   return isNaN(n) ? null : n;
 }
 
+// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
+function validateEnum(res, value, allowed, fieldName) {
+  if (value !== undefined && allowed.indexOf(value) === -1) {
+    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
+    return false;
+  }
+  return true;
+}
+
+var POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed'];
+
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 
 // Dio's system prompt for caption generation
@@ -164,6 +175,7 @@ export default function (core) {
     if (!who) return;
     var id = parseIntParam(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (!validateEnum(res, req.body.status, POST_STATUSES, 'status')) return;
     db.updatePost(id, req.body);
     res.json({ ok: true });
   });

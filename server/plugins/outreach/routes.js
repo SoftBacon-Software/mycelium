@@ -8,6 +8,18 @@ function parseIntParam(val) {
   return isNaN(n) ? null : n;
 }
 
+// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
+function validateEnum(res, value, allowed, fieldName) {
+  if (value !== undefined && allowed.indexOf(value) === -1) {
+    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
+    return false;
+  }
+  return true;
+}
+
+var CAMPAIGN_STATUSES = ['active', 'paused', 'completed'];
+var CONTACT_STATUSES = ['discovered', 'researched', 'draft_ready', 'approved', 'sent', 'followed_up', 'replied', 'covered', 'closed'];
+
 export default function (core) {
   var router = Router();
   var db = createOutreachDB(core.db);
@@ -38,6 +50,7 @@ export default function (core) {
     if (!who) return;
     var campaign = db.getCampaign(parseIntParam(req.params.id));
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (!validateEnum(res, req.body.status, CAMPAIGN_STATUSES, 'status')) return;
     var fields = {};
     for (var k of ['name', 'persona_prompt', 'project_facts', 'status']) {
       if (req.body[k] !== undefined) fields[k] = req.body[k];
@@ -82,6 +95,7 @@ export default function (core) {
     if (!who) return;
     var contact = db.getContact(parseIntParam(req.params.id));
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!validateEnum(res, req.body.status, CONTACT_STATUSES, 'status')) return;
     var b = req.body;
     if (b.metadata && typeof b.metadata !== 'string') b.metadata = JSON.stringify(b.metadata);
     db.updateContact(contact.id, b);
