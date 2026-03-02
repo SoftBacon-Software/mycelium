@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { createPlan, updatePlan, updatePlanStep, fetchPlan } from '../api/endpoints'
+import { toast } from 'sonner'
 import type { Plan, PlanStep } from '../api/types'
 import PlanCard from '../components/plans/PlanCard'
 import StepChecklist from '../components/plans/StepChecklist'
@@ -61,9 +62,11 @@ function CreatePlanModal({ onClose, onCreated }: CreatePlanModalProps) {
         priority,
         status: 'active',
       })
+      toast.success('Plan created')
       onCreated()
       onClose()
     } catch (err) {
+      toast.error('Failed to create plan')
       setError(err instanceof Error ? err.message : 'Failed to create plan')
     } finally {
       setSaving(false)
@@ -342,11 +345,13 @@ export default function PlansPage() {
     async (planId: string, stepId: string, data: Partial<PlanStep>) => {
       try {
         await updatePlanStep(planId, stepId, data)
+        toast.success('Step updated')
         await refresh()
         // Refetch full plan to update steps
         const updated = await fetchPlan(planId)
         setSelectedPlan(updated)
       } catch (err) {
+        toast.error('Failed to update step')
         console.error('Failed to update step:', err)
       }
     },
@@ -357,11 +362,13 @@ export default function PlansPage() {
     async (planId: string, status: string) => {
       try {
         await updatePlan(planId, { status })
+        toast.success('Plan status updated')
         await refresh()
         // Refetch full plan
         const updated = await fetchPlan(planId)
         setSelectedPlan(updated)
       } catch (err) {
+        toast.error('Failed to update plan')
         console.error('Failed to update plan status:', err)
       }
     },

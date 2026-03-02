@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { createTask } from '../api/endpoints'
+import { toast } from 'sonner'
 import type { Task } from '../api/types'
 import TaskCard from '../components/tasks/TaskCard'
 import TaskDetail from '../components/tasks/TaskDetail'
@@ -232,8 +233,10 @@ function CreateTaskModal({ onClose, onCreated }: CreateTaskModalProps) {
         assignee: assignee.trim() || null,
         status: 'open',
       })
+      toast.success('Task created')
       onCreated()
     } catch (err) {
+      toast.error('Failed to create task')
       setError(err instanceof Error ? err.message : 'Failed to create task')
       setSubmitting(false)
     }
