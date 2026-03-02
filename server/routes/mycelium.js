@@ -111,6 +111,26 @@ function parseIntParam(val) {
   return isNaN(n) ? null : n;
 }
 
+// Validate an enum field. Returns true if valid, sends 400 and returns false if not.
+function validateEnum(res, value, allowed, fieldName) {
+  if (value !== undefined && allowed.indexOf(value) === -1) {
+    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
+    return false;
+  }
+  return true;
+}
+
+var AGENT_STATUSES = ['online', 'offline', 'idle', 'busy'];
+var TASK_STATUSES = ['open', 'in_progress', 'review', 'done', 'cancelled'];
+var TASK_PRIORITIES = ['low', 'normal', 'high'];
+var ASSET_STATUSES = ['requested', 'in_progress', 'ready', 'delivered', 'cancelled'];
+var PLAN_STATUSES = ['draft', 'active', 'completed', 'cancelled'];
+var PLAN_STEP_STATUSES = ['pending', 'in_progress', 'completed', 'blocked'];
+var BUG_STATUSES = ['open', 'in_progress', 'fixed', 'closed'];
+var BUG_SEVERITIES = ['low', 'medium', 'high', 'critical'];
+var CHANNEL_STATUSES = ['active', 'archived'];
+var DRONE_JOB_STATUSES = ['done', 'completed', 'failed', 'cancelled'];
+
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
 // but API serves data to any client. Escape on write to protect all consumers.
@@ -394,6 +414,7 @@ router.post('/agents/heartbeat', function (req, res) {
     if (!agentId) return;
   }
   var status = req.body.status || 'online';
+  if (!validateEnum(res, req.body.status, AGENT_STATUSES, 'status')) return;
   var workingOn = req.body.working_on || '';
   // Allow agent metadata to be updated via heartbeat
   var agentUpdates = {};
@@ -590,6 +611,8 @@ router.put('/tasks/:id', function (req, res) {
   var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id)) return;
+  if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
+  if (!validateEnum(res, req.body.priority, TASK_PRIORITIES, 'priority')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -809,6 +832,7 @@ router.post('/assets', function (req, res) {
   var type = req.body.type || 'sprite';
   var projectId = req.body.project_id || 'shared';
   var status = req.body.status || 'requested';
+  if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var assetPath = req.body.path || '';
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
   var id = createDvAsset(name, type, projectId, status, assetPath, metadata, agentId);
@@ -842,6 +866,7 @@ router.put('/assets/:id', function (req, res) {
   if (!agentId) return;
   var asset = getDvAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.status !== undefined) fields.status = req.body.status;
   if (req.body.path !== undefined) fields.path = req.body.path;
@@ -1164,6 +1189,7 @@ router.put('/plans/:id', function (req, res) {
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
+  if (!validateEnum(res, req.body.status, PLAN_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -1222,6 +1248,7 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (plan && !checkProjectScope(req, res, plan.project_id)) return;
+  if (!validateEnum(res, req.body.status, PLAN_STEP_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -1494,6 +1521,7 @@ router.put('/admin/agents/:id/heartbeat', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  if (!validateEnum(res, req.body.status, AGENT_STATUSES, 'status')) return;
   var status = req.body.status || 'online';
   var workingOn = req.body.working_on || '';
   var prevStatus = agent.status;
@@ -1852,6 +1880,8 @@ router.put('/bugs/:id', function (req, res) {
   var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   if (!checkProjectScope(req, res, bug.project_id)) return;
+  if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
+  if (!validateEnum(res, req.body.severity, BUG_SEVERITIES, 'severity')) return;
   var updates = {};
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.assignee !== undefined) updates.assignee = req.body.assignee;
@@ -1972,6 +2002,7 @@ router.put('/channels/:id', function (req, res) {
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  if (!validateEnum(res, req.body.status, CHANNEL_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.name !== undefined) fields.name = escapeHtml(req.body.name);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -2196,6 +2227,7 @@ router.put('/drones/jobs/:id', function (req, res) {
   // Accept 'completed' as alias for 'done'
   var statusVal = req.body.status;
   if (statusVal === 'completed') statusVal = 'done';
+  if (!validateEnum(res, statusVal, DRONE_JOB_STATUSES, 'status')) return;
   if (statusVal !== undefined) fields.status = statusVal;
   if (req.body.result_url !== undefined) fields.result_url = req.body.result_url;
   if (req.body.result_data !== undefined) fields.result_data = req.body.result_data;
