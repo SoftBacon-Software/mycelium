@@ -106,7 +106,11 @@ async function processBacklog() {
   try {
     var msgs = await apiGet('/messages?limit=20&to_agent=' + AGENT_ID);
     var unresolved = msgs.filter(function (m) {
-      return !m.resolved_at && (m.msg_type === 'directive' || m.msg_type === 'request');
+      // Only process unresolved directives/requests NOT from ourselves
+      return !m.resolved_at
+        && (m.msg_type === 'directive' || m.msg_type === 'request')
+        && m.from_agent !== AGENT_ID
+        && m.from_agent !== '__admin__';
     });
     if (unresolved.length > 0) {
       console.log('[backlog] Found ' + unresolved.length + ' unresolved directives/requests');
