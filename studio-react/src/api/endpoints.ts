@@ -3,6 +3,7 @@
 import { apiGet, apiPost, apiPut, apiDelete, setToken, getToken } from './client';
 import type {
   Overview,
+  AdminOps,
   Task,
   Message,
   TeamChat,
@@ -46,6 +47,12 @@ export function isAuthenticated(): boolean {
 
 export function fetchOverview(): Promise<Overview> {
   return apiGet<Overview>('/admin/overview');
+}
+
+// Admin Ops
+
+export function fetchAdminOps(): Promise<AdminOps> {
+  return apiGet<AdminOps>('/admin/ops');
 }
 
 // Tasks
