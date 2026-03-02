@@ -271,6 +271,19 @@ export interface DroneArtifact {
   url: string;
 }
 
+export interface WebhookDelivery {
+  id: number
+  webhook_id: number
+  event: string
+  agent_id: string
+  payload: string
+  status_code: number | null
+  response_body: string | null
+  error: string | null
+  duration_ms: number | null
+  created_at: string
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
