@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { cancelDroneJob, createDroneJob } from '../api/endpoints'
+import { timeAgo } from '../utils/time'
 import type { DroneJob } from '../api/types'
 
 const statusColors: Record<string, string> = {
@@ -14,23 +15,6 @@ const statusColors: Record<string, string> = {
 const statusDot: Record<string, string> = {
   online: 'bg-green',
   offline: 'bg-text-muted',
-}
-
-function parseTimestamp(dateStr: string): number {
-  // Handle mixed formats: "2026-03-02 02:27:48" and "2026-03-02T02:27:53.214Z"
-  if (dateStr.includes('T')) return new Date(dateStr).getTime()
-  return new Date(dateStr.replace(' ', 'T') + 'Z').getTime()
-}
-
-function timeAgo(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const ts = parseTimestamp(dateStr)
-  if (isNaN(ts)) return '-'
-  const diff = Date.now() - ts
-  if (diff < 60000) return 'just now'
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago'
-  return Math.floor(diff / 86400000) + 'd ago'
 }
 
 function formatSize(bytes: number): string {

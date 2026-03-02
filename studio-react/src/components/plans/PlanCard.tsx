@@ -1,4 +1,5 @@
 import type { Plan } from '../../api/types'
+import { formatDate } from '../../utils/time'
 import Badge from '../shared/Badge'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -17,11 +18,6 @@ const priorityVariant: Record<string, 'red' | 'accent' | 'green' | 'muted' | 'de
   low: 'green',
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface PlanCardProps {
@@ -31,12 +27,9 @@ interface PlanCardProps {
 }
 
 export default function PlanCard({ plan, onClick, isSelected = false }: PlanCardProps) {
-  const steps = plan.steps ?? []
-  const completedSteps = steps.filter(
-    (s) => s.status === 'done' || s.status === 'completed',
-  ).length
-  const totalSteps = steps.length
-  const progressPct = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0
+  const completedSteps = plan.progress?.completed ?? 0
+  const totalSteps = plan.progress?.total ?? 0
+  const progressPct = plan.progress?.percent ?? 0
 
   return (
     <div

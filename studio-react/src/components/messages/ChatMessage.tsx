@@ -1,4 +1,5 @@
 import type { TeamChat, Message } from '../../api/types'
+import { formatTime } from '../../utils/time'
 
 // ─── Avatar helpers ─────────────────────────────────────────────────────────
 
@@ -26,13 +27,6 @@ function Avatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' }) {
       {initial}
     </span>
   )
-}
-
-// ─── Timestamp formatting ────────────────────────────────────────────────────
-
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
