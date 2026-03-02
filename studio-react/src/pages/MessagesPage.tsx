@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { resolveRequest } from '../api/endpoints'
+import { resolveRequest, sendMessage } from '../api/endpoints'
 import type { Message } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
@@ -177,8 +177,14 @@ export default function MessagesPage() {
   const pendingRequests = useDashboardStore((s) => s.pendingRequests)
   const refresh = useDashboardStore((s) => s.refresh)
 
+  const agents = useDashboardStore((s) => s.agents)
+
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [resolvingId, setResolvingId] = useState<string | null>(null)
+  const [composeTo, setComposeTo] = useState('')
+  const [composeContent, setComposeContent] = useState('')
+  const [composeMsgType, setComposeMsgType] = useState<'message' | 'request' | 'directive'>('message')
+  const [sending, setSending] = useState(false)
 
   const pendingCount = useMemo(() => pendingRequests.length, [pendingRequests])
 
@@ -197,6 +203,28 @@ export default function MessagesPage() {
       return next
     })
   }
+
+  const handleSend = useCallback(
+    async () => {
+      if (!composeContent.trim() || !composeTo.trim()) return
+      setSending(true)
+      try {
+        await sendMessage({
+          from_agent: '__admin__',
+          to_agent: composeTo.trim(),
+          content: composeContent.trim(),
+          msg_type: composeMsgType,
+        })
+        setComposeContent('')
+        await refresh()
+      } catch (err) {
+        console.error('Failed to send message:', err)
+      } finally {
+        setSending(false)
+      }
+    },
+    [composeContent, composeTo, composeMsgType, refresh],
+  )
 
   const handleResolve = useCallback(
     async (id: string) => {
@@ -272,6 +300,52 @@ export default function MessagesPage() {
             )
           })
         )}
+      </div>
+
+      {/* Compose bar */}
+      <div className="shrink-0 border-t border-border px-4 py-3">
+        <div className="flex items-end gap-2">
+          <select
+            value={composeTo}
+            onChange={(e) => setComposeTo(e.target.value)}
+            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-36 shrink-0"
+          >
+            <option value="">To...</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+            <option value="all">Broadcast (all)</option>
+          </select>
+          <select
+            value={composeMsgType}
+            onChange={(e) => setComposeMsgType(e.target.value as 'message' | 'request' | 'directive')}
+            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-24 shrink-0"
+          >
+            <option value="message">message</option>
+            <option value="request">request</option>
+            <option value="directive">directive</option>
+          </select>
+          <textarea
+            value={composeContent}
+            onChange={(e) => setComposeContent(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder="Send a message..."
+            rows={1}
+            className="flex-1 bg-surface-raised border border-border rounded-sm px-3 py-1.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none min-h-[34px] max-h-24"
+          />
+          <button
+            onClick={handleSend}
+            disabled={sending || !composeContent.trim() || !composeTo}
+            className="px-3 py-1.5 rounded-sm text-sm font-medium bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+          >
+            {sending ? '...' : 'Send'}
+          </button>
+        </div>
       </div>
     </div>
   )
