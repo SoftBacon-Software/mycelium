@@ -127,7 +127,8 @@ var ASSET_STATUSES = ['requested', 'in_progress', 'ready', 'delivered', 'cancell
 var PLAN_STATUSES = ['draft', 'active', 'completed', 'cancelled'];
 var PLAN_STEP_STATUSES = ['pending', 'in_progress', 'completed', 'blocked'];
 var BUG_STATUSES = ['open', 'in_progress', 'fixed', 'closed'];
-var BUG_SEVERITIES = ['low', 'medium', 'high', 'critical'];
+var BUG_SEVERITIES = ['low', 'normal', 'high', 'critical'];
+var BUG_CATEGORIES = ['gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance', 'other'];
 var CHANNEL_STATUSES = ['active', 'archived'];
 var DRONE_JOB_STATUSES = ['done', 'completed', 'failed', 'cancelled'];
 
@@ -916,6 +917,13 @@ router.put('/assets/link-job', function (req, res) {
   var { asset_ids, drone_job_id, status } = req.body;
   if (!asset_ids || !Array.isArray(asset_ids)) return res.status(400).json({ error: 'asset_ids array required' });
   if (!drone_job_id) return res.status(400).json({ error: 'drone_job_id required' });
+  // Validate drone job exists
+  var job = getDroneJob(parseIntParam(drone_job_id));
+  if (!job) return res.status(404).json({ error: 'Drone job #' + drone_job_id + ' not found' });
+  // Validate all asset IDs exist before making any changes
+  var missing = asset_ids.filter(function (id) { return !getDvAsset(parseIntParam(id)); });
+  if (missing.length > 0) return res.status(404).json({ error: 'Assets not found: ' + missing.join(', ') });
+  if (!validateEnum(res, status, ASSET_STATUSES, 'status')) return;
   var updated = 0;
   for (var id of asset_ids) {
     var fields = { drone_job_id: drone_job_id };
@@ -1816,9 +1824,6 @@ router.get('/files', function (req, res) {
 
 // =============== BUGS ===============
 
-var VALID_BUG_CATEGORIES = ['gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance', 'other'];
-var VALID_BUG_SEVERITIES = ['low', 'normal', 'high', 'critical'];
-
 // POST /bugs — create a bug report (agent or admin)
 router.post('/bugs', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
@@ -1826,12 +1831,8 @@ router.post('/bugs', function (req, res) {
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
   var projectId = project_id;
   if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
-  if (category && VALID_BUG_CATEGORIES.indexOf(category) === -1) {
-    return res.status(400).json({ error: 'Invalid category. Valid: ' + VALID_BUG_CATEGORIES.join(', ') });
-  }
-  if (severity && VALID_BUG_SEVERITIES.indexOf(severity) === -1) {
-    return res.status(400).json({ error: 'Invalid severity. Valid: ' + VALID_BUG_SEVERITIES.join(', ') });
-  }
+  if (!validateEnum(res, category, BUG_CATEGORIES, 'category')) return;
+  if (!validateEnum(res, severity, BUG_SEVERITIES, 'severity')) return;
   var diagStr = null;
   if (diagnostic_data) {
     diagStr = typeof diagnostic_data === 'string' ? diagnostic_data : JSON.stringify(diagnostic_data);
