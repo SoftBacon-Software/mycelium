@@ -271,6 +271,16 @@ export interface DroneArtifact {
   url: string;
 }
 
+export interface AdminOps {
+  pending_requests: Message[]
+  unassigned_tasks: Task[]
+  unassigned_bugs: Bug[]
+  failed_drone_jobs: DroneJob[]
+  pending_approvals: Approval[]
+  stale_requests: Message[]
+  open_prs: { number: number; title: string; url: string; author: string; created_at: string }[]
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
