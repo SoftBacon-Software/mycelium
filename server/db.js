@@ -498,6 +498,17 @@ export function listDvThreads(limit) {
     GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(limit || 20);
 }
 
+export function bulkDeleteMessages(filters) {
+  var conditions = [];
+  var params = [];
+  if (filters.from) { conditions.push('from_agent = ?'); params.push(filters.from); }
+  if (filters.to) { conditions.push('to_agent = ?'); params.push(filters.to); }
+  if (filters.content_like) { conditions.push('content LIKE ?'); params.push('%' + filters.content_like + '%'); }
+  if (conditions.length === 0) return 0;
+  var sql = 'DELETE FROM dv_messages WHERE ' + conditions.join(' AND ');
+  return db.prepare(sql).run(...params).changes;
+}
+
 // -- Namespaced context --
 
 export function upsertDvContextKey(namespace, key, data, agentId) {
