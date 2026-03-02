@@ -1859,11 +1859,24 @@ router.get('/webhooks/deliveries', function (req, res) {
 
 // ======== DRONES ========
 
-// List all drones (agents with game='drone')
+// List all drones (agents with game='drone') with diagnostics
 router.get('/drones', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var drones = listDrones();
+  // Enrich each drone with system diagnostics from latest savepoint
+  drones = drones.map(function (d) {
+    var savepoint = getLatestSavepoint(d.id);
+    if (savepoint) {
+      try {
+        var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+        d.system_info = snapshot.system_info || null;
+        d.warnings = snapshot.warnings || [];
+        d.worker_version = snapshot.worker_version || null;
+      } catch (e) { /* */ }
+    }
+    return d;
+  });
   res.json(drones);
 });
 
@@ -1931,11 +1944,14 @@ router.put('/drones/jobs/:id', function (req, res) {
     return res.status(403).json({ error: 'Not authorized to update this job' });
   }
   var fields = {};
-  if (req.body.status !== undefined) fields.status = req.body.status;
+  // Accept 'completed' as alias for 'done'
+  var statusVal = req.body.status;
+  if (statusVal === 'completed') statusVal = 'done';
+  if (statusVal !== undefined) fields.status = statusVal;
   if (req.body.result_url !== undefined) fields.result_url = req.body.result_url;
   if (req.body.result_data !== undefined) fields.result_data = req.body.result_data;
   if (req.body.error !== undefined) fields.error = req.body.error;
-  if (req.body.status === 'done' || req.body.status === 'failed') {
+  if (fields.status === 'done' || fields.status === 'failed') {
     fields.completed_at = new Date().toISOString();
   }
   updateDroneJob(job.id, fields);
@@ -2069,7 +2085,7 @@ router.delete('/drones/artifacts/:name', function (req, res) {
   res.json({ ok: true, deleted: name });
 });
 
-// Get single drone + recent jobs (must be after /drones/artifacts to prevent :id catching "artifacts")
+// Get single drone + recent jobs + diagnostics (must be after /drones/artifacts to prevent :id catching "artifacts")
 router.get('/drones/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -2078,6 +2094,32 @@ router.get('/drones/:id', function (req, res) {
   var { api_key_hash, ...safe } = agent;
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
+  // Include system diagnostics from latest savepoint
+  var savepoint = getLatestSavepoint(req.params.id);
+  if (savepoint) {
+    try {
+      var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+      safe.system_info = snapshot.system_info || null;
+      safe.warnings = snapshot.warnings || [];
+      safe.worker_version = snapshot.worker_version || null;
+    } catch (e) { /* */ }
+  }
+  // Error summary from recent failed jobs
+  var failedJobs = recentJobs.filter(function (j) { return j.status === 'failed'; });
+  if (failedJobs.length > 0) {
+    safe.error_summary = failedJobs.slice(0, 5).map(function (j) {
+      var resultData = {};
+      try { resultData = JSON.parse(j.result_data || '{}'); } catch (e) { /* */ }
+      return {
+        job_id: j.id,
+        title: j.title,
+        error_type: resultData.error_type || 'unknown',
+        message: (resultData.message || j.error || '').substring(0, 200),
+        suggestion: (resultData.suggestion || '').substring(0, 200),
+        failed_at: j.completed_at,
+      };
+    });
+  }
   res.json(safe);
 });
 
