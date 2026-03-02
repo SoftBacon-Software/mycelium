@@ -822,7 +822,7 @@ function buildRoleContract(agent, agentId) {
       if (roleData.responsibilities) contract.responsibilities = roleData.responsibilities;
       if (roleData.constraints) contract.constraints = roleData.constraints;
       if (roleData.guidelines) contract.guidelines = roleData.guidelines;
-    } catch (e) { /* */ }
+    } catch (e) { console.warn('[mycelium] JSON parse failed for role_contract.data (agent: ' + agentId + '):', e.message); }
   }
 
   // Check for project-level guidelines: namespace = project_id, key = "guidelines"
@@ -832,6 +832,7 @@ function buildRoleContract(agent, agentId) {
       var gData = typeof projGuidelines.data === 'string' ? JSON.parse(projGuidelines.data) : projGuidelines.data;
       contract.guidelines = typeof gData === 'string' ? gData : (gData.text || gData.guidelines || JSON.stringify(gData));
     } catch (e) {
+      console.warn('[mycelium] JSON parse failed for project_guidelines.data (project: ' + agent.project_id + '):', e.message);
       contract.guidelines = projGuidelines.data;
     }
   }

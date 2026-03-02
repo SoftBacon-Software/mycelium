@@ -368,7 +368,7 @@
   var savedUser = sessionStorage.getItem('dv_user');
   if (savedToken && savedUser) {
     authToken = savedToken;
-    try { currentUser = JSON.parse(savedUser); } catch (e) { currentUser = null; }
+    try { currentUser = JSON.parse(savedUser); } catch (e) { console.warn('[studio] JSON parse failed for saved user session:', e.message); currentUser = null; }
     fetchOverview(function (err) {
       if (!err) {
         loginScreen.style.display = 'none'; dashboard.style.display = '';
@@ -534,7 +534,7 @@
       footer.appendChild(el('span', { className: 'agent-heartbeat', textContent: timeAgo(a.last_heartbeat) }));
 
       var caps = [];
-      try { caps = JSON.parse(a.capabilities || '[]'); } catch (e) {}
+      try { caps = JSON.parse(a.capabilities || '[]'); } catch (e) { console.warn('[studio] JSON parse failed for agent capabilities (agent: ' + a.id + '):', e.message); }
       if (caps.length) {
         var capsEl = el('div', { className: 'agent-caps' });
         caps.forEach(function (cap) {
@@ -580,7 +580,7 @@
     var c = document.getElementById(id);
     if (!items || !items.length) { c.textContent = ''; return; }
     clearAndAppend(c, items.map(function (t) {
-      var blocked = []; try { blocked = JSON.parse(t.blocked_by || '[]'); } catch (e) {}
+      var blocked = []; try { blocked = JSON.parse(t.blocked_by || '[]'); } catch (e) { console.warn('[studio] JSON parse failed for task.blocked_by (task: ' + t.id + '):', e.message); }
       var dotCls = 'tile-dot dot-task';
       if (t.priority === 'urgent') dotCls += ' dot-task-urgent';
       else if (t.priority === 'high') dotCls += ' dot-task-high';
@@ -620,8 +620,8 @@
       meta.appendChild(el('div', {}, [el('span', { className: 'detail-label', textContent: pair[0] + ': ' }), el('span', { textContent: pair[1] })]));
     });
     body.appendChild(meta);
-    var blocked = []; try { blocked = JSON.parse(t.blocked_by || '[]'); } catch (e) {}
-    var blocks = []; try { blocks = JSON.parse(t.blocks || '[]'); } catch (e) {}
+    var blocked = []; try { blocked = JSON.parse(t.blocked_by || '[]'); } catch (e) { console.warn('[studio] JSON parse failed for task.blocked_by (task: ' + t.id + '):', e.message); }
+    var blocks = []; try { blocks = JSON.parse(t.blocks || '[]'); } catch (e) { console.warn('[studio] JSON parse failed for task.blocks (task: ' + t.id + '):', e.message); }
     if (blocked.length || blocks.length) {
       var dep = el('div', { className: 'detail-section' });
       dep.appendChild(el('label', {}, 'Dependencies'));
@@ -1880,7 +1880,7 @@
           try {
             var msg = JSON.parse(evt.data);
             handleVoiceMessage(msg);
-          } catch (e) { /* ignore */ }
+          } catch (e) { console.warn('[studio] Voice WS: non-JSON frame received:', e.message); }
         };
       })
       .catch(function (err) {
