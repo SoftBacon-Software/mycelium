@@ -4,6 +4,7 @@ import { resolveRequest, sendMessage } from '../api/endpoints'
 import type { Message } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
+import ThreadPanel from '../components/messages/ThreadPanel'
 
 // ─── Date separator ──────────────────────────────────────────────────────────
 
@@ -82,6 +83,8 @@ function AgentMessage({
   onToggleExpand,
   onResolve,
   isResolving,
+  threadCount,
+  onOpenThread,
 }: {
   msg: Message
   isGrouped: boolean
@@ -89,6 +92,8 @@ function AgentMessage({
   onToggleExpand: () => void
   onResolve: (id: string) => void
   isResolving: boolean
+  threadCount?: number
+  onOpenThread?: () => void
 }) {
   const content = msg.content
   const shouldTruncate = content.length > 200
@@ -96,6 +101,32 @@ function AgentMessage({
     shouldTruncate && !isExpanded ? content.slice(0, 200) + '...' : content
 
   const isPendingRequest = msg.msg_type === 'request' && msg.status === 'pending'
+
+  const threadIndicator = threadCount && threadCount > 1 && onOpenThread ? (
+    <button
+      onClick={onOpenThread}
+      className="flex items-center gap-1 mt-1 text-xs text-accent hover:text-accent-light hover:underline underline-offset-2 transition-colors"
+    >
+      <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M2 4h12M2 8h8M2 12h5" />
+      </svg>
+      {threadCount - 1} {threadCount - 1 === 1 ? 'reply' : 'replies'}
+    </button>
+  ) : null
+
+  const replyButton = onOpenThread ? (
+    <button
+      onClick={onOpenThread}
+      className="opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-accent text-xs flex items-center gap-1 mt-1"
+      title="Reply in thread"
+    >
+      <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M5 5L2 8l3 3" />
+        <path d="M2 8h8c2.2 0 4 1.8 4 4v1" />
+      </svg>
+      Reply
+    </button>
+  ) : null
 
   if (isGrouped) {
     return (
@@ -120,6 +151,8 @@ function AgentMessage({
             {isResolving ? 'Resolving...' : 'Resolve'}
           </button>
         )}
+        {threadIndicator}
+        {!threadIndicator && replyButton}
       </div>
     )
   }
@@ -164,6 +197,8 @@ function AgentMessage({
               {isResolving ? 'Resolving...' : 'Resolve'}
             </button>
           )}
+          {threadIndicator}
+          {!threadIndicator && replyButton}
         </div>
       </div>
     </div>
@@ -185,8 +220,17 @@ export default function MessagesPage() {
   const [composeContent, setComposeContent] = useState('')
   const [composeMsgType, setComposeMsgType] = useState<'message' | 'request' | 'directive'>('message')
   const [sending, setSending] = useState(false)
+  const [threadRootMsg, setThreadRootMsg] = useState<Message | null>(null)
 
   const pendingCount = useMemo(() => pendingRequests.length, [pendingRequests])
+
+  const threadCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const msg of messages) {
+      if (msg.thread_id) counts.set(msg.thread_id, (counts.get(msg.thread_id) || 0) + 1)
+    }
+    return counts
+  }, [messages])
 
   const sorted = useMemo(
     () => [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
@@ -295,6 +339,8 @@ export default function MessagesPage() {
                   onToggleExpand={() => toggleExpand(msg.id)}
                   onResolve={handleResolve}
                   isResolving={resolvingId === msg.id}
+                  threadCount={msg.thread_id ? threadCounts.get(msg.thread_id) : undefined}
+                  onOpenThread={() => setThreadRootMsg(msg)}
                 />
               </div>
             )
@@ -347,6 +393,14 @@ export default function MessagesPage() {
           </button>
         </div>
       </div>
+
+      {/* Thread slide-in panel */}
+      {threadRootMsg && (
+        <ThreadPanel
+          message={threadRootMsg}
+          onClose={() => setThreadRootMsg(null)}
+        />
+      )}
     </div>
   )
 }

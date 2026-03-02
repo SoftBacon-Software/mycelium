@@ -20,6 +20,7 @@ import type {
   ChannelMember,
   ChannelMessage,
   DroneJob,
+  ThreadSummary,
 } from './types';
 
 // Auth
@@ -61,6 +62,16 @@ export function updateTask(id: string, data: Partial<Task>): Promise<Task> {
 
 export function sendMessage(data: Partial<Message>): Promise<Message> {
   return apiPost<Message>('/messages', data);
+}
+
+// Threads
+
+export function fetchThreads(limit = 50): Promise<ThreadSummary[]> {
+  return apiGet<ThreadSummary[]>(`/messages/threads?limit=${limit}`);
+}
+
+export function fetchThreadMessages(threadId: string): Promise<Message[]> {
+  return apiGet<Message[]>(`/messages?thread=${encodeURIComponent(threadId)}`);
 }
 
 // Team Chat
