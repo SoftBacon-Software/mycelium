@@ -23,11 +23,8 @@ export function initDB() {
   // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
   migrateGameToProjectId();
 
-  // Run platform schema (creates new tables if needed, indexes reference project_id)
-  var schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  db.exec(schema);
-
-  // Migrations: add columns that may not exist yet
+  // Migrations: add columns that may not exist yet on the LIVE database.
+  // MUST run BEFORE schema.sql because schema has CREATE INDEX on these columns.
   var migrations = [
     ["dv_tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"],
     ["dv_tasks", "blocks", "TEXT NOT NULL DEFAULT '[]'"],
@@ -70,6 +67,10 @@ export function initDB() {
   for (var [table, col, def] of migrations) {
     try { db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); } catch (e) { /* already exists */ }
   }
+
+  // Run platform schema AFTER migrations (schema has CREATE INDEX on migrated columns)
+  var schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  db.exec(schema);
 
   // Indexes on migrated columns
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_tasks_blocked ON dv_tasks(blocked_by)'); } catch (e) {}
