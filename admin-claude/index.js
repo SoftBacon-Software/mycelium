@@ -67,7 +67,7 @@ var server = app.listen(PORT, function () {
 // ---- Graceful shutdown ----
 process.on('SIGTERM', function () {
   console.log('[shutdown] SIGTERM received — going offline');
-  apiPost('/agents/heartbeat', { status: 'offline', working_on: '' })
+  heartbeat('Shutting down', 'offline')
     .catch(function () {})
     .finally(function () {
       server.close();
@@ -77,10 +77,10 @@ process.on('SIGTERM', function () {
 
 // ---- Helpers ----
 
-async function heartbeat(workingOn) {
+async function heartbeat(workingOn, status) {
   try {
-    await apiPost('/agents/heartbeat', {
-      status: 'online',
+    await apiPut('/admin/agents/' + AGENT_ID + '/heartbeat', {
+      status: status || 'online',
       working_on: workingOn || 'Listening for webhooks'
     });
   } catch (err) {
