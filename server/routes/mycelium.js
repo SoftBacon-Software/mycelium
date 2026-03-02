@@ -376,6 +376,8 @@ router.put('/agents/:id', function (req, res) {
     if (req.body.role !== undefined) fields.role = req.body.role;
     if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
     if (req.body.project !== undefined) fields.project = req.body.project;
+    if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
+    if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);
   }
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);

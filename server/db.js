@@ -225,9 +225,11 @@ export function updateAgent(id, fields) {
   if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
   if (fields.operator_id !== undefined) { sets.push('operator_id = ?'); values.push(fields.operator_id); }
   if (fields.project !== undefined) { sets.push('project = ?'); values.push(fields.project); }
+  if (fields.project_id !== undefined) { sets.push('project_id = ?'); values.push(fields.project_id); }
   if (fields.llm_backend !== undefined) { sets.push('llm_backend = ?'); values.push(fields.llm_backend); }
   if (fields.llm_model !== undefined) { sets.push('llm_model = ?'); values.push(fields.llm_model); }
   if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
+  if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); values.push(fields.capabilities); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
