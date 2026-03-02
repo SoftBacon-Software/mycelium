@@ -17,6 +17,8 @@ import ConceptsPage from './pages/ConceptsPage'
 import ContextPage from './pages/ContextPage'
 import WebhooksPage from './pages/WebhooksPage'
 import AdminOpsPage from './pages/AdminOpsPage'
+import NetworkHealthPage from './pages/NetworkHealthPage'
+import OnboardingPage from './pages/OnboardingPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -50,6 +52,8 @@ export default function App() {
           <Route path="context" element={<ContextPage />} />
           <Route path="webhooks" element={<WebhooksPage />} />
           <Route path="ops" element={<AdminOpsPage />} />
+          <Route path="health" element={<NetworkHealthPage />} />
+          <Route path="onboarding" element={<OnboardingPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

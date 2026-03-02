@@ -21,6 +21,10 @@ const routeTitles: Record<string, string> = {
   '/drones': 'Drones',
   '/concepts': 'Concepts',
   '/context': 'Context Keys',
+  '/webhooks': 'Webhooks',
+  '/ops': 'Admin Ops',
+  '/health': 'Network Health',
+  '/onboarding': 'Onboarding',
 }
 
 function formatTime(date: Date | null): string {
