@@ -221,6 +221,7 @@ export default function MessagesPage() {
   const [composeMsgType, setComposeMsgType] = useState<'message' | 'request' | 'directive'>('message')
   const [sending, setSending] = useState(false)
   const [threadRootMsg, setThreadRootMsg] = useState<Message | null>(null)
+  const [timeRange, setTimeRange] = useState<string>('3h')
 
   const pendingCount = useMemo(() => pendingRequests.length, [pendingRequests])
 
@@ -232,10 +233,17 @@ export default function MessagesPage() {
     return counts
   }, [messages])
 
-  const sorted = useMemo(
-    () => [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-    [messages],
-  )
+  const sorted = useMemo(() => {
+    const all = [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    if (timeRange === 'all') return all
+    const hours: Record<string, number> = { '1h': 1, '3h': 3, '12h': 12, '24h': 24, '7d': 168 }
+    const ms = (hours[timeRange] ?? 3) * 3600000
+    const cutoff = Date.now() - ms
+    return all.filter((m) => {
+      const t = m.created_at.includes('T') ? new Date(m.created_at).getTime() : new Date(m.created_at.replace(' ', 'T') + 'Z').getTime()
+      return t >= cutoff
+    })
+  }, [messages, timeRange])
 
   const { containerRef, handleScroll } = useAutoScroll([sorted.length])
 
@@ -297,16 +305,31 @@ export default function MessagesPage() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => refresh()}
-          className="text-text-muted hover:text-text transition-colors p-1 rounded-sm hover:bg-surface-raised"
-          title="Refresh"
-        >
-          <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4M13.5 8a5.5 5.5 0 0 1-9.3 4" />
-            <path d="M11.5 1v3h3M4.5 15v-3h-3" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value)}
+            className="bg-surface-raised text-text text-xs rounded px-2 py-1 border border-border focus:outline-none focus:ring-1 ring-accent"
+          >
+            <option value="1h">Last hour</option>
+            <option value="3h">Last 3 hours</option>
+            <option value="12h">Last 12 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="all">All time</option>
+          </select>
+          <span className="text-xs text-text-muted tabular-nums">{sorted.length} msgs</span>
+          <button
+            onClick={() => refresh()}
+            className="text-text-muted hover:text-text transition-colors p-1 rounded-sm hover:bg-surface-raised"
+            title="Refresh"
+          >
+            <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M2.5 8a5.5 5.5 0 0 1 9.3-4M13.5 8a5.5 5.5 0 0 1-9.3 4" />
+              <path d="M11.5 1v3h3M4.5 15v-3h-3" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Message list */}

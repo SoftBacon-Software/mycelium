@@ -54,7 +54,7 @@ import {
   createDvEvent, listDvEvents,
   createDvMessage, createDvRequest, getDvMessage,
   acknowledgeDvMessage, resolveDvMessage, listPendingRequests,
-  listDvMessages, listDvThreads,
+  listDvMessages, listDvThreads, bulkDeleteMessages,
   getBootPayload, getDvOverview,
   createDvBug, getDvBug, listDvBugs, updateDvBug, countDvBugs,
   createDvPlan, getDvPlan, listDvPlans, updateDvPlan, deleteDvPlan,
@@ -68,7 +68,7 @@ import {
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
   createDvTeamChat, listDvTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
   addTaskComment, getTaskComments, deleteTaskComment,
   createOutreachCampaign, getOutreachCampaign, listOutreachCampaigns, updateOutreachCampaign,
   createOutreachContact, getOutreachContact, listOutreachContacts, updateOutreachContact,
@@ -198,10 +198,13 @@ function checkAdmin(req, res) {
 }
 
 // Get display name for admin user (studio JWT display_name, or fallback)
+// X-Acting-As header lets admin key holders identify themselves (e.g. greatness-claude via MCP)
 function getAdminDisplayName(req) {
   var user = getStudioUser(req);
   if (user) return user.displayName || user.username;
-  return '__admin__';
+  var actingAs = req.headers['x-acting-as'];
+  if (actingAs) return actingAs;
+  return '__system__';
 }
 
 // Either agent or admin — returns display name / agent ID
@@ -211,7 +214,10 @@ function checkAgentOrAdmin(req, res) {
   if (user) return user.displayName || user.username;
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey === ADMIN_KEY) return '__admin__';
+  if (adminKey === ADMIN_KEY) {
+    var actingAs = req.headers['x-acting-as'];
+    return actingAs || '__system__';
+  }
   // Try agent key
   return checkAgent(req, res);
 }
@@ -226,7 +232,7 @@ function emitEvent(type, agentId, game, summary, data) {
 // Hard enforcement: blocks agents without an approved approval_id.
 function checkApprovalGate(req, who, actionType) {
   // Admin/studio users bypass gates
-  if (who === '__admin__' || !who || who.indexOf('-claude') === -1) return { ok: true };
+  if (who === '__admin__' || who === '__system__' || !who || who.indexOf('-claude') === -1) return { ok: true };
   var approvalId = req.body.approval_id || req.query.approval_id;
   if (!approvalId) {
     return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call studio_request_approval first.' };
@@ -939,6 +945,17 @@ router.get('/messages/threads', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listDvThreads(parseInt(req.query.limit) || 20));
+});
+
+// Admin-only bulk message cleanup
+router.delete('/messages/bulk', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var from = req.query.from;
+  var to = req.query.to;
+  var content_like = req.query.content_like;
+  if (!from && !to && !content_like) return res.status(400).json({ error: 'Specify at least one filter: from, to, content_like' });
+  var deleted = bulkDeleteMessages({ from: from, to: to, content_like: content_like });
+  res.json({ deleted: deleted });
 });
 
 // ======== PLANS ========
@@ -1859,11 +1876,24 @@ router.get('/webhooks/deliveries', function (req, res) {
 
 // ======== DRONES ========
 
-// List all drones (agents with game='drone')
+// List all drones (agents with game='drone') with diagnostics
 router.get('/drones', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var drones = listDrones();
+  // Enrich each drone with system diagnostics from latest savepoint
+  drones = drones.map(function (d) {
+    var savepoint = getLatestSavepoint(d.id);
+    if (savepoint) {
+      try {
+        var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+        d.system_info = snapshot.system_info || null;
+        d.warnings = snapshot.warnings || [];
+        d.worker_version = snapshot.worker_version || null;
+      } catch (e) { /* */ }
+    }
+    return d;
+  });
   res.json(drones);
 });
 
@@ -1931,11 +1961,14 @@ router.put('/drones/jobs/:id', function (req, res) {
     return res.status(403).json({ error: 'Not authorized to update this job' });
   }
   var fields = {};
-  if (req.body.status !== undefined) fields.status = req.body.status;
+  // Accept 'completed' as alias for 'done'
+  var statusVal = req.body.status;
+  if (statusVal === 'completed') statusVal = 'done';
+  if (statusVal !== undefined) fields.status = statusVal;
   if (req.body.result_url !== undefined) fields.result_url = req.body.result_url;
   if (req.body.result_data !== undefined) fields.result_data = req.body.result_data;
   if (req.body.error !== undefined) fields.error = req.body.error;
-  if (req.body.status === 'done' || req.body.status === 'failed') {
+  if (fields.status === 'done' || fields.status === 'failed') {
     fields.completed_at = new Date().toISOString();
   }
   updateDroneJob(job.id, fields);
@@ -2006,15 +2039,29 @@ router.put('/drones/jobs/:id', function (req, res) {
   res.json({ ok: true, id: job.id });
 });
 
-// Cancel pending drone job (admin only)
+// Cancel/delete drone job (admin only — works on any status)
 router.delete('/drones/jobs/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var job = getDroneJob(parseInt(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
-  if (job.status !== 'pending') return res.status(400).json({ error: 'Can only cancel pending jobs' });
-  updateDroneJob(job.id, { status: 'cancelled', completed_at: new Date().toISOString() });
-  emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id, { job_id: job.id });
+  updateDroneJob(job.id, { status: 'cancelled', completed_at: job.completed_at || new Date().toISOString() });
+  emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id + ' (was: ' + job.status + ')', { job_id: job.id });
   res.json({ ok: true, id: job.id, cancelled: true });
+});
+
+// Bulk cleanup: cancel old done/failed jobs (admin only)
+// DELETE /drones/jobs?older_than_days=7&status=failed
+router.delete('/drones/jobs', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var days = parseInt(req.query.older_than_days) || 0; // 0 = all matching
+  var statusFilter = req.query.status || 'failed'; // failed, done, or both
+  var statuses = statusFilter === 'both' ? ['failed', 'done'] : [statusFilter];
+  if (statuses.some(function (s) { return s !== 'failed' && s !== 'done'; })) {
+    return res.status(400).json({ error: 'status must be failed, done, or both' });
+  }
+  var jobs = bulkCancelDroneJobs(statuses, days);
+  emitEvent('drone_jobs_cleanup', getAdminDisplayName(req), 'drone', 'Bulk cancelled ' + jobs.length + ' ' + statusFilter + ' drone jobs', { count: jobs.length });
+  res.json({ ok: true, cancelled: jobs.length, jobs: jobs.map(function (j) { return { id: j.id, title: j.title }; }) });
 });
 
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
@@ -2069,7 +2116,7 @@ router.delete('/drones/artifacts/:name', function (req, res) {
   res.json({ ok: true, deleted: name });
 });
 
-// Get single drone + recent jobs (must be after /drones/artifacts to prevent :id catching "artifacts")
+// Get single drone + recent jobs + diagnostics (must be after /drones/artifacts to prevent :id catching "artifacts")
 router.get('/drones/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -2078,6 +2125,32 @@ router.get('/drones/:id', function (req, res) {
   var { api_key_hash, ...safe } = agent;
   var recentJobs = listDroneJobs({ drone_id: req.params.id, limit: 20 });
   safe.recent_jobs = recentJobs;
+  // Include system diagnostics from latest savepoint
+  var savepoint = getLatestSavepoint(req.params.id);
+  if (savepoint) {
+    try {
+      var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+      safe.system_info = snapshot.system_info || null;
+      safe.warnings = snapshot.warnings || [];
+      safe.worker_version = snapshot.worker_version || null;
+    } catch (e) { /* */ }
+  }
+  // Error summary from recent failed jobs
+  var failedJobs = recentJobs.filter(function (j) { return j.status === 'failed'; });
+  if (failedJobs.length > 0) {
+    safe.error_summary = failedJobs.slice(0, 5).map(function (j) {
+      var resultData = {};
+      try { resultData = JSON.parse(j.result_data || '{}'); } catch (e) { /* */ }
+      return {
+        job_id: j.id,
+        title: j.title,
+        error_type: resultData.error_type || 'unknown',
+        message: (resultData.message || j.error || '').substring(0, 200),
+        suggestion: (resultData.suggestion || '').substring(0, 200),
+        failed_at: j.completed_at,
+      };
+    });
+  }
   res.json(safe);
 });
 

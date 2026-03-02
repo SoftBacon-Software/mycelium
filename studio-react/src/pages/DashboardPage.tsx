@@ -123,6 +123,7 @@ const quickLinks = [
   { to: '/concepts', label: 'Concepts', desc: 'Shared concepts', color: 'text-purple' },
   { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
   { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
+  { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
 ]
 
 export default function DashboardPage() {
