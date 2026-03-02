@@ -58,6 +58,12 @@ if (fs.existsSync(dashboardPath)) {
   app.use('/studio', express.static(dashboardPath));
 }
 
+// ---- Public downloads (setup scripts, etc.) ----
+var publicRoot = path.join(__dirname, '..', 'public');
+app.get('/setup-admin.ps1', function (req, res) {
+  res.type('text/plain').sendFile(path.join(publicRoot, 'setup-admin.ps1'));
+});
+
 // ---- API routes ----
 app.use('/api/mycelium', myceliumRoutes);
 app.use('/api/dioverse', myceliumRoutes);  // backward compat alias
