@@ -4,7 +4,7 @@
 
 import express from 'express';
 import crypto from 'crypto';
-import { PORT, WEBHOOK_SECRET, AGENT_ID, GITHUB_REPOS, GITHUB_TOKEN } from './config.js';
+import { PORT, WEBHOOK_SECRET, AGENT_ID, GITHUB_REPOS, GITHUB_TOKEN, MYCELIUM_API_URL } from './config.js';
 import { apiPost, apiPut, apiGet } from './api.js';
 import { handleEvent } from './handlers.js';
 
@@ -13,7 +13,14 @@ app.use(express.json({ limit: '1mb' }));
 
 // ---- Health check ----
 app.get('/health', function (req, res) {
-  res.json({ status: 'ok', agent: AGENT_ID, uptime: process.uptime() });
+  res.json({
+    status: 'ok',
+    agent: AGENT_ID,
+    uptime: process.uptime(),
+    github_enabled: !!(GITHUB_TOKEN && GITHUB_REPOS.length > 0),
+    github_repos: GITHUB_REPOS,
+    api_url: MYCELIUM_API_URL
+  });
 });
 
 // ---- Webhook receiver ----
@@ -58,9 +65,12 @@ var server = app.listen(PORT, function () {
 
   // Periodic GitHub PR check every 15 minutes (if token configured)
   if (GITHUB_TOKEN && GITHUB_REPOS.length > 0) {
+    console.log('[startup] GitHub PR reviews enabled for: ' + GITHUB_REPOS.join(', '));
     // Initial check after 30s startup delay
     setTimeout(checkGitHubPRs, 30000);
     setInterval(checkGitHubPRs, 15 * 60 * 1000);
+  } else {
+    console.log('[startup] GitHub PR reviews DISABLED (no GITHUB_TOKEN or GITHUB_REPOS)');
   }
 });
 

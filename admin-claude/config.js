@@ -13,7 +13,7 @@ export var MODEL = 'claude-sonnet-4-6'; // Sonnet for fast/cheap triage
 export var MAX_CLAUDE_CALLS_PER_MIN = parseInt(process.env.MAX_CLAUDE_CALLS_PER_MIN) || 10;
 
 // GitHub repos to watch for PRs
-export var GITHUB_REPOS = (process.env.GITHUB_REPOS || 'anthropics/mycelium').split(',').map(function (r) { return r.trim(); });
+export var GITHUB_REPOS = (process.env.GITHUB_REPOS || 'grbarajas-soymd/mycelium').split(',').map(function (r) { return r.trim(); });
 
 // System prompt for admin-claude's judgment calls
 export var SYSTEM_PROMPT = `You are admin-claude, the automated administrator for Mycelium — a distributed development platform.
