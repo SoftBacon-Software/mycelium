@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { initDB } from './db.js';
+import { initDB, resolveStaleRequests, pruneWebhookDeliveries } from './db.js';
 import myceliumRoutes from './routes/mycelium.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,29 @@ if (fs.existsSync(dashboardPath)) {
 
 var server = app.listen(PORT, function () {
   console.log('Mycelium running on port ' + PORT + ' — mycelium.fyi');
+
+  // Startup maintenance: clean stale requests and prune old webhook delivery logs
+  try {
+    var staleResolved = resolveStaleRequests(72);
+    if (staleResolved > 0) console.log('Resolved ' + staleResolved + ' stale requests (>72h)');
+    var pruned = pruneWebhookDeliveries(7);
+    if (pruned > 0) console.log('Pruned ' + pruned + ' old webhook delivery logs (>7d)');
+  } catch (e) {
+    console.error('Startup maintenance error:', e.message);
+  }
 });
+
+// Daily maintenance: stale requests + webhook log pruning (runs every 24h)
+setInterval(function () {
+  try {
+    var staleResolved = resolveStaleRequests(72);
+    if (staleResolved > 0) console.log('[daily] Resolved ' + staleResolved + ' stale requests');
+    var pruned = pruneWebhookDeliveries(7);
+    if (pruned > 0) console.log('[daily] Pruned ' + pruned + ' old webhook delivery logs');
+  } catch (e) {
+    console.error('[daily] Maintenance error:', e.message);
+  }
+}, 24 * 60 * 60 * 1000);
 
 // ---- Voice chat signaling (WebRTC) ----
 import { WebSocketServer } from 'ws';

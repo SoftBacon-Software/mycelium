@@ -361,6 +361,23 @@ CREATE TABLE IF NOT EXISTS dv_approval_votes (
 CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_approval ON dv_approval_votes(approval_id);
 CREATE INDEX IF NOT EXISTS idx_dv_approval_votes_voter ON dv_approval_votes(voter);
 
+-- Webhook delivery log
+CREATE TABLE IF NOT EXISTS dv_webhook_deliveries (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  webhook_id      INTEGER NOT NULL,
+  event           TEXT NOT NULL,
+  agent_id        TEXT NOT NULL DEFAULT '',
+  payload         TEXT NOT NULL DEFAULT '{}',
+  status_code     INTEGER,
+  response_body   TEXT,
+  error           TEXT,
+  duration_ms     INTEGER,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_event ON dv_webhook_deliveries(event);
+CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_webhook ON dv_webhook_deliveries(webhook_id);
+CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_created ON dv_webhook_deliveries(created_at DESC);
+
 -- Chat channels
 CREATE TABLE IF NOT EXISTS dv_channels (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
