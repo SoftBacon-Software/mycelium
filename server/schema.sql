@@ -394,6 +394,22 @@ CREATE TABLE IF NOT EXISTS dv_channel_members (
 CREATE INDEX IF NOT EXISTS idx_dv_channel_members_channel ON dv_channel_members(channel_id);
 CREATE INDEX IF NOT EXISTS idx_dv_channel_members_user ON dv_channel_members(user_id);
 
+-- Agent savepoints (persistent session state)
+CREATE TABLE IF NOT EXISTS dv_agent_savepoints (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id        TEXT NOT NULL,
+  session_id      TEXT,
+  heartbeat_at    TEXT NOT NULL,
+  working_on      TEXT NOT NULL DEFAULT '',
+  state_snapshot  TEXT NOT NULL DEFAULT '{}',
+  messages_acked  TEXT NOT NULL DEFAULT '[]',
+  context_versions TEXT NOT NULL DEFAULT '{}',
+  notes           TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_savepoints_agent ON dv_agent_savepoints(agent_id, heartbeat_at DESC);
+CREATE INDEX IF NOT EXISTS idx_savepoints_session ON dv_agent_savepoints(session_id);
+
 -- Channel read tracking
 CREATE TABLE IF NOT EXISTS dv_channel_reads (
   channel_id          INTEGER NOT NULL REFERENCES dv_channels(id) ON DELETE CASCADE,
