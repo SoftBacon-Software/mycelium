@@ -172,6 +172,37 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
             </div>
           </div>
 
+          {/* Source (branch / PR / repo) */}
+          {(task.branch || task.pr_url || task.repo) && (
+            <div>
+              <h3 className="text-xs uppercase tracking-wider text-text-muted font-medium mb-2">Source</h3>
+              <div className="space-y-1.5">
+                {task.repo && (
+                  <div className="text-sm text-text-dim font-mono">{task.repo}</div>
+                )}
+                {task.branch && (
+                  <div className="text-sm text-text-dim">
+                    <BranchIcon />
+                    <span className="font-mono">{task.branch}</span>
+                  </div>
+                )}
+                {task.pr_url && (
+                  <div className="text-sm">
+                    <a
+                      href={task.pr_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent hover:text-accent-light transition-colors"
+                    >
+                      {formatPrUrl(task.pr_url)}
+                      <ExternalLinkIcon />
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Tags */}
           {(() => {
             const tags = parseTags(task.tags)
@@ -267,6 +298,28 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
         </div>
       </div>
     </>
+  )
+}
+
+function formatPrUrl(url: string): string {
+  const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)
+  if (ghMatch) return `${ghMatch[1]}#${ghMatch[2]}`
+  return url.replace(/^https?:\/\//, '').slice(0, 40)
+}
+
+function BranchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 inline-block mr-1 text-text-muted" fill="currentColor">
+      <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
+    </svg>
+  )
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg viewBox="0 0 12 12" className="w-3 h-3 inline-block ml-1 text-text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M7 1h4v4M11 1L5.5 6.5M9 7v3.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H5" />
+    </svg>
   )
 }
 

@@ -4,6 +4,12 @@ import Badge from '../shared/Badge'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function formatPrUrl(url: string): string {
+  const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/)
+  if (ghMatch) return `${ghMatch[1]}#${ghMatch[2]}`
+  return url.replace(/^https?:\/\//, '').slice(0, 40)
+}
+
 const statusConfig: Record<string, { variant: 'green' | 'blue' | 'muted' | 'default'; label: string }> = {
   pending: { variant: 'default', label: 'pending' },
   in_progress: { variant: 'blue', label: 'in progress' },
@@ -164,6 +170,38 @@ export default function StepChecklist({ steps, planId, onStepUpdate }: StepCheck
                   <p className="text-text-muted text-xs mt-1.5">
                     Assigned to <span className="text-text-dim">{step.assignee}</span>
                   </p>
+                )}
+                {(step.linked_task_id || step.linked_branch || step.linked_pr_url) && (
+                  <div className="mt-2 pt-2 border-t border-border/50 space-y-1">
+                    {step.linked_task_id && (
+                      <p className="text-xs">
+                        <Badge variant="blue">Task #{step.linked_task_id}</Badge>
+                      </p>
+                    )}
+                    {step.linked_branch && (
+                      <p className="text-xs text-text-dim">
+                        <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 inline-block mr-1 text-text-muted" fill="currentColor">
+                          <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
+                        </svg>
+                        <span className="font-mono">{step.linked_branch}</span>
+                      </p>
+                    )}
+                    {step.linked_pr_url && (
+                      <p className="text-xs">
+                        <a
+                          href={step.linked_pr_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-accent hover:text-accent-light transition-colors"
+                        >
+                          {formatPrUrl(step.linked_pr_url)}
+                          <svg viewBox="0 0 12 12" className="w-3 h-3 inline-block ml-1 text-text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M7 1h4v4M11 1L5.5 6.5M9 7v3.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H5" />
+                          </svg>
+                        </a>
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
