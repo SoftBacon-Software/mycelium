@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { toast } from 'sonner'
 import { useAuthStore } from './authStore'
 
 // ─── ICE Servers ─────────────────────────────────────────────────────────────
@@ -66,6 +67,22 @@ function createPeerConnection(remotePeerId: string): RTCPeerConnection {
     audioElements.set(remotePeerId, audio)
   }
 
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'failed') {
+      toast.error(`Voice: connection to ${remotePeerId} failed (ICE failure)`)
+      removePeer(remotePeerId)
+    } else if (pc.iceConnectionState === 'disconnected') {
+      toast.error(`Voice: connection to ${remotePeerId} lost`)
+    }
+  }
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed') {
+      toast.error(`Voice: peer connection to ${remotePeerId} failed`)
+      removePeer(remotePeerId)
+    }
+  }
+
   peerConnections.set(remotePeerId, pc)
   syncPeers()
 
@@ -106,6 +123,7 @@ async function handleMessage(event: MessageEvent) {
         sendSignal({ type: 'offer', offer, targetPeerId: peerId })
       } catch (err) {
         console.error('Failed to create offer:', err)
+        toast.error('Voice: failed to connect to new peer')
       }
       break
     }
@@ -120,6 +138,7 @@ async function handleMessage(event: MessageEvent) {
         sendSignal({ type: 'answer', answer, targetPeerId: peerId })
       } catch (err) {
         console.error('Failed to handle offer:', err)
+        toast.error('Voice: failed to negotiate with peer')
       }
       break
     }
@@ -134,6 +153,7 @@ async function handleMessage(event: MessageEvent) {
           )
         } catch (err) {
           console.error('Failed to set remote description:', err)
+          toast.error('Voice: connection setup failed')
         }
       }
       break
@@ -226,6 +246,7 @@ export const useVoiceStore = create<VoiceState>()((set) => ({
 
       socket.onerror = () => {
         set({ error: 'Voice connection failed', isConnected: false })
+        toast.error('Voice: connection error — check server or network')
       }
 
       socket.onclose = () => {
@@ -240,6 +261,7 @@ export const useVoiceStore = create<VoiceState>()((set) => ({
 
         if (!intentionalDisconnect) {
           set({ isConnected: false, peers: [], channelName: null })
+          toast.error('Voice: disconnected unexpectedly')
         }
       }
     } catch {
