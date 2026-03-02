@@ -6,6 +6,11 @@ import { ask, askJson } from './claude.js';
 import { apiGet, apiPost, apiPut } from './api.js';
 import { AGENT_ID, GITHUB_TOKEN, GITHUB_REPOS } from './config.js';
 
+// Track handled message IDs to prevent duplicate processing
+var handledMessages = new Set();
+// Periodically clear old IDs to prevent memory growth
+setInterval(function () { handledMessages.clear(); }, 30 * 60 * 1000);
+
 // Update heartbeat so dashboard shows what admin-claude is doing
 async function setStatus(workingOn) {
   try {
@@ -29,8 +34,6 @@ export async function handleEvent(event, data, agentId) {
   if (agentId === AGENT_ID) return;
 
   switch (event) {
-    case 'request_created':
-      return handleRequestCreated(data);
     case 'message_sent':
       return handleMessageSent(data);
     case 'bug_created':
@@ -39,32 +42,39 @@ export async function handleEvent(event, data, agentId) {
       return handleDroneJobExhausted(data);
     case 'approval_requested':
       return handleApprovalRequested(data);
+    // request_created is handled via message_sent to avoid duplicate processing
+    case 'request_created':
+      return; // Skip — handled by message_sent
     default:
-      // Log but don't process other events
       break;
   }
 }
 
 // ---- Handler: message_sent ----
-// Handles messages, directives, and requests sent TO admin-claude.
-// Directives MUST be responded to. Requests get helpful responses. Regular messages get acknowledged if actionable.
+// Handles ALL messages sent TO admin-claude:
+// - Directives: MUST respond (priority command from human)
+// - Requests: Helpful response + resolve
+// - Regular messages: Respond if actionable
 
 async function handleMessageSent(data) {
   if (!data.message_id) return;
 
-  // Fetch recent messages to find the one we got notified about
+  // Dedup — prevent double-processing from webhook + backlog
+  var msgKey = 'msg-' + data.message_id;
+  if (handledMessages.has(msgKey)) return;
+  handledMessages.add(msgKey);
+
+  // Fetch the message
   var msg;
   try {
-    var msgs = await apiGet('/messages?limit=20&to_agent=' + encodeURIComponent(AGENT_ID));
+    var msgs = await apiGet('/messages?limit=30&to_agent=' + encodeURIComponent(AGENT_ID));
     msg = msgs.find(function (m) { return m.id === data.message_id || m.id === parseInt(data.message_id); });
   } catch (err) {
     console.error('[message] Failed to fetch messages:', err.message);
   }
 
-  // Fall back to webhook data if we can't find the message
   if (!msg) {
-    // Use webhook data directly — but we can't determine msg_type, so skip
-    console.log('[message] Could not find message #' + data.message_id + ' in recent messages — skipping');
+    console.log('[message] Could not find message #' + data.message_id + ' — skipping');
     return;
   }
 
@@ -73,108 +83,59 @@ async function handleMessageSent(data) {
 
   var isDirective = msg.msg_type === 'directive';
   var isRequest = msg.msg_type === 'request';
+  var isRegularMessage = msg.msg_type === 'message';
 
-  if (!isDirective && !isRequest) return; // Skip regular messages and info
+  // Skip info messages (system notifications)
+  if (msg.msg_type === 'info') return;
 
   var fromAgent = msg.from_agent || data.from || 'unknown';
-  await setStatus((isDirective ? 'Responding to directive' : 'Responding to request') + ' from ' + fromAgent);
+  var typeLabel = isDirective ? 'directive' : isRequest ? 'request' : 'message';
+  await setStatus('Processing ' + typeLabel + ' from ' + fromAgent);
 
-  // Get network context for a better response
+  // Get network context
   var ops;
   try { ops = await apiGet('/admin/ops'); } catch (err) { ops = {}; }
 
-  var context = (isDirective ? 'DIRECTIVE' : 'Request') + ' from: ' + fromAgent + '\n' +
+  var context = typeLabel.toUpperCase() + ' from: ' + fromAgent + '\n' +
     'Content: ' + msg.content + '\n' +
     'Current unassigned tasks: ' + (ops.unassigned_tasks ? ops.unassigned_tasks.length : 0) + '\n' +
     'Current open bugs: ' + (ops.unassigned_bugs ? ops.unassigned_bugs.length : 0) + '\n' +
     'Failed drone jobs: ' + (ops.failed_drone_jobs ? ops.failed_drone_jobs.length : 0);
 
-  var prompt = isDirective
-    ? 'A human operator sent you a DIRECTIVE — this is a priority command that MUST be acted on. ' +
+  var prompt;
+  if (isDirective) {
+    prompt = 'A human operator sent you a DIRECTIVE — this is a priority command that MUST be acted on. ' +
       'Read the directive carefully and respond with what you will do or have done. Be specific and actionable. ' +
-      'If the directive requires actions you cannot take (like deploying code), say exactly what needs to happen and who should do it.'
-    : 'An agent sent a request that needs a response. Draft a helpful, concise response. ' +
+      'If the directive requires actions you cannot take (like deploying code), say exactly what needs to happen and who should do it.';
+  } else if (isRequest) {
+    prompt = 'An agent sent a request that needs a response. Draft a helpful, concise response. ' +
       'If they are asking for work, suggest available tasks or bugs they could claim. ' +
       'If they are asking a question, answer directly. Be actionable, not vague.';
+  } else {
+    prompt = 'Someone sent you a message. Read it and respond helpfully if it requires action. ' +
+      'If it is asking you to do something, acknowledge and describe what you will do. ' +
+      'Keep your response concise. If the message does not need a response, just say "Acknowledged."';
+  }
 
   var response = await ask(prompt, context);
 
-  // Resolve the message and send follow-up
+  // Resolve (for directives/requests) and send follow-up
   try {
-    await apiPut('/messages/' + msg.id + '/resolve', {
-      resolved_by: AGENT_ID,
-      response: response
-    });
+    if (isDirective || isRequest) {
+      await apiPut('/messages/' + msg.id + '/resolve', {
+        resolved_by: AGENT_ID,
+        response: response
+      });
+    }
     await apiPost('/messages', {
       from_agent: AGENT_ID,
       to_agent: fromAgent,
       content: response,
       msg_type: 'message'
     });
-    console.log('[message] Resolved ' + msg.msg_type + ' #' + msg.id + ' from ' + fromAgent + ': ' + response.substring(0, 100));
+    console.log('[message] Handled ' + typeLabel + ' #' + msg.id + ' from ' + fromAgent + ': ' + response.substring(0, 100));
   } catch (err) {
-    console.error('[message] Failed to resolve #' + msg.id + ':', err.message);
-  }
-  await resetStatus();
-}
-
-// ---- Handler: request_created ----
-// Read the request, call Claude to draft a helpful response, resolve it.
-// Posture: "approve and route" — be helpful, don't gatekeep.
-
-async function handleRequestCreated(data) {
-  if (!data.message_id) return;
-  var fromAgent = data.from || 'unknown';
-  await setStatus('Responding to request from ' + fromAgent);
-
-  // Fetch the full request message
-  var msg;
-  try {
-    msg = await apiGet('/messages?limit=1&from_agent=' + encodeURIComponent(data.from || ''));
-    // The webhook data might have message_id — try to get context
-  } catch (err) {
-    console.error('[request] Failed to fetch request context:', err.message);
-  }
-
-  var content = data.content || '(no content)';
-  var fromAgent = data.from || 'unknown';
-
-  // Get current network state for context
-  var ops;
-  try {
-    ops = await apiGet('/admin/ops');
-  } catch (err) {
-    ops = {};
-  }
-
-  var context = 'Request from: ' + fromAgent + '\n' +
-    'Request content: ' + content + '\n' +
-    'Current unassigned tasks: ' + (ops.unassigned_tasks ? ops.unassigned_tasks.length : 0) + '\n' +
-    'Current open bugs: ' + (ops.unassigned_bugs ? ops.unassigned_bugs.length : 0);
-
-  var response = await ask(
-    'An agent sent a request that needs a response. Draft a helpful, concise response. ' +
-    'If they are asking for work, suggest available tasks or bugs they could claim. ' +
-    'If they are asking a question, answer directly. Be actionable, not vague.',
-    context
-  );
-
-  // Resolve the request with our response
-  try {
-    await apiPut('/messages/' + data.message_id + '/resolve', {
-      resolved_by: AGENT_ID,
-      response: response
-    });
-    // Send a follow-up message so the agent sees the response
-    await apiPost('/messages', {
-      from_agent: AGENT_ID,
-      to_agent: fromAgent,
-      content: response,
-      msg_type: 'message'
-    });
-    console.log('[request] Resolved request #' + data.message_id + ' from ' + fromAgent);
-  } catch (err) {
-    console.error('[request] Failed to resolve:', err.message);
+    console.error('[message] Failed to handle #' + msg.id + ':', err.message);
   }
   await resetStatus();
 }
@@ -186,7 +147,6 @@ async function handleBugCreated(data) {
   if (!data.bug_id) return;
   await setStatus('Triaging bug #' + data.bug_id);
 
-  // Fetch the full bug
   var bug;
   try {
     bug = await apiGet('/bugs/' + data.bug_id);
@@ -195,7 +155,6 @@ async function handleBugCreated(data) {
     return;
   }
 
-  // Don't reassign bugs that already have an owner
   if (bug.assignee) {
     console.log('[bug] Bug #' + data.bug_id + ' already assigned to ' + bug.assignee + ' — skipping');
     return;
@@ -241,7 +200,6 @@ async function handleBugCreated(data) {
 }
 
 // ---- Handler: drone_job_exhausted ----
-// All drones failed this job. Notify the requester with error details.
 
 async function handleDroneJobExhausted(data) {
   var jobId = data.job_id || data.original_job_id;
@@ -272,7 +230,6 @@ async function handleDroneJobExhausted(data) {
 }
 
 // ---- Handler: approval_requested ----
-// Low risk: auto-approve. Medium+: broadcast to human operators.
 
 async function handleApprovalRequested(data) {
   if (!data.approval_id) return;
@@ -289,7 +246,6 @@ async function handleApprovalRequested(data) {
   var riskTier = approval.risk_tier || data.risk_tier || 'medium';
 
   if (riskTier === 'low') {
-    // Auto-approve low risk actions
     try {
       await apiPut('/approvals/' + approval.id, {
         status: 'approved',
@@ -300,7 +256,6 @@ async function handleApprovalRequested(data) {
       console.error('[approval] Failed to auto-approve:', err.message);
     }
   } else {
-    // Medium+ risk: broadcast to human operators
     var message = 'Approval needed [' + riskTier + ' risk]: ' + approval.title + ' (' + approval.action_type + ')' +
       '\nRequested by: ' + approval.requested_by +
       '\nApproval #' + approval.id + ' — review in dashboard or respond here.';
@@ -308,7 +263,7 @@ async function handleApprovalRequested(data) {
     try {
       await apiPost('/messages', {
         from_agent: AGENT_ID,
-        to_agent: null, // broadcast
+        to_agent: null,
         content: message,
         msg_type: 'info'
       });
@@ -321,7 +276,6 @@ async function handleApprovalRequested(data) {
 }
 
 // ---- Periodic: GitHub PR check ----
-// Poll open PRs, review with Claude, post comments.
 
 export async function checkGitHubPRs() {
   console.log('[github] Starting PR check. Token set:', !!GITHUB_TOKEN, 'Repos:', GITHUB_REPOS);
@@ -343,7 +297,7 @@ export async function checkGitHubPRs() {
 
       for (var pr of prs) {
         console.log('[github] Processing PR #' + pr.number + ': ' + pr.title);
-        // Check if already reviewed via context keys
+        // Check if already reviewed
         var contextKey;
         try {
           contextKey = await apiGet('/context/keys/admin-claude/pr-reviewed-' + pr.number);
@@ -357,7 +311,7 @@ export async function checkGitHubPRs() {
           if (reviewData.reviewed) { console.log('[github] PR #' + pr.number + ' already reviewed — skipping'); continue; }
         }
 
-        // Fetch the diff via API (pr.diff_url can 404 on private repos)
+        // Fetch diff
         console.log('[github] Fetching diff for PR #' + pr.number);
         var diffResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls/' + pr.number, {
           headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3.diff' }
@@ -366,16 +320,16 @@ export async function checkGitHubPRs() {
         var diff = await diffResponse.text();
         console.log('[github] Diff size:', diff.length, 'chars');
 
-        // Check if pure design assets (only images/svg/css with no code)
+        // Check if pure design assets
         var lines = diff.split('\n');
         var designOnlyFiles = lines.filter(function (l) { return l.match(/^\+\+\+ .+\.(css|scss|svg|png|jpg|jpeg|gif|webp|ico)/); }).length;
         var totalFiles = lines.filter(function (l) { return l.startsWith('+++ '); }).length;
         var isDesignOnly = totalFiles > 0 && designOnlyFiles === totalFiles;
 
-        // Claude reviews ALL PRs. Flag design-only PRs additionally for human eyes.
+        // Review with Claude
         console.log('[github] Calling Claude to review PR #' + pr.number);
         await setStatus('Reviewing PR #' + pr.number + ': ' + pr.title.substring(0, 40));
-        var truncatedDiff = diff.substring(0, 15000); // Limit diff size for API
+        var truncatedDiff = diff.substring(0, 15000);
         var review = await ask(
           'Review this pull request diff. Focus on: bugs, logic errors, security issues, and code quality. ' +
           'Be concise. If the PR looks good, say so briefly. If there are issues, list them with specific line references.\n\n' +
@@ -385,7 +339,7 @@ export async function checkGitHubPRs() {
           'Diff:\n' + truncatedDiff
         );
 
-        // Post review comment on GitHub
+        // Post review on GitHub
         await fetch('https://api.github.com/repos/' + repo + '/issues/' + pr.number + '/comments', {
           method: 'POST',
           headers: {
@@ -397,7 +351,6 @@ export async function checkGitHubPRs() {
         });
 
         if (isDesignOnly) {
-          // Also flag for human since pure design can't be fully reviewed by Claude
           await apiPost('/messages', {
             from_agent: AGENT_ID,
             to_agent: null,
@@ -406,16 +359,16 @@ export async function checkGitHubPRs() {
           });
         }
 
-        // Mark as reviewed in context keys
+        // Mark reviewed
         try {
           await apiPut('/context/keys/admin-claude/pr-reviewed-' + pr.number, {
-            data: JSON.stringify({ reviewed: true, at: new Date().toISOString(), ui_heavy: isUiHeavy })
+            data: JSON.stringify({ reviewed: true, at: new Date().toISOString(), design_only: isDesignOnly })
           });
         } catch (err) {
           // Non-critical
         }
 
-        console.log('[github] Reviewed PR #' + pr.number + ' in ' + repo + (isUiHeavy ? ' (flagged for human)' : ''));
+        console.log('[github] Reviewed PR #' + pr.number + ' in ' + repo + (isDesignOnly ? ' (design-only, flagged for human)' : ''));
       }
     } catch (err) {
       console.error('[github] Error checking PRs for ' + repo + ':', err.message);
