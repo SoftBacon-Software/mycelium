@@ -498,6 +498,17 @@ export function listDvThreads(limit) {
     GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(limit || 20);
 }
 
+export function bulkDeleteMessages(filters) {
+  var conditions = [];
+  var params = [];
+  if (filters.from) { conditions.push('from_agent = ?'); params.push(filters.from); }
+  if (filters.to) { conditions.push('to_agent = ?'); params.push(filters.to); }
+  if (filters.content_like) { conditions.push('content LIKE ?'); params.push('%' + filters.content_like + '%'); }
+  if (conditions.length === 0) return 0;
+  var sql = 'DELETE FROM dv_messages WHERE ' + conditions.join(' AND ');
+  return db.prepare(sql).run(...params).changes;
+}
+
 // -- Namespaced context --
 
 export function upsertDvContextKey(namespace, key, data, agentId) {
@@ -1245,6 +1256,19 @@ export function listDroneJobs(filters) {
 
 export function listDrones() {
   return db.prepare("SELECT id, name, game, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents WHERE game = 'drone' ORDER BY created_at").all();
+}
+
+export function bulkCancelDroneJobs(statuses, olderThanDays) {
+  var where = "status IN ('" + statuses.join("','") + "')";
+  if (olderThanDays > 0) {
+    where += " AND completed_at < datetime('now', '-" + olderThanDays + " days')";
+  }
+  var jobs = db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where).all();
+  if (jobs.length > 0) {
+    var ids = jobs.map(function (j) { return j.id; });
+    db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + ids.join(',') + ")").run();
+  }
+  return jobs;
 }
 
 // -- Shared Concepts --

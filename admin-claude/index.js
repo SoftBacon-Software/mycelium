@@ -58,10 +58,14 @@ var server = app.listen(PORT, function () {
   // Register heartbeat as online
   heartbeat('Starting up — listening for webhooks');
 
-  // Periodic heartbeat every 5 minutes
+  // Process any unresolved directives/requests from before we were online
+  setTimeout(processBacklog, 10000);
+
+  // Periodic heartbeat every 5 minutes + backlog check
   setInterval(function () {
     heartbeat('Listening for webhooks');
   }, 5 * 60 * 1000);
+  setInterval(processBacklog, 5 * 60 * 1000);
 
   // Periodic GitHub PR check every 15 minutes (if token configured)
   if (GITHUB_TOKEN && GITHUB_REPOS.length > 0) {
@@ -95,6 +99,28 @@ async function heartbeat(workingOn, status) {
     });
   } catch (err) {
     console.error('[heartbeat] Failed:', err.message);
+  }
+}
+
+async function processBacklog() {
+  try {
+    var msgs = await apiGet('/messages?limit=20&to_agent=' + AGENT_ID);
+    var unresolved = msgs.filter(function (m) {
+      // Only process unresolved directives/requests NOT from ourselves
+      return !m.resolved_at
+        && (m.msg_type === 'directive' || m.msg_type === 'request')
+        && m.from_agent !== AGENT_ID
+        && m.from_agent !== '__admin__'
+        && m.from_agent !== '__system__';
+    });
+    if (unresolved.length > 0) {
+      console.log('[backlog] Found ' + unresolved.length + ' unresolved directives/requests');
+      for (var msg of unresolved) {
+        await handleEvent('message_sent', { message_id: msg.id, from: msg.from_agent, content: msg.content }, msg.from_agent);
+      }
+    }
+  } catch (err) {
+    console.error('[backlog] Error:', err.message);
   }
 }
 

@@ -1,10 +1,10 @@
 // HTTP client for the Mycelium API — admin-claude edition
 // Based on dioverse-mcp/src/api.js pattern
 
-import { MYCELIUM_API_URL, MYCELIUM_ADMIN_KEY } from './config.js';
+import { MYCELIUM_API_URL, MYCELIUM_ADMIN_KEY, AGENT_ID } from './config.js';
 
 function authHeaders() {
-  return { 'X-Admin-Key': MYCELIUM_ADMIN_KEY };
+  return { 'X-Admin-Key': MYCELIUM_ADMIN_KEY, 'X-Acting-As': AGENT_ID };
 }
 
 async function request(method, path, body) {

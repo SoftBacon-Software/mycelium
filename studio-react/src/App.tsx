@@ -16,6 +16,7 @@ import DronesPage from './pages/DronesPage'
 import ConceptsPage from './pages/ConceptsPage'
 import ContextPage from './pages/ContextPage'
 import WebhooksPage from './pages/WebhooksPage'
+import AdminOpsPage from './pages/AdminOpsPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -48,6 +49,7 @@ export default function App() {
           <Route path="concepts" element={<ConceptsPage />} />
           <Route path="context" element={<ContextPage />} />
           <Route path="webhooks" element={<WebhooksPage />} />
+          <Route path="ops" element={<AdminOpsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
