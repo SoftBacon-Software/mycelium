@@ -291,44 +291,43 @@ export async function checkGitHubPRs() {
         var diff = await diffResponse.text();
         console.log('[github] Diff size:', diff.length, 'chars');
 
-        // Check if UI-heavy (>50% tsx/css changes)
+        // Check if pure design assets (only images/svg/css with no code)
         var lines = diff.split('\n');
-        var uiLines = lines.filter(function (l) { return l.match(/^\+\+\+ .+\.(tsx|css|scss|svg)/); }).length;
+        var designOnlyFiles = lines.filter(function (l) { return l.match(/^\+\+\+ .+\.(css|scss|svg|png|jpg|jpeg|gif|webp|ico)/); }).length;
         var totalFiles = lines.filter(function (l) { return l.startsWith('+++ '); }).length;
-        var isUiHeavy = totalFiles > 0 && (uiLines / totalFiles) > 0.5;
+        var isDesignOnly = totalFiles > 0 && designOnlyFiles === totalFiles;
 
-        if (isUiHeavy) {
-          // Flag for human review
-          await setStatus('Flagging UI-heavy PR #' + pr.number + ' for human review');
+        // Claude reviews ALL PRs. Flag design-only PRs additionally for human eyes.
+        console.log('[github] Calling Claude to review PR #' + pr.number);
+        await setStatus('Reviewing PR #' + pr.number + ': ' + pr.title.substring(0, 40));
+        var truncatedDiff = diff.substring(0, 15000); // Limit diff size for API
+        var review = await ask(
+          'Review this pull request diff. Focus on: bugs, logic errors, security issues, and code quality. ' +
+          'Be concise. If the PR looks good, say so briefly. If there are issues, list them with specific line references.\n\n' +
+          'PR #' + pr.number + ': ' + pr.title + '\n' +
+          'Author: ' + (pr.user ? pr.user.login : 'unknown') + '\n' +
+          'Description: ' + (pr.body || '(none)').substring(0, 500),
+          'Diff:\n' + truncatedDiff
+        );
+
+        // Post review comment on GitHub
+        await fetch('https://api.github.com/repos/' + repo + '/issues/' + pr.number + '/comments', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'token ' + GITHUB_TOKEN,
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ body: '**admin-claude review:**\n\n' + review })
+        });
+
+        if (isDesignOnly) {
+          // Also flag for human since pure design can't be fully reviewed by Claude
           await apiPost('/messages', {
             from_agent: AGENT_ID,
             to_agent: null,
-            content: 'PR #' + pr.number + ' in ' + repo + ' is UI-heavy (' + uiLines + '/' + totalFiles + ' UI files). Needs human review: ' + pr.html_url,
+            content: 'PR #' + pr.number + ' in ' + repo + ' is design-only (' + designOnlyFiles + ' asset files). Claude reviewed the code, but visual changes need human eyes: ' + pr.html_url,
             msg_type: 'info'
-          });
-        } else {
-          // Code-only: Claude reviews
-          console.log('[github] Calling Claude to review PR #' + pr.number);
-          await setStatus('Reviewing PR #' + pr.number + ': ' + pr.title.substring(0, 40));
-          var truncatedDiff = diff.substring(0, 15000); // Limit diff size for API
-          var review = await ask(
-            'Review this pull request diff. Focus on: bugs, logic errors, security issues, and code quality. ' +
-            'Be concise. If the PR looks good, say so briefly. If there are issues, list them with specific line references.\n\n' +
-            'PR #' + pr.number + ': ' + pr.title + '\n' +
-            'Author: ' + (pr.user ? pr.user.login : 'unknown') + '\n' +
-            'Description: ' + (pr.body || '(none)').substring(0, 500),
-            'Diff:\n' + truncatedDiff
-          );
-
-          // Post review comment on GitHub
-          await fetch('https://api.github.com/repos/' + repo + '/issues/' + pr.number + '/comments', {
-            method: 'POST',
-            headers: {
-              'Authorization': 'token ' + GITHUB_TOKEN,
-              'Accept': 'application/vnd.github.v3+json',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ body: '**admin-claude review:**\n\n' + review })
           });
         }
 
