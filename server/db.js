@@ -353,7 +353,7 @@ export function listDvTasks(filters) {
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.requester) { where.push('requester = ?'); params.push(filters.requester); }
   if (filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_tasks WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -484,7 +484,7 @@ export function listDvAssets(filters) {
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_assets WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -529,7 +529,7 @@ export function listDvEvents(filters) {
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.agent) { where.push('agent = ?'); params.push(filters.agent); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_events WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -586,7 +586,7 @@ export function listDvMessages(filters) {
   if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
   if (filters.msg_type) { where.push('msg_type = ?'); params.push(filters.msg_type); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -597,7 +597,7 @@ export function listDvThreads(limit) {
     MAX(created_at) as last_message_at,
     (SELECT from_agent FROM dv_messages m2 WHERE m2.thread_id = dv_messages.thread_id ORDER BY created_at DESC LIMIT 1) as last_sender
     FROM dv_messages WHERE thread_id IS NOT NULL
-    GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(limit || 20);
+    GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(Math.min(limit || 20, 500));
 }
 
 export function bulkDeleteMessages(filters) {
@@ -669,7 +669,7 @@ export function listDvBugs(filters) {
   if (filters.reporter) { where.push('reporter = ?'); params.push(filters.reporter); }
   if (filters.severity) { where.push('severity = ?'); params.push(filters.severity); }
   if (filters.category) { where.push('category = ?'); params.push(filters.category); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -1014,7 +1014,7 @@ export function listDvPlans(filters) {
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.owner) { where.push('owner = ?'); params.push(filters.owner); }
   if (filters.exclude_status) { where.push('status != ?'); params.push(filters.exclude_status); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   var plans = db.prepare('SELECT * FROM dv_plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
@@ -1298,7 +1298,7 @@ export function listChannels(filters) {
     where.push('id IN (SELECT channel_id FROM dv_channel_members WHERE user_id = ?)');
     params.push(filters.member);
   }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
   return db.prepare('SELECT * FROM dv_channels WHERE ' + where.join(' AND ') + ' ORDER BY created_at ASC LIMIT ? OFFSET ?').all(...params);
@@ -1378,7 +1378,7 @@ export function listChannelMessages(channelId, filters) {
   var params = [channelId];
   if (filters.before) { where.push('id < ?'); params.push(filters.before); }
   if (filters.after) { where.push('id > ?'); params.push(filters.after); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   params.push(limit);
   return db.prepare(
     'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
@@ -1643,7 +1643,7 @@ export function listApprovals(filters) {
   if (filters.action_type) { where.push('action_type = ?'); params.push(filters.action_type); }
   if (filters.requested_by) { where.push('requested_by = ?'); params.push(filters.requested_by); }
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  var limit = filters.limit || 50;
+  var limit = Math.min(filters.limit || 50, 500);
   params.push(limit);
   return db.prepare('SELECT * FROM dv_approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
 }

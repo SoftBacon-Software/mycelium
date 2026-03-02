@@ -129,6 +129,14 @@ function apiError(res, status, message, extra) {
   return res.status(status).json(Object.assign({ error: message }, extra || {}));
 }
 
+// Parse and cap a pagination limit query parameter.
+// Default is 50, maximum is MAX_PAGE_LIMIT (500). Prevents runaway queries.
+var MAX_PAGE_LIMIT = 500;
+function parseLimit(val, def) {
+  var n = parseInt(val, 10);
+  return Math.min(isNaN(n) || n < 1 ? (def || 50) : n, MAX_PAGE_LIMIT);
+}
+
 var AGENT_STATUSES = ['online', 'offline', 'idle', 'busy'];
 var TASK_STATUSES = ['open', 'in_progress', 'review', 'done', 'cancelled'];
 var TASK_PRIORITIES = ['low', 'normal', 'high'];
@@ -497,7 +505,7 @@ router.get('/agents/:id/savepoint', function (req, res) {
 router.get('/agents/:id/savepoints', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var limit = parseInt(req.query.limit) || 10;
+  var limit = parseLimit(req.query.limit, 10);
   res.json(getSavepointHistory(req.params.id, limit));
 });
 
@@ -575,7 +583,7 @@ router.get('/tasks', function (req, res) {
     assignee: req.query.assignee,
     requester: req.query.requester,
     priority: req.query.priority,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDvTasks(filters));
@@ -828,7 +836,7 @@ router.get('/assets', function (req, res) {
     project_id: req.query.project_id,
     type: req.query.type,
     status: req.query.status,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDvAssets(filters));
@@ -964,7 +972,7 @@ router.get('/events', function (req, res) {
     project_id: req.query.project_id,
     type: req.query.type,
     agent: req.query.agent,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDvEvents(filters));
@@ -1062,7 +1070,7 @@ router.get('/messages', function (req, res) {
     since: req.query.since,
     msg_type: req.query.msg_type,
     status: req.query.status,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0,
     channel_id: req.query.channel_id ? parseIntParam(req.query.channel_id) : undefined
   };
@@ -1140,7 +1148,7 @@ router.put('/messages/:id/resolve', function (req, res) {
 router.get('/messages/threads', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listDvThreads(parseInt(req.query.limit) || 20));
+  res.json(listDvThreads(parseLimit(req.query.limit, 20)));
 });
 
 // Admin-only bulk message cleanup
@@ -1163,7 +1171,7 @@ router.get('/plans', function (req, res) {
     project_id: req.query.project_id,
     status: req.query.status,
     owner: req.query.owner,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDvPlans(filters));
@@ -1867,7 +1875,7 @@ router.get('/bugs', function (req, res) {
   if (req.query.reporter) filters.reporter = req.query.reporter;
   if (req.query.severity) filters.severity = req.query.severity;
   if (req.query.category) filters.category = req.query.category;
-  filters.limit = parseInt(req.query.limit) || 50;
+  filters.limit = parseLimit(req.query.limit, 50);
   filters.offset = parseInt(req.query.offset) || 0;
   var bugs = listDvBugs(filters);
   var counts = countDvBugs();
@@ -1930,7 +1938,7 @@ router.get('/team-chat', function (req, res) {
     var key = req.headers['x-admin-key'];
     if (key !== ADMIN_KEY) return res.status(403).json({ error: 'Studio login required' });
   }
-  var limit = parseInt(req.query.limit) || 50;
+  var limit = parseLimit(req.query.limit, 50);
   res.json(listDvTeamChat(limit));
 });
 
@@ -1967,7 +1975,7 @@ router.get('/channels', function (req, res) {
     type: req.query.type,
     status: req.query.status,
     member: req.query.member,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listChannels(filters));
@@ -2071,7 +2079,7 @@ router.get('/channels/:id/messages', function (req, res) {
   var filters = {
     before: req.query.before ? parseIntParam(req.query.before) : undefined,
     after: req.query.after ? parseIntParam(req.query.after) : undefined,
-    limit: parseInt(req.query.limit) || 50
+    limit: parseLimit(req.query.limit, 50)
   };
   var messages;
   if (channel.slug === 'general') {
@@ -2141,7 +2149,7 @@ router.get('/webhooks/deliveries', function (req, res) {
     event: req.query.event || undefined,
     webhook_id: req.query.webhook_id ? parseIntParam(req.query.webhook_id) : undefined,
     error_only: req.query.error_only === 'true',
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listWebhookDeliveries(filters));
@@ -2207,7 +2215,7 @@ router.get('/drones/jobs', function (req, res) {
     status: req.query.status,
     drone_id: req.query.drone_id,
     requester: req.query.requester,
-    limit: parseInt(req.query.limit) || 50,
+    limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDroneJobs(filters));
@@ -2461,7 +2469,7 @@ router.get('/approvals', function (req, res) {
     action_type: req.query.action_type || undefined,
     requested_by: req.query.requested_by || undefined,
     project: req.query.project || undefined,
-    limit: parseInt(req.query.limit) || 50
+    limit: parseLimit(req.query.limit, 50)
   };
   var approvals = listApprovals(filters);
   approvals.forEach(function (a) { try { a.payload = JSON.parse(a.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + a.id + '):', e.message); } });
