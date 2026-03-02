@@ -21,10 +21,11 @@ function checkRateLimit() {
 }
 
 // Ask Claude a question and get a text response
+// Returns null if rate limited (callers must handle null)
 export async function ask(prompt, context) {
   if (!checkRateLimit()) {
     console.warn('[claude] Rate limited — skipping call');
-    return '[Rate limited — try again in a minute]';
+    return null;
   }
   var messages = [{ role: 'user', content: prompt }];
   if (context) {

@@ -1,6 +1,7 @@
 // =============== admin-claude Event Handlers ===============
 // Clean split: requests = coordination/judgment. Drone jobs = compute execution.
 // admin-claude handles requests, never creates drone jobs directly.
+// Approval tiers: low+medium = auto-approve. high+critical = escalate to dashboard.
 
 import { ask, askJson } from './claude.js';
 import { apiGet, apiPost, apiPut } from './api.js';
@@ -53,7 +54,7 @@ export async function handleEvent(event, data, agentId) {
 // ---- Handler: message_sent ----
 // Handles ALL messages sent TO admin-claude:
 // - Directives: MUST respond (priority command from human)
-// - Requests: Helpful response + resolve
+// - Requests: Check if it's a PR merge request (handle specially) or general request
 // - Regular messages: Respond if actionable
 
 async function handleMessageSent(data) {
@@ -81,12 +82,11 @@ async function handleMessageSent(data) {
   // Skip if already resolved
   if (msg.resolved_at) return;
 
-  // Skip messages from ourselves (prevent feedback loops)
+  // Skip messages from ourselves or system (prevent feedback loops)
   if (msg.from_agent === AGENT_ID || msg.from_agent === '__admin__' || msg.from_agent === '__system__') return;
 
   var isDirective = msg.msg_type === 'directive';
   var isRequest = msg.msg_type === 'request';
-  var isRegularMessage = msg.msg_type === 'message';
 
   // Skip info messages (system notifications)
   if (msg.msg_type === 'info') return;
@@ -94,6 +94,13 @@ async function handleMessageSent(data) {
   var fromAgent = msg.from_agent || data.from || 'unknown';
   var typeLabel = isDirective ? 'directive' : isRequest ? 'request' : 'message';
   await setStatus('Processing ' + typeLabel + ' from ' + fromAgent);
+
+  // Check if this is a PR merge request — handle with GitHub API directly
+  if (isRequest && isPRMergeRequest(msg.content)) {
+    await handlePRMergeRequest(msg, fromAgent);
+    await resetStatus();
+    return;
+  }
 
   // Get network context
   var ops;
@@ -122,6 +129,15 @@ async function handleMessageSent(data) {
 
   var response = await ask(prompt, context);
 
+  // If rate limited, skip — don't send empty/null messages
+  if (!response) {
+    console.log('[message] Rate limited — will retry on next backlog sweep for #' + msg.id);
+    // Remove from dedup so it gets retried
+    handledMessages.delete(msgKey);
+    await resetStatus();
+    return;
+  }
+
   // Resolve (for directives/requests) and send follow-up
   try {
     if (isDirective || isRequest) {
@@ -141,6 +157,162 @@ async function handleMessageSent(data) {
     console.error('[message] Failed to handle #' + msg.id + ':', err.message);
   }
   await resetStatus();
+}
+
+// ---- PR Merge Detection + Handling ----
+
+function isPRMergeRequest(content) {
+  if (!content) return false;
+  var lower = content.toLowerCase();
+  return (lower.includes('merge') || lower.includes('review')) &&
+    (lower.includes('pr #') || lower.includes('pull/') || lower.includes('pull request'));
+}
+
+function extractPRNumber(content) {
+  // Match "PR #14", "pull/14", "#14"
+  var match = content.match(/(?:PR\s*#|pull\/)(\d+)/i);
+  return match ? parseInt(match[1]) : null;
+}
+
+function extractRepo(content) {
+  // Match "github.com/owner/repo/pull/14"
+  var match = content.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
+  return match ? match[1] : (GITHUB_REPOS.length > 0 ? GITHUB_REPOS[0] : null);
+}
+
+async function handlePRMergeRequest(msg, fromAgent) {
+  var prNumber = extractPRNumber(msg.content);
+  var repo = extractRepo(msg.content);
+
+  if (!prNumber || !repo) {
+    await resolveWithResponse(msg, fromAgent, 'Could not parse PR number or repo from request. Please include the PR URL.');
+    return;
+  }
+
+  if (!GITHUB_TOKEN) {
+    await resolveWithResponse(msg, fromAgent, 'GitHub token not configured — cannot review or merge PRs.');
+    return;
+  }
+
+  await setStatus('Reviewing + merging PR #' + prNumber);
+
+  try {
+    // Fetch PR details
+    var prResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls/' + prNumber, {
+      headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!prResponse.ok) {
+      await resolveWithResponse(msg, fromAgent, 'Failed to fetch PR #' + prNumber + ': HTTP ' + prResponse.status);
+      return;
+    }
+    var pr = await prResponse.json();
+
+    // Check if already merged/closed
+    if (pr.merged) {
+      await resolveWithResponse(msg, fromAgent, 'PR #' + prNumber + ' is already merged.');
+      return;
+    }
+    if (pr.state === 'closed') {
+      await resolveWithResponse(msg, fromAgent, 'PR #' + prNumber + ' is closed (not merged).');
+      return;
+    }
+
+    // Fetch diff for review
+    var diffResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls/' + prNumber, {
+      headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3.diff' }
+    });
+    var diff = diffResponse.ok ? await diffResponse.text() : '';
+
+    // Review with Claude
+    var truncatedDiff = diff.substring(0, 15000);
+    var review = await ask(
+      'Review this pull request diff. Focus on: bugs, logic errors, security issues, and code quality. ' +
+      'Be concise. If the PR looks good, say "LGTM" at the start. If there are blocking issues, say "BLOCKING:" at the start.\n\n' +
+      'PR #' + prNumber + ': ' + pr.title + '\n' +
+      'Author: ' + (pr.user ? pr.user.login : 'unknown') + '\n' +
+      'Description: ' + (pr.body || '(none)').substring(0, 500),
+      'Diff:\n' + truncatedDiff
+    );
+
+    if (!review) {
+      // Rate limited — retry later
+      handledMessages.delete('msg-' + msg.id);
+      return;
+    }
+
+    // Post review as comment on GitHub
+    await fetch('https://api.github.com/repos/' + repo + '/issues/' + prNumber + '/comments', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'token ' + GITHUB_TOKEN,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ body: '**admin-claude review:**\n\n' + review })
+    });
+
+    // Check if review found blocking issues
+    var hasBlockingIssues = review.toUpperCase().startsWith('BLOCKING');
+
+    if (hasBlockingIssues) {
+      await resolveWithResponse(msg, fromAgent,
+        'PR #' + prNumber + ' reviewed — found blocking issues. Review posted on GitHub. Please fix and re-request.\n\n' + review.substring(0, 300));
+      return;
+    }
+
+    // No blocking issues — merge the PR
+    var mergeResponse = await fetch('https://api.github.com/repos/' + repo + '/pulls/' + prNumber + '/merge', {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'token ' + GITHUB_TOKEN,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        merge_method: 'merge',
+        commit_title: pr.title + ' (#' + prNumber + ')'
+      })
+    });
+
+    if (mergeResponse.ok) {
+      await resolveWithResponse(msg, fromAgent,
+        'PR #' + prNumber + ' (' + pr.title + ') reviewed and merged. Review posted on GitHub.');
+      console.log('[github] Merged PR #' + prNumber + ' in ' + repo);
+
+      // Mark reviewed in context
+      try {
+        await apiPut('/context/keys/admin-claude/pr-reviewed-' + prNumber, {
+          data: JSON.stringify({ reviewed: true, merged: true, at: new Date().toISOString() })
+        });
+      } catch (err) { /* non-critical */ }
+    } else {
+      var mergeError = await mergeResponse.json().catch(function () { return {}; });
+      await resolveWithResponse(msg, fromAgent,
+        'PR #' + prNumber + ' reviewed (LGTM) but merge failed: ' + (mergeError.message || 'HTTP ' + mergeResponse.status) +
+        '. Review posted on GitHub. May need manual merge.');
+    }
+  } catch (err) {
+    console.error('[github] Error handling PR merge request:', err.message);
+    await resolveWithResponse(msg, fromAgent, 'Error processing PR #' + prNumber + ': ' + err.message);
+  }
+}
+
+async function resolveWithResponse(msg, fromAgent, response) {
+  try {
+    await apiPut('/messages/' + msg.id + '/resolve', {
+      resolved_by: AGENT_ID,
+      response: response
+    });
+    await apiPost('/messages', {
+      from_agent: AGENT_ID,
+      to_agent: fromAgent,
+      content: response,
+      msg_type: 'message'
+    });
+    console.log('[message] Resolved #' + msg.id + ': ' + response.substring(0, 100));
+  } catch (err) {
+    console.error('[message] Failed to resolve #' + msg.id + ':', err.message);
+  }
 }
 
 // ---- Handler: bug_created ----
@@ -233,6 +405,7 @@ async function handleDroneJobExhausted(data) {
 }
 
 // ---- Handler: approval_requested ----
+// Low + Medium risk: auto-approve. High + Critical: escalate to dashboard for human review.
 
 async function handleApprovalRequested(data) {
   if (!data.approval_id) return;
@@ -248,20 +421,22 @@ async function handleApprovalRequested(data) {
 
   var riskTier = approval.risk_tier || data.risk_tier || 'medium';
 
-  if (riskTier === 'low') {
+  if (riskTier === 'low' || riskTier === 'medium') {
+    // Auto-approve low and medium risk
     try {
       await apiPut('/approvals/' + approval.id, {
         status: 'approved',
-        reason: '[admin-claude] Auto-approved: low risk action'
+        reason: '[admin-claude] Auto-approved: ' + riskTier + ' risk action'
       });
-      console.log('[approval] Auto-approved low-risk #' + approval.id + ': ' + approval.title);
+      console.log('[approval] Auto-approved ' + riskTier + '-risk #' + approval.id + ': ' + approval.title);
     } catch (err) {
       console.error('[approval] Failed to auto-approve:', err.message);
     }
   } else {
-    var message = 'Approval needed [' + riskTier + ' risk]: ' + approval.title + ' (' + approval.action_type + ')' +
+    // High + Critical: escalate to humans via dashboard
+    var message = 'APPROVAL NEEDED [' + riskTier.toUpperCase() + ' RISK]: ' + approval.title + ' (' + approval.action_type + ')' +
       '\nRequested by: ' + approval.requested_by +
-      '\nApproval #' + approval.id + ' — review in dashboard or respond here.';
+      '\nApproval #' + approval.id + ' — review and vote on the Approvals page in the dashboard.';
 
     try {
       await apiPost('/messages', {
@@ -270,7 +445,7 @@ async function handleApprovalRequested(data) {
         content: message,
         msg_type: 'info'
       });
-      console.log('[approval] Escalated ' + riskTier + '-risk #' + approval.id + ' to humans');
+      console.log('[approval] Escalated ' + riskTier + '-risk #' + approval.id + ' to dashboard for human review');
     } catch (err) {
       console.error('[approval] Failed to escalate:', err.message);
     }
@@ -341,6 +516,12 @@ export async function checkGitHubPRs() {
           'Description: ' + (pr.body || '(none)').substring(0, 500),
           'Diff:\n' + truncatedDiff
         );
+
+        // If rate limited, skip this PR
+        if (!review) {
+          console.log('[github] Rate limited — skipping PR #' + pr.number);
+          continue;
+        }
 
         // Post review on GitHub
         await fetch('https://api.github.com/repos/' + repo + '/issues/' + pr.number + '/comments', {
