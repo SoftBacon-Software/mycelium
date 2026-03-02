@@ -120,6 +120,15 @@ function validateEnum(res, value, allowed, fieldName) {
   return true;
 }
 
+// Standard error response helper.
+// All error responses MUST use this format: { error: "message" }
+// Extra fields (e.g. approval_required, existing_id) may be added via the `extra` param.
+// Usage: return apiError(res, 404, 'Task not found');
+//        return apiError(res, 403, 'Approval required', { approval_required: true });
+function apiError(res, status, message, extra) {
+  return res.status(status).json(Object.assign({ error: message }, extra || {}));
+}
+
 var AGENT_STATUSES = ['online', 'offline', 'idle', 'busy'];
 var TASK_STATUSES = ['open', 'in_progress', 'review', 'done', 'cancelled'];
 var TASK_PRIORITIES = ['low', 'normal', 'high'];
@@ -2655,7 +2664,8 @@ export async function initPlugins() {
   var pluginCore = {
     db: getDB(),
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
-    emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS
+    emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
+    apiError, parseIntParam
   };
   await loadPlugins(pluginCore, router);
 }
