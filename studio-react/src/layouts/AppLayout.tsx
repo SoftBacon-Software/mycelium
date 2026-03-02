@@ -31,10 +31,13 @@ const routeTitles: Record<string, string> = {
 
 function formatTime(date: Date | null): string {
   if (!date) return 'never'
-  const h = date.getHours().toString().padStart(2, '0')
-  const m = date.getMinutes().toString().padStart(2, '0')
-  const s = date.getSeconds().toString().padStart(2, '0')
-  return `${h}:${m}:${s}`
+  return date.toLocaleTimeString('en-US', {
+    timeZone: 'America/Chicago',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }) + ' CST'
 }
 
 export default function AppLayout() {
