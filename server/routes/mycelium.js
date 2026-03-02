@@ -94,6 +94,14 @@ var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
 
+// Wrap async route handlers so rejected promises forward to Express error handler.
+// Express 4 does not catch async rejections automatically.
+function asyncHandler(fn) {
+  return function (req, res, next) {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
 // but API serves data to any client. Escape on write to protect all consumers.
@@ -149,7 +157,18 @@ function clearAgentKeyCache() {
   agentKeyCache.clear();
 }
 
-// Agent auth: validates X-Agent-Key header, sets req.agentId
+// Check if the authenticated caller has access to a resource's project.
+// Admins and studio users bypass. Agents must match project_id.
+function checkProjectScope(req, res, resourceProjectId) {
+  if (req._authIsAdmin) return true;
+  if (!req._authAgentId) return true; // studio user or admin — no scope restriction
+  if (!resourceProjectId) return true; // resource has no project — allow
+  if (req._authProjectId === resourceProjectId) return true;
+  res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
+  return false;
+}
+
+// Agent auth: validates X-Agent-Key header, sets req._authAgentId and req._authProjectId
 function checkAgent(req, res) {
   var key = req.headers['x-agent-key'];
   if (!key) {
@@ -159,14 +178,21 @@ function checkAgent(req, res) {
   // Fast path: check SHA-256 cache first
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
   if (agentKeyCache.has(keyHash)) {
-    return agentKeyCache.get(keyHash);
+    var cached = agentKeyCache.get(keyHash);
+    var agentId = typeof cached === 'object' ? cached.id : cached;
+    var projectId = typeof cached === 'object' ? cached.project_id : null;
+    req._authAgentId = agentId;
+    req._authProjectId = projectId;
+    return agentId;
   }
   // Slow path: bcrypt comparison (first request per key only)
   var agents = listAgents();
   for (var a of agents) {
     var full = getAgent(a.id);
     if (full && bcrypt.compareSync(key, full.api_key_hash)) {
-      agentKeyCache.set(keyHash, a.id);
+      agentKeyCache.set(keyHash, { id: a.id, project_id: full.project_id || null });
+      req._authAgentId = a.id;
+      req._authProjectId = full.project_id || null;
       return a.id;
     }
   }
@@ -178,10 +204,10 @@ function checkAgent(req, res) {
 function checkAdmin(req, res) {
   // Try studio JWT first
   var user = getStudioUser(req);
-  if (user) return true;
+  if (user) { req._authIsAdmin = true; return true; }
   // Try admin key
   var key = req.headers['x-admin-key'];
-  if (key === ADMIN_KEY) return true;
+  if (key === ADMIN_KEY) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
   return false;
 }
@@ -200,10 +226,11 @@ function getAdminDisplayName(req) {
 function checkAgentOrAdmin(req, res) {
   // Try studio JWT first
   var user = getStudioUser(req);
-  if (user) return user.displayName || user.username;
+  if (user) { req._authIsAdmin = true; return user.displayName || user.username; }
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
   if (adminKey === ADMIN_KEY) {
+    req._authIsAdmin = true;
     var actingAs = req.headers['x-acting-as'];
     return actingAs || '__system__';
   }
@@ -449,6 +476,7 @@ router.put('/tasks/:id', function (req, res) {
   if (!agentId) return;
   var task = getDvTask(parseInt(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (!checkProjectScope(req, res, task.project_id)) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -567,6 +595,7 @@ router.delete('/tasks/:id/comments/:commentId', function (req, res) {
   if (!who) return;
   var task = getDvTask(parseInt(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (!checkProjectScope(req, res, task.project_id)) return;
   var deleted = deleteTaskComment(parseInt(req.params.commentId));
   if (!deleted) return res.status(404).json({ error: 'Comment not found' });
   res.json({ ok: true, deleted: parseInt(req.params.commentId) });
@@ -1016,6 +1045,7 @@ router.put('/plans/:id', function (req, res) {
   if (!agentId) return;
   var plan = getDvPlan(parseInt(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -1038,6 +1068,7 @@ router.delete('/plans/:id', function (req, res) {
   if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
   var plan = getDvPlan(parseInt(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   deleteDvPlan(plan.id);
   emitEvent('plan_deleted', who, plan.project_id, who + ' deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
   var result = { ok: true, deleted: plan.id };
@@ -1071,6 +1102,8 @@ router.post('/plans/:id/steps', function (req, res) {
 router.put('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  var plan = getDvPlan(parseInt(req.params.id));
+  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -1088,6 +1121,8 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
 router.delete('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  var plan = getDvPlan(parseInt(req.params.id));
+  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
   deleteDvPlanStep(parseInt(req.params.stepId));
   res.json({ ok: true, deleted: parseInt(req.params.stepId) });
 });
@@ -1095,6 +1130,8 @@ router.delete('/plans/:id/steps/:stepId', function (req, res) {
 router.put('/plans/:id/reorder', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  var plan = getDvPlan(parseInt(req.params.id));
+  if (plan && !checkProjectScope(req, res, plan.project_id)) return;
   var order = req.body.order;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
   reorderDvPlanSteps(parseInt(req.params.id), order);
@@ -1104,7 +1141,7 @@ router.put('/plans/:id/reorder', function (req, res) {
 // ======== STUDIO AUTH ========
 
 // Login — returns JWT
-router.post('/studio/login', async function (req, res) {
+router.post('/studio/login', asyncHandler(async function (req, res) {
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
@@ -1124,7 +1161,7 @@ router.post('/studio/login', async function (req, res) {
     token: token,
     user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }
   });
-});
+}));
 
 // Who am I
 router.get('/studio/me', function (req, res) {
@@ -1141,7 +1178,7 @@ router.get('/studio/me', function (req, res) {
 });
 
 // Register new studio user (admin only)
-router.post('/studio/users', async function (req, res) {
+router.post('/studio/users', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
@@ -1158,7 +1195,7 @@ router.post('/studio/users', async function (req, res) {
   var id = createStudioUser(username, displayName, hash, role);
   emitEvent('studio_user_created', getAdminDisplayName(req), null, 'Studio user created: ' + displayName + ' (' + username + ')');
   res.json({ id: id, username: username, display_name: displayName, role: role });
-});
+}));
 
 // List studio users (admin only)
 router.get('/studio/users', function (req, res) {
@@ -1167,7 +1204,7 @@ router.get('/studio/users', function (req, res) {
 });
 
 // Update studio user password (admin only)
-router.put('/studio/users/:id/password', async function (req, res) {
+router.put('/studio/users/:id/password', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var user = getStudioUserById(parseInt(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1176,7 +1213,7 @@ router.put('/studio/users/:id/password', async function (req, res) {
   var hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS_PASSWORD);
   updateStudioUser(user.id, { password_hash: hash });
   res.json({ ok: true, username: user.username });
-});
+}));
 
 // Delete studio user (admin only)
 router.delete('/studio/users/:id', function (req, res) {
@@ -1281,7 +1318,7 @@ router.put('/admin/override', function (req, res) {
 // ======== ADMIN ========
 
 // Register new agent (returns plaintext API key — store it, shown only once)
-router.post('/admin/agents', async function (req, res) {
+router.post('/admin/agents', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   var name = req.body.name;
@@ -1309,7 +1346,7 @@ router.post('/admin/agents', async function (req, res) {
   }
   emitEvent('agent_registered', '__admin__', null, 'Admin registered agent: ' + id);
   res.json({ id: id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
-});
+}));
 
 router.delete('/admin/agents/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
@@ -1322,7 +1359,7 @@ router.delete('/admin/agents/:id', function (req, res) {
 });
 
 // Regenerate agent API key (admin only)
-router.put('/admin/agents/:id/key', async function (req, res) {
+router.put('/admin/agents/:id/key', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -1332,7 +1369,7 @@ router.put('/admin/agents/:id/key', async function (req, res) {
   clearAgentKeyCache();  // invalidate cached keys
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
-});
+}));
 
 // Admin heartbeat for any agent
 router.put('/admin/agents/:id/heartbeat', function (req, res) {
@@ -1696,6 +1733,7 @@ router.put('/bugs/:id', function (req, res) {
   if (!who) return;
   var bug = getDvBug(parseInt(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
+  if (!checkProjectScope(req, res, bug.project_id)) return;
   var updates = {};
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.assignee !== undefined) updates.assignee = req.body.assignee;
