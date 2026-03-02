@@ -363,7 +363,7 @@ router.put('/agents/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   // Agents can only update themselves, admin can update anyone
-  if (who !== '__admin__' && who !== req.params.id) {
+  if (who !== '__admin__' && who !== '__system__' && who !== req.params.id) {
     return res.status(403).json({ error: 'Can only update your own profile' });
   }
   var agent = getAgent(req.params.id);
@@ -372,7 +372,7 @@ router.put('/agents/:id', function (req, res) {
   if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
   if (req.body.name !== undefined) fields.name = req.body.name;
   // Admin-only fields
-  if (who === '__admin__') {
+  if (who === '__admin__' || who === '__system__') {
     if (req.body.role !== undefined) fields.role = req.body.role;
     if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
     if (req.body.project !== undefined) fields.project = req.body.project;
