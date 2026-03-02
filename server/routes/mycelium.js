@@ -111,15 +111,6 @@ function parseIntParam(val) {
   return isNaN(n) ? null : n;
 }
 
-// Validate an enum field. Returns true if valid, sends 400 and returns false if not.
-function validateEnum(res, value, allowed, fieldName) {
-  if (value !== undefined && allowed.indexOf(value) === -1) {
-    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
-    return false;
-  }
-  return true;
-}
-
 // Standard error response helper.
 // All error responses MUST use this format: { error: "message" }
 // Extra fields (e.g. approval_required, existing_id) may be added via the `extra` param.
@@ -127,6 +118,16 @@ function validateEnum(res, value, allowed, fieldName) {
 //        return apiError(res, 403, 'Approval required', { approval_required: true });
 function apiError(res, status, message, extra) {
   return res.status(status).json(Object.assign({ error: message }, extra || {}));
+}
+
+// Validate an enum field. Returns true if valid, sends 400 via apiError and returns false if not.
+// Exposed via core.validateEnum so plugins share this implementation.
+function validateEnum(res, value, allowed, fieldName) {
+  if (value !== undefined && allowed.indexOf(value) === -1) {
+    apiError(res, 400, fieldName + ' must be one of: ' + allowed.join(', '));
+    return false;
+  }
+  return true;
 }
 
 // Parse and cap a pagination limit query parameter.
@@ -2677,7 +2678,7 @@ export async function initPlugins() {
     db: getDB(),
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
-    apiError, parseIntParam
+    apiError, parseIntParam, validateEnum
   };
   await loadPlugins(pluginCore, router);
 }

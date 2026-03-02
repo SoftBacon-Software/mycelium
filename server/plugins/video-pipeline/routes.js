@@ -2,21 +2,6 @@ import { Router } from 'express';
 import createVideoDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
-// Parse an integer route parameter safely — returns null instead of NaN.
-function parseIntParam(val) {
-  var n = parseInt(val, 10);
-  return isNaN(n) ? null : n;
-}
-
-// Validate an enum field — returns false and sends 400 if invalid, true if ok or undefined.
-function validateEnum(res, value, allowed, fieldName) {
-  if (value !== undefined && allowed.indexOf(value) === -1) {
-    res.status(400).json({ error: fieldName + ' must be one of: ' + allowed.join(', ') });
-    return false;
-  }
-  return true;
-}
-
 var SESSION_STATUSES = ['pending', 'detecting', 'assembling', 'exporting', 'completed', 'failed'];
 var CLIP_STATUSES = ['detected', 'assembled', 'exported'];
 
@@ -26,6 +11,8 @@ var WSAC_SETUP = 'pip install anthropic pyyaml requests';
 export default function (core) {
   var router = Router();
   var db = createVideoDB(core.db);
+  // Use shared helpers from core — single source of truth for error format.
+  var { apiError, parseIntParam, validateEnum } = core;
 
   // ── Session CRUD ──
 
@@ -34,7 +21,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var { project_id, title, footage_url, event_log_url, config } = req.body;
-    if (!project_id || !title) return res.status(400).json({ error: 'project_id and title required' });
+    if (!project_id || !title) return apiError(res, 400, 'project_id and title required');
     var id = db.createSession(project_id, title, footage_url, event_log_url, config, who);
     core.emitEvent('video_session_created', who, project_id, 'Created video session: ' + title, { session_id: id });
     res.json({ ok: true, id: id });
@@ -52,7 +39,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
     session.clips = db.listClips(session.id, {});
     session.stats = db.getSessionStats(session.id);
     res.json(session);
@@ -63,7 +50,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     if (!validateEnum(res, req.body.status, SESSION_STATUSES, 'status')) return;
     db.updateSession(id, req.body);
     res.json({ ok: true });
@@ -74,7 +61,7 @@ export default function (core) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     db.deleteSession(id);
     res.json({ ok: true });
   });
@@ -86,7 +73,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     res.json(db.listClips(id, { tier: req.query.tier, status: req.query.status }));
   });
 
@@ -95,9 +82,9 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     var clips = req.body.clips;
-    if (!Array.isArray(clips)) return res.status(400).json({ error: 'clips array required' });
+    if (!Array.isArray(clips)) return apiError(res, 400, 'clips array required');
     var count = db.bulkCreateClips(id, clips);
     res.json({ ok: true, count: count });
   });
@@ -107,7 +94,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    if (id === null) return apiError(res, 400, 'Invalid id');
     if (!validateEnum(res, req.body.status, CLIP_STATUSES, 'status')) return;
     db.updateClip(id, req.body);
     res.json({ ok: true });
@@ -120,7 +107,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
 
     var useVision = req.body.use_vision !== false;
     var jobId = createDroneJob(
@@ -157,10 +144,10 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
 
     var clips = db.listClips(session.id, { status: 'detected' });
-    if (clips.length === 0) return res.status(400).json({ error: 'No detected clips to assemble' });
+    if (clips.length === 0) return apiError(res, 400, 'No detected clips to assemble');
 
     var jobId = createDroneJob(
       'Video assemble: ' + session.title + ' (' + clips.length + ' clips)',
@@ -191,7 +178,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
 
     var platforms = req.body.platforms || ['tiktok', 'twitter', 'youtube_shorts'];
     var jobId = createDroneJob(
@@ -224,7 +211,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
 
     var clips = db.listClips(session.id, { status: req.body.clip_status || 'detected' });
     var platform = req.body.platform || 'tiktok';
@@ -250,7 +237,7 @@ export default function (core) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (!session) return apiError(res, 404, 'Session not found');
 
     var status = {
       session_id: session.id,
