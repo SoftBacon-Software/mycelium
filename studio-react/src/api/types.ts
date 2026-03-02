@@ -251,6 +251,13 @@ export interface DroneJob {
   workspace_branch: string;
 }
 
+export interface ThreadSummary {
+  thread_id: string;
+  message_count: number;
+  last_message_at: string;
+  last_sender: string;
+}
+
 export interface DroneArtifact {
   name: string;
   size: number;
