@@ -22,6 +22,7 @@ import type {
   ChannelMessage,
   DroneJob,
   ThreadSummary,
+  WebhookDelivery,
 } from './types';
 
 // Auth
@@ -326,6 +327,21 @@ export function updateDroneJob(id: number, data: Partial<DroneJob>): Promise<Dro
 
 export function cancelDroneJob(id: number): Promise<DroneJob> {
   return apiPut<DroneJob>(`/drone-jobs/${id}`, { status: 'cancelled' });
+}
+
+// Webhook Deliveries
+
+export function fetchWebhookDeliveries(params?: {
+  event?: string; webhook_id?: number; error_only?: boolean; limit?: number; offset?: number
+}): Promise<WebhookDelivery[]> {
+  const q = new URLSearchParams()
+  if (params?.event) q.set('event', params.event)
+  if (params?.webhook_id) q.set('webhook_id', String(params.webhook_id))
+  if (params?.error_only) q.set('error_only', 'true')
+  if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.offset) q.set('offset', String(params.offset))
+  const qs = q.toString()
+  return apiGet<WebhookDelivery[]>('/webhooks/deliveries' + (qs ? '?' + qs : ''))
 }
 
 export function linkAssetsToJob(
