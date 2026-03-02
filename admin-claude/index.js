@@ -110,7 +110,8 @@ async function processBacklog() {
       return !m.resolved_at
         && (m.msg_type === 'directive' || m.msg_type === 'request')
         && m.from_agent !== AGENT_ID
-        && m.from_agent !== '__admin__';
+        && m.from_agent !== '__admin__'
+        && m.from_agent !== '__system__';
     });
     if (unresolved.length > 0) {
       console.log('[backlog] Found ' + unresolved.length + ' unresolved directives/requests');
