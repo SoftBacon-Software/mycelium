@@ -757,8 +757,20 @@ export function getBootPayload(agentId) {
     ch.unread = unreadMap[ch.id] || 0;
   }
 
+  // --- Role contract: compiled from agent fields + context keys ---
+  var roleContract = buildRoleContract(agent, agentId);
+
+  // --- Prioritized work queue ---
+  var workQueue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
+
+  // --- Project record ---
+  var project = getProject(agent.project_id);
+
   return {
     agent: safeAgent,
+    project: project || null,
+    role_contract: roleContract,
+    work_queue: workQueue,
     tasks: myTasks,
     pending_requests: pendingRequests,
     new_messages: newMessages,
@@ -776,6 +788,123 @@ export function getBootPayload(agentId) {
     unread_counts: unreadMap,
     server_time: new Date().toISOString()
   };
+}
+
+// Build a role contract from agent fields + context keys
+function buildRoleContract(agent, agentId) {
+  var capabilities = [];
+  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
+
+  var contract = {
+    agent_id: agentId,
+    role: agent.role || 'agent',
+    project_id: agent.project_id,
+    capabilities: capabilities,
+    llm_backend: agent.llm_backend || null,
+    llm_model: agent.llm_model || null,
+    // Role-specific fields populated from context keys
+    description: null,
+    responsibilities: [],
+    constraints: [],
+    guidelines: null,
+  };
+
+  // Check for agent-specific role contract in context: namespace "roles", key = agentId
+  var agentRole = getDvContextKey('roles', agentId);
+  if (agentRole) {
+    try {
+      var roleData = typeof agentRole.data === 'string' ? JSON.parse(agentRole.data) : agentRole.data;
+      if (roleData.description) contract.description = roleData.description;
+      if (roleData.responsibilities) contract.responsibilities = roleData.responsibilities;
+      if (roleData.constraints) contract.constraints = roleData.constraints;
+      if (roleData.guidelines) contract.guidelines = roleData.guidelines;
+    } catch (e) { /* */ }
+  }
+
+  // Check for project-level guidelines: namespace = project_id, key = "guidelines"
+  var projGuidelines = getDvContextKey(agent.project_id, 'guidelines');
+  if (projGuidelines && !contract.guidelines) {
+    try {
+      var gData = typeof projGuidelines.data === 'string' ? JSON.parse(projGuidelines.data) : projGuidelines.data;
+      contract.guidelines = typeof gData === 'string' ? gData : (gData.text || gData.guidelines || JSON.stringify(gData));
+    } catch (e) {
+      contract.guidelines = projGuidelines.data;
+    }
+  }
+
+  return contract;
+}
+
+// Build a prioritized work queue: what should this agent do next?
+function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
+  var queue = [];
+
+  // Priority 1: Blocking directives (MUST respond first)
+  for (var d of directives) {
+    queue.push({ priority: 0, type: 'directive', id: d.id, title: 'DIRECTIVE from ' + d.from_agent, summary: (d.content || '').substring(0, 200), status: d.status });
+  }
+
+  // Priority 2: Pending requests (respond before new work)
+  for (var r of requests) {
+    queue.push({ priority: 1, type: 'request', id: r.id, title: 'Request from ' + r.from_agent, summary: (r.content || '').substring(0, 200), status: r.status });
+  }
+
+  // Priority 3: In-progress plan steps assigned to this agent
+  // Priority 4: Pending plan steps assigned to this agent
+  for (var plan of plans) {
+    if (!plan.steps) continue;
+    for (var step of plan.steps) {
+      if (step.assignee === agentId && step.status === 'in_progress') {
+        queue.push({ priority: 2, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+      }
+    }
+    for (var step of plan.steps) {
+      if (step.assignee === agentId && step.status === 'pending') {
+        queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+      }
+    }
+  }
+
+  // Priority 5: In-progress tasks
+  for (var t of tasks) {
+    if (t.status === 'in_progress') {
+      queue.push({ priority: 4, type: 'task', id: t.id, title: t.title, status: t.status, project_id: t.project_id });
+    }
+  }
+
+  // Priority 6: Open tasks assigned to this agent
+  for (var t of tasks) {
+    if (t.status === 'open') {
+      queue.push({ priority: 5, type: 'task', id: t.id, title: t.title, status: t.status, project_id: t.project_id });
+    }
+  }
+
+  // Priority 7: Bugs assigned to this agent
+  var myBugs = bugs.filter(function (b) { return b.assignee === agentId; });
+  for (var b of myBugs) {
+    queue.push({ priority: 6, type: 'bug', id: b.id, title: b.title, severity: b.severity, status: b.status, project_id: b.project_id });
+  }
+
+  // Priority 8: Unassigned plan steps for this agent's project
+  for (var plan of plans) {
+    if (!plan.steps) continue;
+    for (var step of plan.steps) {
+      if (!step.assignee && step.status === 'pending') {
+        queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+      }
+    }
+  }
+
+  // Priority 9: Unassigned bugs for this agent's project
+  var unassignedBugs = bugs.filter(function (b) { return !b.assignee && (b.project_id === projectId || !b.project_id); });
+  for (var b of unassignedBugs) {
+    queue.push({ priority: 8, type: 'bug_unassigned', id: b.id, title: b.title, severity: b.severity, status: b.status, project_id: b.project_id });
+  }
+
+  // Sort by priority (already mostly sorted but ensure it)
+  queue.sort(function (a, b) { return a.priority - b.priority; });
+
+  return queue;
 }
 
 // -- Auto-task from asset request --
