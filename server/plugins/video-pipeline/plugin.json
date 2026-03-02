@@ -1,0 +1,12 @@
+{
+  "name": "video-pipeline",
+  "version": "1.0.0",
+  "displayName": "Video Pipeline",
+  "description": "Gameplay capture → highlight detection → assembly → platform export → social posting. Submits drone jobs for compute-heavy FFmpeg work.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/video",
+  "schema": "schema.sql",
+  "gatedActions": ["video_post"],
+  "mcpTools": "mcp-tools.json"
+}

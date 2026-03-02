@@ -20,6 +20,7 @@ const navItems = [
   { to: '/ops', label: 'Admin Ops', abbr: 'Ao' },
   { to: '/health', label: 'Network Health', abbr: 'Nh' },
   { to: '/onboarding', label: 'Onboarding', abbr: 'Ob' },
+  { to: '/plugins', label: 'Plugins', abbr: 'Pg' },
 ] as const
 
 export default function SideNav() {

@@ -18,6 +18,7 @@ import type {
   ConfigEntry,
   Channel,
   DroneJob,
+  Plugin,
 } from '../api/types';
 
 interface DashboardState {
@@ -44,6 +45,7 @@ interface DashboardState {
   channelCounts: { total: number; active: number; archived: number };
   drones: Agent[];
   droneJobs: DroneJob[];
+  plugins: Plugin[];
 
   // UI state
   loading: boolean;
@@ -79,6 +81,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   channelCounts: { total: 0, active: 0, archived: 0 },
   drones: [],
   droneJobs: [],
+  plugins: [],
 
   // UI state defaults
   loading: false,
@@ -113,6 +116,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
         drones: data.drones || [],
         droneJobs: data.drone_jobs || [],
+        plugins: data.plugins || [],
         loading: false,
         lastRefresh: new Date(),
       });

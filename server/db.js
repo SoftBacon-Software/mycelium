@@ -100,7 +100,7 @@ export function initDB() {
     var riskTiers = JSON.stringify({
       plan_create: 'low', context_change: 'low',
       deploy: 'medium', git_push: 'medium', delete: 'medium',
-      outreach_send: 'high', external_comm: 'high',
+      external_comm: 'high',
       money_action: 'critical', delete_agent: 'critical', instance_config: 'critical'
     });
     db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('instance_mode', 'developer', 'system');
@@ -138,8 +138,6 @@ function migrateGameToProjectId() {
     ['dv_bugs', 'game', 'project_id'],
     ['dv_plans', 'game', 'project_id'],
     ['dv_approvals', 'project', 'project_id'],
-    ['dv_outreach_campaigns', 'project', 'project_id'],
-    ['dv_outreach_contacts', 'project', 'project_id'],
   ];
   for (var [table, oldCol, newCol] of tables) {
     try {
@@ -163,17 +161,6 @@ function migrateGameToProjectId() {
     }
   } catch (e) {
     console.error('[migration] Error renaming dv_games:', e.message);
-  }
-  // Rename game_facts to project_facts in outreach_campaigns
-  try {
-    var info = db.prepare("PRAGMA table_info(dv_outreach_campaigns)").all();
-    var hasOld = info.some(function(c) { return c.name === 'game_facts'; });
-    if (hasOld) {
-      db.prepare("ALTER TABLE dv_outreach_campaigns RENAME COLUMN game_facts TO project_facts").run();
-      console.log('[migration] Renamed dv_outreach_campaigns.game_facts -> project_facts');
-    }
-  } catch (e) {
-    console.error('[migration] Error renaming game_facts:', e.message);
   }
 }
 
@@ -801,6 +788,7 @@ export function getBootPayload(agentId) {
     plans: myPlans,
     channels: myChannels,
     unread_counts: unreadMap,
+    plugins: listPluginRecords().filter(function (p) { return p.enabled; }),
     server_time: new Date().toISOString()
   };
 }
@@ -1590,7 +1578,7 @@ export function initDioverse() {
 
 // =============== APPROVALS ===============
 
-var GATED_ACTIONS = ['deploy', 'outreach_send', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
+var GATED_ACTIONS = ['deploy', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
 export { GATED_ACTIONS };
 
 export function createApproval(actionType, requestedBy, title, payload, projectId, riskTier, requiredApprovals) {
@@ -1749,98 +1737,46 @@ export function getDvOverview() {
     operators: listOperators(),
     instance_config: listInstanceConfig(),
     drones: listDrones(),
-    drone_jobs: listDroneJobs({ limit: 50 })
+    drone_jobs: listDroneJobs({ limit: 50 }),
+    plugins: listPluginRecords()
   };
 }
 
-// =============== OUTREACH ===============
+// =============== PLUGINS ===============
 
-// -- Outreach Campaigns --
+export function getDB() { return db; }
 
-export function createOutreachCampaign(projectId, name, personaPrompt, projectFacts, templates, config, createdBy) {
-  var result = stmt('orCreateCampaign', `INSERT INTO dv_outreach_campaigns (project_id, name, persona_prompt, project_facts, templates, config, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(projectId, name, personaPrompt || '', projectFacts || '', templates || '{}', config || '{}', createdBy || '');
-  return result.id;
-}
-
-export function getOutreachCampaign(id) {
-  return stmt('orGetCampaign', 'SELECT * FROM dv_outreach_campaigns WHERE id = ?').get(id);
-}
-
-export function listOutreachCampaigns(filters) {
-  var where = ['1=1']; var params = [];
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  params.push(filters.limit || 50);
-  return db.prepare('SELECT * FROM dv_outreach_campaigns WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
-}
-
-export function updateOutreachCampaign(id, fields) {
-  var sets = ["updated_at = datetime('now')"]; var values = [];
-  for (var key of ['name', 'persona_prompt', 'project_facts', 'templates', 'config', 'status']) {
-    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+export function ensurePluginRecord(manifest) {
+  var existing = stmt('dvGetPlugin', 'SELECT * FROM dv_plugins WHERE name = ?').get(manifest.name);
+  if (existing) {
+    stmt('dvUpdatePlugin', `UPDATE dv_plugins SET display_name = ?, description = ?, version = ?, author = ?, route_prefix = ?, mcp_tool_count = ?, updated_at = datetime('now')
+      WHERE name = ?`).run(manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.routePrefix || '', manifest.mcpToolCount || 0, manifest.name);
+    return { ...existing, updated: true };
   }
-  values.push(id);
-  return db.prepare('UPDATE dv_outreach_campaigns SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  stmt('dvInsertPlugin', `INSERT INTO dv_plugins (name, display_name, description, version, author, enabled, route_prefix, mcp_tool_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.enabled !== false ? 1 : 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
+  return { name: manifest.name, created: true };
 }
 
-// -- Outreach Contacts --
-
-export function createOutreachContact(fields) {
-  var result = db.prepare(`INSERT INTO dv_outreach_contacts
-    (project_id, campaign_id, type, name, email, outlet, tier, archetype, subscriber_count, status, last_content, notes, metadata, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(
-    fields.project_id, fields.campaign_id || null, fields.type || 'creator', fields.name,
-    fields.email || '', fields.outlet || '', fields.tier || '', fields.archetype || '',
-    fields.subscriber_count || 0, fields.status || 'discovered', fields.last_content || '',
-    fields.notes || '', fields.metadata || '{}', fields.created_by || ''
-  );
-  return result.id;
+export function getPluginRecord(name) {
+  return stmt('dvGetPlugin', 'SELECT * FROM dv_plugins WHERE name = ?').get(name);
 }
 
-export function getOutreachContact(id) {
-  return stmt('orGetContact', 'SELECT * FROM dv_outreach_contacts WHERE id = ?').get(id);
+export function listPluginRecords() {
+  return db.prepare('SELECT * FROM dv_plugins ORDER BY name').all();
 }
 
-export function listOutreachContacts(filters) {
-  var where = ['1=1']; var params = [];
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
-  if (filters.campaign_id) { where.push('campaign_id = ?'); params.push(filters.campaign_id); }
-  var limit = filters.limit || 50;
-  var offset = filters.offset || 0;
-  params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+export function updatePluginEnabled(name, enabled) {
+  return db.prepare("UPDATE dv_plugins SET enabled = ?, updated_at = datetime('now') WHERE name = ?").run(enabled ? 1 : 0, name);
 }
 
-export function updateOutreachContact(id, fields) {
-  var sets = ["updated_at = datetime('now')"]; var values = [];
-  var allowed = ['name', 'email', 'outlet', 'tier', 'archetype', 'subscriber_count', 'status',
-    'pitch_subject', 'pitch_body', 'last_content', 'key_assigned', 'pitch_sent_at',
-    'followup_due_at', 'followup_sent_at', 'response_at', 'outcome', 'notes', 'metadata', 'campaign_id'];
-  for (var key of allowed) {
-    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
-  }
-  values.push(id);
-  return db.prepare('UPDATE dv_outreach_contacts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+export function getPluginMigrationVersion(pluginName) {
+  var row = db.prepare('SELECT MAX(version) as v FROM dv_plugin_migrations WHERE plugin_name = ?').get(pluginName);
+  return row ? (row.v || 0) : 0;
 }
 
-export function deleteOutreachContact(id) {
-  return db.prepare('DELETE FROM dv_outreach_contacts WHERE id = ?').run(id);
-}
-
-export function countOutreachContacts(projectId) {
-  var rows = db.prepare(
-    'SELECT status, COUNT(*) as count FROM dv_outreach_contacts WHERE project_id = ? GROUP BY status'
-  ).all(projectId);
-  var counts = {};
-  for (var r of rows) counts[r.status] = r.count;
-  return counts;
-}
-
-export function findOutreachContactByEmail(projectId, email) {
-  return db.prepare('SELECT * FROM dv_outreach_contacts WHERE project_id = ? AND email = ?').get(projectId, email);
+export function recordPluginMigration(pluginName, version, description) {
+  db.prepare('INSERT INTO dv_plugin_migrations (plugin_name, version, description) VALUES (?, ?, ?)').run(pluginName, version, description || '');
 }
 
 // ======== AGENT SAVEPOINTS ========

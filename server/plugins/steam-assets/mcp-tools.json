@@ -1,0 +1,72 @@
+[
+  {
+    "name": "studio_steam_list_assets",
+    "description": "List Steam asset generation jobs (store copy, screenshots, trailers).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string" },
+        "asset_type": { "type": "string", "enum": ["store_copy", "screenshots", "trailer"] },
+        "status": { "type": "string", "enum": ["pending", "processing", "complete", "failed"] }
+      }
+    },
+    "endpoint": { "method": "GET", "path": "/steam/assets", "queryMap": { "project_id": "project_id", "asset_type": "asset_type", "status": "status" } }
+  },
+  {
+    "name": "studio_steam_get_asset",
+    "description": "Get details of a Steam asset including drone job status.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "asset_id": { "type": "integer", "description": "Asset ID" }
+      },
+      "required": ["asset_id"]
+    },
+    "endpoint": { "method": "GET", "path": "/steam/assets/{asset_id}" }
+  },
+  {
+    "name": "studio_steam_store_copy",
+    "description": "Generate a Steam store page BBCode prompt. Returns a structured prompt to send to Claude API for BBCode store copy generation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "game_facts": { "type": "object", "description": "Override game facts (title, genre, core_loop, loot, pvp, etc.)" },
+        "sections": { "type": "array", "items": { "type": "string" }, "description": "Sections to generate (short_description, about, features, tags)" }
+      }
+    },
+    "endpoint": { "method": "POST", "path": "/steam/store-copy", "bodyMap": { "project_id": "project_id", "game_facts": "game_facts", "sections": "sections" } }
+  },
+  {
+    "name": "studio_steam_screenshots",
+    "description": "Submit a drone job to extract and curate Steam screenshots from gameplay footage. Uses Claude Vision to score frames and selects diverse set across categories.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "footage_url": { "type": "string", "description": "URL or path to gameplay footage" },
+        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "count": { "type": "integer", "description": "Number of screenshots to select (default: 10)" },
+        "categories": { "type": "array", "items": { "type": "string" }, "description": "Screenshot categories for diversity (default: combat, loot, builds, pvp, exploration, ui)" },
+        "priority": { "type": "integer" }
+      },
+      "required": ["footage_url"]
+    },
+    "endpoint": { "method": "POST", "path": "/steam/screenshots", "bodyMap": { "footage_url": "footage_url", "project_id": "project_id", "count": "count", "categories": "categories", "priority": "priority" } }
+  },
+  {
+    "name": "studio_steam_trailer",
+    "description": "Submit a drone job to build a segmented Steam trailer from gameplay footage. Segments: intro → cross-class → combat/loot → stakes → journey → outro, with Dio narration and title cards.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "footage_url": { "type": "string", "description": "URL or path to gameplay footage" },
+        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "max_duration": { "type": "integer", "description": "Maximum trailer duration in seconds (default: 120)" },
+        "video_session_id": { "type": "integer", "description": "Link to a video pipeline session for highlight clips" },
+        "priority": { "type": "integer" }
+      },
+      "required": ["footage_url"]
+    },
+    "endpoint": { "method": "POST", "path": "/steam/trailer", "bodyMap": { "footage_url": "footage_url", "project_id": "project_id", "max_duration": "max_duration", "video_session_id": "video_session_id", "priority": "priority" } }
+  }
+]
