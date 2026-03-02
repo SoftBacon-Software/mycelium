@@ -81,6 +81,9 @@ async function handleMessageSent(data) {
   // Skip if already resolved
   if (msg.resolved_at) return;
 
+  // Skip messages from ourselves (prevent feedback loops)
+  if (msg.from_agent === AGENT_ID || msg.from_agent === '__admin__') return;
+
   var isDirective = msg.msg_type === 'directive';
   var isRequest = msg.msg_type === 'request';
   var isRegularMessage = msg.msg_type === 'message';

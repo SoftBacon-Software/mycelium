@@ -10,7 +10,7 @@ export var AGENT_ID = 'admin-claude';
 export var MODEL = 'claude-sonnet-4-6'; // Sonnet for fast/cheap triage
 
 // Rate limiting: max Claude API calls per minute
-export var MAX_CLAUDE_CALLS_PER_MIN = parseInt(process.env.MAX_CLAUDE_CALLS_PER_MIN) || 10;
+export var MAX_CLAUDE_CALLS_PER_MIN = parseInt(process.env.MAX_CLAUDE_CALLS_PER_MIN) || 30;
 
 // GitHub repos to watch for PRs
 export var GITHUB_REPOS = (process.env.GITHUB_REPOS || 'grbarajas-soymd/mycelium').split(',').map(function (r) { return r.trim(); });
