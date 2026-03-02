@@ -2,6 +2,12 @@ import { Router } from 'express';
 import createSocialDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
+// Parse an integer route parameter safely — returns null instead of NaN.
+function parseIntParam(val) {
+  var n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
+
 var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
 
 // Dio's system prompt for caption generation
@@ -70,7 +76,9 @@ export default function (core) {
   router.put('/accounts/:id', function (req, res) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
-    db.updateAccount(parseInt(req.params.id), req.body);
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.updateAccount(id, req.body);
     res.json({ ok: true });
   });
 
@@ -78,7 +86,9 @@ export default function (core) {
   router.delete('/accounts/:id', function (req, res) {
     var who = core.auth.checkAdmin(req, res);
     if (!who) return;
-    db.deleteAccount(parseInt(req.params.id));
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.deleteAccount(id);
     res.json({ ok: true });
   });
 
@@ -139,7 +149,7 @@ export default function (core) {
   router.get('/posts/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var post = db.getPost(parseInt(req.params.id));
+    var post = db.getPost(parseIntParam(req.params.id));
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.drone_job_id) {
       var job = getDroneJob(post.drone_job_id);
@@ -152,7 +162,9 @@ export default function (core) {
   router.put('/posts/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    db.updatePost(parseInt(req.params.id), req.body);
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.updatePost(id, req.body);
     res.json({ ok: true });
   });
 
@@ -160,7 +172,9 @@ export default function (core) {
   router.delete('/posts/:id', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    db.deletePost(parseInt(req.params.id));
+    var id = parseIntParam(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid id' });
+    db.deletePost(id);
     res.json({ ok: true });
   });
 
@@ -177,7 +191,7 @@ export default function (core) {
   router.post('/posts/:id/schedule', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var post = db.getPost(parseInt(req.params.id));
+    var post = db.getPost(parseIntParam(req.params.id));
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.status !== 'draft') return res.status(400).json({ error: 'Only draft posts can be scheduled' });
 
@@ -204,7 +218,7 @@ export default function (core) {
   router.post('/posts/:id/publish', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var post = db.getPost(parseInt(req.params.id));
+    var post = db.getPost(parseIntParam(req.params.id));
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (!post.caption) return res.status(400).json({ error: 'Post has no caption' });
     if (!post.media_url) return res.status(400).json({ error: 'Post has no media_url' });
