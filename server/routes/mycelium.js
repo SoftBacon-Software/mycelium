@@ -211,12 +211,13 @@ function clearAgentKeyCache() {
 }
 
 // Check if the authenticated caller has access to a resource's project.
-// Admins and studio users bypass. Agents must match project_id.
-function checkProjectScope(req, res, resourceProjectId) {
+// Admins and studio users bypass. Agents must match project_id OR be the assignee.
+function checkProjectScope(req, res, resourceProjectId, assignee) {
   if (req._authIsAdmin) return true;
   if (!req._authAgentId) return true; // studio user or admin — no scope restriction
   if (!resourceProjectId) return true; // resource has no project — allow
   if (req._authProjectId === resourceProjectId) return true;
+  if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
   return false;
 }
@@ -757,7 +758,7 @@ router.put('/tasks/:id', function (req, res) {
   if (!agentId) return;
   var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!checkProjectScope(req, res, task.project_id)) return;
+  if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
   if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.priority, TASK_PRIORITIES, 'priority')) return;
   var fields = {};
@@ -1478,7 +1479,9 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
-  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var stepId0 = parseIntParam(req.params.stepId);
+  var planStep = plan.steps ? plan.steps.find(function (s) { return s.id === stepId0; }) : null;
+  if (!checkProjectScope(req, res, plan.project_id, planStep ? planStep.assignee : null)) return;
   if (!validateEnum(res, req.body.status, PLAN_STEP_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
@@ -2250,7 +2253,7 @@ router.put('/bugs/:id', function (req, res) {
   if (!who) return;
   var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  if (!checkProjectScope(req, res, bug.project_id)) return;
+  if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
   if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.severity, BUG_SEVERITIES, 'severity')) return;
   var updates = {};
