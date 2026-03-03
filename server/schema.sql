@@ -280,7 +280,6 @@ CREATE INDEX IF NOT EXISTS idx_dv_tasks_project_status ON dv_tasks(project_id, s
 CREATE INDEX IF NOT EXISTS idx_dv_bugs_severity ON dv_bugs(severity);
 CREATE INDEX IF NOT EXISTS idx_dv_bugs_assignee ON dv_bugs(assignee);
 CREATE INDEX IF NOT EXISTS idx_dv_messages_project ON dv_messages(project_id);
-CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_agent ON dv_webhook_deliveries(agent_id);
 -- Plugins (installable capability modules with routes, DB, MCP tools)
 CREATE TABLE IF NOT EXISTS dv_plugins (
   name            TEXT PRIMARY KEY,
@@ -378,6 +377,7 @@ CREATE TABLE IF NOT EXISTS dv_webhook_deliveries (
   duration_ms     INTEGER,
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_agent ON dv_webhook_deliveries(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_event ON dv_webhook_deliveries(event);
 CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_webhook ON dv_webhook_deliveries(webhook_id);
 CREATE INDEX IF NOT EXISTS idx_dv_webhook_deliveries_created ON dv_webhook_deliveries(created_at DESC);
