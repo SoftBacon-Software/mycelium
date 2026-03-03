@@ -620,7 +620,7 @@ export default function ChannelsPage() {
   )
 
   return (
-    <div className="h-[calc(100dvh-7rem)] rounded-sm overflow-hidden border border-border flex">
+    <div className="flex-1 min-h-0 rounded-sm overflow-hidden border border-border flex">
       <div className={`${activeChannelId ? 'hidden sm:flex' : 'flex'} flex-col w-full sm:w-60 shrink-0 min-h-0`}>
         <ChannelSidebar
           channels={channels}
