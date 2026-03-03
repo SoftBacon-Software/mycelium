@@ -6,14 +6,23 @@ import { getSenderDisplay } from '../../utils/sender'
 
 function getAvatarConfig(name: string): { bg: string; initial: string } {
   const lower = name.toLowerCase()
-  if (lower === 'admin' || lower === '__admin__') {
-    return { bg: 'bg-accent', initial: 'D' }
+  if (lower === 'admin' || lower === '__admin__' || lower.startsWith('admin')) {
+    return { bg: 'bg-accent', initial: 'A' }
+  }
+  if (lower === 'system' || lower === '__system__') {
+    return { bg: 'bg-text-muted', initial: 'S' }
   }
   if (lower.startsWith('hijack')) {
     return { bg: 'bg-purple', initial: 'H' }
   }
   if (lower.startsWith('greatness')) {
     return { bg: 'bg-green', initial: 'G' }
+  }
+  if (lower.startsWith('macbook')) {
+    return { bg: 'bg-blue', initial: 'M' }
+  }
+  if (lower.startsWith('unakron')) {
+    return { bg: 'bg-accent', initial: 'U' }
   }
   return { bg: 'bg-blue', initial: name.charAt(0).toUpperCase() || '?' }
 }
