@@ -170,6 +170,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
           <button
             onClick={onMobileClose}
             className="p-1 rounded-lg text-text-muted hover:text-text-dim transition-colors"
+            aria-label="Close navigation menu"
           >
             <X size={18} strokeWidth={1.5} />
           </button>
@@ -190,6 +191,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
                 <button
                   onClick={() => toggleSection(section.id)}
                   className="flex items-center justify-between w-full px-3 py-1 mb-0.5 group"
+                  aria-expanded={!isSectionCollapsed}
                 >
                   <span className="text-[10px] uppercase tracking-widest font-semibold text-text-muted group-hover:text-text-dim transition-colors">
                     {section.label}
