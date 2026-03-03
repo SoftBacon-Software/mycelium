@@ -4,6 +4,7 @@ import { useDashboardStore } from '../../stores/dashboardStore'
 import type { Message } from '../../api/types'
 import { Avatar, formatTime } from './ChatMessage'
 import Badge from '../shared/Badge'
+import { getSenderDisplay } from '../../utils/sender'
 
 const msgTypeBadge: Record<string, 'red' | 'accent' | 'default'> = {
   directive: 'red',
@@ -128,11 +129,11 @@ export default function ThreadPanel({ message, onClose }: ThreadPanelProps) {
               <Avatar name={message.from_agent} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-sm text-text">{message.from_agent}</span>
+                  <span className="font-semibold text-sm text-text">{getSenderDisplay(message.from_agent)}</span>
                   <svg viewBox="0 0 12 12" className="w-3 h-3 text-text-muted shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M2 6h8M7 3l3 3-3 3" />
                   </svg>
-                  <span className="font-semibold text-sm text-text-dim">{message.to_agent}</span>
+                  <span className="font-semibold text-sm text-text-dim">{getSenderDisplay(message.to_agent)}</span>
                   <Badge variant={msgTypeBadge[message.msg_type] ?? 'default'}>{message.msg_type}</Badge>
                   <span className="text-text-muted text-xs">{formatTime(message.created_at)}</span>
                 </div>
@@ -166,7 +167,7 @@ export default function ThreadPanel({ message, onClose }: ThreadPanelProps) {
                   <Avatar name={msg.from_agent} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm text-text">{msg.from_agent}</span>
+                      <span className="font-semibold text-sm text-text">{getSenderDisplay(msg.from_agent)}</span>
                       <span className="text-text-muted text-xs">{formatTime(msg.created_at)}</span>
                     </div>
                     <p className="text-text text-sm whitespace-pre-wrap break-words mt-0.5">
