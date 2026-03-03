@@ -5,16 +5,16 @@ export default function VoiceBar() {
   const { isConnected, isMuted, channelName, peers, error, join, leave, toggleMute } =
     useVoiceStore()
 
-  // Disconnected state — show subtle join prompt
+  // Disconnected state — subtle join prompt
   if (!isConnected) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 bg-surface border-t border-border text-xs font-mono">
-        <span className="w-2 h-2 rounded-full bg-text-muted/30 shrink-0" />
+        <span className="w-2 h-2 rounded-full bg-text-muted shrink-0" />
         <span className="text-text-muted">Voice</span>
         <div className="flex-1" />
         <button
-          onClick={() => join()}
-          className="px-2 py-0.5 rounded-sm bg-green/20 text-green hover:bg-green/30 transition-colors"
+          onClick={() => join('voice')}
+          className="px-2 py-0.5 rounded-sm bg-green/15 text-green hover:bg-green/25 transition-colors"
         >
           JOIN
         </button>
