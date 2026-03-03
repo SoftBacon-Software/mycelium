@@ -21,6 +21,7 @@
       "command": "node",
       "args": ["PATH_TO_MYCELIUM_MCP/index.js"],
       "env": {
+        "MYCELIUM_API_URL": "https://INSTANCE_URL/api/mycelium",
         "MYCELIUM_API_KEY": "env:RUNNER_AGENT_KEY",
         "MYCELIUM_ROLE": "agent",
         "MYCELIUM_AGENT_ID": "AGENT_ID"
