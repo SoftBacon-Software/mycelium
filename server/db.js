@@ -1459,10 +1459,35 @@ export function autoCreateEntityChannel(linkedType, linkedId, name, createdBy, m
 }
 
 export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
-  var sorted = [userA, userB].sort();
-  var slug = 'dm-' + sorted[0] + '-' + sorted[1];
-  var existing = getChannelBySlug(slug);
-  if (existing) return existing.id;
+  // Find any existing active DM channel that has exactly these two participants (case-insensitive).
+  // This prevents duplicate channels when usernames differ by case or creation order.
+  var existing = db.prepare(`
+    SELECT c.id FROM dv_channels c
+    WHERE c.type = 'dm' AND c.status = 'active'
+      AND (SELECT COUNT(*) FROM dv_channel_members m
+           WHERE m.channel_id = c.id AND LOWER(m.user_id) IN (LOWER(?), LOWER(?))) = 2
+      AND (SELECT COUNT(*) FROM dv_channel_members m WHERE m.channel_id = c.id) = 2
+    ORDER BY c.id ASC
+    LIMIT 1
+  `).get(userA, userB);
+  if (existing) {
+    // Ensure both users are members (handles legacy channels missing a member row)
+    addChannelMember(existing.id, userA, userAType || 'agent', 'member');
+    addChannelMember(existing.id, userB, userBType || 'agent', 'member');
+    return existing.id;
+  }
+  // Create new DM channel — use case-insensitive sort for canonical slug
+  var sorted = [userA, userB].sort(function (a, b) {
+    return a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
+  });
+  var slug = 'dm-' + sorted[0].toLowerCase() + '-' + sorted[1].toLowerCase();
+  // Check slug in case a channel exists that our member query didn't catch (e.g. single-member DM)
+  var bySlug = getChannelBySlug(slug);
+  if (bySlug) {
+    addChannelMember(bySlug.id, userA, userAType || 'agent', 'member');
+    addChannelMember(bySlug.id, userB, userBType || 'agent', 'member');
+    return bySlug.id;
+  }
   var id = createChannel('DM: ' + sorted[0] + ' & ' + sorted[1], slug, 'dm', null, null, '', userA);
   addChannelMember(id, userA, userAType || 'agent', 'member');
   addChannelMember(id, userB, userBType || 'agent', 'member');
@@ -1729,7 +1754,7 @@ export function resolveStaleRequests(hoursOld) {
   return stale.length;
 }
 
-export function getDvOverview() {
+export function getDvOverview(userId) {
   var agents = listAgents();
   var events = listDvEvents({ limit: 50 });
   var openTasks = listDvTasks({ status: 'open', limit: 20 });
@@ -1752,6 +1777,14 @@ export function getDvOverview() {
   var allChannels = listChannels({ limit: 200, status: 'all' });
   var activeChannelCount = allChannels.filter(function (c) { return c.status === 'active'; }).length;
   var archivedChannelCount = allChannels.filter(function (c) { return c.status === 'archived'; }).length;
+  // DM channels are private — only show channels where the current user is a member
+  var visibleChannels = allChannels;
+  if (userId && userId !== '__system__') {
+    visibleChannels = allChannels.filter(function (c) {
+      if (c.type !== 'dm') return true;
+      return isChannelMember(c.id, userId);
+    });
+  }
   return {
     agents: agents,
     events: events,
@@ -1776,7 +1809,7 @@ export function getDvOverview() {
       });
       return c;
     })(),
-    channels: allChannels,
+    channels: visibleChannels,
     channel_counts: { total: allChannels.length, active: activeChannelCount, archived: archivedChannelCount },
     organizations: listOrgs(),
     operators: listOperators(),

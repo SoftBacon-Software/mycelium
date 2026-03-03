@@ -1595,7 +1595,8 @@ router.post('/agents/:id/savepoint', function (req, res) {
 // Full studio overview (for dashboard)
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  res.json(getDvOverview());
+  var who = getAdminDisplayName(req);
+  res.json(getDvOverview(who));
 });
 
 // Actionable items needing decisions (admin only)
@@ -1983,7 +1984,16 @@ router.get('/channels', function (req, res) {
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
-  res.json(listChannels(filters));
+  var channels = listChannels(filters);
+  // DM channels are private — filter to only include those where the authenticated user is a member.
+  // Skip filtering if an explicit member filter is already set, or caller is __system__.
+  if (!filters.member && who !== '__system__') {
+    channels = channels.filter(function (c) {
+      if (c.type !== 'dm') return true;
+      return isChannelMember(c.id, who);
+    });
+  }
+  res.json(channels);
 });
 
 // POST /channels — create channel (admin only)
@@ -2081,6 +2091,10 @@ router.get('/channels/:id/messages', function (req, res) {
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  // DM channels are private — only members can read messages
+  if (channel.type === 'dm' && who !== '__system__' && !isChannelMember(channel.id, who)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   var filters = {
     before: req.query.before ? parseIntParam(req.query.before) : undefined,
     after: req.query.after ? parseIntParam(req.query.after) : undefined,
@@ -2102,6 +2116,10 @@ router.post('/channels/:id/messages', function (req, res) {
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  // DM channels are private — only members can post
+  if (channel.type === 'dm' && who !== '__system__' && !isChannelMember(channel.id, who)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
