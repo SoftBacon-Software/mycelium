@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useLiveStore } from '../stores/liveStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel } from '../api/endpoints'
@@ -576,18 +577,36 @@ export default function ChannelsPage() {
     [],
   )
 
-  // Initial load + polling for messages and unread every 5s
+  // Initial load
   useEffect(() => {
     loadMessages()
     loadUnread()
+  }, [loadMessages, loadUnread])
 
+  // Live reload on SSE channel_message events
+  const liveEvents = useLiveStore((s) => s.events)
+  const liveConnected = useLiveStore((s) => s.connected)
+  const lastLiveRef = useRef(0)
+  useEffect(() => {
+    const channelEvent = liveEvents.find(
+      (e) => e.id > lastLiveRef.current && e.type === 'channel_message'
+    )
+    if (channelEvent) {
+      lastLiveRef.current = channelEvent.id
+      loadMessages()
+      loadUnread()
+    }
+  }, [liveEvents, loadMessages, loadUnread])
+
+  // Fallback poll when SSE is disconnected
+  useEffect(() => {
+    if (liveConnected) return
     const interval = setInterval(() => {
       loadMessages()
       loadUnread()
-    }, 5000)
-
+    }, 10000)
     return () => clearInterval(interval)
-  }, [loadMessages, loadUnread])
+  }, [liveConnected, loadMessages, loadUnread])
 
   // Send a message
   const handleSend = useCallback(
