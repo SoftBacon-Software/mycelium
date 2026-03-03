@@ -406,11 +406,11 @@ export function createDroneJob(data: Partial<DroneJob>): Promise<DroneJob> {
 }
 
 export function updateDroneJob(id: number, data: Partial<DroneJob>): Promise<DroneJob> {
-  return apiPut<DroneJob>(`/drone-jobs/${id}`, data);
+  return apiPut<DroneJob>(`/drones/jobs/${id}`, data);
 }
 
 export function cancelDroneJob(id: number): Promise<DroneJob> {
-  return apiPut<DroneJob>(`/drone-jobs/${id}`, { status: 'cancelled' });
+  return apiPut<DroneJob>(`/drones/jobs/${id}`, { status: 'cancelled' });
 }
 
 // Webhook Deliveries
