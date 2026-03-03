@@ -324,6 +324,27 @@ export interface Plugin {
   updated_at: string
 }
 
+export interface Feedback {
+  id: string
+  entity_type: string
+  entity_id: string
+  subject: string
+  rating: number
+  comment: string
+  submitted_by: string
+  agent_id: string
+  created_at: string
+}
+
+export interface FeedbackSummary {
+  total: number
+  avg_rating: number
+  by_agent: { agent_id: string; count: number; avg_rating: number }[]
+  by_type: { entity_type: string; count: number; avg_rating: number }[]
+  rating_dist: { rating: number; count: number }[]
+  recent: Feedback[]
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
