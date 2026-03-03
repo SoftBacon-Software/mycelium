@@ -92,9 +92,9 @@ function computeNetworkHealth(
   ).length
   const workerRatio = totalWorkers > 0 ? onlineWorkers / totalWorkers : 0
 
-  if (workerRatio > 0.5 && criticalBugs === 0) {
-    return { level: 'green', label: 'Healthy' }
-  }
+  if (criticalBugs > 0) return { level: 'red', label: 'Critical' }
+  if (workerRatio === 0) return { level: 'red', label: 'No Workers' }
+  if (workerRatio > 0.5) return { level: 'green', label: 'Healthy' }
   return { level: 'amber', label: 'Degraded' }
 }
 
@@ -109,6 +109,9 @@ const healthColors: Record<HealthLevel, { bg: string; text: string; dot: string 
 const agentAvatarColors: Record<string, string> = {
   hijack: 'bg-purple/20 text-purple',
   greatness: 'bg-green/20 text-green',
+  macbook: 'bg-blue/20 text-blue',
+  admin: 'bg-accent/20 text-accent',
+  unakron: 'bg-accent/20 text-accent',
 }
 
 function getAvatarColor(agentId: string): string {
