@@ -14,16 +14,19 @@ import { useVoice } from '../hooks/useVoice'
 type ChannelType = Channel['type']
 type BadgeVariant = 'default' | 'green' | 'red' | 'blue' | 'accent' | 'purple' | 'pink' | 'muted'
 
-const CHANNEL_TYPE_CONFIG: Record<ChannelType, { label: string; icon: string; variant: BadgeVariant }> = {
-  general: { label: 'General', icon: '#', variant: 'default' },
-  announcement: { label: 'Announcements', icon: '\u{1F4E2}', variant: 'accent' },
+const CHANNEL_TYPE_CONFIG: Record<string, { label: string; icon: string; variant: BadgeVariant }> = {
+  general: { label: 'Channels', icon: '#', variant: 'default' },
+  announcement: { label: 'Channels', icon: '\u{1F4E2}', variant: 'accent' },
   dm: { label: 'Direct Messages', icon: '\u{1F4AC}', variant: 'purple' },
-  plan: { label: 'Plans', icon: '\u{1F4CB}', variant: 'blue' },
-  bug: { label: 'Bugs', icon: '\u{1F41B}', variant: 'red' },
-  task: { label: 'Tasks', icon: '\u2705', variant: 'green' },
 }
 
-const CHANNEL_TYPE_ORDER: ChannelType[] = ['general', 'announcement', 'dm', 'plan', 'bug', 'task']
+const DEFAULT_TYPE_CONFIG = { label: 'Channels', icon: '#', variant: 'default' as BadgeVariant }
+
+type SidebarGroup = 'channels' | 'dm'
+const SIDEBAR_GROUPS: { key: SidebarGroup; label: string }[] = [
+  { key: 'channels', label: 'Channels' },
+  { key: 'dm', label: 'Direct Messages' },
+]
 
 const TRUNCATE_LENGTH = 300
 
@@ -234,16 +237,18 @@ function ChannelSidebar({
     [unreadMap],
   )
 
-  // Group channels by type in defined order
+  // Group channels into Channels (general/announcement/legacy entity types) and DMs
   const grouped = useMemo(() => {
-    const map = new Map<ChannelType, Channel[]>()
-    for (const t of CHANNEL_TYPE_ORDER) {
-      map.set(t, [])
-    }
+    const map = new Map<SidebarGroup, Channel[]>()
+    map.set('channels', [])
+    map.set('dm', [])
     for (const ch of channels) {
       if (ch.status !== 'active') continue
-      const list = map.get(ch.type)
-      if (list) list.push(ch)
+      if (ch.type === 'dm') {
+        map.get('dm')!.push(ch)
+      } else {
+        map.get('channels')!.push(ch)
+      }
     }
     return map
   }, [channels])
@@ -307,9 +312,6 @@ function ChannelSidebar({
           >
             <option value="general">General</option>
             <option value="announcement">Announcement</option>
-            <option value="plan">Plan</option>
-            <option value="bug">Bug</option>
-            <option value="task">Task</option>
           </select>
           <input
             value={newDesc}
@@ -337,21 +339,21 @@ function ChannelSidebar({
 
       {/* Channel list */}
       <div className="flex-1 overflow-y-auto py-2">
-        {CHANNEL_TYPE_ORDER.map((type) => {
-          const list = grouped.get(type)
+        {SIDEBAR_GROUPS.map(({ key, label }) => {
+          const list = grouped.get(key)
           if (!list || list.length === 0) return null
-          const config = CHANNEL_TYPE_CONFIG[type]
 
           return (
-            <div key={type} className="mb-2">
+            <div key={key} className="mb-2">
               <div className="px-3 py-1">
                 <span className="text-text-muted text-[10px] font-semibold tracking-wider uppercase">
-                  {config.label}
+                  {label}
                 </span>
               </div>
               {list.map((ch) => {
                 const isActive = ch.id === activeId
                 const unread = unreadMap[ch.id] || 0
+                const config = CHANNEL_TYPE_CONFIG[ch.type] || DEFAULT_TYPE_CONFIG
 
                 return (
                   <button
@@ -443,7 +445,7 @@ function ChatArea({
     )
   }
 
-  const config = CHANNEL_TYPE_CONFIG[channel.type]
+  const config = CHANNEL_TYPE_CONFIG[channel.type] || DEFAULT_TYPE_CONFIG
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-bg">
