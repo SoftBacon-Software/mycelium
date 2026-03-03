@@ -4,8 +4,9 @@ import DirectiveBanner from '../components/directives/DirectiveBanner'
 import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { useVoiceStore } from '../stores/voiceStore'
 import { usePolling } from '../hooks/usePolling'
+import { useLiveEvents } from '../hooks/useLiveEvents'
+import { useLiveStore } from '../stores/liveStore'
 import { useMemo } from 'react'
 
 const routeTitles: Record<string, string> = {
@@ -44,12 +45,16 @@ export default function AppLayout() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const { loading, refresh, instanceConfig } = useDashboardStore()
+  const { loading, refresh, instanceConfig, agents, droneJobs, pendingApprovals } = useDashboardStore()
   const { lastRefresh } = usePolling(10_000)
 
+  useLiveEvents()
+  const liveConnected = useLiveStore((s) => s.connected)
+
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
-  const voiceConnected = useVoiceStore((s) => s.isConnected)
-  const showFloatingVoice = voiceConnected && location.pathname !== '/channels'
+  const showFloatingVoice = location.pathname !== '/channels'
+  const onlineAgents = agents.filter((a) => a.status === 'online').length
+  const activeDrones = droneJobs.filter((j) => j.status === 'pending' || j.status === 'claimed').length
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
@@ -63,11 +68,26 @@ export default function AppLayout() {
       <div className="flex flex-col flex-1 min-w-0">
         {/* Header bar */}
         <header className="flex items-center justify-between h-14 px-6 border-b border-border bg-surface shrink-0">
-          {/* Left: page title */}
-          <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+          {/* Left: page title + network pulse */}
+          <div className="flex items-center gap-4">
+            <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+            <div className="flex items-center gap-3 text-xs font-mono text-text-muted">
+              <span title="Online agents">{onlineAgents} agents</span>
+              {activeDrones > 0 && <span className="text-purple" title="Active drone jobs">{activeDrones} drones</span>}
+              {pendingApprovals.length > 0 && <span className="text-accent" title="Pending approvals">{pendingApprovals.length} approvals</span>}
+            </div>
+          </div>
 
           {/* Right: controls */}
           <div className="flex items-center gap-4">
+            {/* Live connection indicator */}
+            <span className="flex items-center gap-1.5" title={liveConnected ? 'Live connection active' : 'Live disconnected'}>
+              <span className={`w-1.5 h-1.5 rounded-full ${liveConnected ? 'bg-green animate-pulse' : 'bg-text-muted/30'}`} />
+              <span className={`text-xs font-mono ${liveConnected ? 'text-green' : 'text-text-muted'}`}>
+                {liveConnected ? 'LIVE' : 'OFF'}
+              </span>
+            </span>
+
             {/* Frozen kill switch badge */}
             {isFrozen && (
               <span className="px-2.5 py-1 rounded text-xs font-mono font-bold bg-red/20 text-red animate-pulse">

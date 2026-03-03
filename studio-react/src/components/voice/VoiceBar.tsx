@@ -2,10 +2,25 @@ import { Link } from 'react-router-dom'
 import { useVoiceStore } from '../../stores/voiceStore'
 
 export default function VoiceBar() {
-  const { isConnected, isMuted, channelName, peers, error, leave, toggleMute } =
+  const { isConnected, isMuted, channelName, peers, error, join, leave, toggleMute } =
     useVoiceStore()
 
-  if (!isConnected) return null
+  // Disconnected state — show subtle join prompt
+  if (!isConnected) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-surface border-t border-border text-xs font-mono">
+        <span className="w-2 h-2 rounded-full bg-text-muted/30 shrink-0" />
+        <span className="text-text-muted">Voice</span>
+        <div className="flex-1" />
+        <button
+          onClick={() => join()}
+          className="px-2 py-0.5 rounded-sm bg-green/20 text-green hover:bg-green/30 transition-colors"
+        >
+          JOIN
+        </button>
+      </div>
+    )
+  }
 
   const peerCount = peers.length
   const statusText = error

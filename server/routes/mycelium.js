@@ -91,6 +91,7 @@ import {
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
+import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
@@ -382,6 +383,45 @@ function dispatchWorkToIdleAgents(triggerContext) {
 // ---- Router ----
 
 var router = Router();
+
+// ---- SSE: Live event stream ----
+router.get('/events/stream', function (req, res) {
+  // Auth: accept token as query param (SSE can't set headers)
+  var token = req.query.token;
+  if (token) {
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } else {
+    // Fall back to standard auth headers
+    var user = getStudioUser(req);
+    var adminKey = req.headers['x-admin-key'];
+    if (!user && adminKey !== ADMIN_KEY) {
+      return res.status(401).json({ error: 'Authentication required. Pass ?token= or use headers.' });
+    }
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('data: {"type":"connected","clients":' + (clientCount() + 1) + '}\n\n');
+
+  addClient(res);
+
+  // Keep-alive ping every 30s to prevent proxy/load-balancer timeouts
+  var keepAlive = setInterval(function () {
+    res.write(': ping\n\n');
+  }, 30000);
+
+  req.on('close', function () {
+    clearInterval(keepAlive);
+  });
+});
 
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
@@ -1300,6 +1340,7 @@ router.get('/plans/:id', function (req, res) {
   if (!who) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   res.json(plan);
 });
 
@@ -1380,9 +1421,12 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (req.body.linked_branch !== undefined) fields.linked_branch = req.body.linked_branch;
   if (req.body.linked_pr_url !== undefined) fields.linked_pr_url = req.body.linked_pr_url;
   if (req.body.phase !== undefined) fields.phase = escapeHtml(req.body.phase);
-  updateDvPlanStep(parseIntParam(req.params.stepId), fields);
-  dispatchWebhook('plan_step_updated', agentId, { plan_id: parseIntParam(req.params.id), step_id: parseIntParam(req.params.stepId), fields: fields });
-  res.json({ ok: true, step_id: parseIntParam(req.params.stepId) });
+  var stepPlanId = parseIntParam(req.params.id);
+  var stepStepId = parseIntParam(req.params.stepId);
+  updateDvPlanStep(stepStepId, fields);
+  emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  res.json({ ok: true, step_id: stepStepId });
 });
 
 router.delete('/plans/:id/steps/:stepId', function (req, res) {
@@ -1438,7 +1482,7 @@ router.get('/studio/me', function (req, res) {
   if (!user) {
     // Check admin key
     var key = req.headers['x-admin-key'];
-    if (key === ADMIN_KEY) return res.json({ id: 0, username: 'admin', display_name: '__admin__', role: 'admin' });
+    if (key === ADMIN_KEY) return res.json({ id: 0, username: 'admin', display_name: 'Admin', role: 'admin' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
   var dbUser = getStudioUserById(user.userId);
