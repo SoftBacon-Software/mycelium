@@ -240,7 +240,7 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
     try {
       parsed = JSON.parse(dataStr)
     } catch {
-      toast.error('Invalid JSON — fix syntax before saving')
+      toast.error('Invalid JSON — check your data field')
       return
     }
     setSaving(true)
@@ -262,9 +262,11 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
     try {
       await deleteConcept(concept.id)
       await refresh()
+      toast.success('Concept deleted')
       onClose()
     } catch (err) {
       console.error('Failed to delete concept:', err)
+      toast.error('Failed to delete concept')
     } finally {
       setDeleting(false)
     }
@@ -627,10 +629,21 @@ export default function ConceptsPage() {
       )}
 
       {/* Concept grid */}
-      {filtered.length === 0 ? (
+      {loading && concepts.length === 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="bg-surface rounded-lg border border-border p-4 animate-pulse">
+              <div className="h-4 bg-surface-raised rounded w-2/3 mb-2" />
+              <div className="h-3 bg-surface-raised rounded w-1/3 mb-3" />
+              <div className="h-3 bg-surface-raised rounded w-full mb-1" />
+              <div className="h-3 bg-surface-raised rounded w-4/5" />
+            </div>
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="bg-surface rounded-lg p-12 text-center">
           <p className="text-text-muted text-sm">
-            No concepts match the current filter.
+            {concepts.length === 0 ? 'No concepts yet. Create your first concept to get started.' : 'No concepts match the current filter.'}
           </p>
         </div>
       ) : (

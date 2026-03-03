@@ -28,15 +28,12 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
   task_completed: 'green',
   task_unblocked: 'green',
   task_approved: 'green',
-  task_dependency: 'blue',
-  task_comment: 'blue',
   message_sent: 'green',
   message_received: 'green',
   agent_boot: 'purple',
   agent_heartbeat: 'muted',
   agent_registered: 'purple',
   agent_removed: 'red',
-  agent_key_regenerated: 'purple',
   heartbeat: 'muted',
   agent_online: 'purple',
   agent_offline: 'purple',
@@ -49,40 +46,16 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
   plan_updated: 'purple',
   plan_completed: 'green',
   plan_step_completed: 'green',
-  plan_step_added: 'blue',
-  asset_requested: 'accent',
-  asset_completed: 'green',
-  asset_delivered: 'green',
-  asset_registered: 'accent',
-  approval_created: 'accent',
-  approval_requested: 'accent',
-  approval_resolved: 'green',
-  approval_executed: 'green',
-  approval_vote: 'blue',
-  approval_denied: 'red',
-  approval_approved: 'green',
-  channel_created: 'blue',
-  channel_message: 'green',
-  channel_deleted: 'red',
   drone_job_created: 'blue',
   drone_job_claimed: 'blue',
   drone_job_done: 'green',
   drone_job_failed: 'red',
-  artifact_uploaded: 'accent',
-  assets_linked_to_job: 'blue',
+  approval_created: 'accent',
+  approval_resolved: 'green',
   context_updated: 'muted',
-  context_key_updated: 'muted',
   config_changed: 'muted',
   admin_frozen: 'red',
   admin_unfrozen: 'green',
-  sleep_mode_on: 'purple',
-  sleep_mode_off: 'green',
-  operator_availability: 'blue',
-  request_resolved: 'green',
-  work_request: 'accent',
-  concept_created: 'purple',
-  concept_updated: 'purple',
-  project_created: 'blue',
 }
 
 function getEventBadgeVariant(type: string): 'accent' | 'blue' | 'green' | 'muted' | 'purple' | 'red' {
@@ -117,19 +90,12 @@ function computeNetworkHealth(
   const criticalBugs = bugs.filter(
     (b) => b.severity === 'critical' && b.status !== 'fixed' && b.status !== 'closed',
   ).length
-  const highBugs = bugs.filter(
-    (b) => b.severity === 'high' && b.status !== 'fixed' && b.status !== 'closed',
-  ).length
   const workerRatio = totalWorkers > 0 ? onlineWorkers / totalWorkers : 0
 
-  // Critical bugs = red (regardless of agent count)
   if (criticalBugs > 0) return { level: 'red', label: 'Critical' }
-  // Most workers offline = red
-  if (totalWorkers > 0 && workerRatio <= 0.25) return { level: 'red', label: 'Offline' }
-  // High bugs or degraded workforce = amber
-  if (highBugs > 0 || workerRatio <= 0.5) return { level: 'amber', label: 'Degraded' }
-
-  return { level: 'green', label: 'Healthy' }
+  if (workerRatio === 0) return { level: 'red', label: 'No Workers' }
+  if (workerRatio > 0.5) return { level: 'green', label: 'Healthy' }
+  return { level: 'amber', label: 'Degraded' }
 }
 
 const healthColors: Record<HealthLevel, { bg: string; text: string; dot: string }> = {
