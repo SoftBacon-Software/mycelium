@@ -454,3 +454,14 @@ CREATE TABLE IF NOT EXISTS dv_feedback (
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_agent ON dv_feedback(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_entity ON dv_feedback(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_created ON dv_feedback(created_at DESC);
+
+-- Push notification subscriptions (Web Push)
+CREATE TABLE IF NOT EXISTS dv_push_subscriptions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL,
+  endpoint        TEXT UNIQUE NOT NULL,
+  subscription    TEXT NOT NULL,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_push_subs_user ON dv_push_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_dv_push_subs_endpoint ON dv_push_subscriptions(endpoint);

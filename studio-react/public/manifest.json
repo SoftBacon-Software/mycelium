@@ -1,0 +1,21 @@
+{
+  "name": "Mycelium Command",
+  "short_name": "Mycelium",
+  "description": "AI agent swarm command center",
+  "start_url": "/m",
+  "display": "standalone",
+  "background_color": "#111110",
+  "theme_color": "#D4A847",
+  "icons": [
+    {
+      "src": "/fungal_horror.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/fungal_horror.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

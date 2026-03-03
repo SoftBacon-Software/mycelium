@@ -91,10 +91,12 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent
+  countPendingForAgent,
+  upsertPushSubscription, listPushSubscriptions, deletePushSubscription
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
+import { shouldNotify, sendPushToAll } from '../push.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
@@ -326,6 +328,15 @@ function emitEvent(type, agentId, projectId, summary, data) {
       } catch (e) { sseClients.delete(client); }
     });
   }
+  // Send push notification for high-signal events
+  if (shouldNotify(type)) {
+    sendPushToAll({
+      title: 'Mycelium',
+      body: summary || type.replace(/_/g, ' '),
+      tag: type,
+      data: { url: '/m', type: type, agent: agentId }
+    }).catch(function (e) { console.error('[push] broadcast error:', e.message); });
+  }
 }
 
 // ---- SSE Event Stream ----
@@ -365,6 +376,30 @@ router.get('/events/stream', function (req, res) {
   addClient(res);
   var keepAlive = setInterval(function () { res.write(': ping\n\n'); }, 30000);
   req.on('close', function () { clearInterval(keepAlive); });
+});
+
+// ---- Push notification routes ----
+
+router.get('/push/vapid-key', function (req, res) {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY || '' });
+});
+
+router.post('/push/subscribe', function (req, res) {
+  var user = getStudioUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  var sub = req.body.subscription;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Missing subscription' });
+  upsertPushSubscription(user.studioUser, JSON.stringify(sub), sub.endpoint);
+  res.json({ ok: true });
+});
+
+router.delete('/push/subscribe', function (req, res) {
+  var user = getStudioUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  var endpoint = req.query.endpoint;
+  if (!endpoint) return res.status(400).json({ error: 'Missing endpoint' });
+  deletePushSubscription(endpoint);
+  res.json({ ok: true });
 });
 
 // ---- Approval gate helpers ----

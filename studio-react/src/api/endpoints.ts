@@ -447,3 +447,23 @@ export function enablePlugin(name: string): Promise<{ ok: boolean }> {
 export function disablePlugin(name: string): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/disable`, {});
 }
+
+// Push notifications
+
+export function getVapidKey(): Promise<{ key: string }> {
+  return apiGet<{ key: string }>('/push/vapid-key');
+}
+
+export function subscribePush(subscription: PushSubscriptionJSON): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>('/push/subscribe', { subscription });
+}
+
+export function unsubscribePush(endpoint: string): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`);
+}
+
+// Directives (convenience)
+
+export function sendDirective(toAgent: string, content: string): Promise<Message> {
+  return apiPost<Message>('/messages', { to_agent: toAgent, content, msg_type: 'directive' });
+}

@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { useAuthStore } from './stores/authStore'
 import AppLayout from './layouts/AppLayout'
+import MobileLayout from './layouts/MobileLayout'
+import MobileCommandPage from './pages/MobileCommandPage'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import TasksPage from './pages/TasksPage'
@@ -49,6 +51,11 @@ export default function App() {
           path="/login"
           element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
         />
+        <Route
+          element={isAuthenticated ? <MobileLayout /> : <Navigate to="/login" replace />}
+        >
+          <Route path="m" element={<MobileCommandPage />} />
+        </Route>
         <Route
           element={isAuthenticated ? <AppLayout /> : <Navigate to="/login" replace />}
         >

@@ -2083,6 +2083,24 @@ export function deleteFeedback(id) {
   db.prepare('DELETE FROM dv_feedback WHERE id = ?').run(id);
 }
 
+// ---- Push subscriptions ----
+
+export function upsertPushSubscription(userId, subscriptionJson, endpoint) {
+  db.prepare(`
+    INSERT INTO dv_push_subscriptions (user_id, subscription, endpoint)
+    VALUES (?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET subscription = excluded.subscription, user_id = excluded.user_id
+  `).run(userId, subscriptionJson, endpoint);
+}
+
+export function listPushSubscriptions() {
+  return db.prepare('SELECT * FROM dv_push_subscriptions').all();
+}
+
+export function deletePushSubscription(endpoint) {
+  db.prepare('DELETE FROM dv_push_subscriptions WHERE endpoint = ?').run(endpoint);
+}
+
 export function getFeedbackSummary() {
   var total = db.prepare('SELECT COUNT(*) as count FROM dv_feedback').get().count;
   var avgRating = db.prepare('SELECT ROUND(AVG(rating), 2) as avg FROM dv_feedback').get().avg || 0;
