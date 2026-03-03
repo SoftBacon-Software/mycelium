@@ -173,6 +173,7 @@ export interface PlanStep {
   id: string;
   plan_id: string;
   step_number: number;
+  step_order?: number;
   title: string;
   description: string;
   status: string;

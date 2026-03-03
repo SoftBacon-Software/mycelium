@@ -1,10 +1,9 @@
-import { useState } from 'react'
-import type { PlanStep } from '../../api/types'
-import { addStepComment } from '../../api/endpoints'
-import { useAuthStore } from '../../stores/authStore'
+import { useState, useEffect } from 'react'
+import type { PlanStep, PlanStepComment } from '../../api/types'
+import { addPlanStepComment } from '../../api/endpoints'
 import Badge from '../shared/Badge'
 import { getSenderDisplay } from '../../utils/sender'
-import { formatTime } from '../messages/ChatMessage'
+import { formatDateTime } from '../../utils/time'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -22,6 +21,94 @@ const statusConfig: Record<string, { variant: 'green' | 'blue' | 'muted' | 'defa
   skipped: { variant: 'muted', label: 'skipped' },
 }
 
+// ─── Comment Thread ───────────────────────────────────────────────────────────
+
+interface CommentThreadProps {
+  planId: string
+  stepId: string
+  initialComments: PlanStepComment[]
+}
+
+function CommentThread({ planId, stepId, initialComments }: CommentThreadProps) {
+  const [comments, setComments] = useState<PlanStepComment[]>(initialComments)
+  const [draft, setDraft] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Sync if initialComments changes (e.g. parent refetches plan)
+  useEffect(() => {
+    setComments(initialComments)
+  }, [initialComments])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const content = draft.trim()
+    if (!content) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      const comment = await addPlanStepComment(planId, stepId, { content })
+      setComments((prev) => [...prev, comment])
+      setDraft('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to post comment')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 pt-2 border-t border-border/50">
+      <p className="text-text-muted text-xs uppercase tracking-wider mb-2">Comments</p>
+
+      {comments.length === 0 && (
+        <p className="text-text-muted text-xs italic mb-2">No comments yet.</p>
+      )}
+
+      {comments.length > 0 && (
+        <div className="space-y-2 mb-2">
+          {comments.map((c) => (
+            <div key={c.id} className="bg-surface-raised rounded-sm px-2.5 py-2">
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-text-dim text-xs font-medium">{getSenderDisplay(c.author)}</span>
+                <span className="text-text-muted text-xs">{formatDateTime(c.created_at)}</span>
+              </div>
+              <p className="text-text text-xs leading-relaxed whitespace-pre-wrap">{c.content}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-1.5">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Leave a comment..."
+          rows={2}
+          disabled={submitting}
+          className="w-full bg-surface-raised border border-border rounded-sm px-2.5 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-ring resize-none disabled:opacity-60"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              handleSubmit(e as unknown as React.FormEvent)
+            }
+          }}
+        />
+        {error && <p className="text-red text-xs">{error}</p>}
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={!draft.trim() || submitting}
+            className="px-3 py-1 rounded-sm text-xs font-medium bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Posting…' : 'Comment'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface StepChecklistProps {
@@ -31,14 +118,15 @@ interface StepChecklistProps {
   onCommentAdded?: () => void
 }
 
-export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAdded }: StepChecklistProps) {
+export default function StepChecklist({ steps, planId, onStepUpdate }: StepChecklistProps) {
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
   const [updatingStep, setUpdatingStep] = useState<string | null>(null)
-  const [commentText, setCommentText] = useState('')
-  const [submittingComment, setSubmittingComment] = useState(false)
-  const user = useAuthStore((s) => s.user)
 
-  const sorted = [...steps].sort((a, b) => a.step_number - b.step_number)
+  const sorted = [...steps].sort((a, b) => {
+    const aOrder = a.step_order ?? a.step_number ?? 0
+    const bOrder = b.step_order ?? b.step_number ?? 0
+    return aOrder - bOrder
+  })
 
   async function handleToggle(step: PlanStep) {
     const isDone = step.status === 'done' || step.status === 'completed'
@@ -53,22 +141,6 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
 
   function toggleExpand(stepId: string) {
     setExpandedStep((prev) => (prev === stepId ? null : stepId))
-    setCommentText('')
-  }
-
-  async function handleSubmitComment(stepId: string) {
-    const text = commentText.trim()
-    if (!text || submittingComment) return
-    setSubmittingComment(true)
-    try {
-      await addStepComment(planId, stepId, text, user?.username)
-      setCommentText('')
-      onCommentAdded?.()
-    } catch (err) {
-      console.error('Failed to add comment:', err)
-    } finally {
-      setSubmittingComment(false)
-    }
   }
 
   if (sorted.length === 0) {
@@ -87,8 +159,7 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
         const config = statusConfig[step.status] ?? statusConfig.pending
         const isExpanded = expandedStep === step.id
         const isUpdating = updatingStep === step.id
-        const comments = step.comments ?? []
-        const hasContent = step.description || comments.length > 0
+        const stepOrder = step.step_order ?? step.step_number ?? 0
 
         return (
           <div key={step.id} className="group">
@@ -141,7 +212,7 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
 
               {/* Step number */}
               <span className="text-text-muted text-xs font-mono w-5 text-right shrink-0">
-                {step.step_number}
+                {stepOrder}
               </span>
 
               {/* Title */}
@@ -158,16 +229,19 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
                 <span className="truncate block">{step.title}</span>
               </button>
 
-              {/* Comment count */}
-              {comments.length > 0 && (
-                <span className="text-text-muted text-xs shrink-0 tabular-nums">
-                  {comments.length}
-                </span>
-              )}
-
               {/* Status badge (non-pending only) */}
               {step.status !== 'pending' && (
                 <Badge variant={config.variant}>{config.label}</Badge>
+              )}
+
+              {/* Comment count badge */}
+              {(step.comments?.length ?? 0) > 0 && (
+                <span className="text-text-muted text-xs shrink-0 flex items-center gap-0.5">
+                  <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M1 1h10v7H7l-2 2.5L3 8H1z" strokeLinejoin="round" />
+                  </svg>
+                  {step.comments!.length}
+                </span>
               )}
 
               {/* Assignee */}
@@ -177,7 +251,7 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
                 </span>
               )}
 
-              {/* Expand indicator */}
+              {/* Expand indicator — always shown */}
               <svg
                 viewBox="0 0 12 12"
                 className={`w-3 h-3 text-text-muted shrink-0 transition-transform ${
@@ -191,21 +265,21 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
               </svg>
             </div>
 
-            {/* Expanded detail */}
+            {/* Expanded panel: description + links + comments */}
             {isExpanded && (
-              <div className="ml-11 mr-3 mb-2 px-3 py-2 bg-surface rounded-sm space-y-3">
+              <div className="ml-11 mr-3 mb-2 px-3 py-2 bg-surface rounded-sm">
                 {step.description && (
                   <p className="text-text-dim text-xs leading-relaxed whitespace-pre-wrap">
                     {step.description}
                   </p>
                 )}
                 {step.assignee && (
-                  <p className="text-text-muted text-xs">
+                  <p className="text-text-muted text-xs mt-1.5">
                     Assigned to <span className="text-text-dim">{getSenderDisplay(step.assignee)}</span>
                   </p>
                 )}
                 {(step.linked_task_id || step.linked_branch || step.linked_pr_url) && (
-                  <div className="pt-2 border-t border-border/50 space-y-1">
+                  <div className="mt-2 pt-2 border-t border-border/50 space-y-1">
                     {step.linked_task_id && (
                       <p className="text-xs">
                         <Badge variant="blue">Task #{step.linked_task_id}</Badge>
@@ -237,48 +311,12 @@ export default function StepChecklist({ steps, planId, onStepUpdate, onCommentAd
                   </div>
                 )}
 
-                {/* Comments */}
-                {(comments.length > 0 || hasContent) && (
-                  <div className={`${hasContent ? 'pt-2 border-t border-border/50' : ''}`}>
-                    {comments.length > 0 && (
-                      <div className="space-y-2 mb-2">
-                        {comments.map((c) => (
-                          <div key={c.id} className="flex items-start gap-2">
-                            <span className="text-xs font-medium text-text-dim shrink-0">
-                              {getSenderDisplay(c.author)}
-                            </span>
-                            <p className="text-xs text-text-dim whitespace-pre-wrap flex-1 min-w-0">
-                              {c.content}
-                            </p>
-                            <span className="text-text-muted text-[10px] shrink-0">
-                              {formatTime(c.created_at)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Comment input */}
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={commentText}
-                        onChange={(e) => setCommentText(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSubmitComment(step.id)}
-                        placeholder="Add a comment..."
-                        className="flex-1 bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
-                        disabled={submittingComment}
-                      />
-                      <button
-                        onClick={() => handleSubmitComment(step.id)}
-                        disabled={!commentText.trim() || submittingComment}
-                        className="px-2 py-1 rounded-sm text-xs font-medium bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                      >
-                        {submittingComment ? '...' : 'Post'}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                {/* Comment thread */}
+                <CommentThread
+                  planId={planId}
+                  stepId={step.id}
+                  initialComments={step.comments ?? []}
+                />
               </div>
             )}
           </div>

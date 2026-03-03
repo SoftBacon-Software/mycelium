@@ -10,6 +10,7 @@ import type {
   TeamChat,
   Plan,
   PlanStep,
+  PlanStepComment,
   Bug,
   Asset,
   Organization,
@@ -137,13 +138,22 @@ export function updatePlanStep(
   return apiPut<PlanStep>(`/plans/${planId}/steps/${stepId}`, data);
 }
 
+export function addPlanStepComment(
+  planId: string,
+  stepId: string,
+  data: { content: string; author?: string },
+): Promise<PlanStepComment> {
+  return apiPost<PlanStepComment>(`/plans/${planId}/steps/${stepId}/comments`, data);
+}
+
+// Alias for backward compat
 export function addStepComment(
   planId: string,
   stepId: string,
   content: string,
   author?: string,
-): Promise<{ ok: boolean; id: number }> {
-  return apiPost(`/plans/${planId}/steps/${stepId}/comments`, { content, author });
+): Promise<PlanStepComment> {
+  return addPlanStepComment(planId, stepId, { content, author });
 }
 
 // Bugs

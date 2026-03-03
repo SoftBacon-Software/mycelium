@@ -502,6 +502,21 @@ export function deleteTaskComment(commentId) {
   return result.changes > 0;
 }
 
+// -- Plan Step Comments --
+
+export function addPlanStepComment(stepId, planId, author, content) {
+  var result = db.prepare(
+    "INSERT INTO dv_plan_step_comments (step_id, plan_id, author, content) VALUES (?, ?, ?, ?) RETURNING *"
+  ).get(stepId, planId, author, content);
+  return result;
+}
+
+export function getPlanStepComments(stepId) {
+  return db.prepare(
+    "SELECT * FROM dv_plan_step_comments WHERE step_id = ? ORDER BY created_at ASC"
+  ).all(stepId);
+}
+
 // -- Context --
 
 export function getDvContext(projectId) {
@@ -1090,9 +1105,10 @@ export function getDvPlan(id) {
   var plan = db.prepare("SELECT * FROM dv_plans WHERE id = ?").get(id);
   if (!plan) return null;
   var steps = db.prepare("SELECT * FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order, id").all(id);
-  var comments = db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(id);
+  // Batch-fetch all comments for this plan and group by step
+  var allComments = db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(id);
   var commentsByStep = {};
-  for (var c of comments) {
+  for (var c of allComments) {
     if (!commentsByStep[c.step_id]) commentsByStep[c.step_id] = [];
     commentsByStep[c.step_id].push(c);
   }

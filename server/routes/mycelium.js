@@ -71,6 +71,7 @@ import {
   createDvTeamChat, listDvTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
   addTaskComment, getTaskComments, deleteTaskComment,
+  addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
   castApprovalVote, getApprovalVotes, countApprovalVotes,
@@ -1515,6 +1516,35 @@ router.delete('/plans/:id/steps/:stepId', function (req, res) {
   if (!checkProjectScope(req, res, plan.project_id)) return;
   deleteDvPlanStep(parseIntParam(req.params.stepId));
   res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
+});
+
+// -- Plan Step Comments --
+
+router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var plan = getDvPlan(parseIntParam(req.params.id));
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var stepId = parseIntParam(req.params.stepId);
+  var step = plan.steps ? plan.steps.find(function (s) { return s.id === stepId; }) : null;
+  if (!step) return res.status(404).json({ error: 'Step not found' });
+  var content = escapeHtml(req.body.content);
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  var author = escapeHtml(req.body.author || who);
+  var comment = addPlanStepComment(stepId, plan.id, author, content);
+  emitEvent('plan_step_comment', who, plan.project_id, who + ' commented on step #' + stepId + ' of plan #' + plan.id, { plan_id: plan.id, step_id: stepId, comment_id: comment.id });
+  res.json(comment);
+});
+
+router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var plan = getDvPlan(parseIntParam(req.params.id));
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var stepId = parseIntParam(req.params.stepId);
+  res.json(getPlanStepComments(stepId));
 });
 
 router.put('/plans/:id/reorder', function (req, res) {
