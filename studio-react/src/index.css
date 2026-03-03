@@ -64,3 +64,16 @@ body {
 .animate-fade-in {
   animation: fade-in 200ms ease-out;
 }
+
+@keyframes slide-in-from-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-in {
+  animation-duration: 250ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: both;
+}
+.slide-in-from-right {
+  animation-name: slide-in-from-right;
+}
