@@ -627,7 +627,29 @@ export default function ConceptsPage() {
       )}
 
       {/* Concept grid */}
-      {filtered.length === 0 ? (
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="w-full bg-surface-raised rounded-lg p-4 flex gap-3 animate-pulse">
+              {/* Color bar */}
+              <div className="w-1 shrink-0 rounded-full self-stretch bg-surface" />
+              {/* Content */}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="h-4 bg-surface rounded w-2/3" />
+                <div className="h-3 bg-surface rounded w-full" />
+                <div className="h-3 bg-surface rounded w-4/5" />
+                <div className="flex gap-1.5 mt-2">
+                  <div className="h-5 bg-surface rounded-full w-16" />
+                  <div className="h-5 bg-surface rounded-full w-12" />
+                </div>
+                <div className="flex justify-end mt-1">
+                  <div className="h-3 bg-surface rounded w-14" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="bg-surface rounded-lg p-12 text-center">
           <p className="text-text-muted text-sm">
             No concepts match the current filter.
