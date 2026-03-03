@@ -435,3 +435,19 @@ CREATE TABLE IF NOT EXISTS dv_channel_reads (
   last_read_message_id INTEGER NOT NULL DEFAULT 0,
   UNIQUE(channel_id, user_id)
 );
+
+-- Operator feedback on agent work (ratings + comments)
+CREATE TABLE IF NOT EXISTS dv_feedback (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type  TEXT NOT NULL DEFAULT 'general',  -- 'task', 'plan_step', 'bug', 'general'
+  entity_id    TEXT NOT NULL DEFAULT '',          -- ID of the referenced entity
+  subject      TEXT NOT NULL DEFAULT '',          -- human-readable label
+  rating       INTEGER NOT NULL DEFAULT 3,        -- 1-5 stars
+  comment      TEXT NOT NULL DEFAULT '',
+  submitted_by TEXT NOT NULL DEFAULT 'operator',  -- who gave the feedback
+  agent_id     TEXT NOT NULL DEFAULT '',          -- which agent's work is rated
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_feedback_agent ON dv_feedback(agent_id);
+CREATE INDEX IF NOT EXISTS idx_dv_feedback_entity ON dv_feedback(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_dv_feedback_created ON dv_feedback(created_at DESC);

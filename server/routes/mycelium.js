@@ -87,7 +87,8 @@ import {
   createSavepoint, getLatestSavepoint, getSavepointHistory,
   updateSavepointNotes, computeSavepointDiff, pruneSavepoints,
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
-  getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep
+  getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
+  createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
 
@@ -286,9 +287,32 @@ function checkAgentOrAdmin(req, res) {
   return checkAgent(req, res);
 }
 
+// ---- SSE clients registry ----
+// Each entry: { res, filters: { project_id, type, agent } }
+var sseClients = new Set();
+
 // ---- Event helper ----
 function emitEvent(type, agentId, projectId, summary, data) {
-  createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  // Broadcast to connected SSE clients
+  if (sseClients.size > 0) {
+    var payload = 'data: ' + JSON.stringify({
+      id: id, type: type, agent: agentId || '',
+      project_id: projectId || null, summary: summary || '',
+      data: JSON.stringify(data || {}),
+      created_at: new Date().toISOString()
+    }) + '\n\n';
+    sseClients.forEach(function (client) {
+      var f = client.filters;
+      if (f.project_id && f.project_id !== projectId) return;
+      if (f.type && f.type !== type) return;
+      if (f.agent && f.agent !== agentId) return;
+      try {
+        client.res.write(payload);
+        if (client.res.flush) client.res.flush();
+      } catch (e) { sseClients.delete(client); }
+    });
+  }
 }
 
 // ---- Approval gate helpers ----
@@ -988,6 +1012,76 @@ router.post('/events', function (req, res) {
   var data = req.body.data ? JSON.stringify(req.body.data) : '{}';
   var id = createDvEvent(type, agentId, projectId, summary, data);
   res.json({ id: id });
+});
+
+// GET /events/stream — Server-Sent Events stream for live event broadcast
+// Auth: ?token=<jwt> for browser EventSource, or X-Admin-Key/X-Agent-Key headers for API clients
+// Filters (optional): ?project_id=, ?type=, ?agent=
+// On connect: replays last 20 matching events so the client isn't blank
+// Heartbeat: SSE comment every 30s to keep proxies from closing idle connections
+router.get('/events/stream', function (req, res) {
+  // Auth must happen before SSE headers are set so we can send error JSON
+  var authOk = false;
+
+  // ?token=<jwt> — browser EventSource can't set Authorization headers
+  var token = req.query.token;
+  if (token) {
+    try {
+      var decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded && decoded.studioUser) { req._authIsAdmin = true; authOk = true; }
+    } catch (e) { /* invalid token, fall through to header auth */ }
+  }
+
+  if (!authOk) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return; // checkAgentOrAdmin already sent 401/403
+    authOk = true;
+  }
+
+  // Optional event filters
+  var filters = {
+    project_id: req.query.project_id || null,
+    type: req.query.type || null,
+    agent: req.query.agent || null
+  };
+
+  // SSE response headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx/Railway proxy buffering
+  res.flushHeaders();
+
+  // Replay last 20 matching events on connect so dashboard isn't blank
+  try {
+    var recentFilters = { limit: 20, offset: 0 };
+    if (filters.project_id) recentFilters.project_id = filters.project_id;
+    if (filters.type) recentFilters.type = filters.type;
+    if (filters.agent) recentFilters.agent = filters.agent;
+    var recent = listDvEvents(recentFilters);
+    recent.reverse().forEach(function (ev) {
+      res.write('data: ' + JSON.stringify(ev) + '\n\n');
+    });
+    if (res.flush) res.flush();
+  } catch (e) { /* non-fatal — stream still opens */ }
+
+  // Register this client
+  var client = { res: res, filters: filters };
+  sseClients.add(client);
+
+  // Keepalive heartbeat every 30s — SSE comment (ignored by EventSource)
+  var heartbeat = setInterval(function () {
+    try {
+      res.write(': keepalive\n\n');
+      if (res.flush) res.flush();
+    } catch (e) { /* cleaned up below */ }
+  }, 30000);
+
+  // Cleanup when client disconnects
+  req.on('close', function () {
+    clearInterval(heartbeat);
+    sseClients.delete(client);
+  });
 });
 
 // ======== REQUESTS ========
@@ -2688,6 +2782,53 @@ router.get('/docs', function (req, res) {
   });
   res.json({ routes: routes, count: routes.length });
 });
+
+// ======== FEEDBACK ========
+
+// GET /feedback/summary — aggregate stats
+router.get('/feedback/summary', checkAdmin, asyncHandler(async function (req, res) {
+  var summary = getFeedbackSummary();
+  res.json(summary);
+}));
+
+// GET /feedback — list with optional filters
+router.get('/feedback', checkAdmin, asyncHandler(async function (req, res) {
+  var filters = {
+    entity_type: req.query.entity_type || '',
+    agent_id: req.query.agent_id || '',
+    submitted_by: req.query.submitted_by || '',
+    rating: req.query.rating || '',
+    min_rating: req.query.min_rating || '',
+    limit: parseIntParam(req.query.limit) || 50,
+    offset: parseIntParam(req.query.offset) || 0,
+  };
+  // Clear empty strings so listFeedback ignores them
+  Object.keys(filters).forEach(function (k) { if (filters[k] === '') delete filters[k]; });
+  res.json(listFeedback(filters));
+}));
+
+// POST /feedback — submit feedback
+router.post('/feedback', checkAgentOrAdmin, asyncHandler(async function (req, res) {
+  var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
+  if (!rating || rating < 1 || rating > 5) {
+    return apiError(res, 400, 'rating must be 1-5');
+  }
+  var submittedBy = req.agent ? req.agent.id : (req.studioUser ? req.studioUser.username : 'operator');
+  var id = createFeedback(entity_type, entity_id, subject, rating, comment, submittedBy, agent_id || '');
+  var record = getFeedback(id);
+  emitEvent('feedback_submitted', submittedBy, '', JSON.stringify({ id, rating, entity_type, agent_id }));
+  res.status(201).json(record);
+}));
+
+// DELETE /feedback/:id
+router.delete('/feedback/:id', checkAdmin, asyncHandler(async function (req, res) {
+  var id = parseIntParam(req.params.id);
+  if (!id) return apiError(res, 400, 'Invalid feedback id');
+  var record = getFeedback(id);
+  if (!record) return apiError(res, 404, 'Feedback not found');
+  deleteFeedback(id);
+  res.json({ ok: true });
+}));
 
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init

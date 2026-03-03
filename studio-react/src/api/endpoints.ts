@@ -25,6 +25,8 @@ import type {
   ThreadSummary,
   WebhookDelivery,
   Plugin,
+  Feedback,
+  FeedbackSummary,
 } from './types';
 
 // Auth
@@ -374,6 +376,36 @@ export function linkAssetsToJob(
     drone_job_id: droneJobId,
     status,
   });
+}
+
+// Feedback
+
+export function fetchFeedback(params?: {
+  entity_type?: string; agent_id?: string; rating?: number; min_rating?: number; limit?: number; offset?: number
+}): Promise<Feedback[]> {
+  const q = new URLSearchParams()
+  if (params?.entity_type) q.set('entity_type', params.entity_type)
+  if (params?.agent_id) q.set('agent_id', params.agent_id)
+  if (params?.rating) q.set('rating', String(params.rating))
+  if (params?.min_rating) q.set('min_rating', String(params.min_rating))
+  if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.offset) q.set('offset', String(params.offset))
+  const qs = q.toString()
+  return apiGet<Feedback[]>('/feedback' + (qs ? '?' + qs : ''))
+}
+
+export function fetchFeedbackSummary(): Promise<FeedbackSummary> {
+  return apiGet<FeedbackSummary>('/feedback/summary')
+}
+
+export function submitFeedback(data: {
+  entity_type?: string; entity_id?: string; subject?: string; rating: number; comment?: string; agent_id?: string
+}): Promise<Feedback> {
+  return apiPost<Feedback>('/feedback', data)
+}
+
+export function deleteFeedbackItem(id: string): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/feedback/${id}`)
 }
 
 // Plugins

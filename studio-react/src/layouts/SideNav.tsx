@@ -22,6 +22,7 @@ const navItems = [
   { to: '/onboarding', label: 'Onboarding', abbr: 'Ob' },
   { to: '/plugins', label: 'Plugins', abbr: 'Pg' },
   { to: '/analytics', label: 'Analytics', abbr: 'An' },
+  { to: '/feedback', label: 'Feedback', abbr: 'Fb' },
 ] as const
 
 export default function SideNav() {
@@ -36,24 +37,26 @@ export default function SideNav() {
 
   return (
     <nav
-      className="flex flex-col h-screen bg-surface border-r border-border shrink-0 transition-all duration-200"
+      className="glass-nav flex flex-col h-screen shrink-0 transition-all duration-300"
       style={{ width: collapsed ? 56 : 200 }}
     >
       {/* Logo */}
-      <div className="flex items-center h-14 px-3 shrink-0">
+      <div className="flex items-center h-14 px-3 shrink-0 border-b border-border/50">
         {collapsed ? (
-          <span className="font-mono text-accent text-sm font-bold tracking-widest mx-auto">
+          <span className="font-mono text-accent text-sm font-bold tracking-widest mx-auto"
+            style={{ textShadow: '0 0 12px rgba(212,168,71,0.5)' }}>
             M
           </span>
         ) : (
-          <span className="font-mono text-accent text-sm font-bold tracking-widest">
+          <span className="font-mono text-accent text-sm font-bold tracking-[0.2em]"
+            style={{ textShadow: '0 0 16px rgba(212,168,71,0.4)' }}>
             MYCELIUM
           </span>
         )}
       </div>
 
       {/* Navigation links */}
-      <div className="flex flex-col gap-0.5 px-2 flex-1">
+      <div className="flex flex-col gap-0.5 px-2 flex-1 py-2">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
@@ -61,10 +64,10 @@ export default function SideNav() {
             end={item.to === '/'}
             className={({ isActive }) =>
               [
-                'flex items-center gap-3 px-2.5 py-2 text-sm rounded-sm transition-colors duration-150',
+                'flex items-center gap-3 px-2.5 py-2 text-sm rounded-lg transition-all duration-150',
                 isActive
-                  ? 'bg-surface-raised text-accent'
-                  : 'text-text-dim hover:text-text hover:bg-surface-raised/50',
+                  ? 'glass-nav-active text-accent'
+                  : 'text-text-muted hover:text-text-dim hover:bg-white/[0.03] rounded-lg',
               ].join(' ')
             }
           >
@@ -79,7 +82,7 @@ export default function SideNav() {
         ))}
 
         {/* Separator */}
-        <div className="my-3 border-t border-border" />
+        <div className="my-3 border-t border-border/50" />
 
         {/* Agents section */}
         <div className="px-2.5">
@@ -94,7 +97,7 @@ export default function SideNav() {
                 Agents
               </span>
               <div className="mt-1.5 flex items-center gap-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green" />
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green dot-online" />
                 <span className="text-xs text-text-dim">
                   {onlineCount} online
                 </span>
@@ -106,7 +109,7 @@ export default function SideNav() {
         {/* Voice indicator */}
         {voiceConnected && (
           <>
-            <div className="my-3 border-t border-border" />
+            <div className="my-3 border-t border-border/50" />
             <div className="px-2.5">
               {collapsed ? (
                 <div
@@ -145,7 +148,7 @@ export default function SideNav() {
       {/* Toggle button */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="flex items-center justify-center h-10 mx-2 mb-3 rounded-sm text-text-muted hover:text-text hover:bg-surface-raised/50 transition-colors duration-150 text-xs"
+        className="flex items-center justify-center h-9 mx-2 mb-3 rounded-lg text-text-muted hover:text-accent transition-all duration-150 text-xs border border-transparent hover:border-border/50 hover:glass-nav-active"
         title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         {collapsed ? '\u00BB' : '\u00AB'}
