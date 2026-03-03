@@ -56,12 +56,27 @@ app.use(function (req, res, next) {
   next();
 });
 
+// ---- Landing page (marketing) at root ----
+// The landing page is served at GET / — everything else at root falls through
+// to the studio static middleware so SPA asset paths (/assets/, /favicon.svg) still resolve.
+var publicPath = path.join(__dirname, '..', 'public');
+var landingPage = path.join(publicPath, 'index.html');
+
 // ---- Mycelium Dashboard ----
+// Primary: /studio/ — also serves root paths so absolute asset URLs (/assets/*, /favicon.svg) work.
 var dashboardPath = path.join(__dirname, '..', 'public', 'studio');
 if (fs.existsSync(dashboardPath)) {
-  // Serve dashboard at root and /studio for backward compat
-  app.use('/', express.static(dashboardPath));
+  // Serve at /studio/
   app.use('/studio', express.static(dashboardPath));
+  // Also serve studio assets at root so the Vite-built SPA absolute paths resolve
+  app.use('/', express.static(dashboardPath, { index: false }));
+}
+
+// Landing page at GET / (after static so it doesn't shadow favicon/assets above)
+if (fs.existsSync(landingPage)) {
+  app.get('/', function (req, res) {
+    res.sendFile(landingPage);
+  });
 }
 
 // ---- Health check (public, no auth) ----
@@ -122,10 +137,9 @@ app.get('/api/voice/turn-credentials', function (req, res) {
   });
 });
 
-// Dashboard catch-all (SPA)
+// Dashboard SPA catch-all: only for /studio/* paths
 if (fs.existsSync(dashboardPath)) {
-  app.get('*', function (req, res) {
-    if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+  app.get('/studio/*', function (req, res) {
     res.sendFile(path.join(dashboardPath, 'index.html'));
   });
 }
