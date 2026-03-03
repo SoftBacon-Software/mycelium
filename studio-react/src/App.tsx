@@ -23,6 +23,7 @@ import OnboardingPage from './pages/OnboardingPage'
 import PluginsPage from './pages/PluginsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import FeedbackPage from './pages/FeedbackPage'
+import InboxPage from './pages/InboxPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="plugins" element={<PluginsPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="feedback" element={<FeedbackPage />} />
+          <Route path="inbox" element={<InboxPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

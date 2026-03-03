@@ -2083,6 +2083,67 @@ export function deleteFeedback(id) {
   db.prepare('DELETE FROM dv_feedback WHERE id = ?').run(id);
 }
 
+// -- Operator Inbox --
+
+export function createInboxItem(operatorId, type, entityType, entityId, title, summary, data, priority) {
+  var result = db.prepare(
+    'INSERT INTO dv_operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+  ).get(operatorId, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
+  return result.id;
+}
+
+export function createInboxItemForAllOperators(type, entityType, entityId, title, summary, data, priority) {
+  var ops = db.prepare("SELECT id FROM dv_operators WHERE status = 'active'").all();
+  var ids = [];
+  var insertStmt = db.prepare(
+    'INSERT INTO dv_operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+  );
+  for (var op of ops) {
+    var row = insertStmt.get(op.id, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
+    ids.push(row.id);
+  }
+  return ids;
+}
+
+export function getInboxItem(id) {
+  return db.prepare('SELECT * FROM dv_operator_inbox WHERE id = ?').get(id);
+}
+
+export function listInboxItems(filters) {
+  var where = ['1=1'];
+  var params = [];
+  if (filters.operator_id) { where.push('operator_id = ?'); params.push(filters.operator_id); }
+  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
+  if (filters.entity_type) { where.push('entity_type = ?'); params.push(filters.entity_type); }
+  var limit = Math.min(filters.limit || 50, 200);
+  var offset = filters.offset || 0;
+  var sql = 'SELECT * FROM dv_operator_inbox WHERE ' + where.join(' AND ') + ' ORDER BY CASE priority WHEN \'urgent\' THEN 0 WHEN \'normal\' THEN 1 ELSE 2 END, created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  return db.prepare(sql).all(...params);
+}
+
+export function markInboxItemRead(id) {
+  db.prepare("UPDATE dv_operator_inbox SET status = 'read', read_at = datetime('now') WHERE id = ? AND status = 'unread'").run(id);
+}
+
+export function markInboxItemActioned(id) {
+  db.prepare("UPDATE dv_operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE id = ?").run(id);
+}
+
+export function dismissInboxItem(id) {
+  db.prepare("UPDATE dv_operator_inbox SET status = 'dismissed' WHERE id = ?").run(id);
+}
+
+export function countUnreadInbox(operatorId) {
+  var row = db.prepare("SELECT COUNT(*) as c FROM dv_operator_inbox WHERE operator_id = ? AND status = 'unread'").get(operatorId);
+  return row ? row.c : 0;
+}
+
+export function countAllUnreadInbox() {
+  return db.prepare("SELECT operator_id, COUNT(*) as count FROM dv_operator_inbox WHERE status = 'unread' GROUP BY operator_id").all();
+}
+
 export function getFeedbackSummary() {
   var total = db.prepare('SELECT COUNT(*) as count FROM dv_feedback').get().count;
   var avgRating = db.prepare('SELECT ROUND(AVG(rating), 2) as avg FROM dv_feedback').get().avg || 0;

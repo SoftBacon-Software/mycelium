@@ -393,13 +393,15 @@ export default function DashboardPage() {
   const recentHeartbeats = useLiveStore((s) => s.recentHeartbeats)
   const recentEvents = useMemo(() => {
     // Merge live events (newest first) with polled events, dedup by id, cap at 30
-    const seen = new Set<number>()
+    const seen = new Set<string>()
     const merged: typeof events = []
     for (const e of liveEvents) {
-      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e as typeof events[0]); }
+      const eid = String(e.id)
+      if (!seen.has(eid)) { seen.add(eid); merged.push(e as unknown as typeof events[0]); }
     }
     for (const e of events) {
-      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e); }
+      const eid = String(e.id)
+      if (!seen.has(eid)) { seen.add(eid); merged.push(e); }
     }
     return merged.slice(0, 30)
   }, [events, liveEvents])
