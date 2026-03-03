@@ -120,9 +120,10 @@ export default function ActionRequired() {
         input_data: job.input_data,
       })
       await refresh()
+      toast.success('Job queued for retry')
     } catch (err) {
       console.error('Retry failed:', err)
-      toast.error('Retry failed — check drone logs')
+      toast.error('Failed to retry job')
     } finally {
       setRetryingId(null)
     }

@@ -42,7 +42,7 @@ export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
       <div className="flex-1 min-w-0">
         {/* Name */}
         <p className="text-sm font-semibold text-text leading-snug group-hover:text-accent transition-colors">
-          <span className="text-text-muted font-mono">#{concept.id}:</span> {concept.name}
+          {concept.name}
         </p>
 
         {/* Description */}
@@ -63,7 +63,8 @@ export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
         </div>
 
         {/* Meta row */}
-        <div className="flex items-center justify-end mt-2.5 text-xs text-text-muted">
+        <div className="flex items-center justify-between mt-2.5 text-xs text-text-muted">
+          <span className="font-mono opacity-60">#{concept.id}</span>
           <span className="shrink-0 font-mono">
             {timeAgo(concept.updated_at || concept.created_at)}
           </span>

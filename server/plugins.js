@@ -10,6 +10,27 @@ var PLUGINS_DIR = path.join(__dirname, 'plugins');
 var loadedPlugins = [];
 var allMcpTools = [];
 
+// ---- Plugin event hook registry ----
+// Plugins call core.onEvent(eventType, handler) during load.
+// emitEvent() in routes/mycelium.js calls callEventHooks() after SSE broadcast.
+var pluginEventHandlers = {};
+
+export function registerEventHook(eventType, handler) {
+  if (!pluginEventHandlers[eventType]) pluginEventHandlers[eventType] = [];
+  pluginEventHandlers[eventType].push(handler);
+}
+
+export function callEventHooks(eventType, eventData) {
+  var handlers = pluginEventHandlers[eventType] || [];
+  // Also call wildcard '*' handlers
+  var wildcards = pluginEventHandlers['*'] || [];
+  for (var fn of [...handlers, ...wildcards]) {
+    try { fn(eventData); } catch (e) {
+      console.error('[plugins] event hook error for ' + eventType + ':', e.message);
+    }
+  }
+}
+
 export async function loadPlugins(core, router) {
   if (!fs.existsSync(PLUGINS_DIR)) {
     console.log('[plugins] No plugins directory found');
@@ -72,6 +93,16 @@ export async function loadPlugins(core, router) {
           if (!core.gatedActions.includes(action)) {
             core.gatedActions.push(action);
           }
+        }
+      }
+
+      // Register event hooks from handlers.js if present
+      var handlersPath = path.join(pluginDir, 'handlers.js');
+      if (fs.existsSync(handlersPath)) {
+        var handlerModule = await import(pathToFileURL(handlersPath).href);
+        if (handlerModule.registerHooks) {
+          handlerModule.registerHooks(core);
+          console.log('[plugins] ' + manifest.name + ': event hooks registered');
         }
       }
 

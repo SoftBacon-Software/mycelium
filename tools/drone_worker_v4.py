@@ -48,9 +48,9 @@ except ImportError:
     print("=" * 60)
     sys.exit(1)
 
-VERSION = "4.0.0"
+VERSION = "4.0.1"
 DEFAULT_SERVER = "https://mycelium.fyi"
-DEFAULT_CAPABILITIES = ["cpu"]
+DEFAULT_CAPABILITIES = ["cpu", "gpu"]
 DEFAULT_POLL_INTERVAL = 15
 DEFAULT_HEARTBEAT_INTERVAL = 120
 MAX_OUTPUT_SIZE = 50_000
@@ -115,7 +115,18 @@ def extract_commands(shell_cmd):
             continue
         cmd = tokens[i]
         # Get base name (strip path like /usr/bin/python3 → python3)
-        names.append(os.path.basename(cmd))
+        base = os.path.basename(cmd)
+        # Skip false positives: URL path components, Python expressions, quoted fragments.
+        # These arise when ; or | inside a quoted -c "..." string causes a false split.
+        if (
+            '://' in cmd          # URL argument (e.g. https://host/path/file.py)
+            or '(' in base        # Python function call fragment
+            or base.startswith("'")  # Leading quote = inside a shell string
+            or base.startswith('"')  # Same for double quotes
+            or re.search(r"[',]$", base)  # Trailing quote/comma = mid-expression
+        ):
+            continue
+        names.append(base)
     return names
 
 
@@ -1051,7 +1062,7 @@ Examples:
     parser.add_argument("--server", default=DEFAULT_SERVER,
                         help=f"Mycelium server URL (default: {DEFAULT_SERVER})")
     parser.add_argument("--capabilities", default=",".join(DEFAULT_CAPABILITIES),
-                        help="Comma-separated capabilities (default: cpu)")
+                        help=f"Comma-separated capabilities (default: {','.join(DEFAULT_CAPABILITIES)})")
     parser.add_argument("--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL,
                         help=f"Seconds between polls (default: {DEFAULT_POLL_INTERVAL})")
     parser.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL,

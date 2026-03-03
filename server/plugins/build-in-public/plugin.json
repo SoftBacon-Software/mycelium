@@ -1,0 +1,12 @@
+{
+  "name": "build-in-public",
+  "version": "1.0.0",
+  "displayName": "Build in Public",
+  "description": "Watches agent events, drafts social content from milestones, routes to operator inbox for approval before posting.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/bip",
+  "schema": "schema.sql",
+  "gatedActions": ["bip_post_publish"],
+  "mcpTools": "mcp-tools.json"
+}
