@@ -302,7 +302,6 @@ function checkAgentOrAdmin(req, res) {
 var sseClients = new Set();
 
 // ---- Event helper ----
-import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 function emitEvent(type, agentId, projectId, summary, data) {
   var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
