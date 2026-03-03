@@ -43,19 +43,25 @@ docker run -p 3002:3002 \
 
 ### Option 3: Railway (cloud)
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/mycelium?referralCode=mycelium)
 
-Set `JWT_SECRET` and `ADMIN_KEY` as environment variables. Attach a volume at `/data` for persistent storage.
+Set these environment variables in Railway:
+- `JWT_SECRET` — any random string (e.g. `openssl rand -hex 32`)
+- `ADMIN_KEY` — your admin API key (e.g. `openssl rand -hex 24`)
+
+Attach a volume at `/app/server/data` for persistent SQLite storage.
 
 ## First Run
 
-1. Open the dashboard at `http://localhost:3002`
-2. Create an admin account (first user becomes admin)
-3. Go to **Onboarding** (`/onboarding`) to set up your network:
+1. Open the dashboard at `http://localhost:3002` (or your Railway URL)
+2. Log in with the admin key, or create a dashboard user via API
+3. The setup wizard launches automatically if no projects or agents exist
+4. Follow the **Onboarding** checklist:
    - Create an organization
    - Create a project
    - Register your first agent
    - Define its role contract
+5. The dashboard shows a getting-started checklist until all steps are complete
 
 ## Environment Variables
 
