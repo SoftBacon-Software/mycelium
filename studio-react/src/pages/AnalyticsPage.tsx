@@ -1,5 +1,7 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { fetchEvents } from '../api/endpoints'
+import type { Event } from '../api/types'
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
@@ -58,11 +60,25 @@ function HorizontalBar({ items, color = 'bg-accent' }: { items: { label: string;
 }
 
 export default function AnalyticsPage() {
-  const { agents, events, tasks, messages, bugs, plans, droneJobs, loading, refresh } = useDashboardStore()
+  const { agents, tasks, messages, bugs, plans, droneJobs, loading, refresh } = useDashboardStore()
+  const [events, setEvents] = useState<Event[]>([])
+  const [eventsLoading, setEventsLoading] = useState(true)
+
+  const loadEvents = useCallback(async () => {
+    setEventsLoading(true)
+    try {
+      const since = new Date()
+      since.setDate(since.getDate() - 14)
+      const data = await fetchEvents({ since: since.toISOString(), limit: 500 })
+      setEvents(data)
+    } catch { /* silent */ }
+    finally { setEventsLoading(false) }
+  }, [])
 
   useEffect(() => {
     refresh()
-  }, [refresh])
+    loadEvents()
+  }, [refresh, loadEvents])
 
   // Task completion by day (last 14 days)
   const tasksByDay = useMemo(() => {
@@ -160,8 +176,8 @@ export default function AnalyticsPage() {
         </div>
         <button
           type="button"
-          onClick={() => refresh()}
-          disabled={loading}
+          onClick={() => { refresh(); loadEvents() }}
+          disabled={loading || eventsLoading}
           className="text-xs text-text-muted hover:text-accent transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-border disabled:opacity-50"
         >
           {loading ? 'Refreshing...' : 'Refresh'}
@@ -176,7 +192,7 @@ export default function AnalyticsPage() {
           { label: 'Open Bugs', value: openBugs, color: 'text-red' },
           { label: 'Active Plans', value: activePlans, color: 'text-purple' },
           { label: 'Drone Jobs', value: pendingJobs, color: 'text-blue' },
-          { label: 'Events', value: totalEvents, color: 'text-text-muted' },
+          { label: 'Events (14d)', value: totalEvents, color: 'text-text-muted' },
         ].map((m) => (
           <div key={m.label} className="bg-surface rounded-lg p-3 text-center">
             <div className={`text-2xl font-bold font-mono ${m.color}`}>{m.value}</div>
