@@ -268,7 +268,7 @@ function ChannelSidebar({
   }
 
   return (
-    <div className="w-60 bg-surface flex flex-col shrink-0 min-h-0">
+    <div className="bg-surface flex flex-col flex-1 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
@@ -620,20 +620,33 @@ export default function ChannelsPage() {
   )
 
   return (
-    <div className="h-[calc(100vh-7rem)] rounded-sm overflow-hidden border border-border flex">
-      <ChannelSidebar
-        channels={channels}
-        activeId={activeChannelId}
-        unreadMap={unreadMap}
-        onSelect={handleSelectChannel}
-        onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
-      />
-      <ChatArea
-        channel={activeChannel}
-        messages={messages}
-        onSend={handleSend}
-        sending={sending}
-      />
+    <div className="h-[calc(100dvh-7rem)] rounded-sm overflow-hidden border border-border flex">
+      <div className={`${activeChannelId ? 'hidden sm:flex' : 'flex'} flex-col w-full sm:w-60 shrink-0 min-h-0`}>
+        <ChannelSidebar
+          channels={channels}
+          activeId={activeChannelId}
+          unreadMap={unreadMap}
+          onSelect={handleSelectChannel}
+          onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
+        />
+      </div>
+      <div className={`${activeChannelId ? 'flex' : 'hidden sm:flex'} flex-col flex-1 min-w-0`}>
+        {activeChannelId && (
+          <button
+            onClick={() => handleSelectChannel(null as any)}
+            className="sm:hidden flex items-center gap-1 px-3 py-2 text-xs text-text-muted hover:text-accent border-b border-border shrink-0"
+          >
+            <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 2L4 6l4 4" /></svg>
+            Channels
+          </button>
+        )}
+        <ChatArea
+          channel={activeChannel}
+          messages={messages}
+          onSend={handleSend}
+          sending={sending}
+        />
+      </div>
     </div>
   )
 }

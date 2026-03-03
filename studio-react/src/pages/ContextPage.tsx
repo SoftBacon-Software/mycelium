@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { updateContextKey, deleteContextKey } from '../api/endpoints'
+import { getSenderDisplay } from '../utils/sender'
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleString(undefined, {
@@ -103,7 +104,7 @@ function KeyRow({ namespace, keyName, data, updatedBy, updatedAt, onRefresh }: K
         <span className="text-xs text-text-muted flex-1 min-w-0 truncate font-mono">
           {truncateValue(data)}
         </span>
-        <span className="text-xs text-text-muted shrink-0">{updatedBy}</span>
+        <span className="text-xs text-text-muted shrink-0">{getSenderDisplay(updatedBy)}</span>
         <span className="text-xs text-text-muted shrink-0 font-mono">{formatDate(updatedAt)}</span>
         <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <button

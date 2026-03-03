@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { PlanStep } from '../../api/types'
 import Badge from '../shared/Badge'
+import { getSenderDisplay } from '../../utils/sender'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -141,7 +142,7 @@ export default function StepChecklist({ steps, planId: _planId, onStepUpdate }: 
               {/* Assignee */}
               {step.assignee && (
                 <span className="text-text-muted text-xs shrink-0 hidden sm:inline">
-                  {step.assignee}
+                  {getSenderDisplay(step.assignee)}
                 </span>
               )}
 
@@ -169,7 +170,7 @@ export default function StepChecklist({ steps, planId: _planId, onStepUpdate }: 
                 </p>
                 {step.assignee && (
                   <p className="text-text-muted text-xs mt-1.5">
-                    Assigned to <span className="text-text-dim">{step.assignee}</span>
+                    Assigned to <span className="text-text-dim">{getSenderDisplay(step.assignee)}</span>
                   </p>
                 )}
                 {(step.linked_task_id || step.linked_branch || step.linked_pr_url) && (

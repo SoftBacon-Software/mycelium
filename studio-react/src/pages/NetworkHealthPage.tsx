@@ -3,6 +3,7 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import { timeAgo, formatTime } from '../utils/time'
+import { getSenderDisplay } from '../utils/sender'
 import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry } from '../api/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -478,7 +479,7 @@ function PlanProgressCard({ plan }: { plan: Plan }) {
             return (
               <div
                 key={step.id}
-                title={`${step.step_number}. ${step.title} (${step.status})${step.assignee ? ` — ${step.assignee}` : ''}`}
+                title={`${step.step_number}. ${step.title} (${step.status})${step.assignee ? ` — ${getSenderDisplay(step.assignee)}` : ''}`}
                 className={`w-3 h-3 rounded-sm ${color} ${isActive ? 'ring-2 ring-accent/50' : ''} transition-all`}
               />
             )
@@ -495,7 +496,7 @@ function PlanProgressCard({ plan }: { plan: Plan }) {
             <span className="text-text-dim truncate">{currentStep.title}</span>
             {currentStep.assignee && (
               <Badge variant="accent" className="ml-auto shrink-0">
-                {currentStep.assignee}
+                {getSenderDisplay(currentStep.assignee)}
               </Badge>
             )}
           </div>
@@ -535,7 +536,7 @@ function PlanProgressCard({ plan }: { plan: Plan }) {
                 </span>
                 {step.assignee && (
                   <span className="text-[10px] font-mono text-text-muted shrink-0">
-                    {step.assignee}
+                    {getSenderDisplay(step.assignee)}
                   </span>
                 )}
               </div>
@@ -574,7 +575,7 @@ function RecentActivityFeed({ events }: { events: Event[] }) {
             </Badge>
             <span className="text-sm text-text-dim leading-snug flex-1 min-w-0 group-hover:text-text transition-colors">
               {event.agent && (
-                <span className="font-mono text-xs text-accent mr-1.5">{event.agent}</span>
+                <span className="font-mono text-xs text-accent mr-1.5">{getSenderDisplay(event.agent)}</span>
               )}
               <span className="truncate">{event.summary}</span>
             </span>
