@@ -65,6 +65,8 @@ export function initDB() {
     ["dv_operators", "availability", "TEXT NOT NULL DEFAULT 'available'"],
     ["dv_operators", "last_seen_at", "TEXT"],
     ["dv_operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
+    // Step #197 — message priority tiers (urgent/normal/fyi)
+    ["dv_messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -81,6 +83,14 @@ export function initDB() {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_type ON dv_messages(msg_type)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_channel ON dv_messages(channel_id)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_priority ON dv_messages(priority)'); } catch (e) {}
+
+  // Bug #43: drop dead columns from dv_messages (is_stale, rerouted_from, rerouted_at)
+  // These were added in a prior branch but never used. SQLite 3.35+ supports DROP COLUMN.
+  var deadCols = ['is_stale', 'rerouted_from', 'rerouted_at'];
+  for (var dc of deadCols) {
+    try { db.exec('ALTER TABLE dv_messages DROP COLUMN ' + dc); } catch (e) { /* doesn't exist or older SQLite — skip */ }
+  }
 
   // Seed operators (if table is empty)
   var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
@@ -575,16 +585,19 @@ export function listDvEvents(filters) {
 
 // -- Messages --
 
-export function createDvMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId) {
+var VALID_MSG_PRIORITIES = ['urgent', 'normal', 'fyi'];
+
+export function createDvMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId, priority) {
+  var prio = VALID_MSG_PRIORITIES.includes(priority) ? priority : 'normal';
   if (msgType && msgType !== 'message') {
     var result = db.prepare(
-      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-    ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', msgType, channelId || null);
+      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', msgType, channelId || null, prio);
     return result.id;
   }
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', channelId || null);
+    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', channelId || null, prio);
   return result.id;
 }
 
@@ -638,10 +651,15 @@ export function listDvMessages(filters) {
   if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
   if (filters.msg_type) { where.push('msg_type = ?'); params.push(filters.msg_type); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  // Sort: urgent messages first (within same time window), then by created_at DESC
+  var orderBy = filters.priority_sort
+    ? "CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, created_at DESC"
+    : 'created_at DESC';
+  return db.prepare('SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY ' + orderBy + ' LIMIT ? OFFSET ?').all(...params);
 }
 
 export function listDvThreads(limit) {

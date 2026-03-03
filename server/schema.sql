@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS dv_messages (
   project_id      TEXT,
   content         TEXT NOT NULL,
   metadata        TEXT NOT NULL DEFAULT '{}',
+  priority        TEXT NOT NULL DEFAULT 'normal',   -- 'urgent' | 'normal' | 'fyi'
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
