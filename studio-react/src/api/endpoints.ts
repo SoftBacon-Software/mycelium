@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPut, apiDelete, setToken, getToken } from './client
 import type {
   Overview,
   AdminOps,
+  Event,
   Task,
   Message,
   TeamChat,
@@ -54,6 +55,16 @@ export function isAuthenticated(): boolean {
 
 export function fetchOverview(): Promise<Overview> {
   return apiGet<Overview>('/admin/overview');
+}
+
+// Events
+
+export function fetchEvents(params?: { since?: string; limit?: number }): Promise<Event[]> {
+  const q = new URLSearchParams()
+  if (params?.since) q.set('since', params.since)
+  if (params?.limit) q.set('limit', String(params.limit))
+  const qs = q.toString()
+  return apiGet<Event[]>(`/events${qs ? '?' + qs : ''}`)
 }
 
 // Admin Ops

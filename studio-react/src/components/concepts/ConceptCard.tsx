@@ -64,7 +64,7 @@ export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
 
         {/* Meta row */}
         <div className="flex items-center justify-between mt-2.5 text-xs text-text-muted">
-          <span className="font-mono opacity-60">#{concept.id}</span>
+          <span className="font-mono">#{concept.id}</span>
           <span className="shrink-0 font-mono">
             {timeAgo(concept.updated_at || concept.created_at)}
           </span>
