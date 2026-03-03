@@ -439,6 +439,26 @@ CREATE TABLE IF NOT EXISTS dv_channel_reads (
   UNIQUE(channel_id, user_id)
 );
 
+-- Operator inbox (human-facing messages, approvals, BIP drafts, @mentions)
+CREATE TABLE IF NOT EXISTS dv_operator_inbox (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  operator_id   TEXT NOT NULL,
+  type          TEXT NOT NULL DEFAULT 'message',    -- 'message','approval','bip_draft','mention','feedback_request'
+  entity_type   TEXT NOT NULL DEFAULT '',           -- 'message','approval','plan_step','task','bip_draft'
+  entity_id     TEXT NOT NULL DEFAULT '',           -- id of the referenced entity
+  title         TEXT NOT NULL DEFAULT '',
+  summary       TEXT NOT NULL DEFAULT '',
+  data          TEXT NOT NULL DEFAULT '{}',
+  status        TEXT NOT NULL DEFAULT 'unread',     -- 'unread','read','actioned','dismissed'
+  priority      TEXT NOT NULL DEFAULT 'normal',     -- 'urgent','normal','low'
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  read_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dv_operator_inbox_operator ON dv_operator_inbox(operator_id, status);
+CREATE INDEX IF NOT EXISTS idx_dv_operator_inbox_type ON dv_operator_inbox(type);
+CREATE INDEX IF NOT EXISTS idx_dv_operator_inbox_entity ON dv_operator_inbox(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_dv_operator_inbox_created ON dv_operator_inbox(created_at DESC);
+
 -- Operator feedback on agent work (ratings + comments)
 CREATE TABLE IF NOT EXISTS dv_feedback (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,

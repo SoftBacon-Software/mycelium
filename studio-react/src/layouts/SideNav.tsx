@@ -7,6 +7,7 @@ import {
   MessageSquare, Radio, ShieldCheck,
   Users, Cpu, FolderOpen, Lightbulb, Database,
   Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle,
+  Inbox,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -49,6 +50,7 @@ const navSections: NavSection[] = [
     id: 'communicate',
     label: 'Communicate',
     items: [
+      { to: '/inbox', label: 'Inbox', icon: Inbox },
       { to: '/channels', label: 'Channels', icon: MessageSquare },
       { to: '/messages', label: 'Agent Comms', icon: Radio },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
