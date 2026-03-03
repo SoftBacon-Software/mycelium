@@ -91,9 +91,12 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent
+  countPendingForAgent,
+  createInboxItem, createInboxItemForAllOperators,
+  getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
+  dismissInboxItem, countUnreadInbox, countAllUnreadInbox
 } from '../db.js';
-import { loadPlugins, getPluginMcpTools } from '../plugins.js';
+import { loadPlugins, getPluginMcpTools, callEventHooks, registerEventHook } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -211,12 +214,13 @@ function clearAgentKeyCache() {
 }
 
 // Check if the authenticated caller has access to a resource's project.
-// Admins and studio users bypass. Agents must match project_id.
-function checkProjectScope(req, res, resourceProjectId) {
+// Admins and studio users bypass. Agents must match project_id OR be the assignee.
+function checkProjectScope(req, res, resourceProjectId, assignee) {
   if (req._authIsAdmin) return true;
   if (!req._authAgentId) return true; // studio user or admin — no scope restriction
   if (!resourceProjectId) return true; // resource has no project — allow
   if (req._authProjectId === resourceProjectId) return true;
+  if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
   return false;
 }
@@ -320,14 +324,15 @@ var sseClients = new Set();
 
 function emitEvent(type, agentId, projectId, summary, data) {
   var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  var eventObj = {
+    id: id, type: type, agent: agentId || '',
+    project_id: projectId || null, summary: summary || '',
+    data: data || {},
+    created_at: new Date().toISOString()
+  };
   // Broadcast to connected SSE clients (with per-client filtering)
   if (sseClients.size > 0) {
-    var payload = 'data: ' + JSON.stringify({
-      id: id, type: type, agent: agentId || '',
-      project_id: projectId || null, summary: summary || '',
-      data: JSON.stringify(data || {}),
-      created_at: new Date().toISOString()
-    }) + '\n\n';
+    var payload = 'data: ' + JSON.stringify({ ...eventObj, data: JSON.stringify(eventObj.data) }) + '\n\n';
     sseClients.forEach(function (client) {
       var f = client.filters;
       if (f.project_id && f.project_id !== projectId) return;
@@ -339,6 +344,8 @@ function emitEvent(type, agentId, projectId, summary, data) {
       } catch (e) { sseClients.delete(client); }
     });
   }
+  // Notify plugin event hooks (async-safe: handlers are synchronous by convention)
+  callEventHooks(type, eventObj);
 }
 
 // ---- Approval gate helpers ----
@@ -418,6 +425,56 @@ var router = Router();
 
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
+
+// ======== WAITLIST ========
+
+// POST /waitlist — public, no auth. Captures landing page signups.
+// Creates inbox item for greatness operator so they get notified.
+router.post('/waitlist', asyncHandler(async function (req, res) {
+  var { name, email, subdomain, use_case } = req.body;
+  if (!email) return apiError(res, 400, 'email is required');
+  var db = getDB();
+  // Ensure table exists (created on first use if migration hasn't run yet)
+  db.prepare(`CREATE TABLE IF NOT EXISTS dv_waitlist (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL DEFAULT '',
+    email       TEXT NOT NULL,
+    subdomain   TEXT NOT NULL DEFAULT '',
+    use_case    TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )`).run();
+  var result = db.prepare(
+    'INSERT INTO dv_waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
+  ).run(name || '', email, subdomain || '', use_case || '');
+  var waitlistId = result.lastInsertRowid;
+  // Create inbox item for greatness operator
+  try {
+    createInboxItem(
+      'greatness',
+      'message',
+      'waitlist',
+      String(waitlistId),
+      'New instance request: ' + (name || email),
+      (name ? name + ' (' + email + ')' : email) + (subdomain ? ' wants ' + subdomain + '.mycelium.fyi' : '') + (use_case ? ' — ' + use_case : ''),
+      JSON.stringify({ waitlist_id: waitlistId, name, email, subdomain, use_case }),
+      'urgent'
+    );
+  } catch (e) { /* non-fatal — still confirm signup */ }
+  emitEvent('waitlist_signup', '__system__', null, 'New waitlist signup: ' + email, { waitlist_id: waitlistId, email, subdomain });
+  res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
+}));
+
+// GET /waitlist — admin only, list all signups
+router.get('/waitlist', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  try {
+    var items = getDB().prepare('SELECT * FROM dv_waitlist ORDER BY created_at DESC').all();
+    res.json(items);
+  } catch (e) {
+    res.json([]);
+  }
+});
 
 // ======== BOOT ========
 
@@ -692,7 +749,7 @@ router.put('/tasks/:id', function (req, res) {
   if (!agentId) return;
   var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!checkProjectScope(req, res, task.project_id)) return;
+  if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
   if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.priority, TASK_PRIORITIES, 'priority')) return;
   var fields = {};
@@ -1250,6 +1307,27 @@ router.post('/messages', function (req, res) {
     if (toAgent) {
       dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
     }
+    // Directives always land in inbox for all operators
+    if (msgType === 'directive') {
+      var dirTitle = content.substring(0, 80) + (content.length > 80 ? '...' : '');
+      createInboxItemForAllOperators('message', 'message', String(id), 'Directive from ' + displayName(agentId), dirTitle, { message_id: id, from: agentId, msg_type: 'directive' }, 'urgent');
+    }
+    // @mention detection — @operatorId patterns (e.g. @hijack, @greatness)
+    var mentionRe = /@([a-z0-9_-]+)/gi;
+    var mentionMatch;
+    var notifiedOps = new Set();
+    while ((mentionMatch = mentionRe.exec(content)) !== null) {
+      var mentionedId = mentionMatch[1].toLowerCase();
+      if (!notifiedOps.has(mentionedId)) {
+        try {
+          createInboxItem(mentionedId, 'mention', 'message', String(id),
+            displayName(agentId) + ' mentioned you',
+            content.substring(0, 120) + (content.length > 120 ? '...' : ''),
+            { message_id: id, from: agentId, project_id: projectId }, 'normal');
+          notifiedOps.add(mentionedId);
+        } catch (e) { /* operator may not exist — skip silently */ }
+      }
+    }
   }
   res.json({ id: id });
 });
@@ -1413,7 +1491,9 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (!agentId) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
-  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var stepId0 = parseIntParam(req.params.stepId);
+  var planStep = plan.steps ? plan.steps.find(function (s) { return s.id === stepId0; }) : null;
+  if (!checkProjectScope(req, res, plan.project_id, planStep ? planStep.assignee : null)) return;
   if (!validateEnum(res, req.body.status, PLAN_STEP_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
@@ -2204,7 +2284,7 @@ router.put('/bugs/:id', function (req, res) {
   if (!who) return;
   var bug = getDvBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  if (!checkProjectScope(req, res, bug.project_id)) return;
+  if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
   if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.severity, BUG_SEVERITIES, 'severity')) return;
   var updates = {};
@@ -2781,6 +2861,13 @@ router.post('/approvals', function (req, res) {
   emitEvent('approval_requested', who, project,
     who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
   dispatchWebhook('approval_requested', who, { approval_id: id, action_type: actionType, title: title, risk_tier: riskTier, requested_by: who });
+  // Route approval to operator inbox
+  var approvalPriority = (riskTier === 'critical' || riskTier === 'high') ? 'urgent' : 'normal';
+  createInboxItemForAllOperators('approval', 'approval', String(id),
+    '[' + actionType + '] ' + title,
+    'Requested by ' + who + (riskTier ? ' · ' + riskTier + ' risk' : ''),
+    { approval_id: id, action_type: actionType, requested_by: who, risk_tier: riskTier || 'medium' },
+    approvalPriority);
 
   // In autonomous mode, queue high/critical approvals for morning instead of blocking
   var effectiveRiskTier = riskTier || 'medium';
@@ -3052,6 +3139,113 @@ router.delete('/feedback/:id', asyncHandler(async function (req, res) {
   res.json({ ok: true });
 }));
 
+// ======== OPERATOR INBOX ========
+// Human-facing message layer — keeps operator traffic separate from agent chatter.
+
+// GET /inbox — list inbox items for an operator (by ?operator_id or JWT user)
+router.get('/inbox', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  // Operators get their own inbox via JWT; admin can query any operator
+  var operatorId = req.query.operator_id;
+  if (!operatorId) {
+    if (!user) return apiError(res, 400, 'operator_id is required');
+    // Resolve operator from studio_user_id
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    if (!op) return apiError(res, 404, 'No operator linked to this account');
+    operatorId = op.id;
+  }
+  var filters = {
+    operator_id: operatorId,
+    status: req.query.status || undefined,
+    type: req.query.type || undefined,
+    entity_type: req.query.entity_type || undefined,
+    limit: parseLimit(req.query.limit, 50),
+    offset: parseInt(req.query.offset) || 0
+  };
+  var items = listInboxItems(filters);
+  items.forEach(function (item) {
+    try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
+  });
+  res.json(items);
+});
+
+// GET /inbox/count — unread badge count per operator
+router.get('/inbox/count', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var operatorId = req.query.operator_id;
+  if (!operatorId && user) {
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    if (op) operatorId = op.id;
+  }
+  if (operatorId) {
+    res.json({ operator_id: operatorId, unread: countUnreadInbox(operatorId) });
+  } else {
+    res.json(countAllUnreadInbox());
+  }
+});
+
+// GET /inbox/:id — get single inbox item
+router.get('/inbox/:id', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
+  res.json(item);
+});
+
+// POST /inbox — create inbox item (admin/system use)
+router.post('/inbox', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { operator_id, type, entity_type, entity_id, title, summary, data, priority, all_operators } = req.body;
+  if (all_operators) {
+    var ids = createInboxItemForAllOperators(type, entity_type, entity_id, title, summary, data, priority);
+    return res.json({ ok: true, ids: ids });
+  }
+  if (!operator_id) return apiError(res, 400, 'operator_id or all_operators required');
+  var id = createInboxItem(operator_id, type, entity_type, entity_id, title, summary, data, priority);
+  emitEvent('inbox_item_created', '__system__', null, 'Inbox item for ' + operator_id + ': ' + (title || ''), { inbox_id: id, operator_id: operator_id, type: type });
+  res.json({ ok: true, id: id });
+});
+
+// PUT /inbox/:id/read — mark item read
+router.put('/inbox/:id/read', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  markInboxItemRead(item.id);
+  res.json({ ok: true });
+});
+
+// PUT /inbox/:id/action — mark item actioned (e.g. after approve/reject)
+router.put('/inbox/:id/action', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  markInboxItemActioned(item.id);
+  res.json({ ok: true });
+});
+
+// DELETE /inbox/:id — dismiss item
+router.delete('/inbox/:id', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  dismissInboxItem(item.id);
+  res.json({ ok: true });
+});
+
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
 export async function initPlugins() {
@@ -3059,7 +3253,11 @@ export async function initPlugins() {
     db: getDB(),
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
-    apiError, parseIntParam, validateEnum
+    apiError, parseIntParam, validateEnum,
+    // Event hook registration — plugins call core.onEvent(type, fn)
+    onEvent: registerEventHook,
+    // Inbox routing helpers for plugins
+    inbox: { createInboxItem, createInboxItemForAllOperators }
   };
   await loadPlugins(pluginCore, router);
 }

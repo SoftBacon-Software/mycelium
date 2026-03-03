@@ -84,8 +84,16 @@ function CreateConceptModal({ isOpen, onClose }: CreateConceptModalProps) {
     <ModalOverlay isOpen={isOpen} onClose={handleClose} title="Create Concept">
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
-          <div className="px-3 py-2 rounded-sm bg-red/10 border border-red/20 text-red text-sm">
-            {error}
+          <div className="flex items-start justify-between gap-2 px-3 py-2 rounded-sm bg-red/10 border border-red/20 text-red text-sm">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="shrink-0 text-red/60 hover:text-red transition-colors leading-none"
+              aria-label="Dismiss error"
+            >
+              &#x2715;
+            </button>
           </div>
         )}
 

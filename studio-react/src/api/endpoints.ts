@@ -447,3 +447,37 @@ export function enablePlugin(name: string): Promise<{ ok: boolean }> {
 export function disablePlugin(name: string): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/disable`, {});
 }
+
+// Operator Inbox
+
+export function getInboxItems(filters: Record<string, string> = {}): Promise<import('./types').InboxItem[]> {
+  const qs = new URLSearchParams(filters).toString()
+  return apiGet<import('./types').InboxItem[]>('/inbox' + (qs ? '?' + qs : ''))
+}
+
+export function getInboxCount(operatorId: string): Promise<{ operator_id: string; unread: number }> {
+  return apiGet<{ operator_id: string; unread: number }>(`/inbox/count?operator_id=${encodeURIComponent(operatorId)}`)
+}
+
+export function markInboxRead(id: number): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/inbox/${id}/read`, {})
+}
+
+export function dismissInboxItem(id: number): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/inbox/${id}`)
+}
+
+// Build-in-Public (BIP)
+
+export function getBipDrafts(filters: Record<string, string> = {}): Promise<import('./types').BipDraft[]> {
+  const qs = new URLSearchParams(filters).toString()
+  return apiGet<import('./types').BipDraft[]>('/bip/drafts' + (qs ? '?' + qs : ''))
+}
+
+export function approveBipDraft(id: number): Promise<{ ok: boolean; content: string; platforms: string[] }> {
+  return apiPost<{ ok: boolean; content: string; platforms: string[] }>(`/bip/drafts/${id}/approve`, {})
+}
+
+export function rejectBipDraft(id: number, note?: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/bip/drafts/${id}/reject`, { note: note || '' })
+}

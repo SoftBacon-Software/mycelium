@@ -1,0 +1,72 @@
+[
+  {
+    "name": "mycelium_bip_list",
+    "description": "List build-in-public drafts. Returns pending drafts awaiting operator approval, approved drafts ready to post, and recently published posts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected", "published", "skipped"],
+          "description": "Filter by draft status. Omit to get all."
+        },
+        "trigger_event": {
+          "type": "string",
+          "description": "Filter by the event that triggered the draft (e.g. task_completed)"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max number of drafts to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_bip_draft",
+    "description": "Manually create a build-in-public draft. Use when you want to announce something specific (a launch, a milestone, a demo) that wasn't automatically triggered by an event.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["title", "content"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short headline for the post (what was shipped/achieved)"
+        },
+        "content": {
+          "type": "string",
+          "description": "Draft post content (1-4 lines, Twitter-appropriate)"
+        },
+        "platforms": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["twitter", "instagram", "tiktok"] },
+          "default": ["twitter"],
+          "description": "Platforms to post to when approved"
+        },
+        "trigger_event": {
+          "type": "string",
+          "default": "manual",
+          "description": "Event type label for categorization"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_bip_approve",
+    "description": "Approve a build-in-public draft for publishing. After approval, the content is ready to hand off to the social-posting plugin.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["draft_id"],
+      "properties": {
+        "draft_id": {
+          "type": "integer",
+          "description": "ID of the draft to approve"
+        },
+        "approval_id": {
+          "type": "integer",
+          "description": "Optional: pre-obtained approval gate ID (from mycelium_request_approval with action_type=bip_post_publish)"
+        }
+      }
+    }
+  }
+]

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
@@ -392,13 +393,15 @@ export default function DashboardPage() {
   const recentHeartbeats = useLiveStore((s) => s.recentHeartbeats)
   const recentEvents = useMemo(() => {
     // Merge live events (newest first) with polled events, dedup by id, cap at 30
-    const seen = new Set<number>()
+    const seen = new Set<string>()
     const merged: typeof events = []
     for (const e of liveEvents) {
-      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e as typeof events[0]); }
+      const eid = String(e.id)
+      if (!seen.has(eid)) { seen.add(eid); merged.push(e as unknown as typeof events[0]); }
     }
     for (const e of events) {
-      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e); }
+      const eid = String(e.id)
+      if (!seen.has(eid)) { seen.add(eid); merged.push(e); }
     }
     return merged.slice(0, 30)
   }, [events, liveEvents])
@@ -410,6 +413,7 @@ export default function DashboardPage() {
       loadSleepStatus()
     } catch (err) {
       console.error('Failed to activate sleep mode:', err)
+      toast.error('Failed to activate sleep mode')
     }
   }, [loadSleepStatus])
 
@@ -419,6 +423,7 @@ export default function DashboardPage() {
       loadSleepStatus()
     } catch (err) {
       console.error('Failed to deactivate sleep mode:', err)
+      toast.error('Failed to deactivate sleep mode')
     }
   }, [loadSleepStatus])
 
@@ -451,7 +456,7 @@ export default function DashboardPage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-3">
         <SummaryCard
           title="Agents"
           value={`${onlineAgents}/${agents.length}`}

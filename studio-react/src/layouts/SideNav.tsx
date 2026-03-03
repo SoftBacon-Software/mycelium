@@ -7,6 +7,7 @@ import {
   MessageSquare, Radio, ShieldCheck,
   Users, Cpu, FolderOpen, Lightbulb, Database,
   Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle,
+  Inbox,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -49,6 +50,7 @@ const navSections: NavSection[] = [
     id: 'communicate',
     label: 'Communicate',
     items: [
+      { to: '/inbox', label: 'Inbox', icon: Inbox },
       { to: '/channels', label: 'Channels', icon: MessageSquare },
       { to: '/messages', label: 'Agent Comms', icon: Radio },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
@@ -170,6 +172,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
           <button
             onClick={onMobileClose}
             className="p-1 rounded-lg text-text-muted hover:text-text-dim transition-colors"
+            aria-label="Close navigation menu"
           >
             <X size={18} strokeWidth={1.5} />
           </button>
@@ -190,6 +193,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
                 <button
                   onClick={() => toggleSection(section.id)}
                   className="flex items-center justify-between w-full px-3 py-1 mb-0.5 group"
+                  aria-expanded={!isSectionCollapsed}
                 >
                   <span className="text-[10px] uppercase tracking-widest font-semibold text-text-muted group-hover:text-text-dim transition-colors">
                     {section.label}

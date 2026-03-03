@@ -371,3 +371,35 @@ export interface Overview {
   drone_jobs: DroneJob[];
   plugins: Plugin[];
 }
+
+export interface InboxItem {
+  id: number;
+  operator_id: string;
+  type: 'message' | 'approval' | 'bip_draft' | 'mention' | 'feedback_request';
+  entity_type: string;
+  entity_id: string;
+  title: string;
+  summary: string;
+  data: Record<string, any>;
+  status: 'unread' | 'read' | 'actioned' | 'dismissed';
+  priority: 'urgent' | 'normal' | 'low';
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface BipDraft {
+  id: number;
+  trigger_event: string;
+  trigger_data: Record<string, any>;
+  title: string;
+  content: string;
+  platforms: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'published' | 'skipped';
+  approval_id: number | null;
+  inbox_item_id: number[];
+  rejection_note: string;
+  posted_at: string | null;
+  post_ids: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
