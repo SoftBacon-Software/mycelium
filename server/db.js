@@ -1090,6 +1090,15 @@ export function getDvPlan(id) {
   var plan = db.prepare("SELECT * FROM dv_plans WHERE id = ?").get(id);
   if (!plan) return null;
   var steps = db.prepare("SELECT * FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order, id").all(id);
+  var comments = db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(id);
+  var commentsByStep = {};
+  for (var c of comments) {
+    if (!commentsByStep[c.step_id]) commentsByStep[c.step_id] = [];
+    commentsByStep[c.step_id].push(c);
+  }
+  for (var s of steps) {
+    s.comments = commentsByStep[s.id] || [];
+  }
   var total = steps.length;
   var completed = steps.filter(function (s) { return s.status === 'completed'; }).length;
   plan.steps = steps;
@@ -1185,6 +1194,24 @@ export function reorderDvPlanSteps(planId, stepIds) {
     db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
   });
   reorder();
+}
+
+// -- Plan Step Comments --
+
+export function createPlanStepComment(stepId, planId, author, content) {
+  var result = db.prepare(
+    "INSERT INTO dv_plan_step_comments (step_id, plan_id, author, content) VALUES (?, ?, ?, ?) RETURNING id"
+  ).get(stepId, planId, author, content);
+  db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
+  return result.id;
+}
+
+export function listPlanStepComments(stepId) {
+  return db.prepare("SELECT * FROM dv_plan_step_comments WHERE step_id = ? ORDER BY created_at ASC").all(stepId);
+}
+
+export function listPlanComments(planId) {
+  return db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(planId);
 }
 
 export function completeLinkedPlanSteps(taskId) {

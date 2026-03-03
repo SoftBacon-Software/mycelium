@@ -137,6 +137,15 @@ export function updatePlanStep(
   return apiPut<PlanStep>(`/plans/${planId}/steps/${stepId}`, data);
 }
 
+export function addStepComment(
+  planId: string,
+  stepId: string,
+  content: string,
+  author?: string,
+): Promise<{ ok: boolean; id: number }> {
+  return apiPost(`/plans/${planId}/steps/${stepId}/comments`, { content, author });
+}
+
 // Bugs
 
 export function fileBug(data: Partial<Bug>): Promise<Bug> {

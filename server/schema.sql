@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS dv_plan_steps (
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS dv_plan_step_comments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  step_id    INTEGER NOT NULL REFERENCES dv_plan_steps(id) ON DELETE CASCADE,
+  plan_id    INTEGER NOT NULL REFERENCES dv_plans(id) ON DELETE CASCADE,
+  author     TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Studio users (human operators)
 CREATE TABLE IF NOT EXISTS dv_studio_users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,6 +266,7 @@ CREATE INDEX IF NOT EXISTS idx_dv_plans_project ON dv_plans(project_id);
 CREATE INDEX IF NOT EXISTS idx_dv_plans_owner ON dv_plans(owner);
 CREATE INDEX IF NOT EXISTS idx_dv_plan_steps_plan ON dv_plan_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_dv_plan_steps_task ON dv_plan_steps(linked_task_id);
+CREATE INDEX IF NOT EXISTS idx_dv_plan_step_comments_step ON dv_plan_step_comments(step_id);
 CREATE INDEX IF NOT EXISTS idx_dv_studio_users_username ON dv_studio_users(username);
 CREATE INDEX IF NOT EXISTS idx_dv_webhooks_agent ON dv_webhooks(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_webhooks_active ON dv_webhooks(active);
