@@ -328,45 +328,6 @@ function emitEvent(type, agentId, projectId, summary, data) {
   }
 }
 
-// ---- SSE Event Stream ----
-router.get('/events/stream', function (req, res) {
-  // Auth: accept JWT token, admin key, or agent key
-  var token = req.query.token;
-  if (token) {
-    try { jwt.verify(token, JWT_SECRET); } catch (e) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-  } else if (req.query.agent_key) {
-    // Verify agent key
-    var agents = listAgents();
-    var valid = false;
-    for (var a of agents) {
-      if (a.api_key_hash && bcrypt.compareSync(req.query.agent_key, a.api_key_hash)) {
-        valid = true;
-        break;
-      }
-    }
-    if (!valid) return res.status(401).json({ error: 'Invalid agent key' });
-  } else {
-    var user = getStudioUser(req);
-    var adminKey = req.headers['x-admin-key'];
-    if (!user && adminKey !== ADMIN_KEY) {
-      return res.status(401).json({ error: 'Authentication required.' });
-    }
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  res.write('data: ' + JSON.stringify({ type: 'connected', clients: clientCount() + 1 }) + '\n\n');
-  addClient(res);
-  var keepAlive = setInterval(function () { res.write(': ping\n\n'); }, 30000);
-  req.on('close', function () { clearInterval(keepAlive); });
-});
-
 // ---- Approval gate helpers ----
 // Soft enforcement: warns agents but doesn't block (returns warning field).
 // Hard enforcement: blocks agents without an approved approval_id.
@@ -441,45 +402,6 @@ function dispatchWorkToIdleAgents(triggerContext) {
 // ---- Router ----
 
 var router = Router();
-
-// ---- SSE: Live event stream ----
-router.get('/events/stream', function (req, res) {
-  // Auth: accept token as query param (SSE can't set headers)
-  var token = req.query.token;
-  if (token) {
-    try {
-      jwt.verify(token, JWT_SECRET);
-    } catch (e) {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-  } else {
-    // Fall back to standard auth headers
-    var user = getStudioUser(req);
-    var adminKey = req.headers['x-admin-key'];
-    if (!user && adminKey !== ADMIN_KEY) {
-      return res.status(401).json({ error: 'Authentication required. Pass ?token= or use headers.' });
-    }
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  res.write('data: {"type":"connected","clients":' + (clientCount() + 1) + '}\n\n');
-
-  addClient(res);
-
-  // Keep-alive ping every 30s to prevent proxy/load-balancer timeouts
-  var keepAlive = setInterval(function () {
-    res.write(': ping\n\n');
-  }, 30000);
-
-  req.on('close', function () {
-    clearInterval(keepAlive);
-  });
-});
 
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
