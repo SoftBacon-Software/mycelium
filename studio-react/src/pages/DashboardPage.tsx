@@ -121,6 +121,8 @@ const quickLinks = [
   { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
   { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
   { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
+  { to: '/health', label: 'Network Health', desc: 'Mission control', color: 'text-green' },
+  { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-green' },
 ]
 
 // -- Onboarding Checklist --
@@ -322,7 +324,9 @@ function SleepModePanel({
         </div>
         <button
           onClick={() => { onActivate(directive, approvalPolicy); setShowForm(false); setDirective(''); }}
-          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors"
+          disabled={!directive.trim()}
+          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          title={!directive.trim() ? 'Enter a night directive first' : undefined}
         >
           Go to Sleep
         </button>
