@@ -47,7 +47,7 @@ export default function AppLayout() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const { loading, refresh, instanceConfig } = useDashboardStore()
+  const { loading, refresh, instanceConfig, activeOperators } = useDashboardStore()
   const { lastRefresh } = usePolling(10_000)
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -91,6 +91,28 @@ export default function AppLayout() {
               <span className="px-2.5 py-1 rounded text-xs font-mono font-bold bg-red/20 text-red animate-pulse">
                 FROZEN
               </span>
+            )}
+
+            {/* Active operator presence */}
+            {activeOperators.length > 0 && (
+              <div className="hidden sm:flex items-center gap-1.5" title={
+                activeOperators.length === 1
+                  ? 'Only you are online'
+                  : activeOperators.map(o => o.display_name).join(', ') + ' online'
+              }>
+                {activeOperators.map((op) => (
+                  <span
+                    key={op.id}
+                    className="flex items-center gap-1 text-xs text-text-muted"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-moss inline-block" />
+                    <span className="hidden md:inline">{op.display_name}</span>
+                  </span>
+                ))}
+                {activeOperators.length === 1 && (
+                  <span className="text-xs text-text-muted font-mono hidden md:inline">only you</span>
+                )}
+              </div>
             )}
 
             {/* User display name */}

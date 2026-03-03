@@ -67,6 +67,8 @@ export function initDB() {
     ["dv_operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
     // Step #197 — message priority tiers (urgent/normal/fyi)
     ["dv_messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
+    // Operator presence tracking — who's currently in the dashboard
+    ["dv_studio_users", "last_seen", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -1222,7 +1224,18 @@ export function getStudioUserById(id) {
 }
 
 export function listStudioUsers() {
-  return db.prepare("SELECT id, username, display_name, role, created_at FROM dv_studio_users ORDER BY created_at").all();
+  return db.prepare("SELECT id, username, display_name, role, created_at, last_seen FROM dv_studio_users ORDER BY created_at").all();
+}
+
+export function touchStudioUserSeen(id) {
+  db.prepare("UPDATE dv_studio_users SET last_seen = datetime('now') WHERE id = ?").run(id);
+}
+
+export function getActiveStudioUsers(withinMinutes) {
+  var mins = withinMinutes || 5;
+  return db.prepare(
+    "SELECT id, username, display_name, role, last_seen FROM dv_studio_users WHERE last_seen >= datetime('now', '-' || ? || ' minutes') ORDER BY last_seen DESC"
+  ).all(mins);
 }
 
 export function deleteStudioUser(id) {
@@ -1902,7 +1915,8 @@ export function getDvOverview(userId) {
     instance_config: listInstanceConfig(),
     drones: listDrones(),
     drone_jobs: listDroneJobs({ limit: 50 }),
-    plugins: listPluginRecords()
+    plugins: listPluginRecords(),
+    active_operators: getActiveStudioUsers(5),
   };
 }
 
