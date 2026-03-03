@@ -4,7 +4,6 @@ import DirectiveBanner from '../components/directives/DirectiveBanner'
 import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { useVoiceStore } from '../stores/voiceStore'
 import { usePolling } from '../hooks/usePolling'
 import { useMemo } from 'react'
 
@@ -48,8 +47,7 @@ export default function AppLayout() {
   const { lastRefresh } = usePolling(10_000)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
-  const voiceConnected = useVoiceStore((s) => s.isConnected)
-  const showFloatingVoice = voiceConnected && location.pathname !== '/channels'
+  const showFloatingVoice = location.pathname !== '/channels'
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
