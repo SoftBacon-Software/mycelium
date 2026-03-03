@@ -4,7 +4,7 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { useVoiceStore } from '../stores/voiceStore'
 import {
   LayoutDashboard, CheckSquare, Map, Bug,
-  MessageSquare, Radio, ShieldCheck,
+  MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database,
   Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
@@ -49,6 +49,7 @@ const navSections: NavSection[] = [
     id: 'communicate',
     label: 'Communicate',
     items: [
+      { to: '/inbox', label: 'Inbox', icon: Inbox },
       { to: '/channels', label: 'Channels', icon: MessageSquare },
       { to: '/messages', label: 'Agent Comms', icon: Radio },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
@@ -114,6 +115,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   const [collapsed, setCollapsed] = useState(loadSidebarCollapsed)
   const [collapsedSections, setCollapsedSections] = useState(loadCollapsedSections)
   const agents = useDashboardStore((s) => s.agents)
+  const inboxUnread = useDashboardStore((s) => s.inboxUnread)
   const voiceConnected = useVoiceStore((s) => s.isConnected)
   const voiceChannel = useVoiceStore((s) => s.channelName)
   const voicePeers = useVoiceStore((s) => s.peers)
@@ -229,6 +231,11 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
                     >
                       <item.icon size={16} strokeWidth={1.5} className="shrink-0" />
                       {!isNarrow && <span className="truncate">{item.label}</span>}
+                      {item.to === '/inbox' && inboxUnread > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/20 text-accent text-[10px] font-bold tabular-nums ml-auto shrink-0">
+                          {inboxUnread}
+                        </span>
+                      )}
                     </NavLink>
                   ))}
                 </div>

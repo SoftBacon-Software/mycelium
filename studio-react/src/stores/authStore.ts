@@ -9,6 +9,7 @@ interface User {
   username: string;
   display_name: string;
   role: string;
+  operator_id: string | null;
 }
 
 interface AuthState {

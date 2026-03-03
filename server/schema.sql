@@ -454,3 +454,19 @@ CREATE TABLE IF NOT EXISTS dv_feedback (
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_agent ON dv_feedback(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_entity ON dv_feedback(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_created ON dv_feedback(created_at DESC);
+
+-- Plan step comments (mirrors dv_task_comments pattern)
+CREATE TABLE IF NOT EXISTS dv_plan_step_comments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  step_id    INTEGER NOT NULL REFERENCES dv_plan_steps(id) ON DELETE CASCADE,
+  author     TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_step_comments_step ON dv_plan_step_comments(step_id);
+
+-- Operator inbox read state
+CREATE TABLE IF NOT EXISTS dv_inbox_reads (
+  operator_id  TEXT PRIMARY KEY,
+  last_read_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

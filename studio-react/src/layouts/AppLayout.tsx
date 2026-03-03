@@ -11,6 +11,7 @@ import { useMediaQuery } from '../hooks/useMediaQuery'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
+  '/inbox': 'Inbox',
   '/channels': 'Channels',
   '/tasks': 'Tasks',
   '/messages': 'Agent Comms',

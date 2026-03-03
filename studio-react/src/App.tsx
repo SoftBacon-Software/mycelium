@@ -23,6 +23,7 @@ import OnboardingPage from './pages/OnboardingPage'
 import PluginsPage from './pages/PluginsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import FeedbackPage from './pages/FeedbackPage'
+import InboxPage from './pages/InboxPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -53,6 +54,7 @@ export default function App() {
           element={isAuthenticated ? <AppLayout /> : <Navigate to="/login" replace />}
         >
           <Route index element={<DashboardPage />} />
+          <Route path="inbox" element={<InboxPage />} />
           <Route path="channels" element={<ChannelsPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="messages" element={<MessagesPage />} />

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { PlanStep } from '../../api/types'
 import Badge from '../shared/Badge'
 import { getSenderDisplay } from '../../utils/sender'
+import StepCommentThread from './StepCommentThread'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -27,8 +28,7 @@ interface StepChecklistProps {
   onStepUpdate: (stepId: string, data: Partial<PlanStep>) => void
 }
 
-export default function StepChecklist({ steps, planId: _planId, onStepUpdate }: StepChecklistProps) {
-  void _planId
+export default function StepChecklist({ steps, planId, onStepUpdate }: StepChecklistProps) {
   const [expandedStep, setExpandedStep] = useState<string | null>(null)
   const [updatingStep, setUpdatingStep] = useState<string | null>(null)
 
@@ -205,6 +205,7 @@ export default function StepChecklist({ steps, planId: _planId, onStepUpdate }: 
                     )}
                   </div>
                 )}
+                <StepCommentThread planId={planId} stepId={step.id} />
               </div>
             )}
           </div>

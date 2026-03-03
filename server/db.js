@@ -488,6 +488,149 @@ export function deleteTaskComment(commentId) {
   return result.changes > 0;
 }
 
+// -- Plan Step Comments --
+
+export function addPlanStepComment(stepId, author, content) {
+  return db.prepare(
+    "INSERT INTO dv_plan_step_comments (step_id, author, content) VALUES (?, ?, ?) RETURNING *"
+  ).get(stepId, author, content);
+}
+
+export function getPlanStepComments(stepId) {
+  return db.prepare(
+    "SELECT * FROM dv_plan_step_comments WHERE step_id = ? ORDER BY created_at ASC"
+  ).all(stepId);
+}
+
+export function deletePlanStepComment(commentId) {
+  var result = db.prepare("DELETE FROM dv_plan_step_comments WHERE id = ?").run(commentId);
+  return result.changes > 0;
+}
+
+// -- Plan Step Lookup --
+
+export function getPlanStep(stepId) {
+  return db.prepare("SELECT * FROM dv_plan_steps WHERE id = ?").get(stepId);
+}
+
+// -- Operator Inbox --
+
+export function getInboxLastRead(operatorId) {
+  var row = db.prepare("SELECT last_read_at FROM dv_inbox_reads WHERE operator_id = ?").get(operatorId);
+  return row ? row.last_read_at : null;
+}
+
+export function markInboxRead(operatorId) {
+  db.prepare(
+    "INSERT INTO dv_inbox_reads (operator_id, last_read_at) VALUES (?, datetime('now')) ON CONFLICT(operator_id) DO UPDATE SET last_read_at = datetime('now')"
+  ).run(operatorId);
+}
+
+export function getInboxItems(operatorId, limit) {
+  limit = limit || 100;
+  var lastRead = getInboxLastRead(operatorId);
+
+  // Source 1: requests/directives addressed to this operator
+  var directMessages = db.prepare(
+    "SELECT id, from_agent, to_agent, content, msg_type, status, created_at FROM dv_messages WHERE to_agent = ? AND msg_type IN ('request', 'directive') AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT ?"
+  ).all(operatorId, limit);
+
+  // Source 2: @mentions in recent messages (last 7 days)
+  var mentions = db.prepare(
+    "SELECT id, from_agent, to_agent, content, msg_type, status, created_at FROM dv_messages WHERE content LIKE ? AND from_agent != ? AND msg_type != 'chat' AND created_at > datetime('now', '-7 days') ORDER BY created_at DESC LIMIT ?"
+  ).all('%@' + operatorId + '%', operatorId, limit);
+
+  // Source 3: pending approvals
+  var approvals = db.prepare(
+    "SELECT id, entity_type, entity_id, risk_tier, status, created_by, created_at FROM dv_approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?"
+  ).all(limit);
+
+  // Normalize into inbox items
+  var items = [];
+
+  for (var msg of directMessages) {
+    items.push({
+      id: 'msg_' + msg.id,
+      kind: msg.msg_type === 'directive' ? 'directive' : 'request',
+      source_type: 'message',
+      source_id: msg.id,
+      title: msg.from_agent + (msg.msg_type === 'directive' ? ' sent a directive' : ' sent a request'),
+      preview: (msg.content || '').slice(0, 120),
+      from: msg.from_agent,
+      created_at: msg.created_at,
+      is_unread: !lastRead || msg.created_at > lastRead,
+      link: '/messages'
+    });
+  }
+
+  for (var mention of mentions) {
+    // Skip if already included as direct message
+    if (directMessages.some(function (m) { return m.id === mention.id; })) continue;
+    items.push({
+      id: 'mention_' + mention.id,
+      kind: 'mention',
+      source_type: 'message',
+      source_id: mention.id,
+      title: mention.from_agent + ' mentioned you',
+      preview: (mention.content || '').slice(0, 120),
+      from: mention.from_agent,
+      created_at: mention.created_at,
+      is_unread: !lastRead || mention.created_at > lastRead,
+      link: '/messages'
+    });
+  }
+
+  for (var appr of approvals) {
+    items.push({
+      id: 'approval_' + appr.id,
+      kind: 'approval',
+      source_type: 'approval',
+      source_id: appr.id,
+      title: appr.entity_type + ' approval requested by ' + appr.created_by,
+      preview: appr.entity_type + ' #' + appr.entity_id + ' (' + appr.risk_tier + ' risk)',
+      from: appr.created_by,
+      created_at: appr.created_at,
+      is_unread: !lastRead || appr.created_at > lastRead,
+      link: '/approvals'
+    });
+  }
+
+  // Sort by created_at DESC and limit
+  items.sort(function (a, b) { return b.created_at.localeCompare(a.created_at); });
+  return items.slice(0, limit);
+}
+
+export function countInboxUnread(operatorId) {
+  var lastRead = getInboxLastRead(operatorId);
+  if (!lastRead) {
+    // Never read — count all pending items
+    var msgs = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type IN ('request', 'directive') AND status IN ('pending', 'sent')"
+    ).get(operatorId);
+    var mentions = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE content LIKE ? AND from_agent != ? AND msg_type != 'chat' AND created_at > datetime('now', '-7 days')"
+    ).get('%@' + operatorId + '%', operatorId);
+    var approvals = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_approvals WHERE status = 'pending'"
+    ).get();
+    return (msgs.c || 0) + (mentions.c || 0) + (approvals.c || 0);
+  }
+  var msgCount = db.prepare(
+    "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type IN ('request', 'directive') AND status IN ('pending', 'sent') AND created_at > ?"
+  ).get(operatorId, lastRead);
+  var mentionCount = db.prepare(
+    "SELECT COUNT(*) as c FROM dv_messages WHERE content LIKE ? AND from_agent != ? AND msg_type != 'chat' AND created_at > datetime('now', '-7 days') AND created_at > ?"
+  ).get('%@' + operatorId + '%', operatorId, lastRead);
+  var approvalCount = db.prepare(
+    "SELECT COUNT(*) as c FROM dv_approvals WHERE status = 'pending' AND created_at > ?"
+  ).get(lastRead);
+  return (msgCount.c || 0) + (mentionCount.c || 0) + (approvalCount.c || 0);
+}
+
+export function getOperatorByStudioUserId(studioUserId) {
+  return db.prepare("SELECT * FROM dv_operators WHERE studio_user_id = ?").get(studioUserId);
+}
+
 // -- Context --
 
 export function getDvContext(projectId) {

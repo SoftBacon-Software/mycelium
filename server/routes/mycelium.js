@@ -91,7 +91,10 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent
+  countPendingForAgent,
+  addPlanStepComment, getPlanStepComments, deletePlanStepComment, getPlanStep,
+  getInboxItems, countInboxUnread, getInboxLastRead, markInboxRead,
+  getOperatorByStudioUserId
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
@@ -1534,16 +1537,19 @@ router.post('/studio/login', asyncHandler(async function (req, res) {
   if (!(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  var operator = getOperatorByStudioUserId(user.id);
+  var operatorId = operator ? operator.id : null;
   var token = jwt.sign({
     studioUser: true,
     userId: user.id,
     username: user.username,
     displayName: user.display_name,
-    role: user.role
+    role: user.role,
+    operatorId: operatorId
   }, JWT_SECRET, { expiresIn: STUDIO_JWT_EXPIRY });
   res.json({
     token: token,
-    user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }
+    user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, operator_id: operatorId }
   });
 }));
 
@@ -1943,7 +1949,15 @@ router.post('/agents/:id/savepoint', function (req, res) {
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
-  res.json(getDvOverview(who));
+  var overview = getDvOverview(who);
+  // Include inbox unread count for studio users
+  var studioUser = getStudioUser(req);
+  if (studioUser && studioUser.operatorId) {
+    overview.inbox_unread = countInboxUnread(studioUser.operatorId);
+  } else {
+    overview.inbox_unread = 0;
+  }
+  res.json(overview);
 });
 
 // Actionable items needing decisions (admin only)
@@ -2965,6 +2979,68 @@ router.post('/work/request', function (req, res) {
 
   emitEvent('work_request', who, null, who + ' requested work: ' + type + (target ? ' \u2192 ' + target : ''));
   res.json({ ok: true, message_id: msgId, routed_to: adminAgentId });
+});
+
+// ======== OPERATOR INBOX ========
+
+router.get('/inbox', function (req, res) {
+  var user = getStudioUser(req);
+  if (!user) return res.status(401).json({ error: 'Studio login required' });
+  var operatorId = user.operatorId;
+  if (!operatorId) return res.json({ items: [], unread_count: 0, operator_id: null, last_read_at: null });
+  var items = getInboxItems(operatorId, 100);
+  var lastRead = getInboxLastRead(operatorId);
+  var unreadCount = countInboxUnread(operatorId);
+  res.json({ items: items, unread_count: unreadCount, operator_id: operatorId, last_read_at: lastRead });
+});
+
+router.get('/inbox/unread', function (req, res) {
+  var user = getStudioUser(req);
+  if (!user) return res.status(401).json({ error: 'Studio login required' });
+  var operatorId = user.operatorId;
+  if (!operatorId) return res.json({ count: 0 });
+  res.json({ count: countInboxUnread(operatorId), operator_id: operatorId });
+});
+
+router.put('/inbox/read', function (req, res) {
+  var user = getStudioUser(req);
+  if (!user) return res.status(401).json({ error: 'Studio login required' });
+  var operatorId = user.operatorId;
+  if (!operatorId) return res.json({ ok: true });
+  markInboxRead(operatorId);
+  res.json({ ok: true, operator_id: operatorId });
+});
+
+// ======== PLAN STEP COMMENTS ========
+
+router.get('/plans/:planId/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var step = getPlanStep(parseIntParam(req.params.stepId));
+  if (!step || step.plan_id !== parseIntParam(req.params.planId))
+    return res.status(404).json({ error: 'Step not found' });
+  res.json(getPlanStepComments(step.id));
+});
+
+router.post('/plans/:planId/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var step = getPlanStep(parseIntParam(req.params.stepId));
+  if (!step || step.plan_id !== parseIntParam(req.params.planId))
+    return res.status(404).json({ error: 'Step not found' });
+  var author = escapeHtml(req.body.author || who);
+  var content = escapeHtml(req.body.content || '');
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  var comment = addPlanStepComment(step.id, author, content);
+  emitEvent('plan_step_comment', who, null, who + ' commented on plan step #' + step.id, { step_id: step.id, comment_id: comment.id });
+  res.json(comment);
+});
+
+router.delete('/plans/:planId/steps/:stepId/comments/:commentId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var deleted = deletePlanStepComment(parseIntParam(req.params.commentId));
+  if (!deleted) return res.status(404).json({ error: 'Comment not found' });
+  res.json({ ok: true, deleted: parseIntParam(req.params.commentId) });
 });
 
 // ======== PLUGINS ========

@@ -345,6 +345,34 @@ export interface FeedbackSummary {
   recent: Feedback[]
 }
 
+export interface InboxItem {
+  id: string;
+  kind: 'request' | 'directive' | 'mention' | 'approval' | 'step_comment' | 'bip_approval';
+  source_type: 'message' | 'approval' | 'plan_step_comment';
+  source_id: number;
+  title: string;
+  preview: string;
+  from: string;
+  created_at: string;
+  is_unread: boolean;
+  link: string;
+}
+
+export interface InboxData {
+  items: InboxItem[];
+  unread_count: number;
+  operator_id: string | null;
+  last_read_at: string | null;
+}
+
+export interface PlanStepComment {
+  id: number;
+  step_id: number;
+  author: string;
+  content: string;
+  created_at: string;
+}
+
 export interface Overview {
   agents: Agent[];
   events: Event[];
@@ -370,4 +398,5 @@ export interface Overview {
   drones: Agent[];
   drone_jobs: DroneJob[];
   plugins: Plugin[];
+  inbox_unread?: number;
 }

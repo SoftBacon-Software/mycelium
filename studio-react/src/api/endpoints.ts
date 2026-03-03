@@ -27,6 +27,8 @@ import type {
   Plugin,
   Feedback,
   FeedbackSummary,
+  InboxData,
+  PlanStepComment,
 } from './types';
 
 // Auth
@@ -446,4 +448,28 @@ export function enablePlugin(name: string): Promise<{ ok: boolean }> {
 
 export function disablePlugin(name: string): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/disable`, {});
+}
+
+// Inbox
+
+export function fetchInbox(): Promise<InboxData> {
+  return apiGet<InboxData>('/inbox');
+}
+
+export function markInboxRead(): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>('/inbox/read', {});
+}
+
+// Plan Step Comments
+
+export function fetchPlanStepComments(planId: string, stepId: string): Promise<PlanStepComment[]> {
+  return apiGet<PlanStepComment[]>(`/plans/${planId}/steps/${stepId}/comments`);
+}
+
+export function addPlanStepComment(planId: string, stepId: string, content: string): Promise<PlanStepComment> {
+  return apiPost<PlanStepComment>(`/plans/${planId}/steps/${stepId}/comments`, { content });
+}
+
+export function deletePlanStepComment(planId: string, stepId: string, commentId: number): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/plans/${planId}/steps/${stepId}/comments/${commentId}`);
 }
