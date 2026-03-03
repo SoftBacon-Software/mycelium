@@ -10,7 +10,6 @@ import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
-import { useVoiceStore } from '../stores/voiceStore'
 import { getSleepStatus, setSleepMode } from '../api/endpoints'
 
 // -- Event type color mapping --
@@ -476,7 +475,6 @@ export default function DashboardPage() {
     }
     return merged.slice(0, 30)
   }, [events, liveEvents])
-  const { isConnected: voiceConnected, channelName, peers, join: joinVoice, leave: leaveVoice } = useVoiceStore()
 
   const handleSleepActivate = useCallback(async (directive: string, approvalPolicy: string) => {
     try {
@@ -596,26 +594,6 @@ export default function DashboardPage() {
       {/* Action Required */}
       <ActionRequired />
 
-      {/* Voice Chat */}
-      <div className="bg-surface rounded-lg p-3 flex items-center gap-3">
-        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${voiceConnected ? 'bg-green animate-pulse' : 'bg-text-muted/30'}`} />
-        <span className="text-sm font-medium text-text">Voice Chat</span>
-        {voiceConnected ? (
-          <>
-            <span className="text-xs text-accent font-mono">#{channelName}</span>
-            <span className="text-xs text-text-muted">{peers.length} peer{peers.length !== 1 ? 's' : ''}</span>
-            <div className="flex-1" />
-            <Link to="/channels" className="text-xs text-accent hover:underline">Open</Link>
-            <button onClick={leaveVoice} className="text-xs px-2 py-0.5 rounded bg-red/20 text-red hover:bg-red/30 transition-colors">Leave</button>
-          </>
-        ) : (
-          <>
-            <span className="text-xs text-text-muted">Not connected</span>
-            <div className="flex-1" />
-            <button onClick={() => joinVoice()} className="text-xs px-2 py-0.5 rounded bg-green/20 text-green hover:bg-green/30 transition-colors">Join</button>
-          </>
-        )}
-      </div>
 
       {/* Onboarding checklist (hidden when all done) */}
       <OnboardingChecklist checks={onboardingChecks} />

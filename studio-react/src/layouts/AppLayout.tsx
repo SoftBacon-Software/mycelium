@@ -52,7 +52,7 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
-  const showFloatingVoice = location.pathname !== '/channels'
+  const isChannels = location.pathname === '/channels'
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
@@ -125,7 +125,7 @@ export default function AppLayout() {
 
         {/* Content area */}
         <main className={
-          !showFloatingVoice
+          isChannels
             ? 'flex-1 overflow-hidden flex flex-col min-h-0'
             : 'flex-1 overflow-y-auto p-4 md:p-6 pb-16'
         }>
@@ -133,12 +133,10 @@ export default function AppLayout() {
           <Outlet />
         </main>
 
-        {/* Floating voice bar (hidden on /channels where VoicePanel handles it) */}
-        {showFloatingVoice && (
-          <div className="shrink-0">
-            <VoiceBar />
-          </div>
-        )}
+        {/* Voice bar — always at the bottom, all pages */}
+        <div className="shrink-0">
+          <VoiceBar />
+        </div>
       </div>
     </div>
   )
