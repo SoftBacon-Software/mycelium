@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
@@ -410,6 +411,7 @@ export default function DashboardPage() {
       loadSleepStatus()
     } catch (err) {
       console.error('Failed to activate sleep mode:', err)
+      toast.error('Failed to activate sleep mode')
     }
   }, [loadSleepStatus])
 
@@ -419,6 +421,7 @@ export default function DashboardPage() {
       loadSleepStatus()
     } catch (err) {
       console.error('Failed to deactivate sleep mode:', err)
+      toast.error('Failed to deactivate sleep mode')
     }
   }, [loadSleepStatus])
 
