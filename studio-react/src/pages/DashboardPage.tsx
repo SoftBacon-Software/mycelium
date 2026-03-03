@@ -341,6 +341,7 @@ export default function DashboardPage() {
     events,
     tasks,
     messages,
+    pendingRequests,
     bugs,
     bugCounts,
     plans,
@@ -469,8 +470,8 @@ export default function DashboardPage() {
         />
         <SummaryCard
           title="Messages"
-          value={messages.length}
-          subtitle="total messages"
+          value={pendingRequests.length}
+          subtitle={pendingRequests.length === 1 ? 'pending request' : 'pending requests'}
           color="blue"
           icon="messages"
         />
