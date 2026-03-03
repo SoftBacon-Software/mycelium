@@ -43,7 +43,7 @@ var artifactStorage = multer.diskStorage({
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
   createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
-  createOrg, listOrgs, getOrg, updateOrg,
+  createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   createProject, listProjects, getProject, updateProject,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
   setTaskDependency, resolveTaskDependencies,
@@ -2020,6 +2020,14 @@ router.put('/orgs/:id', function (req, res) {
   if (!org) return res.status(404).json({ error: 'Organization not found' });
   updateOrg(req.params.id, req.body);
   res.json(getOrg(req.params.id));
+});
+
+router.delete('/orgs/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var org = getOrg(req.params.id);
+  if (!org) return res.status(404).json({ error: 'Organization not found' });
+  deleteOrg(req.params.id);
+  res.json({ ok: true });
 });
 
 // =============== PROJECTS ===============

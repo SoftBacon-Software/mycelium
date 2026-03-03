@@ -352,6 +352,10 @@ export function updateOrg(id, fields) {
   db.prepare('UPDATE dv_organizations SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
+export function deleteOrg(id) {
+  db.prepare('DELETE FROM dv_organizations WHERE id = ?').run(id);
+}
+
 // -- Projects --
 
 export function createProject(id, name, description, repoUrl, orgId, type) {
