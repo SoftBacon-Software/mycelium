@@ -9,6 +9,7 @@ import {
 import type { Feedback, FeedbackSummary } from '../api/types'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { formatDateTime } from '../utils/time'
+import SummaryCard from '../components/dashboard/SummaryCard'
 
 // ─── Star Rating ─────────────────────────────────────────────────────────────
 
@@ -319,18 +320,6 @@ function FeedbackCard({
   )
 }
 
-// ─── Summary Cards ─────────────────────────────────────────────────────────────
-
-function SummaryCard({ label, value, sub, color = 'text-accent' }: { label: string; value: string | number; sub?: string; color?: string }) {
-  return (
-    <div className="bg-surface rounded-lg p-4 text-center">
-      <div className={`text-3xl font-bold font-mono ${color}`}>{value}</div>
-      <div className="text-[10px] text-text-dim uppercase tracking-wider mt-1">{label}</div>
-      {sub && <div className="text-xs text-text-muted mt-0.5">{sub}</div>}
-    </div>
-  )
-}
-
 // ─── Rating Distribution Bar ──────────────────────────────────────────────────
 
 function RatingDistBar({ dist }: { dist: { rating: number; count: number }[] }) {
@@ -499,25 +488,25 @@ export default function FeedbackPage() {
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <SummaryCard
-            label="Total Feedback"
+            title="Total Feedback"
             value={summary.total}
-            color="text-accent"
+            color="accent"
           />
           <SummaryCard
-            label="Avg Rating"
+            title="Avg Rating"
             value={summary.total > 0 ? summary.avg_rating.toFixed(2) : '—'}
-            sub="out of 5"
-            color={summary.avg_rating >= 4 ? 'text-green' : summary.avg_rating >= 3 ? 'text-accent' : 'text-red'}
+            subtitle="out of 5"
+            color={summary.avg_rating >= 4 ? 'green' : summary.avg_rating >= 3 ? 'accent' : 'red'}
           />
           <SummaryCard
-            label="Agents Rated"
+            title="Agents Rated"
             value={summary.by_agent.length}
-            color="text-text-dim"
+            color="muted"
           />
           <SummaryCard
-            label="Recent (7 days)"
+            title="Recent (7 days)"
             value={summary.recent.length}
-            color="text-text-dim"
+            color="muted"
           />
         </div>
       )}
