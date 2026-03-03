@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
@@ -113,6 +113,73 @@ const quickLinks = [
   { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
 ]
 
+// -- Onboarding Checklist --
+
+function OnboardingChecklist({
+  checks,
+}: {
+  checks: { label: string; done: boolean; to: string }[]
+}) {
+  const completed = checks.filter((c) => c.done).length
+  const total = checks.length
+  const allDone = completed === total
+
+  if (allDone) return null
+
+  return (
+    <div className="bg-surface rounded-lg border border-accent/20 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-accent">Getting Started</h2>
+        <span className="text-xs text-text-muted tabular-nums">
+          {completed}/{total} complete
+        </span>
+      </div>
+      <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden mb-3">
+        <div
+          className="h-full bg-accent rounded-full transition-all duration-500"
+          style={{ width: `${(completed / total) * 100}%` }}
+        />
+      </div>
+      <div className="space-y-1.5">
+        {checks.map((check) => (
+          <Link
+            key={check.label}
+            to={check.to}
+            className={`flex items-center gap-2.5 py-1.5 px-2 rounded transition-colors ${
+              check.done
+                ? 'text-text-muted'
+                : 'text-text hover:bg-surface-raised'
+            }`}
+          >
+            <span
+              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                check.done
+                  ? 'bg-green/20 border-green/40 text-green'
+                  : 'border-border'
+              }`}
+            >
+              {check.done && (
+                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M2.5 6l2.5 2.5 4.5-5" />
+                </svg>
+              )}
+            </span>
+            <span className={`text-sm ${check.done ? 'line-through' : 'font-medium'}`}>
+              {check.label}
+            </span>
+          </Link>
+        ))}
+      </div>
+      <Link
+        to="/onboarding"
+        className="block mt-3 text-center text-xs text-accent hover:text-accent-light transition-colors"
+      >
+        Open setup wizard
+      </Link>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const {
     agents,
@@ -126,13 +193,31 @@ export default function DashboardPage() {
     droneJobs,
     concepts,
     contextKeys,
+    projects,
     loading,
     refresh,
   } = useDashboardStore()
 
+  const navigate = useNavigate()
+
   useEffect(() => {
     refresh()
   }, [refresh])
+
+  // First-boot detection: if no projects and no agents, redirect to onboarding
+  useEffect(() => {
+    if (loading) return
+    if (projects.length === 0 && agents.length === 0) {
+      navigate('/onboarding', { replace: true })
+    }
+  }, [loading, projects.length, agents.length, navigate])
+
+  const onboardingChecks = useMemo(() => [
+    { label: 'Create a project', done: projects.length > 0, to: '/onboarding' },
+    { label: 'Register an agent', done: agents.length > 0, to: '/onboarding' },
+    { label: 'Create your first plan', done: plans.length > 0, to: '/plans' },
+    { label: 'Send a message', done: messages.length > 0, to: '/messages' },
+  ], [projects.length, agents.length, plans.length, messages.length])
 
   const onlineAgents = agents.filter((a) => a.status === 'online').length
   const totalTasks = tasks.open.length + tasks.in_progress.length
@@ -264,6 +349,9 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {/* Onboarding checklist (hidden when all done) */}
+      <OnboardingChecklist checks={onboardingChecks} />
 
       {/* Middle row: Activity + Agents */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
