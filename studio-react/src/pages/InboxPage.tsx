@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuthStore } from '../stores/authStore'
 import { getInboxItems, getInboxCount, markInboxRead, dismissInboxItem } from '../api/endpoints'
@@ -252,12 +253,12 @@ export default function InboxPage() {
               <div className="border border-border rounded p-3 bg-surface/50">
                 <p className="text-xs text-text-muted mb-2">Approval #{selected.data.approval_id}</p>
                 <div className="flex gap-2">
-                  <a
-                    href="/approvals"
+                  <Link
+                    to="/approvals"
                     className="text-xs bg-accent text-bg px-3 py-1.5 rounded hover:bg-accent-light transition-colors font-medium"
                   >
                     Review in Approvals →
-                  </a>
+                  </Link>
                 </div>
               </div>
             )}
@@ -284,12 +285,12 @@ export default function InboxPage() {
                     Project: <span className="text-text-dim">{selected.data.project_id}</span>
                   </p>
                 )}
-                <a
-                  href="/messages"
+                <Link
+                  to="/messages"
                   className="inline-block mt-2 text-xs text-accent hover:text-accent-light transition-colors"
                 >
                   View in Agent Comms →
-                </a>
+                </Link>
               </div>
             )}
 
@@ -298,12 +299,12 @@ export default function InboxPage() {
                 <p className="text-xs text-text-muted">
                   From: <span className="text-text-dim">{selected.data?.from || 'unknown'}</span>
                 </p>
-                <a
-                  href="/messages"
+                <Link
+                  to="/messages"
                   className="inline-block mt-2 text-xs text-accent hover:text-accent-light transition-colors"
                 >
                   View in Agent Comms →
-                </a>
+                </Link>
               </div>
             )}
 
