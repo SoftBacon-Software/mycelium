@@ -1698,18 +1698,23 @@ router.put('/admin/sleep', function (req, res) {
     var logVal = getInstanceConfig('sleep_mode_log');
     try { log = logVal ? JSON.parse(logVal) : null; } catch (e) { log = null; }
 
-    setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
-    emitEvent('sleep_mode_off', who, null, who + ' deactivated sleep mode');
-
-    // Notify agents that humans are back
-    var agents2 = listAgents();
-    for (var agent2 of agents2) {
-      if (agent2.status === 'online' || agent2.status === 'idle') {
-        createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+    // Only clear global sleep mode and notify agents if ALL operators are now available
+    // (another operator might still be sleeping)
+    var stillSleeping = isNetworkAutonomous();
+    if (!stillSleeping) {
+      setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
+      emitEvent('sleep_mode_off', who, null, who + ' is back — all operators now available');
+      var agents2 = listAgents();
+      for (var agent2 of agents2) {
+        if (agent2.status === 'online' || agent2.status === 'idle') {
+          createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+        }
       }
+    } else {
+      emitEvent('operator_wake', who, null, (operatorId2 || who) + ' woke up — other operators still sleeping');
     }
 
-    res.json({ ok: true, sleep_mode: { active: false }, morning_summary: log });
+    res.json({ ok: true, sleep_mode: { active: stillSleeping }, morning_summary: stillSleeping ? null : log });
   }
 });
 
