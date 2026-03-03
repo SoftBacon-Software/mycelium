@@ -500,6 +500,7 @@ export default function PlansPage() {
               onClose={() => setSelectedPlanId(null)}
               onStepUpdate={handleStepUpdate}
               onStatusChange={handleStatusChange}
+              onRefresh={handleRefreshPlan}
             />
           </div>
         </div>
