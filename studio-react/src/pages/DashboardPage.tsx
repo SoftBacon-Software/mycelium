@@ -76,6 +76,9 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
 const agentAvatarColors: Record<string, string> = {
   hijack: 'bg-purple/20 text-purple',
   greatness: 'bg-green/20 text-green',
+  macbook: 'bg-blue/20 text-blue',
+  admin: 'bg-accent/20 text-accent',
+  unakron: 'bg-accent/20 text-accent',
 }
 
 function getAgentInitials(name: string): string {
