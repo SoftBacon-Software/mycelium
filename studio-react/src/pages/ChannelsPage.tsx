@@ -464,7 +464,7 @@ function ChatArea({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 pb-2"
+        className="flex-1 overflow-y-auto px-4 pb-2 min-h-0"
       >
         {sorted.length === 0 ? (
           <div className="flex items-center justify-center h-full">
