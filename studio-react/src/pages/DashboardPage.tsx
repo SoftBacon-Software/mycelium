@@ -267,70 +267,71 @@ function SleepModePanel({
     )
   }
 
-  if (!showForm) {
-    return (
+  // Inactive state: render a small button that opens a dropdown form
+  return (
+    <div className="relative">
       <button
-        onClick={() => setShowForm(true)}
-        className="flex items-center gap-2 text-xs text-text-muted hover:text-purple transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-purple/30"
+        onClick={() => setShowForm((v) => !v)}
+        className={`flex items-center gap-2 text-xs transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-purple/30 ${showForm ? 'text-purple ring-1' : 'text-text-muted hover:text-purple'}`}
         title="Enter sleep mode"
       >
         <span>&#x1F319;</span> Sleep Mode
       </button>
-    )
-  }
 
-  return (
-    <div className="bg-surface border border-border rounded-lg p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">&#x1F319;</span>
-          <span className="text-sm font-semibold text-text">Sleep Mode Setup</span>
-        </div>
-        <button onClick={() => setShowForm(false)} className="text-xs text-text-muted hover:text-text">Cancel</button>
-      </div>
-      <div className="space-y-3">
-        <div>
-          <label className="text-xs text-text-muted block mb-1">Night Directive</label>
-          <textarea
-            value={directive}
-            onChange={e => setDirective(e.target.value)}
-            placeholder="e.g. Focus on Plan #21 WS Steam Polish. No deploys. No external comms."
-            rows={2}
-            className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-purple/40 resize-none"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-text-muted block mb-1">Approval Policy</label>
-          <div className="flex gap-2">
-            {[
-              { value: 'queue_high', label: 'Queue high-risk', desc: 'Recommended' },
-              { value: 'block_all', label: 'Block all', desc: 'Conservative' },
-              { value: 'auto_all', label: 'Auto-approve all', desc: 'Risky' },
-            ].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setApprovalPolicy(opt.value)}
-                className={`flex-1 px-2 py-2 rounded text-xs text-center transition-colors border ${
-                  approvalPolicy === opt.value
-                    ? 'border-purple/50 bg-purple/10 text-purple'
-                    : 'border-border bg-surface-raised text-text-muted hover:text-text'
-                }`}
-              >
-                <div className="font-medium">{opt.label}</div>
-                <div className="text-[10px] mt-0.5 opacity-70">{opt.desc}</div>
-              </button>
-            ))}
+      {showForm && (
+        <div className="absolute right-0 top-full mt-1 z-50 w-80 bg-surface border border-border rounded-lg p-4 shadow-lg">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">&#x1F319;</span>
+              <span className="text-sm font-semibold text-text">Sleep Mode Setup</span>
+            </div>
+            <button onClick={() => setShowForm(false)} className="text-xs text-text-muted hover:text-text">Cancel</button>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-text-muted block mb-1">Night Directive</label>
+              <textarea
+                value={directive}
+                onChange={e => setDirective(e.target.value)}
+                placeholder="e.g. Focus on Plan #21 WS Steam Polish. No deploys. No external comms."
+                rows={2}
+                className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-purple/40 resize-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted block mb-1">Approval Policy</label>
+              <div className="flex gap-2">
+                {[
+                  { value: 'queue_high', label: 'Queue high-risk', desc: 'Recommended' },
+                  { value: 'block_all', label: 'Block all', desc: 'Conservative' },
+                  { value: 'auto_all', label: 'Auto-approve all', desc: 'Risky' },
+                ].map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setApprovalPolicy(opt.value)}
+                    className={`flex-1 px-2 py-2 rounded text-xs text-center transition-colors border ${
+                      approvalPolicy === opt.value
+                        ? 'border-purple/50 bg-purple/10 text-purple'
+                        : 'border-border bg-surface-raised text-text-muted hover:text-text'
+                    }`}
+                  >
+                    <div className="font-medium">{opt.label}</div>
+                    <div className="text-[10px] mt-0.5 opacity-70">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button
+              onClick={() => { onActivate(directive, approvalPolicy); setShowForm(false); setDirective(''); }}
+              disabled={!directive.trim()}
+              className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title={!directive.trim() ? 'Enter a night directive first' : undefined}
+            >
+              Go to Sleep
+            </button>
           </div>
         </div>
-        <button
-          onClick={() => { onActivate(directive, approvalPolicy); setShowForm(false); setDirective(''); }}
-          disabled={!directive.trim()}
-          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title={!directive.trim() ? 'Enter a night directive first' : undefined}
-        >
-          Go to Sleep
-        </button>
-      </div>
+      )}
     </div>
   )
 }
