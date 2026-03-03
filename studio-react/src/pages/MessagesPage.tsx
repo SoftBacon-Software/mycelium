@@ -7,6 +7,7 @@ import { Avatar } from '../components/messages/ChatMessage'
 import { formatTime, formatDateLabel, parseTimestamp } from '../utils/time'
 import Badge from '../components/shared/Badge'
 import ThreadPanel from '../components/messages/ThreadPanel'
+import { getSenderDisplay } from '../utils/sender'
 
 // ─── Date separator ──────────────────────────────────────────────────────────
 
@@ -156,11 +157,11 @@ function AgentMessage({
         <div className="flex-1 min-w-0">
           {/* Header */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-sm text-text">{msg.from_agent}</span>
+            <span className="font-semibold text-sm text-text">{getSenderDisplay(msg.from_agent)}</span>
             <svg viewBox="0 0 12 12" className="w-3 h-3 text-text-muted shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M2 6h8M7 3l3 3-3 3" />
             </svg>
-            <span className="font-semibold text-sm text-text-dim">{msg.to_agent}</span>
+            <span className="font-semibold text-sm text-text-dim">{getSenderDisplay(msg.to_agent)}</span>
             <Badge variant={msgTypeBadge[msg.msg_type] ?? 'default'}>{msg.msg_type}</Badge>
             <Badge variant={statusBadgeVariant[msg.status] ?? 'default'}>{msg.status}</Badge>
             <span className="text-text-muted text-xs">{formatTime(msg.created_at)}</span>
@@ -254,7 +255,6 @@ export default function MessagesPage() {
       setSending(true)
       try {
         await sendMessage({
-          from_agent: '__admin__',
           to_agent: composeTo.trim(),
           content: composeContent.trim(),
           msg_type: composeMsgType,

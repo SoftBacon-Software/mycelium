@@ -69,7 +69,6 @@ export default function ThreadPanel({ message, onClose }: ThreadPanelProps) {
     setSending(true)
     try {
       await sendMessage({
-        from_agent: '__admin__',
         to_agent: message.from_agent,
         project_id: message.project_id,
         content,
