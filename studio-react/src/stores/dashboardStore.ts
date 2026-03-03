@@ -46,6 +46,7 @@ interface DashboardState {
   drones: Agent[];
   droneJobs: DroneJob[];
   plugins: Plugin[];
+  activeOperators: { id: number; username: string; display_name: string; last_seen: string }[];
 
   // UI state
   loading: boolean;
@@ -82,6 +83,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   drones: [],
   droneJobs: [],
   plugins: [],
+  activeOperators: [],
 
   // UI state defaults
   loading: false,
@@ -117,6 +119,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         drones: data.drones || [],
         droneJobs: data.drone_jobs || [],
         plugins: data.plugins || [],
+        activeOperators: data.active_operators || [],
         loading: false,
         lastRefresh: new Date(),
       });
