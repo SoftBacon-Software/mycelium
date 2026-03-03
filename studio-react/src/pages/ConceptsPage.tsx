@@ -582,7 +582,41 @@ export default function ConceptsPage() {
         })}
       </div>
 
-      {/* Concept list */}
+      {/* Project linkage summary */}
+      {concepts.length > 0 && (
+        <div className="bg-surface rounded-lg border border-border p-4">
+          <h3 className="text-xs uppercase tracking-wider text-text-muted font-medium mb-2">Cross-Project DNA</h3>
+          <div className="flex flex-wrap gap-3">
+            {(() => {
+              const projectMap = new Map<string, number>()
+              for (const c of concepts) {
+                for (const p of c.projects || []) {
+                  projectMap.set(p, (projectMap.get(p) || 0) + 1)
+                }
+              }
+              const unlinked = concepts.filter((c) => !c.projects?.length).length
+              return (
+                <>
+                  {Array.from(projectMap.entries()).map(([proj, count]) => (
+                    <div key={proj} className="flex items-center gap-1.5 bg-surface-raised rounded px-2.5 py-1">
+                      <span className="text-sm font-medium text-text">{proj}</span>
+                      <span className="text-xs text-text-muted tabular-nums">{count} concepts</span>
+                    </div>
+                  ))}
+                  {unlinked > 0 && (
+                    <div className="flex items-center gap-1.5 bg-surface-raised rounded px-2.5 py-1">
+                      <span className="text-sm font-medium text-text-dim">Unlinked</span>
+                      <span className="text-xs text-text-muted tabular-nums">{unlinked}</span>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Concept grid */}
       {filtered.length === 0 ? (
         <div className="bg-surface rounded-lg p-12 text-center">
           <p className="text-text-muted text-sm">
@@ -590,7 +624,7 @@ export default function ConceptsPage() {
           </p>
         </div>
       ) : (
-        <div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {filtered.map((concept) => (
             <ConceptCard
               key={concept.id}
