@@ -1,11 +1,13 @@
 import { Outlet, useLocation } from 'react-router-dom'
+import { useState, useMemo } from 'react'
+import { Menu } from 'lucide-react'
 import SideNav from './SideNav'
 import DirectiveBanner from '../components/directives/DirectiveBanner'
 import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { usePolling } from '../hooks/usePolling'
-import { useMemo } from 'react'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
@@ -45,6 +47,8 @@ export default function AppLayout() {
   const logout = useAuthStore((s) => s.logout)
   const { loading, refresh, instanceConfig } = useDashboardStore()
   const { lastRefresh } = usePolling(10_000)
+  const isMobile = useMediaQuery('(max-width: 767px)')
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
   const showFloatingVoice = location.pathname !== '/channels'
@@ -56,16 +60,30 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
-      <SideNav />
+      <SideNav
+        isMobile={isMobile}
+        mobileOpen={mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+      />
 
       <div className="flex flex-col flex-1 min-w-0">
         {/* Header bar */}
-        <header className="flex items-center justify-between h-14 px-6 border-b border-border bg-surface shrink-0">
-          {/* Left: page title */}
-          <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-surface shrink-0">
+          {/* Left: hamburger + page title */}
+          <div className="flex items-center gap-3">
+            {isMobile && (
+              <button
+                onClick={() => setMobileOpen(true)}
+                className="p-1.5 -ml-1 rounded-lg text-text-muted hover:text-text transition-colors"
+              >
+                <Menu size={20} strokeWidth={1.5} />
+              </button>
+            )}
+            <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+          </div>
 
           {/* Right: controls */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 md:gap-4">
             {/* Frozen kill switch badge */}
             {isFrozen && (
               <span className="px-2.5 py-1 rounded text-xs font-mono font-bold bg-red/20 text-red animate-pulse">
@@ -75,11 +93,11 @@ export default function AppLayout() {
 
             {/* User display name */}
             {user && (
-              <span className="text-sm text-text-dim">{user.display_name}</span>
+              <span className="text-sm text-text-dim hidden sm:inline">{user.display_name}</span>
             )}
 
             {/* Last refresh */}
-            <span className="text-xs text-text-muted font-mono" title="Last refresh">
+            <span className="text-xs text-text-muted font-mono hidden md:inline" title="Last refresh">
               {formatTime(lastRefresh)}
             </span>
 
@@ -105,7 +123,7 @@ export default function AppLayout() {
         </header>
 
         {/* Content area */}
-        <main className={`flex-1 overflow-y-auto p-6 ${showFloatingVoice ? 'pb-16' : ''}`}>
+        <main className={`flex-1 overflow-y-auto p-4 md:p-6 ${showFloatingVoice ? 'pb-16' : ''}`}>
           <DirectiveBanner />
           <Outlet />
         </main>

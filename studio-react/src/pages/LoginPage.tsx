@@ -33,12 +33,20 @@ export default function LoginPage() {
         className="w-full max-w-sm bg-surface rounded-xl p-8 shadow-lg shadow-black/30"
       >
         {/* Title */}
-        <h1 className="font-mono text-accent text-2xl tracking-widest font-bold text-center">
-          MYCELIUM
-        </h1>
-        <p className="text-text-dim text-sm text-center mt-1.5 mb-8">
-          Distributed Development Hub
-        </p>
+        <div className="flex flex-col items-center mb-8">
+          <img
+            src="/fungal_horror.png"
+            alt="Mycelium"
+            className="w-20 h-20 rounded-xl object-cover mb-3"
+            style={{ filter: 'drop-shadow(0 0 12px rgba(212,168,71,0.3))' }}
+          />
+          <h1 className="font-mono text-accent text-2xl tracking-widest font-bold">
+            MYCELIUM
+          </h1>
+          <p className="text-text-dim text-sm mt-1.5">
+            Distributed Development Hub
+          </p>
+        </div>
 
         {/* Error */}
         {error && (
