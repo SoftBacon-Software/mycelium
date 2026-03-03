@@ -222,7 +222,7 @@ export interface Channel {
   id: number;
   name: string;
   slug: string;
-  type: 'general' | 'announcement' | 'dm' | 'plan' | 'bug' | 'task';
+  type: 'general' | 'announcement' | 'dm' | string;
   linked_type: string | null;
   linked_id: string | null;
   description: string;
