@@ -219,6 +219,32 @@ export function killSwitch(action: 'freeze' | 'unfreeze'): Promise<any> {
   return apiPut('/admin/override', { action });
 }
 
+// Sleep Mode
+
+export function getSleepStatus(): Promise<{
+  sleep_mode: { active: boolean; directive?: string; priorities?: string[]; approval_policy?: string; started_at?: string; started_by?: string; auto_wake_at?: string | null };
+  autonomous: boolean;
+  available_operators: number;
+  log: { tasks_completed?: any[]; steps_completed?: any[]; approvals_queued?: any[]; dispatches?: any[]; errors?: any[]; messages_sent?: number } | null;
+}> {
+  return apiGet('/admin/sleep');
+}
+
+export function setSleepMode(config: {
+  action: 'on' | 'off';
+  operator_id?: string;
+  directive?: string;
+  priorities?: string[];
+  approval_policy?: 'queue_high' | 'block_all' | 'auto_all';
+  auto_wake_at?: string | null;
+}): Promise<any> {
+  return apiPut('/admin/sleep', config);
+}
+
+export function setOperatorAvailability(id: string, availability: 'available' | 'away' | 'sleeping', message?: string): Promise<Operator> {
+  return apiPut<Operator>(`/operators/${id}/availability`, { availability, message });
+}
+
 // Approvals
 
 export function castVote(

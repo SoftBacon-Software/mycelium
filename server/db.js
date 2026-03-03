@@ -62,6 +62,9 @@ export function initDB() {
     ["dv_projects", "org_id", "TEXT NOT NULL DEFAULT ''"],
     ["dv_projects", "type", "TEXT NOT NULL DEFAULT 'software'"],
     ["dv_projects", "status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["dv_operators", "availability", "TEXT NOT NULL DEFAULT 'available'"],
+    ["dv_operators", "last_seen_at", "TEXT"],
+    ["dv_operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -246,8 +249,24 @@ export function updateOperator(id, fields) {
   if (fields.email !== undefined) { sets.push('email = ?'); values.push(fields.email); }
   if (fields.studio_user_id !== undefined) { sets.push('studio_user_id = ?'); values.push(fields.studio_user_id); }
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (fields.availability !== undefined) { sets.push('availability = ?'); values.push(fields.availability); }
+  if (fields.away_message !== undefined) { sets.push('away_message = ?'); values.push(fields.away_message); }
   values.push(id);
   db.prepare('UPDATE dv_operators SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+}
+
+export function setOperatorAvailability(id, availability, awayMessage) {
+  db.prepare(`UPDATE dv_operators SET availability = ?, away_message = ?, last_seen_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
+    .run(availability, awayMessage || '', id);
+}
+
+export function getAvailableOperators() {
+  return db.prepare("SELECT * FROM dv_operators WHERE status = 'active' AND availability = 'available'").all();
+}
+
+export function isNetworkAutonomous() {
+  var count = db.prepare("SELECT COUNT(*) as c FROM dv_operators WHERE status = 'active' AND availability = 'available'").get();
+  return count.c === 0;
 }
 
 export function deleteOperator(id) {
@@ -274,6 +293,25 @@ export function listInstanceConfig() {
 
 export function deleteInstanceConfig(key) {
   stmt('dvDeleteConfig', 'DELETE FROM dv_instance_config WHERE key = ?').run(key);
+}
+
+// -- Sleep Mode --
+
+export function getSleepMode() {
+  var val = getInstanceConfig('sleep_mode');
+  if (!val) return { active: false };
+  try { return JSON.parse(val); } catch (e) { return { active: false }; }
+}
+
+export function appendSleepLog(field, item) {
+  var val = getInstanceConfig('sleep_mode_log');
+  var log;
+  try { log = val ? JSON.parse(val) : {}; } catch (e) { log = {}; }
+  if (!log[field]) log[field] = [];
+  if (Array.isArray(log[field])) {
+    log[field].push(item);
+  }
+  setInstanceConfig('sleep_mode_log', JSON.stringify(log), '__system__');
 }
 
 // -- Projects --

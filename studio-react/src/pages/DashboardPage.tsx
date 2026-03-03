@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
@@ -9,6 +9,7 @@ import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import { useVoiceStore } from '../stores/voiceStore'
+import { getSleepStatus, setSleepMode } from '../api/endpoints'
 
 // -- Event type color mapping --
 const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 'purple' | 'red'> = {
@@ -65,6 +66,11 @@ const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 
   config_changed: 'muted',
   admin_frozen: 'red',
   admin_unfrozen: 'green',
+  sleep_mode_on: 'purple',
+  sleep_mode_off: 'green',
+  autonomous_mode_on: 'purple',
+  autonomous_mode_off: 'green',
+  operator_availability: 'blue',
   request_resolved: 'green',
   work_request: 'accent',
   operator_created: 'blue',
@@ -184,6 +190,147 @@ function OnboardingChecklist({
   )
 }
 
+// -- Sleep Mode types --
+interface SleepStatus {
+  sleep_mode: { active: boolean; directive?: string; priorities?: string[]; approval_policy?: string; started_at?: string; started_by?: string };
+  autonomous: boolean;
+  available_operators: number;
+  log: { tasks_completed?: any[]; steps_completed?: any[]; approvals_queued?: any[]; dispatches?: any[]; errors?: any[] } | null;
+}
+
+function SleepModePanel({
+  status,
+  onActivate,
+  onDeactivate,
+}: {
+  status: SleepStatus | null;
+  onActivate: (directive: string, approvalPolicy: string) => void;
+  onDeactivate: () => void;
+}) {
+  const [directive, setDirective] = useState('')
+  const [approvalPolicy, setApprovalPolicy] = useState('queue_high')
+  const [showForm, setShowForm] = useState(false)
+
+  const isActive = status?.sleep_mode?.active ?? false
+  const log = status?.log
+
+  if (isActive) {
+    return (
+      <div className="bg-purple/10 border border-purple/30 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">&#x1F319;</span>
+            <span className="text-sm font-semibold text-purple">Sleep Mode Active</span>
+            {status?.autonomous && <Badge variant="purple">Autonomous</Badge>}
+          </div>
+          <button
+            onClick={onDeactivate}
+            className="text-xs px-3 py-1.5 rounded bg-green/20 text-green hover:bg-green/30 transition-colors font-medium"
+          >
+            Wake Up
+          </button>
+        </div>
+        {status?.sleep_mode?.directive && (
+          <p className="text-xs text-text-dim mb-2">
+            <span className="text-text-muted">Directive:</span> {status.sleep_mode.directive}
+          </p>
+        )}
+        <div className="text-xs text-text-muted">
+          Started by {status?.sleep_mode?.started_by ?? 'unknown'} at {status?.sleep_mode?.started_at ? formatTimestamp(status.sleep_mode.started_at) : '?'}
+          {' | '}{status?.available_operators ?? 0} operator(s) available
+        </div>
+
+        {/* Overnight summary */}
+        {log && (
+          <div className="mt-3 pt-3 border-t border-purple/20 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="bg-surface rounded p-2 text-center">
+              <div className="text-text font-bold tabular-nums">{log.tasks_completed?.length ?? 0}</div>
+              <div className="text-text-muted">Tasks done</div>
+            </div>
+            <div className="bg-surface rounded p-2 text-center">
+              <div className="text-text font-bold tabular-nums">{log.steps_completed?.length ?? 0}</div>
+              <div className="text-text-muted">Steps done</div>
+            </div>
+            <div className="bg-surface rounded p-2 text-center">
+              <div className="text-text font-bold tabular-nums">{log.dispatches?.length ?? 0}</div>
+              <div className="text-text-muted">Dispatches</div>
+            </div>
+            <div className="bg-surface rounded p-2 text-center">
+              <div className="text-text font-bold tabular-nums">{log.approvals_queued?.length ?? 0}</div>
+              <div className="text-text-muted">Queued approvals</div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (!showForm) {
+    return (
+      <button
+        onClick={() => setShowForm(true)}
+        className="flex items-center gap-2 text-xs text-text-muted hover:text-purple transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-purple/30"
+        title="Enter sleep mode"
+      >
+        <span>&#x1F319;</span> Sleep Mode
+      </button>
+    )
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">&#x1F319;</span>
+          <span className="text-sm font-semibold text-text">Sleep Mode Setup</span>
+        </div>
+        <button onClick={() => setShowForm(false)} className="text-xs text-text-muted hover:text-text">Cancel</button>
+      </div>
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Night Directive</label>
+          <textarea
+            value={directive}
+            onChange={e => setDirective(e.target.value)}
+            placeholder="e.g. Focus on Plan #21 WS Steam Polish. No deploys. No external comms."
+            rows={2}
+            className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-purple/40 resize-none"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-text-muted block mb-1">Approval Policy</label>
+          <div className="flex gap-2">
+            {[
+              { value: 'queue_high', label: 'Queue high-risk', desc: 'Recommended' },
+              { value: 'block_all', label: 'Block all', desc: 'Conservative' },
+              { value: 'auto_all', label: 'Auto-approve all', desc: 'Risky' },
+            ].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setApprovalPolicy(opt.value)}
+                className={`flex-1 px-2 py-2 rounded text-xs text-center transition-colors border ${
+                  approvalPolicy === opt.value
+                    ? 'border-purple/50 bg-purple/10 text-purple'
+                    : 'border-border bg-surface-raised text-text-muted hover:text-text'
+                }`}
+              >
+                <div className="font-medium">{opt.label}</div>
+                <div className="text-[10px] mt-0.5 opacity-70">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <button
+          onClick={() => { onActivate(directive, approvalPolicy); setShowForm(false); setDirective(''); }}
+          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors"
+        >
+          Go to Sleep
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const {
     agents,
@@ -203,10 +350,19 @@ export default function DashboardPage() {
   } = useDashboardStore()
 
   const navigate = useNavigate()
+  const [sleepStatus, setSleepStatus] = useState<SleepStatus | null>(null)
+
+  const loadSleepStatus = useCallback(async () => {
+    try {
+      const data = await getSleepStatus()
+      setSleepStatus(data)
+    } catch { /* not critical */ }
+  }, [])
 
   useEffect(() => {
     refresh()
-  }, [refresh])
+    loadSleepStatus()
+  }, [refresh, loadSleepStatus])
 
   // First-boot detection: if no projects and no agents, redirect to onboarding
   useEffect(() => {
@@ -245,6 +401,24 @@ export default function DashboardPage() {
   }, [events, liveEvents])
   const { isConnected: voiceConnected, channelName, peers, join: joinVoice, leave: leaveVoice } = useVoiceStore()
 
+  const handleSleepActivate = useCallback(async (directive: string, approvalPolicy: string) => {
+    try {
+      await setSleepMode({ action: 'on', directive, approval_policy: approvalPolicy as any })
+      loadSleepStatus()
+    } catch (err) {
+      console.error('Failed to activate sleep mode:', err)
+    }
+  }, [loadSleepStatus])
+
+  const handleSleepDeactivate = useCallback(async () => {
+    try {
+      await setSleepMode({ action: 'off' })
+      loadSleepStatus()
+    } catch (err) {
+      console.error('Failed to deactivate sleep mode:', err)
+    }
+  }, [loadSleepStatus])
+
   return (
     <div className="space-y-6">
       {/* Page header */}
@@ -253,15 +427,25 @@ export default function DashboardPage() {
           <h1 className="text-xl font-semibold text-text">Dashboard</h1>
           <p className="text-sm text-text-muted mt-0.5">Mycelium overview</p>
         </div>
-        <button
-          type="button"
-          onClick={() => refresh()}
-          disabled={loading}
-          className="text-xs text-text-muted hover:text-accent transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-border disabled:opacity-50"
-        >
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2">
+          {!sleepStatus?.sleep_mode?.active && (
+            <SleepModePanel status={sleepStatus} onActivate={handleSleepActivate} onDeactivate={handleSleepDeactivate} />
+          )}
+          <button
+            type="button"
+            onClick={() => refresh()}
+            disabled={loading}
+            className="text-xs text-text-muted hover:text-accent transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-border disabled:opacity-50"
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
       </div>
+
+      {/* Sleep Mode Banner (when active) */}
+      {sleepStatus?.sleep_mode?.active && (
+        <SleepModePanel status={sleepStatus} onActivate={handleSleepActivate} onDeactivate={handleSleepDeactivate} />
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-3">
