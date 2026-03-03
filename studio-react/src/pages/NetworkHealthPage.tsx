@@ -180,7 +180,8 @@ const agentAvatarColors: Record<string, string> = {
   greatness: 'bg-green/20 text-green',
   macbook: 'bg-blue/20 text-blue',
   admin: 'bg-accent/20 text-accent',
-  unakron: 'bg-accent/20 text-accent',
+  unakron: 'bg-red/20 text-red',
+  dev: 'bg-red/20 text-red',
 }
 
 function getAvatarColor(agentId: string): string {
@@ -935,9 +936,9 @@ export default function NetworkHealthPage() {
     }
   }, [liveEvents, refresh])
 
-  // Fallback poll every 60 seconds (reduced from 30s since SSE handles live)
+  // Fallback poll every 15 seconds (SSE handles live events, this closes the stale-data gap)
   useEffect(() => {
-    const interval = setInterval(() => refresh(), 60_000)
+    const interval = setInterval(() => refresh(), 15_000)
     return () => clearInterval(interval)
   }, [refresh])
 

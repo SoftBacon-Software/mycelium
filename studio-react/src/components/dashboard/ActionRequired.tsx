@@ -129,7 +129,17 @@ export default function ActionRequired() {
     }
   }, [refresh])
 
-  if (totalCount === 0) return null
+  if (totalCount === 0) {
+    return (
+      <div className="bg-surface rounded-lg p-4 ring-1 ring-green/20">
+        <div className="flex items-center gap-2">
+          <span className="text-green text-base">✓</span>
+          <h2 className="text-sm font-semibold text-text">All Clear</h2>
+          <span className="text-text-muted text-xs">No pending actions</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-surface rounded-lg p-4 ring-1 ring-red/20">
