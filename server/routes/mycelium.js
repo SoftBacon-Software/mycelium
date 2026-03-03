@@ -63,6 +63,7 @@ import {
   completeLinkedPlanSteps,
   createStudioUser, getStudioUserByUsername, getStudioUserById,
   listStudioUsers, deleteStudioUser, updateStudioUser,
+  touchStudioUserSeen, getActiveStudioUsers,
   createConcept, getConcept, listConcepts, updateConcept, deleteConcept,
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
@@ -201,7 +202,10 @@ function getStudioUser(req) {
   if (!auth || !auth.startsWith('Bearer ')) return null;
   try {
     var decoded = jwt.verify(auth.slice(7), JWT_SECRET);
-    if (decoded && decoded.studioUser) return decoded;
+    if (decoded && decoded.studioUser) {
+      if (decoded.userId) touchStudioUserSeen(decoded.userId);
+      return decoded;
+    }
     return null;
   } catch (e) { return null; }
 }
