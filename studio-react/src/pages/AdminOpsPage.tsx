@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchAdminOps, resolveRequest, cancelDroneJob, createDroneJob } from '../api/endpoints'
 import { timeAgo } from '../utils/time'
+import { getSenderDisplay } from '../utils/sender'
 import type { AdminOps } from '../api/types'
 import Badge from '../components/shared/Badge'
 
@@ -107,9 +108,9 @@ export default function AdminOpsPage() {
               {ops.pending_requests.map((msg) => (
                 <div key={msg.id} className="flex items-center gap-2 py-2 px-3 rounded hover:bg-surface-raised/50 text-sm">
                   <span className="text-text-muted font-mono text-xs shrink-0">#{msg.id}</span>
-                  <span className="text-accent font-mono text-xs shrink-0">{msg.from_agent}</span>
+                  <span className="text-accent font-mono text-xs shrink-0">{getSenderDisplay(msg.from_agent)}</span>
                   <span className="text-text-muted text-xs shrink-0">-&gt;</span>
-                  <span className="text-accent font-mono text-xs shrink-0">{msg.to_agent}</span>
+                  <span className="text-accent font-mono text-xs shrink-0">{getSenderDisplay(msg.to_agent)}</span>
                   <span className="text-text-dim truncate flex-1 min-w-0">{truncate(msg.content)}</span>
                   <button
                     onClick={() => handleResolveRequest(msg.id)}
@@ -190,7 +191,7 @@ export default function AdminOpsPage() {
                   <span className="text-text-muted font-mono text-xs shrink-0">#{approval.id}</span>
                   <Badge variant="accent">{approval.risk_tier}</Badge>
                   <span className="text-text-dim truncate flex-1 min-w-0">
-                    {approval.entity_type} by {approval.created_by}
+                    {approval.entity_type} by {getSenderDisplay(approval.created_by)}
                   </span>
                   <span className="text-text-muted text-xs font-mono shrink-0">{timeAgo(approval.created_at)}</span>
                 </div>
@@ -204,9 +205,9 @@ export default function AdminOpsPage() {
               {ops.stale_requests.map((msg) => (
                 <div key={msg.id} className="flex items-center gap-2 py-2 px-3 rounded hover:bg-surface-raised/50 text-sm">
                   <span className="text-text-muted font-mono text-xs shrink-0">#{msg.id}</span>
-                  <span className="text-accent font-mono text-xs shrink-0">{msg.from_agent}</span>
+                  <span className="text-accent font-mono text-xs shrink-0">{getSenderDisplay(msg.from_agent)}</span>
                   <span className="text-text-muted text-xs shrink-0">-&gt;</span>
-                  <span className="text-accent font-mono text-xs shrink-0">{msg.to_agent}</span>
+                  <span className="text-accent font-mono text-xs shrink-0">{getSenderDisplay(msg.to_agent)}</span>
                   <span className="text-text-dim truncate flex-1 min-w-0">{truncate(msg.content)}</span>
                   <button
                     onClick={() => handleResolveRequest(msg.id)}

@@ -3,6 +3,7 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { createPlan, updatePlan, updatePlanStep, fetchPlan } from '../api/endpoints'
 import { toast } from 'sonner'
 import { formatDateTime } from '../utils/time'
+import { getSenderDisplay } from '../utils/sender'
 import type { Plan, PlanStep } from '../api/types'
 import PlanCard from '../components/plans/PlanCard'
 import StepChecklist from '../components/plans/StepChecklist'
@@ -231,7 +232,7 @@ function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailP
 
           {plan.owner && (
             <span className="text-text-muted">
-              Owner: <span className="text-text-dim">{plan.owner}</span>
+              Owner: <span className="text-text-dim">{getSenderDisplay(plan.owner)}</span>
             </span>
           )}
 
@@ -452,7 +453,7 @@ export default function PlansPage() {
 
           {/* Detail panel */}
           {selectedPlan && (
-            <div className="hidden lg:block w-1/2 sticky top-0 max-h-[calc(100vh-10rem)]">
+            <div className="hidden lg:block w-1/2 sticky top-0 max-h-[calc(100dvh-10rem)]">
               <PlanDetail
                 plan={selectedPlan}
                 onClose={() => setSelectedPlanId(null)}

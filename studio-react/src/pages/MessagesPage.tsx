@@ -290,7 +290,7 @@ export default function MessagesPage() {
   )
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7rem)]">
+    <div className="flex flex-col h-[calc(100dvh-7rem)]">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-1 pb-2 shrink-0">
         <div className="flex items-center gap-2">
@@ -369,11 +369,11 @@ export default function MessagesPage() {
 
       {/* Compose bar */}
       <div className="shrink-0 border-t border-border px-4 py-3">
-        <div className="flex items-end gap-2">
+        <div className="flex flex-wrap sm:flex-nowrap items-end gap-2">
           <select
             value={composeTo}
             onChange={(e) => setComposeTo(e.target.value)}
-            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-36 shrink-0"
+            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-full sm:w-36 shrink-0"
           >
             <option value="">To...</option>
             {agents.map((a) => (
@@ -384,7 +384,7 @@ export default function MessagesPage() {
           <select
             value={composeMsgType}
             onChange={(e) => setComposeMsgType(e.target.value as 'message' | 'request' | 'directive')}
-            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-24 shrink-0"
+            className="bg-surface-raised border border-border rounded-sm px-2 py-1.5 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40 w-full sm:w-24 shrink-0"
           >
             <option value="message">message</option>
             <option value="request">request</option>
