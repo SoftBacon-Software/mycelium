@@ -30,7 +30,7 @@ server/
   db.js             # SQLite (better-sqlite3, WAL) + all DB functions
   schema.sql        # Full platform schema (dv_* tables)
   routes/
-    mycelium.js     # All API routes (served at /api/mycelium/ and /api/dioverse/)
+    mycelium.js     # All API routes (served at /api/mycelium/)
   data/             # SQLite DB + uploaded files (gitignored)
 public/
   studio/           # Mycelium dashboard (vanilla JS SPA)
@@ -43,7 +43,7 @@ package.json        # mycelium v1.0.0
 
 - **Database**: SQLite via better-sqlite3, WAL mode. Schema in `server/schema.sql`.
 - **Auth**: JWT tokens (7-day expiry). Dashboard users in `dv_studio_users`. Agents use API keys (`X-Agent-Key`). Admin uses `X-Admin-Key` or JWT Bearer token.
-- **API routes**: Served at both `/api/mycelium/` (primary) and `/api/dioverse/` (backward compat).
+- **API routes**: Served at `/api/mycelium/`.
 - **Dashboard**: Served at `/` and `/studio/` (backward compat). Vanilla JS SPA.
 - **Voice chat**: WebRTC signaling via WebSocket at `/voice`. REST endpoints for peers and TURN credentials.
 - **Plans system**: `dv_plans` + `dv_plan_steps`. Auto-completion cascade.
