@@ -85,8 +85,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   plugins: [],
   inboxUnread: 0,
 
-  // UI state defaults
-  loading: false,
+  // UI state defaults — start true so first-boot detection waits for data
+  loading: true,
   error: null,
   lastRefresh: null,
 
