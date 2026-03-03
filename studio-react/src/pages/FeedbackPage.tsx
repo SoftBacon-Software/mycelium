@@ -249,6 +249,8 @@ function FeedbackCard({
   item: Feedback
   onDelete: (id: string) => void
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
   return (
     <div className="bg-surface rounded-lg p-4 border border-border hover:border-border/80 transition-colors">
       <div className="flex items-start justify-between gap-3 mb-2">
@@ -274,13 +276,31 @@ function FeedbackCard({
             <p className="text-sm font-medium text-text mt-1.5 leading-snug">{item.subject}</p>
           )}
         </div>
-        <button
-          onClick={() => onDelete(item.id)}
-          className="text-text-muted hover:text-red transition-colors text-xs shrink-0 opacity-50 hover:opacity-100 px-1 py-0.5"
-          title="Delete feedback"
-        >
-          ✕
-        </button>
+        {confirmDelete ? (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] text-red">Delete?</span>
+            <button
+              onClick={() => onDelete(item.id)}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-red/80 text-text hover:bg-red/90 transition-colors"
+            >
+              Yes
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-surface-raised text-text-dim hover:text-text transition-colors"
+            >
+              No
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-text-muted hover:text-red transition-colors text-xs shrink-0 opacity-50 hover:opacity-100 px-1 py-0.5"
+            title="Delete feedback"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {item.comment && (
