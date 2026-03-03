@@ -90,7 +90,6 @@ app.get('/setup-admin.ps1', function (req, res) {
 
 // ---- API routes ----
 app.use('/api/mycelium', myceliumRoutes);
-app.use('/api/dioverse', myceliumRoutes); // backward compat
 
 // ---- Voice REST endpoints ----
 var voicePeers = new Map();
