@@ -91,9 +91,12 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent
+  countPendingForAgent,
+  createInboxItem, createInboxItemForAllOperators,
+  getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
+  dismissInboxItem, countUnreadInbox, countAllUnreadInbox
 } from '../db.js';
-import { loadPlugins, getPluginMcpTools } from '../plugins.js';
+import { loadPlugins, getPluginMcpTools, callEventHooks, registerEventHook } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -308,14 +311,15 @@ var sseClients = new Set();
 
 function emitEvent(type, agentId, projectId, summary, data) {
   var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  var eventObj = {
+    id: id, type: type, agent: agentId || '',
+    project_id: projectId || null, summary: summary || '',
+    data: data || {},
+    created_at: new Date().toISOString()
+  };
   // Broadcast to connected SSE clients (with per-client filtering)
   if (sseClients.size > 0) {
-    var payload = 'data: ' + JSON.stringify({
-      id: id, type: type, agent: agentId || '',
-      project_id: projectId || null, summary: summary || '',
-      data: JSON.stringify(data || {}),
-      created_at: new Date().toISOString()
-    }) + '\n\n';
+    var payload = 'data: ' + JSON.stringify({ ...eventObj, data: JSON.stringify(eventObj.data) }) + '\n\n';
     sseClients.forEach(function (client) {
       var f = client.filters;
       if (f.project_id && f.project_id !== projectId) return;
@@ -327,6 +331,8 @@ function emitEvent(type, agentId, projectId, summary, data) {
       } catch (e) { sseClients.delete(client); }
     });
   }
+  // Notify plugin event hooks (async-safe: handlers are synchronous by convention)
+  callEventHooks(type, eventObj);
 }
 
 // ---- Approval gate helpers ----
@@ -1237,6 +1243,27 @@ router.post('/messages', function (req, res) {
     emitEvent('message_sent', agentId, projectId, displayName(agentId) + ' sent message' + target, { message_id: id });
     if (toAgent) {
       dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
+    }
+    // Directives always land in inbox for all operators
+    if (msgType === 'directive') {
+      var dirTitle = content.substring(0, 80) + (content.length > 80 ? '...' : '');
+      createInboxItemForAllOperators('message', 'message', String(id), 'Directive from ' + displayName(agentId), dirTitle, { message_id: id, from: agentId, msg_type: 'directive' }, 'urgent');
+    }
+    // @mention detection — @operatorId patterns (e.g. @hijack, @greatness)
+    var mentionRe = /@([a-z0-9_-]+)/gi;
+    var mentionMatch;
+    var notifiedOps = new Set();
+    while ((mentionMatch = mentionRe.exec(content)) !== null) {
+      var mentionedId = mentionMatch[1].toLowerCase();
+      if (!notifiedOps.has(mentionedId)) {
+        try {
+          createInboxItem(mentionedId, 'mention', 'message', String(id),
+            displayName(agentId) + ' mentioned you',
+            content.substring(0, 120) + (content.length > 120 ? '...' : ''),
+            { message_id: id, from: agentId, project_id: projectId }, 'normal');
+          notifiedOps.add(mentionedId);
+        } catch (e) { /* operator may not exist — skip silently */ }
+      }
     }
   }
   res.json({ id: id });
@@ -2752,6 +2779,13 @@ router.post('/approvals', function (req, res) {
   emitEvent('approval_requested', who, project,
     who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
   dispatchWebhook('approval_requested', who, { approval_id: id, action_type: actionType, title: title, risk_tier: riskTier, requested_by: who });
+  // Route approval to operator inbox
+  var approvalPriority = (riskTier === 'critical' || riskTier === 'high') ? 'urgent' : 'normal';
+  createInboxItemForAllOperators('approval', 'approval', String(id),
+    '[' + actionType + '] ' + title,
+    'Requested by ' + who + (riskTier ? ' · ' + riskTier + ' risk' : ''),
+    { approval_id: id, action_type: actionType, requested_by: who, risk_tier: riskTier || 'medium' },
+    approvalPriority);
 
   // In autonomous mode, queue high/critical approvals for morning instead of blocking
   var effectiveRiskTier = riskTier || 'medium';
@@ -3019,6 +3053,113 @@ router.delete('/feedback/:id', checkAdmin, asyncHandler(async function (req, res
   res.json({ ok: true });
 }));
 
+// ======== OPERATOR INBOX ========
+// Human-facing message layer — keeps operator traffic separate from agent chatter.
+
+// GET /inbox — list inbox items for an operator (by ?operator_id or JWT user)
+router.get('/inbox', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  // Operators get their own inbox via JWT; admin can query any operator
+  var operatorId = req.query.operator_id;
+  if (!operatorId) {
+    if (!user) return apiError(res, 400, 'operator_id is required');
+    // Resolve operator from studio_user_id
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    if (!op) return apiError(res, 404, 'No operator linked to this account');
+    operatorId = op.id;
+  }
+  var filters = {
+    operator_id: operatorId,
+    status: req.query.status || undefined,
+    type: req.query.type || undefined,
+    entity_type: req.query.entity_type || undefined,
+    limit: parseLimit(req.query.limit, 50),
+    offset: parseInt(req.query.offset) || 0
+  };
+  var items = listInboxItems(filters);
+  items.forEach(function (item) {
+    try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
+  });
+  res.json(items);
+});
+
+// GET /inbox/count — unread badge count per operator
+router.get('/inbox/count', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var operatorId = req.query.operator_id;
+  if (!operatorId && user) {
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    if (op) operatorId = op.id;
+  }
+  if (operatorId) {
+    res.json({ operator_id: operatorId, unread: countUnreadInbox(operatorId) });
+  } else {
+    res.json(countAllUnreadInbox());
+  }
+});
+
+// GET /inbox/:id — get single inbox item
+router.get('/inbox/:id', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
+  res.json(item);
+});
+
+// POST /inbox — create inbox item (admin/system use)
+router.post('/inbox', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { operator_id, type, entity_type, entity_id, title, summary, data, priority, all_operators } = req.body;
+  if (all_operators) {
+    var ids = createInboxItemForAllOperators(type, entity_type, entity_id, title, summary, data, priority);
+    return res.json({ ok: true, ids: ids });
+  }
+  if (!operator_id) return apiError(res, 400, 'operator_id or all_operators required');
+  var id = createInboxItem(operator_id, type, entity_type, entity_id, title, summary, data, priority);
+  emitEvent('inbox_item_created', '__system__', null, 'Inbox item for ' + operator_id + ': ' + (title || ''), { inbox_id: id, operator_id: operator_id, type: type });
+  res.json({ ok: true, id: id });
+});
+
+// PUT /inbox/:id/read — mark item read
+router.put('/inbox/:id/read', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  markInboxItemRead(item.id);
+  res.json({ ok: true });
+});
+
+// PUT /inbox/:id/action — mark item actioned (e.g. after approve/reject)
+router.put('/inbox/:id/action', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  markInboxItemActioned(item.id);
+  res.json({ ok: true });
+});
+
+// DELETE /inbox/:id — dismiss item
+router.delete('/inbox/:id', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var item = getInboxItem(parseIntParam(req.params.id));
+  if (!item) return apiError(res, 404, 'Inbox item not found');
+  dismissInboxItem(item.id);
+  res.json({ ok: true });
+});
+
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
 export async function initPlugins() {
@@ -3026,7 +3167,11 @@ export async function initPlugins() {
     db: getDB(),
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
-    apiError, parseIntParam, validateEnum
+    apiError, parseIntParam, validateEnum,
+    // Event hook registration — plugins call core.onEvent(type, fn)
+    onEvent: registerEventHook,
+    // Inbox routing helpers for plugins
+    inbox: { createInboxItem, createInboxItemForAllOperators }
   };
   await loadPlugins(pluginCore, router);
 }
