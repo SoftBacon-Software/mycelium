@@ -22,6 +22,7 @@ import NetworkHealthPage from './pages/NetworkHealthPage'
 import OnboardingPage from './pages/OnboardingPage'
 import PluginsPage from './pages/PluginsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
+import FeedbackPage from './pages/FeedbackPage'
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="onboarding" element={<OnboardingPage />} />
           <Route path="plugins" element={<PluginsPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="feedback" element={<FeedbackPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
