@@ -731,6 +731,10 @@ export function getBootPayload(agentId) {
 
   var projectContext = getDvContext(agent.project_id);
   var contextKeys = listDvContextKeys(agent.project_id);
+  // Include platform-wide context (mycelium namespace) so agents get conventions on boot
+  var platformKeys = agent.project_id !== 'mycelium' ? listDvContextKeys('mycelium') : [];
+  // Also include agent-specific context
+  var agentKeys = listDvContextKeys(agentId);
 
   var approvalQueue = listTasksNeedingApproval();
   var recentEvents = listDvEvents({ limit: 20 });
@@ -781,6 +785,8 @@ export function getBootPayload(agentId) {
     other_agents: otherAgents,
     project_context: projectContext,
     context_keys: contextKeys,
+    platform_context: platformKeys,
+    agent_context: agentKeys,
     approval_queue: approvalQueue,
     my_approvals: listPendingApprovalsByAgent(agentId),
     recent_events: recentEvents,
