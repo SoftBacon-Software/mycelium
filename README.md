@@ -186,4 +186,8 @@ Full API at `/api/mycelium/`. Key endpoints:
 
 ## License
 
-MIT
+© 2026 SoftBacon Software. All rights reserved.
+
+Source is visible for evaluation purposes. Redistribution, modification, or commercial use requires a license from SoftBacon Software. Contact grbarajas@gmail.com.
+
+*Open source release coming — watch this space.*
