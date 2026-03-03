@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { fetchOverview } from '../api/endpoints';
+import { fetchOverview, fetchInboxCount } from '../api/endpoints';
 import type {
   Agent,
   Event,
@@ -46,6 +46,7 @@ interface DashboardState {
   drones: Agent[];
   droneJobs: DroneJob[];
   plugins: Plugin[];
+  inboxUnread: number;
 
   // UI state
   loading: boolean;
@@ -82,6 +83,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   drones: [],
   droneJobs: [],
   plugins: [],
+  inboxUnread: 0,
 
   // UI state defaults
   loading: false,
@@ -92,7 +94,10 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   refresh: async () => {
     set({ loading: true, error: null });
     try {
-      const data = await fetchOverview();
+      const [data, inboxData] = await Promise.all([
+        fetchOverview(),
+        fetchInboxCount().catch(() => ({ count: 0 })),
+      ]);
       set({
         agents: data.agents,
         events: data.events,
@@ -118,6 +123,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         droneJobs: data.drone_jobs || [],
         plugins: data.plugins || [],
         loading: false,
+        inboxUnread: inboxData.count || 0,
         lastRefresh: new Date(),
       });
     } catch (err) {
