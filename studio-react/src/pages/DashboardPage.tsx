@@ -122,7 +122,7 @@ const quickLinks = [
   { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
   { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
   { to: '/health', label: 'Network Health', desc: 'Mission control', color: 'text-green' },
-  { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-green' },
+  { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-accent' },
 ]
 
 // -- Onboarding Checklist --
@@ -324,9 +324,7 @@ function SleepModePanel({
         </div>
         <button
           onClick={() => { onActivate(directive, approvalPolicy); setShowForm(false); setDirective(''); }}
-          disabled={!directive.trim()}
-          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title={!directive.trim() ? 'Enter a night directive first' : undefined}
+          className="w-full px-4 py-2 rounded bg-purple text-bg text-sm font-medium hover:bg-purple/80 transition-colors"
         >
           Go to Sleep
         </button>
@@ -341,6 +339,7 @@ export default function DashboardPage() {
     events,
     tasks,
     messages,
+    pendingRequests,
     bugs,
     bugCounts,
     plans,
@@ -469,9 +468,9 @@ export default function DashboardPage() {
         />
         <SummaryCard
           title="Messages"
-          value={messages.length}
-          subtitle="total messages"
-          color="blue"
+          value={pendingRequests.length}
+          subtitle={pendingRequests.length === 1 ? '1 pending request' : pendingRequests.length > 0 ? `${pendingRequests.length} pending · ${messages.length} total` : `${messages.length} total`}
+          color={pendingRequests.length > 0 ? 'accent' : 'blue'}
           icon="messages"
         />
         <SummaryCard
