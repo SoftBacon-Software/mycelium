@@ -222,27 +222,40 @@ function checkProjectScope(req, res, resourceProjectId) {
 }
 
 // Agent auth: validates X-Agent-Key header, sets req._authAgentId and req._authProjectId
+// Agent keys are high-entropy machine-generated secrets (192-bit) — stored as SHA-256.
+// bcrypt adds no security over SHA-256 for keys of this entropy; SHA-256 is instant and
+// deterministic across container restarts. Legacy bcrypt hashes auto-migrate on first use.
 function checkAgent(req, res) {
   var key = req.headers['x-agent-key'];
   if (!key) {
     res.status(401).json({ error: 'Missing X-Agent-Key header' });
     return null;
   }
-  // Fast path: check SHA-256 cache first
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
+  // In-memory cache: avoids DB lookup on every request
   if (agentKeyCache.has(keyHash)) {
     var cached = agentKeyCache.get(keyHash);
-    var agentId = typeof cached === 'object' ? cached.id : cached;
-    var projectId = typeof cached === 'object' ? cached.project_id : null;
-    req._authAgentId = agentId;
-    req._authProjectId = projectId;
-    return agentId;
+    req._authAgentId = cached.id;
+    req._authProjectId = cached.project_id;
+    return cached.id;
   }
-  // Slow path: bcrypt comparison (first request per key only)
+  // DB lookup: SHA-256 direct comparison, bcrypt fallback for legacy hashes
   var agents = listAgents();
   for (var a of agents) {
     var full = getAgent(a.id);
-    if (full && bcrypt.compareSync(key, full.api_key_hash)) {
+    if (!full || !full.api_key_hash) continue;
+    var match = false;
+    if (full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) {
+      // Legacy bcrypt hash — compare and auto-migrate to SHA-256
+      if (bcrypt.compareSync(key, full.api_key_hash)) {
+        match = true;
+        updateAgentKey(a.id, keyHash);
+        clearAgentKeyCache();
+      }
+    } else if (full.api_key_hash === keyHash) {
+      match = true;
+    }
+    if (match) {
       agentKeyCache.set(keyHash, { id: a.id, project_id: full.project_id || null });
       req._authAgentId = a.id;
       req._authProjectId = full.project_id || null;
@@ -1770,9 +1783,9 @@ router.post('/admin/agents', asyncHandler(async function (req, res) {
   if (!id || !name || !projectId) return res.status(400).json({ error: 'id, name, and project_id are required' });
   // Check if exists
   if (getAgent(id)) return res.status(409).json({ error: 'Agent ' + id + ' already exists' });
-  // Generate API key
+  // Generate API key — store as SHA-256 (high-entropy key, bcrypt adds no security)
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
+  var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, projectId, hash, capabilities);
   // Set optional LLM metadata
@@ -1803,17 +1816,31 @@ router.delete('/admin/agents/:id', function (req, res) {
 });
 
 // Regenerate agent API key (admin only)
-router.put('/admin/agents/:id/key', asyncHandler(async function (req, res) {
+router.put('/admin/agents/:id/key', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
-  var hash = await bcrypt.hash(apiKey, BCRYPT_ROUNDS_KEY);
+  var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   updateAgentKey(req.params.id, hash);
-  clearAgentKeyCache();  // invalidate cached keys
+  clearAgentKeyCache();
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
 }));
+
+// Self-service rekey — agent calls this with their current key to rotate to a new one.
+// Useful when an agent suspects their key was leaked or wants to rotate proactively.
+// Does not require admin key — the existing valid key is proof of identity.
+router.post('/agents/rekey', function (req, res) {
+  var agentId = checkAgent(req, res);
+  if (!agentId) return;
+  var newKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+  var newHash = crypto.createHash('sha256').update(newKey).digest('hex');
+  updateAgentKey(agentId, newHash);
+  clearAgentKeyCache();
+  emitEvent('agent_key_rotated', agentId, null, agentId + ' rotated their API key');
+  res.json({ id: agentId, api_key: newKey, message: 'Key rotated — update your config with this new key' });
+});
 
 // Admin heartbeat for any agent
 router.put('/admin/agents/:id/heartbeat', function (req, res) {
