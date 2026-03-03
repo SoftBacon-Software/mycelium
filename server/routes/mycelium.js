@@ -75,7 +75,9 @@ import {
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
   castApprovalVote, getApprovalVotes, countApprovalVotes,
   createOperator, getOperator, listOperators, updateOperator, deleteOperator,
+  setOperatorAvailability, getAvailableOperators, isNetworkAutonomous,
   getInstanceConfig, setInstanceConfig, listInstanceConfig, deleteInstanceConfig,
+  getSleepMode, appendSleepLog,
   createChannel, getChannel, getChannelBySlug, getChannelByLink,
   listChannels, updateChannel, deleteChannel,
   addChannelMember, removeChannelMember, listChannelMembers,
@@ -426,6 +428,13 @@ function dispatchWorkToIdleAgents(triggerContext) {
     break;
   }
 
+  // Log dispatches during sleep mode
+  if (dispatched.length > 0 && getSleepMode().active) {
+    for (var d of dispatched) {
+      appendSleepLog('dispatches', { agent: d.agent, type: d.type, id: d.id, title: d.title, time: new Date().toISOString() });
+    }
+  }
+
   return dispatched;
 }
 
@@ -488,6 +497,10 @@ router.get('/boot/:agentId', function (req, res) {
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
   // Attach savepoint diff
   payload.savepoint = computeSavepointDiff(agentId);
+  // Attach sleep mode / autonomous status
+  payload.sleep_mode = getSleepMode();
+  payload.autonomous_mode = isNetworkAutonomous();
+  payload.operators_available = getAvailableOperators().length;
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
@@ -764,6 +777,7 @@ router.put('/tasks/:id', function (req, res) {
 
   // When task completes: resolve dependencies and update linked asset
   if (fields.status === 'done') {
+    if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
     var unblocked = resolveTaskDependencies(task.id);
     if (unblocked.length > 0) {
       result.unblocked = unblocked;
@@ -1478,6 +1492,9 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   var stepPlanId = parseIntParam(req.params.id);
   var stepStepId = parseIntParam(req.params.stepId);
   updateDvPlanStep(stepStepId, fields);
+  if (fields.status === 'done' && getSleepMode().active) {
+    appendSleepLog('steps_completed', { id: stepStepId, plan_id: stepPlanId, agent: agentId, time: new Date().toISOString() });
+  }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   res.json({ ok: true, step_id: stepStepId });
@@ -1680,6 +1697,144 @@ router.put('/admin/override', function (req, res) {
   } else {
     res.status(400).json({ error: 'action must be freeze or unfreeze' });
   }
+});
+
+// ======== SLEEP MODE ========
+
+router.put('/admin/sleep', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var action = req.body.action;
+  if (action !== 'on' && action !== 'off') {
+    return res.status(400).json({ error: 'action must be on or off' });
+  }
+
+  if (action === 'on') {
+    var directive = req.body.directive || '';
+    var priorities = req.body.priorities || [];
+    var approvalPolicy = req.body.approval_policy || 'queue_high';
+    var autoWakeAt = req.body.auto_wake_at || null;
+
+    // Find the operator linked to this admin user
+    var operatorId = req.body.operator_id;
+    if (operatorId) {
+      var op = getOperator(operatorId);
+      if (op) setOperatorAvailability(operatorId, 'sleeping', directive);
+    }
+
+    var config = {
+      active: true,
+      directive: directive,
+      priorities: priorities,
+      approval_policy: approvalPolicy,
+      auto_wake_at: autoWakeAt,
+      started_at: new Date().toISOString(),
+      started_by: who
+    };
+    setInstanceConfig('sleep_mode', JSON.stringify(config), who);
+    setInstanceConfig('sleep_mode_log', JSON.stringify({
+      tasks_completed: [], steps_completed: [], approvals_queued: [],
+      dispatches: [], errors: [], messages_sent: 0
+    }), who);
+
+    var autonomous = isNetworkAutonomous();
+    if (autonomous && directive) {
+      // Broadcast night directive to all online agents
+      var agents = listAgents();
+      for (var agent of agents) {
+        if (agent.status === 'online' || agent.status === 'idle') {
+          createDvMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+        }
+      }
+    }
+
+    emitEvent('sleep_mode_on', who, null, who + ' activated sleep mode' + (autonomous ? ' (network autonomous)' : ''));
+    res.json({ ok: true, sleep_mode: config, autonomous: autonomous });
+
+  } else {
+    // action === 'off'
+    var operatorId2 = req.body.operator_id;
+    if (operatorId2) {
+      var op2 = getOperator(operatorId2);
+      if (op2) setOperatorAvailability(operatorId2, 'available', '');
+    }
+
+    var log = null;
+    var logVal = getInstanceConfig('sleep_mode_log');
+    try { log = logVal ? JSON.parse(logVal) : null; } catch (e) { log = null; }
+
+    setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
+    emitEvent('sleep_mode_off', who, null, who + ' deactivated sleep mode');
+
+    // Notify agents that humans are back
+    var agents2 = listAgents();
+    for (var agent2 of agents2) {
+      if (agent2.status === 'online' || agent2.status === 'idle') {
+        createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+      }
+    }
+
+    res.json({ ok: true, sleep_mode: { active: false }, morning_summary: log });
+  }
+});
+
+router.get('/admin/sleep', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var config = getSleepMode();
+  var log = null;
+  var logVal = getInstanceConfig('sleep_mode_log');
+  try { log = logVal ? JSON.parse(logVal) : null; } catch (e) {}
+  res.json({
+    sleep_mode: config,
+    autonomous: isNetworkAutonomous(),
+    available_operators: getAvailableOperators().length,
+    log: log
+  });
+});
+
+router.put('/operators/:id/availability', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var who = getAdminDisplayName(req);
+  var op = getOperator(req.params.id);
+  if (!op) return res.status(404).json({ error: 'Operator not found' });
+
+  var availability = req.body.availability;
+  if (!['available', 'away', 'sleeping'].includes(availability)) {
+    return res.status(400).json({ error: 'availability must be available, away, or sleeping' });
+  }
+
+  var wasBefore = isNetworkAutonomous();
+  setOperatorAvailability(req.params.id, availability, req.body.message || '');
+  var isNow = isNetworkAutonomous();
+
+  // Transition to autonomous
+  if (!wasBefore && isNow) {
+    var sleepConfig = getSleepMode();
+    if (sleepConfig.active && sleepConfig.directive) {
+      var agents = listAgents();
+      for (var agent of agents) {
+        if (agent.status === 'online' || agent.status === 'idle') {
+          createDvMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
+        }
+      }
+    }
+    emitEvent('autonomous_mode_on', who, null, 'All operators away — network is autonomous');
+  }
+
+  // Transition from autonomous
+  if (wasBefore && !isNow) {
+    emitEvent('autonomous_mode_off', who, null, displayName(req.params.id) + ' is back — autonomous mode ended');
+    var agents2 = listAgents();
+    for (var agent2 of agents2) {
+      if (agent2.status === 'online' || agent2.status === 'idle') {
+        createDvMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
+      }
+    }
+  }
+
+  emitEvent('operator_availability', who, null, displayName(req.params.id) + ' is now ' + availability);
+  res.json(getOperator(req.params.id));
 });
 
 // ======== ADMIN ========
@@ -2672,6 +2827,17 @@ router.post('/approvals', function (req, res) {
   emitEvent('approval_requested', who, project,
     who + ' requested approval: [' + actionType + '] ' + title, JSON.stringify({ approval_id: id, action_type: actionType }));
   dispatchWebhook('approval_requested', who, { approval_id: id, action_type: actionType, title: title, risk_tier: riskTier, requested_by: who });
+
+  // In autonomous mode, queue high/critical approvals for morning instead of blocking
+  var effectiveRiskTier = riskTier || 'medium';
+  if (isNetworkAutonomous() && (effectiveRiskTier === 'high' || effectiveRiskTier === 'critical')) {
+    var sleepConfig = getSleepMode();
+    if (sleepConfig.active && sleepConfig.approval_policy === 'queue_high') {
+      appendSleepLog('approvals_queued', { id: id, action_type: actionType, title: title, requested_by: who, time: new Date().toISOString() });
+      return res.json({ id: id, status: 'queued_for_morning', queued: true, message: 'Queued for operator review — all operators are away. Continue with other work.' });
+    }
+  }
+
   res.json({ id: id, status: 'pending', approval_required: true });
 });
 

@@ -334,6 +334,9 @@ CREATE TABLE IF NOT EXISTS dv_operators (
   email           TEXT NOT NULL DEFAULT '',
   studio_user_id  INTEGER REFERENCES dv_studio_users(id),
   status          TEXT NOT NULL DEFAULT 'active',
+  availability    TEXT NOT NULL DEFAULT 'available',
+  last_seen_at    TEXT,
+  away_message    TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
