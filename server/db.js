@@ -1922,7 +1922,7 @@ export function ensurePluginRecord(manifest) {
     return { ...existing, updated: true };
   }
   stmt('dvInsertPlugin', `INSERT INTO dv_plugins (name, display_name, description, version, author, enabled, route_prefix, mcp_tool_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.enabled !== false ? 1 : 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
   return { name: manifest.name, created: true };
 }
 
