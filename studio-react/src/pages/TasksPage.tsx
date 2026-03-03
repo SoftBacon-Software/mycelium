@@ -112,7 +112,7 @@ export default function TasksPage() {
       </div>
 
       {/* Kanban board */}
-      <div className="flex gap-3 flex-1 min-h-0 overflow-x-auto pb-2">
+      <div className="flex flex-col sm:flex-row gap-3 flex-1 min-h-0 sm:overflow-x-auto pb-2">
         {columns.map((col) => {
           const colTasks = filteredColumns[col.key]
           const isDone = col.key === 'done'
@@ -121,8 +121,8 @@ export default function TasksPage() {
           return (
             <div
               key={col.key}
-              className={`bg-surface rounded-lg p-3 flex flex-col min-w-[260px] ${
-                isDone ? (isCollapsed ? 'max-w-[260px]' : 'flex-1') : 'flex-1'
+              className={`bg-surface rounded-lg p-3 flex flex-col sm:min-w-[260px] ${
+                isDone ? (isCollapsed ? 'sm:max-w-[260px]' : 'sm:flex-1') : 'sm:flex-1'
               } transition-all`}
             >
               {/* Column header */}

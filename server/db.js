@@ -588,6 +588,10 @@ export function getDvMessage(id) {
 export function listDvMessages(filters) {
   var where = ["msg_type != 'chat'"];
   var params = [];
+  // Exclude system-to-system telemetry (runner health, etc) unless explicitly requested
+  if (!filters.include_system) {
+    where.push("NOT (from_agent = '__system__' AND to_agent = '__system__')");
+  }
   if (filters.from_agent) { where.push('from_agent = ?'); params.push(filters.from_agent); }
   if (filters.to_agent) { where.push('(to_agent = ? OR to_agent IS NULL)'); params.push(filters.to_agent); }
   if (filters.thread_id) { where.push('thread_id = ?'); params.push(filters.thread_id); }

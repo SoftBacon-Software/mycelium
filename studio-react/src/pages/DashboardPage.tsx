@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
+import { getSenderDisplay } from '../utils/sender'
 import SummaryCard from '../components/dashboard/SummaryCard'
 import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
@@ -381,7 +382,7 @@ export default function DashboardPage() {
                 </Badge>
                 <span className="text-sm text-text-dim leading-snug flex-1 min-w-0 group-hover:text-text transition-colors">
                   {event.agent && (
-                    <span className="font-mono text-xs text-accent mr-1.5">{event.agent}</span>
+                    <span className="font-mono text-xs text-accent mr-1.5">{getSenderDisplay(event.agent)}</span>
                   )}
                   <span className="break-words">{event.summary}</span>
                 </span>

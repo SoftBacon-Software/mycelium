@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import type { Task } from '../../api/types'
 import { updateTask } from '../../api/endpoints'
 import { useDashboardStore } from '../../stores/dashboardStore'
+import { getSenderDisplay } from '../../utils/sender'
 import Badge from '../shared/Badge'
 
 interface TaskDetailProps {
@@ -151,7 +152,7 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
                 </Badge>
               </MetaField>
               <MetaField label="Assignee">
-                <span className="text-sm text-text">{task.assignee || 'Unassigned'}</span>
+                <span className="text-sm text-text">{task.assignee ? getSenderDisplay(task.assignee) : 'Unassigned'}</span>
               </MetaField>
               <MetaField label="Project">
                 <span className="text-sm text-text font-mono">{task.project_id}</span>
@@ -166,7 +167,7 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
               </MetaField>
               {task.assigned_by && (
                 <MetaField label="Assigned by">
-                  <span className="text-sm text-text">{task.assigned_by}</span>
+                  <span className="text-sm text-text">{getSenderDisplay(task.assigned_by)}</span>
                 </MetaField>
               )}
             </div>
@@ -238,7 +239,7 @@ export default function TaskDetail({ task, onClose }: TaskDetailProps) {
                 <div className="text-sm">
                   <span className="text-green font-medium">Approved</span>
                   <span className="text-text-muted"> by </span>
-                  <span className="text-text-dim">{task.approved_by}</span>
+                  <span className="text-text-dim">{getSenderDisplay(task.approved_by)}</span>
                   {task.approved_at && (
                     <span className="text-text-muted font-mono text-xs ml-2">{formatDate(task.approved_at)}</span>
                   )}

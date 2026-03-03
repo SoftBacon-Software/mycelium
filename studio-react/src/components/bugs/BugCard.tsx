@@ -1,6 +1,7 @@
 import type { Bug } from '../../api/types'
 import Badge from '../shared/Badge'
 import { timeAgo } from '../../utils/time'
+import { getSenderDisplay } from '../../utils/sender'
 
 interface BugCardProps {
   bug: Bug
@@ -85,11 +86,11 @@ export default function BugCard({ bug, onClick }: BugCardProps) {
         <div className="flex items-center justify-between mt-2.5 text-xs text-text-muted">
           <div className="flex items-center gap-3 truncate">
             <span>
-              Filed by <span className="text-text-dim">{bug.filed_by}</span>
+              Filed by <span className="text-text-dim">{getSenderDisplay(bug.filed_by)}</span>
             </span>
             {bug.assignee && (
               <span>
-                Assigned to <span className="text-text-dim">{bug.assignee}</span>
+                Assigned to <span className="text-text-dim">{getSenderDisplay(bug.assignee)}</span>
               </span>
             )}
           </div>

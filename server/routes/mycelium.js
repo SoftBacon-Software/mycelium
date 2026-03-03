@@ -273,6 +273,14 @@ function getAdminDisplayName(req) {
   return '__system__';
 }
 
+// Friendly display name for event summaries
+function displayName(id) {
+  if (id === '__system__') return 'System';
+  if (id === '__admin__') return 'Admin';
+  if (id && id.startsWith('__user:')) return id.slice(7);
+  return id;
+}
+
 // Either agent or admin — returns display name / agent ID
 function checkAgentOrAdmin(req, res) {
   // Try studio JWT first
@@ -1287,10 +1295,13 @@ router.post('/messages', function (req, res) {
     if (general) channelId = general.id;
   }
   var id = createDvMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId);
-  var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
-  emitEvent('message_sent', agentId, projectId, agentId + ' sent message' + target, { message_id: id });
-  if (toAgent) {
-    dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
+  // Skip events/webhooks for system-to-system telemetry (runner health pings etc)
+  if (!(agentId === '__system__' && toAgent === '__system__')) {
+    var target = toAgent ? ' to ' + displayName(toAgent) : ' (broadcast)';
+    emitEvent('message_sent', agentId, projectId, displayName(agentId) + ' sent message' + target, { message_id: id });
+    if (toAgent) {
+      dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
+    }
   }
   res.json({ id: id });
 });
