@@ -117,12 +117,19 @@ function computeNetworkHealth(
   const criticalBugs = bugs.filter(
     (b) => b.severity === 'critical' && b.status !== 'fixed' && b.status !== 'closed',
   ).length
+  const highBugs = bugs.filter(
+    (b) => b.severity === 'high' && b.status !== 'fixed' && b.status !== 'closed',
+  ).length
   const workerRatio = totalWorkers > 0 ? onlineWorkers / totalWorkers : 0
 
-  if (workerRatio > 0.5 && criticalBugs === 0) {
-    return { level: 'green', label: 'Healthy' }
-  }
-  return { level: 'amber', label: 'Degraded' }
+  // Critical bugs = red (regardless of agent count)
+  if (criticalBugs > 0) return { level: 'red', label: 'Critical' }
+  // Most workers offline = red
+  if (totalWorkers > 0 && workerRatio <= 0.25) return { level: 'red', label: 'Offline' }
+  // High bugs or degraded workforce = amber
+  if (highBugs > 0 || workerRatio <= 0.5) return { level: 'amber', label: 'Degraded' }
+
+  return { level: 'green', label: 'Healthy' }
 }
 
 const healthColors: Record<HealthLevel, { bg: string; text: string; dot: string }> = {
