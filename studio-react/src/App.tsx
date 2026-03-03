@@ -54,6 +54,7 @@ export default function App() {
           element={isAuthenticated ? <AppLayout /> : <Navigate to="/login" replace />}
         >
           <Route index element={<DashboardPage />} />
+          <Route path="inbox" element={<InboxPage />} />
           <Route path="channels" element={<ChannelsPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="messages" element={<MessagesPage />} />
