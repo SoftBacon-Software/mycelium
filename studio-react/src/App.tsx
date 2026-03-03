@@ -34,7 +34,7 @@ export default function App() {
   }, [hydrate])
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/studio">
       <Toaster
         position="bottom-right"
         toastOptions={{
