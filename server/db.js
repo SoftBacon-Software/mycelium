@@ -571,6 +571,16 @@ export function listPendingRequests(agentId) {
   ).all(agentId);
 }
 
+export function countPendingForAgent(agentId) {
+  var row = db.prepare(
+    "SELECT " +
+    "(SELECT COUNT(*) FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent')) as requests, " +
+    "(SELECT COUNT(*) FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent')) as directives, " +
+    "(SELECT COUNT(*) FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent') as unread"
+  ).get(agentId, agentId, agentId);
+  return row;
+}
+
 export function getDvMessage(id) {
   return db.prepare("SELECT * FROM dv_messages WHERE id = ?").get(id);
 }
