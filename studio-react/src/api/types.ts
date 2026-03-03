@@ -345,20 +345,6 @@ export interface FeedbackSummary {
   recent: Feedback[]
 }
 
-export interface InboxItem {
-  id: number;
-  operator_id: string;
-  type: 'message' | 'approval' | 'bip_draft' | 'mention' | 'feedback_request';
-  entity_type: string;
-  entity_id: string;
-  title: string;
-  summary: string;
-  data: string;
-  status: 'unread' | 'read' | 'actioned' | 'dismissed';
-  priority: 'urgent' | 'normal' | 'low';
-  created_at: string;
-  read_at: string | null;
-}
 
 export interface InboxCountResponse {
   count: number;

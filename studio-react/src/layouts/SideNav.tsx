@@ -7,7 +7,6 @@ import {
   MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database,
   Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle,
-  Inbox,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
