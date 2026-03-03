@@ -757,7 +757,10 @@ router.put('/tasks/:id', function (req, res) {
   if (!agentId) return;
   var task = getDvTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!checkProjectScope(req, res, task.project_id)) return;
+  // Allow assigned agents to update their own tasks regardless of project scope (Bug #42)
+  if (!(req._authAgentId && task.assignee === req._authAgentId)) {
+    if (!checkProjectScope(req, res, task.project_id)) return;
+  }
   if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.priority, TASK_PRIORITIES, 'priority')) return;
   var fields = {};
