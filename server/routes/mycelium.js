@@ -42,7 +42,7 @@ var artifactStorage = multer.diskStorage({
 });
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
-  createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
+  createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   createProject, listProjects, getProject, updateProject,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
@@ -248,7 +248,7 @@ function checkAgent(req, res) {
     return cached.id;
   }
   // DB lookup: SHA-256 direct comparison, bcrypt fallback for legacy hashes
-  var agents = listAgents();
+  var agents = listAllAgentsIncludingDrones();
   for (var a of agents) {
     var full = getAgent(a.id);
     if (!full || !full.api_key_hash) continue;
