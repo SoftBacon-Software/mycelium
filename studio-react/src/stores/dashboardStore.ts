@@ -47,6 +47,7 @@ interface DashboardState {
   droneJobs: DroneJob[];
   plugins: Plugin[];
   inboxUnread: number;
+  activeOperators: { id: number; username: string; display_name: string; last_seen: string }[];
 
   // UI state
   loading: boolean;
@@ -84,6 +85,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   droneJobs: [],
   plugins: [],
   inboxUnread: 0,
+  activeOperators: [],
 
   // UI state defaults — start true so first-boot detection waits for data
   loading: true,
@@ -122,6 +124,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         drones: data.drones || [],
         droneJobs: data.drone_jobs || [],
         plugins: data.plugins || [],
+        activeOperators: data.active_operators || [],
         loading: false,
         inboxUnread: inboxData.count || 0,
         lastRefresh: new Date(),
