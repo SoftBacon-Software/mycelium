@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { useLiveStore } from '../stores/liveStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel } from '../api/endpoints'
@@ -34,6 +33,8 @@ const TRUNCATE_LENGTH = 300
 function isSameDay(a: string, b: string): boolean {
   return new Date(a).toDateString() === new Date(b).toDateString()
 }
+
+// getSenderDisplay imported from utils/sender
 
 // ─── Date Separator ─────────────────────────────────────────────────────────
 
@@ -214,19 +215,20 @@ function ChannelSidebar({
   activeId,
   unreadMap,
   onSelect,
-  onCreate,
+  onChannelCreated,
 }: {
   channels: Channel[]
   activeId: number | null
   unreadMap: Record<number, number>
   onSelect: (id: number) => void
-  onCreate: (name: string, type: string, description: string) => Promise<void>
+  onChannelCreated: () => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
-  const [newType, setNewType] = useState('general')
+  const [newType, setNewType] = useState<ChannelType>('general')
   const [newDesc, setNewDesc] = useState('')
   const [creating, setCreating] = useState(false)
+
   const totalUnread = useMemo(
     () => Object.values(unreadMap).reduce((sum, n) => sum + n, 0),
     [unreadMap],
@@ -246,75 +248,86 @@ function ChannelSidebar({
     return map
   }, [channels])
 
+  async function handleCreate() {
+    const name = newName.trim()
+    if (!name || creating) return
+    setCreating(true)
+    try {
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      await createChannel({ name, slug, type: newType, description: newDesc.trim() || undefined })
+      setNewName('')
+      setNewDesc('')
+      setNewType('general')
+      setShowCreate(false)
+      onChannelCreated()
+    } catch (err) {
+      console.error('Failed to create channel:', err)
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return (
     <div className="w-60 bg-surface flex flex-col shrink-0 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border shrink-0">
-        <span className="font-semibold text-sm text-text">Channels</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-sm text-text">Channels</span>
           {totalUnread > 0 && (
             <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
               {totalUnread}
             </span>
           )}
-          <button
-            onClick={() => setShowCreate(!showCreate)}
-            className="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface-raised transition-colors text-sm"
-            title="Create channel"
-          >
-            +
-          </button>
         </div>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="text-text-muted hover:text-accent transition-colors p-0.5 rounded-sm hover:bg-surface-raised"
+          title="Create channel"
+        >
+          <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+        </button>
       </div>
 
       {/* Create channel form */}
       {showCreate && (
         <div className="px-3 py-2 border-b border-border space-y-2">
           <input
-            type="text"
-            placeholder="Channel name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            className="w-full bg-bg border border-border rounded px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+            placeholder="Channel name"
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
           <select
             value={newType}
-            onChange={(e) => setNewType(e.target.value)}
-            className="w-full bg-bg border border-border rounded px-2 py-1 text-xs text-text focus:outline-none focus:border-accent"
+            onChange={(e) => setNewType(e.target.value as ChannelType)}
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
           >
             <option value="general">General</option>
             <option value="announcement">Announcement</option>
-            <option value="project">Project</option>
+            <option value="plan">Plan</option>
+            <option value="bug">Bug</option>
+            <option value="task">Task</option>
           </select>
           <input
-            type="text"
-            placeholder="Description (optional)"
             value={newDesc}
             onChange={(e) => setNewDesc(e.target.value)}
-            className="w-full bg-bg border border-border rounded px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+            placeholder="Description (optional)"
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
           />
-          <div className="flex gap-1.5">
+          <div className="flex items-center gap-2">
             <button
+              onClick={handleCreate}
               disabled={!newName.trim() || creating}
-              onClick={async () => {
-                setCreating(true)
-                try {
-                  await onCreate(newName.trim(), newType, newDesc.trim())
-                  setNewName('')
-                  setNewType('general')
-                  setNewDesc('')
-                  setShowCreate(false)
-                } finally {
-                  setCreating(false)
-                }
-              }}
-              className="flex-1 bg-accent text-bg text-xs font-medium py-1 rounded hover:bg-accent/80 transition-colors disabled:opacity-50"
+              className="flex-1 px-2 py-1 rounded-sm text-xs font-medium bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-50"
             >
               {creating ? 'Creating...' : 'Create'}
             </button>
             <button
               onClick={() => setShowCreate(false)}
-              className="px-2 py-1 text-xs text-text-muted hover:text-text transition-colors"
+              className="px-2 py-1 rounded-sm text-xs text-text-muted hover:text-text transition-colors"
             >
               Cancel
             </button>
@@ -510,7 +523,6 @@ function ChatArea({
 
 export default function ChannelsPage() {
   const channels = useDashboardStore((s) => s.channels)
-  const refresh = useDashboardStore((s) => s.refresh)
   const user = useAuthStore((s) => s.user)
 
   const [activeChannelId, setActiveChannelId] = useState<number | null>(null)
@@ -577,36 +589,18 @@ export default function ChannelsPage() {
     [],
   )
 
-  // Initial load
+  // Initial load + polling for messages and unread every 5s
   useEffect(() => {
     loadMessages()
     loadUnread()
-  }, [loadMessages, loadUnread])
 
-  // Live reload on SSE channel_message events
-  const liveEvents = useLiveStore((s) => s.events)
-  const liveConnected = useLiveStore((s) => s.connected)
-  const lastLiveRef = useRef(0)
-  useEffect(() => {
-    const channelEvent = liveEvents.find(
-      (e) => e.id > lastLiveRef.current && e.type === 'channel_message'
-    )
-    if (channelEvent) {
-      lastLiveRef.current = channelEvent.id
-      loadMessages()
-      loadUnread()
-    }
-  }, [liveEvents, loadMessages, loadUnread])
-
-  // Fallback poll when SSE is disconnected
-  useEffect(() => {
-    if (liveConnected) return
     const interval = setInterval(() => {
       loadMessages()
       loadUnread()
-    }, 10000)
+    }, 5000)
+
     return () => clearInterval(interval)
-  }, [liveConnected, loadMessages, loadUnread])
+  }, [loadMessages, loadUnread])
 
   // Send a message
   const handleSend = useCallback(
@@ -625,16 +619,6 @@ export default function ChannelsPage() {
     [activeChannelId, user, loadMessages],
   )
 
-  const handleCreateChannel = useCallback(
-    async (name: string, type: string, description: string) => {
-      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-      const result = await createChannel({ name, slug, type, description: description || undefined })
-      await refresh()
-      if (result.id) setActiveChannelId(result.id)
-    },
-    [refresh],
-  )
-
   return (
     <div className="h-[calc(100vh-7rem)] rounded-sm overflow-hidden border border-border flex">
       <ChannelSidebar
@@ -642,7 +626,7 @@ export default function ChannelsPage() {
         activeId={activeChannelId}
         unreadMap={unreadMap}
         onSelect={handleSelectChannel}
-        onCreate={handleCreateChannel}
+        onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
       />
       <ChatArea
         channel={activeChannel}
