@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import { toast } from 'sonner'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { createConcept, updateConcept, deleteConcept, linkConceptToProject, unlinkConceptFromProject } from '../api/endpoints'
 import type { Concept } from '../api/types'
@@ -225,8 +226,10 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
       if (editDescription !== concept.description) updates.description = editDescription
       await updateConcept(concept.id, updates)
       await refresh()
+      toast.success('Concept saved')
     } catch (err) {
       console.error('Failed to update concept:', err)
+      toast.error('Failed to save concept')
     } finally {
       setSaving(false)
     }
@@ -237,6 +240,7 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
     try {
       parsed = JSON.parse(dataStr)
     } catch {
+      toast.error('Invalid JSON — fix syntax before saving')
       return
     }
     setSaving(true)
@@ -244,8 +248,10 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
       await updateConcept(concept.id, { data: parsed })
       await refresh()
       setEditingData(false)
+      toast.success('Concept data saved')
     } catch (err) {
       console.error('Failed to update concept data:', err)
+      toast.error('Failed to save concept data')
     } finally {
       setSaving(false)
     }
@@ -270,8 +276,10 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
       await linkConceptToProject(concept.id, linkProject)
       await refresh()
       setLinkProject('')
+      toast.success(`Linked to ${linkProject}`)
     } catch (err) {
       console.error('Failed to link project:', err)
+      toast.error('Failed to link project')
     }
   }, [concept.id, linkProject, refresh])
 
@@ -279,8 +287,10 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
     try {
       await unlinkConceptFromProject(concept.id, projectId)
       await refresh()
+      toast.success(`Unlinked from ${projectId}`)
     } catch (err) {
       console.error('Failed to unlink project:', err)
+      toast.error('Failed to unlink project')
     }
   }, [concept.id, refresh])
 

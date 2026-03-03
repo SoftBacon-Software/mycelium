@@ -26,17 +26,17 @@ const routeTitles: Record<string, string> = {
   '/onboarding': 'Onboarding',
   '/plugins': 'Plugins',
   '/analytics': 'Analytics',
+  '/feedback': 'Feedback',
 }
 
 function formatTime(date: Date | null): string {
   if (!date) return 'never'
   return date.toLocaleTimeString('en-US', {
-    timeZone: 'America/Chicago',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
-  }) + ' CST'
+  })
 }
 
 export default function AppLayout() {

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { useDashboardStore } from '../../stores/dashboardStore'
 import { createDroneJob } from '../../api/endpoints'
 import Badge from '../shared/Badge'
@@ -121,6 +122,7 @@ export default function ActionRequired() {
       await refresh()
     } catch (err) {
       console.error('Retry failed:', err)
+      toast.error('Retry failed — check drone logs')
     } finally {
       setRetryingId(null)
     }
