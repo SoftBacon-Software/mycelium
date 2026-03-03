@@ -2999,13 +2999,15 @@ router.get('/docs', function (req, res) {
 // ======== FEEDBACK ========
 
 // GET /feedback/summary — aggregate stats
-router.get('/feedback/summary', checkAdmin, asyncHandler(async function (req, res) {
+router.get('/feedback/summary', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
   var summary = getFeedbackSummary();
   res.json(summary);
 }));
 
 // GET /feedback — list with optional filters
-router.get('/feedback', checkAdmin, asyncHandler(async function (req, res) {
+router.get('/feedback', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
   var filters = {
     entity_type: req.query.entity_type || '',
     agent_id: req.query.agent_id || '',
@@ -3021,20 +3023,22 @@ router.get('/feedback', checkAdmin, asyncHandler(async function (req, res) {
 }));
 
 // POST /feedback — submit feedback
-router.post('/feedback', checkAgentOrAdmin, asyncHandler(async function (req, res) {
+router.post('/feedback', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
   var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
   if (!rating || rating < 1 || rating > 5) {
     return apiError(res, 400, 'rating must be 1-5');
   }
-  var submittedBy = req.agent ? req.agent.id : (req.studioUser ? req.studioUser.username : 'operator');
-  var id = createFeedback(entity_type, entity_id, subject, rating, comment, submittedBy, agent_id || '');
+  var id = createFeedback(entity_type, entity_id, subject, rating, comment, who, agent_id || '');
   var record = getFeedback(id);
-  emitEvent('feedback_submitted', submittedBy, '', JSON.stringify({ id, rating, entity_type, agent_id }));
+  emitEvent('feedback_submitted', who, '', JSON.stringify({ id, rating, entity_type, agent_id }));
   res.status(201).json(record);
 }));
 
 // DELETE /feedback/:id
-router.delete('/feedback/:id', checkAdmin, asyncHandler(async function (req, res) {
+router.delete('/feedback/:id', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
   var id = parseIntParam(req.params.id);
   if (!id) return apiError(res, 400, 'Invalid feedback id');
   var record = getFeedback(id);
