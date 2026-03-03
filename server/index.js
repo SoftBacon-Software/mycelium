@@ -1,5 +1,18 @@
 // =============== MYCELIUM — Distributed Development Platform ===============
 // The printing press of ideas.
+
+// Crash diagnostics — ensure unhandled errors always print before exit
+process.on('uncaughtException', (err) => {
+  process.stdout.write('[FATAL] uncaughtException: ' + (err?.stack || err?.message || String(err)) + '\n');
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  process.stdout.write('[FATAL] unhandledRejection: ' + (reason?.stack || reason?.message || String(reason)) + '\n');
+  process.exit(1);
+});
+
+process.stdout.write('[boot] Node ' + process.version + ' PORT=' + (process.env.PORT || '(not set, will use 3002)') + '\n');
+
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
@@ -27,10 +40,14 @@ if (!process.env.TURN_SECRET) {
 }
 
 // Initialize database
+process.stdout.write('[boot] initializing DB...\n');
 initDB();
+process.stdout.write('[boot] DB ready\n');
 
 // Load plugins (after DB init, before routes are used)
+process.stdout.write('[boot] loading plugins...\n');
 await initPlugins();
+process.stdout.write('[boot] plugins loaded\n');
 
 var app = express();
 
