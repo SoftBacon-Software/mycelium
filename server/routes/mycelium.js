@@ -1300,6 +1300,7 @@ router.get('/plans/:id', function (req, res) {
   if (!who) return;
   var plan = getDvPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
   res.json(plan);
 });
 
@@ -1438,7 +1439,7 @@ router.get('/studio/me', function (req, res) {
   if (!user) {
     // Check admin key
     var key = req.headers['x-admin-key'];
-    if (key === ADMIN_KEY) return res.json({ id: 0, username: 'admin', display_name: '__admin__', role: 'admin' });
+    if (key === ADMIN_KEY) return res.json({ id: 0, username: 'admin', display_name: 'Admin', role: 'admin' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
   var dbUser = getStudioUserById(user.userId);
