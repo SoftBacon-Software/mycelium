@@ -160,10 +160,20 @@ export interface Bug {
   notes: string | null;
 }
 
+export interface PlanStepComment {
+  id: number;
+  step_id: number;
+  plan_id: number;
+  author: string;
+  content: string;
+  created_at: string;
+}
+
 export interface PlanStep {
   id: string;
   plan_id: string;
   step_number: number;
+  step_order?: number;
   title: string;
   description: string;
   status: string;
@@ -173,6 +183,7 @@ export interface PlanStep {
   linked_pr_url: string | null;
   created_at: string;
   updated_at: string;
+  comments?: PlanStepComment[];
 }
 
 export interface Plan {

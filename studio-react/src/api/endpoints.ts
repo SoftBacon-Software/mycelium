@@ -10,6 +10,7 @@ import type {
   TeamChat,
   Plan,
   PlanStep,
+  PlanStepComment,
   Bug,
   Asset,
   Organization,
@@ -135,6 +136,24 @@ export function updatePlanStep(
   data: Partial<PlanStep>,
 ): Promise<PlanStep> {
   return apiPut<PlanStep>(`/plans/${planId}/steps/${stepId}`, data);
+}
+
+export function addPlanStepComment(
+  planId: string,
+  stepId: string,
+  data: { content: string; author?: string },
+): Promise<PlanStepComment> {
+  return apiPost<PlanStepComment>(`/plans/${planId}/steps/${stepId}/comments`, data);
+}
+
+// Alias for backward compat
+export function addStepComment(
+  planId: string,
+  stepId: string,
+  content: string,
+  author?: string,
+): Promise<PlanStepComment> {
+  return addPlanStepComment(planId, stepId, { content, author });
 }
 
 // Bugs
@@ -370,6 +389,10 @@ export function markChannelRead(id: number, messageId?: number): Promise<{ ok: b
 
 export function createChannel(data: { name: string; slug: string; type?: string; description?: string }): Promise<{ id: number }> {
   return apiPost<{ id: number }>('/channels', data);
+}
+
+export function deleteChannel(id: number): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/channels/${id}`);
 }
 
 export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
