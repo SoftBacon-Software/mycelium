@@ -59,7 +59,7 @@ import {
   getBootPayload, getDvOverview,
   createDvBug, getDvBug, listDvBugs, updateDvBug, deleteDvBug, countDvBugs,
   createDvPlan, getDvPlan, listDvPlans, updateDvPlan, deleteDvPlan,
-  createDvPlanStep, updateDvPlanStep, deleteDvPlanStep, reorderDvPlanSteps,
+  createDvPlanStep, updateDvPlanStep, deleteDvPlanStep, reorderDvPlanSteps, createPlanStepComment, listPlanStepComments,
   completeLinkedPlanSteps,
   createStudioUser, getStudioUserByUsername, getStudioUserById,
   listStudioUsers, deleteStudioUser, updateStudioUser,
@@ -1536,6 +1536,35 @@ router.put('/plans/:id/reorder', function (req, res) {
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
   reorderDvPlanSteps(parseIntParam(req.params.id), order);
   res.json({ ok: true, plan_id: parseIntParam(req.params.id) });
+});
+
+// -- Plan Step Comments --
+
+router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var plan = getDvPlan(parseIntParam(req.params.id));
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var comments = listPlanStepComments(parseIntParam(req.params.stepId));
+  res.json(comments);
+});
+
+router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var plan = getDvPlan(parseIntParam(req.params.id));
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+  if (!checkProjectScope(req, res, plan.project_id)) return;
+  var stepId = parseIntParam(req.params.stepId);
+  var step = plan.steps ? plan.steps.find(function (s) { return s.id === stepId; }) : null;
+  if (!step) return res.status(404).json({ error: 'Step not found' });
+  var content = req.body.content;
+  if (!content || !content.trim()) return res.status(400).json({ error: 'content is required' });
+  var author = req.body.author || who;
+  var id = createPlanStepComment(stepId, plan.id, escapeHtml(author), escapeHtml(content.trim()));
+  emitEvent('plan_step_comment', who, plan.project_id, who + ' commented on step #' + stepId + ' of plan #' + plan.id, { plan_id: plan.id, step_id: stepId, comment_id: id });
+  res.status(201).json({ ok: true, id: id });
 });
 
 // ======== STUDIO AUTH ========

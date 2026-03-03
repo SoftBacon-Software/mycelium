@@ -181,9 +181,10 @@ interface PlanDetailProps {
   onClose: () => void
   onStepUpdate: (planId: string, stepId: string, data: Partial<PlanStep>) => void
   onStatusChange: (planId: string, status: string) => void
+  onRefresh: () => void
 }
 
-function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailProps) {
+function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange, onRefresh }: PlanDetailProps) {
   const steps = plan.steps ?? []
   const completedSteps = steps.filter(
     (s) => s.status === 'done' || s.status === 'completed',
@@ -280,6 +281,7 @@ function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailP
           steps={steps}
           planId={plan.id}
           onStepUpdate={(stepId, data) => onStepUpdate(plan.id, stepId, data)}
+          onCommentAdded={onRefresh}
         />
       </div>
     </div>
@@ -381,6 +383,12 @@ export default function PlansPage() {
     [refresh],
   )
 
+  const handleRefreshPlan = useCallback(async () => {
+    if (!selectedPlanId) return
+    const updated = await fetchPlan(selectedPlanId)
+    setSelectedPlan(updated)
+  }, [selectedPlanId])
+
   const handleCreated = useCallback(async () => {
     await refresh()
   }, [refresh])
@@ -473,6 +481,7 @@ export default function PlansPage() {
                 onClose={() => setSelectedPlanId(null)}
                 onStepUpdate={handleStepUpdate}
                 onStatusChange={handleStatusChange}
+                onRefresh={handleRefreshPlan}
               />
             </div>
           )}
