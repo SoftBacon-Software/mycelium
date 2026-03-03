@@ -88,7 +88,8 @@ import {
   updateSavepointNotes, computeSavepointDiff, pruneSavepoints,
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
-  createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary
+  createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
+  countPendingForAgent
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
@@ -585,7 +586,9 @@ router.post('/agents/heartbeat', function (req, res) {
   // Prune old savepoints (keep last 100)
   pruneSavepoints(agentId, 100);
 
-  var response = { ok: true, agent: agentId, status: status };
+  // Include pending counts so agents know if they have unread messages
+  var pending = countPendingForAgent(agentId);
+  var response = { ok: true, agent: agentId, status: status, pending: pending };
 
   // Auto-dispatch: if agent just came online or is idle with no work, try to assign
   if (!workingOn && (status === 'online' || status === 'idle')) {
