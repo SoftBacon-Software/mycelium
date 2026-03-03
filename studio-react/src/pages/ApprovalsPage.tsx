@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { castVote, resolveApproval, updateTask } from '../api/endpoints'
+import { getSenderDisplay } from '../utils/sender'
 import type { Approval, Task } from '../api/types'
 import RiskBadge from '../components/approvals/RiskBadge'
 import QuorumBar from '../components/approvals/QuorumBar'
@@ -219,7 +220,7 @@ export default function ApprovalsPage() {
                   </div>
                   {task.assignee && (
                     <p className="text-xs text-text-muted">
-                      Assigned to <span className="text-text-dim">{task.assignee}</span>
+                      Assigned to <span className="text-text-dim">{getSenderDisplay(task.assignee)}</span>
                     </p>
                   )}
                 </div>
@@ -279,7 +280,7 @@ function ApprovalCard({ approval, onVote }: ApprovalCardProps) {
       {/* Meta row */}
       <div className="flex items-center gap-3 text-xs text-text-muted">
         <span>
-          by <span className="text-text-dim">{approval.created_by}</span>
+          by <span className="text-text-dim">{getSenderDisplay(approval.created_by)}</span>
         </span>
         <span>&middot;</span>
         <span>{formatDate(approval.created_at)}</span>

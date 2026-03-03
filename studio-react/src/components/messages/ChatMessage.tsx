@@ -46,7 +46,7 @@ function isAgentMessage(msg: TeamChat | Message): msg is Message {
 }
 
 function getSenderName(msg: TeamChat | Message): string {
-  return isAgentMessage(msg) ? getSenderDisplay(msg.from_agent) : msg.display_name
+  return getSenderDisplay(isAgentMessage(msg) ? msg.from_agent : msg.display_name)
 }
 
 // ─── Main component ─────────────────────────────────────────────────────────

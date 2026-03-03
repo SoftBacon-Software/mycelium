@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { fileBug, updateBug } from '../api/endpoints'
+import { getSenderDisplay } from '../utils/sender'
 import { toast } from 'sonner'
 import type { Bug } from '../api/types'
 import BugCard from '../components/bugs/BugCard'
@@ -321,7 +322,7 @@ function BugDetail({ bug, onClose }: BugDetailProps) {
       />
 
       {/* Slide-in panel */}
-      <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-surface border-l border-border z-50 flex flex-col animate-in slide-in-from-right">
+      <div className="fixed top-0 right-0 h-full w-full sm:max-w-lg bg-surface border-l border-border z-50 flex flex-col animate-in slide-in-from-right">
         {/* Header */}
         <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
           <div className="min-w-0 flex-1 mr-3">
@@ -406,7 +407,7 @@ function BugDetail({ bug, onClose }: BugDetailProps) {
                 />
               </MetaField>
               <MetaField label="Filed by">
-                <span className="text-sm text-text">{bug.filed_by}</span>
+                <span className="text-sm text-text">{getSenderDisplay(bug.filed_by)}</span>
               </MetaField>
               <MetaField label="Project">
                 <span className="text-sm text-text font-mono">{bug.project_id}</span>
