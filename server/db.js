@@ -603,7 +603,7 @@ export function createDvMessage(fromAgent, toAgent, threadId, projectId, content
 
 export function createDvRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending') RETURNING id"
+    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status, priority) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending', 'urgent') RETURNING id"
   ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}');
   return result.id;
 }
