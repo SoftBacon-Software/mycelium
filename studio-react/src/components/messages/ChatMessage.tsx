@@ -4,7 +4,8 @@ import { getSenderDisplay } from '../../utils/sender'
 
 // ─── Avatar helpers ─────────────────────────────────────────────────────────
 
-function getAvatarConfig(name: string): { bg: string; initial: string } {
+function getAvatarConfig(name: string | null | undefined): { bg: string; initial: string } {
+  if (!name) return { bg: 'bg-text-muted', initial: '?' }
   const lower = name.toLowerCase()
   if (lower === 'admin' || lower === '__admin__' || lower.startsWith('admin')) {
     return { bg: 'bg-accent', initial: 'A' }
@@ -27,7 +28,7 @@ function getAvatarConfig(name: string): { bg: string; initial: string } {
   return { bg: 'bg-blue', initial: name.charAt(0).toUpperCase() || '?' }
 }
 
-function Avatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' }) {
+function Avatar({ name, size = 'sm' }: { name: string | null | undefined; size?: 'sm' | 'md' }) {
   const { bg, initial } = getAvatarConfig(name)
   const dim = size === 'sm' ? 'w-7 h-7 text-xs' : 'w-8 h-8 text-sm'
   return (
