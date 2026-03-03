@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useLiveStore } from '../stores/liveStore'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import { timeAgo, formatTime } from '../utils/time'
@@ -131,6 +132,246 @@ const stepStatusColors: Record<string, string> = {
   in_progress: 'bg-accent',
   pending: 'bg-surface-raised',
   blocked: 'bg-red',
+}
+
+// ─── Sparkline SVG ────────────────────────────────────────────────────────────
+
+function Sparkline({
+  data,
+  width = 320,
+  height = 48,
+  color = '#22c55e',
+  fillColor,
+}: {
+  data: number[]
+  width?: number
+  height?: number
+  color?: string
+  fillColor?: string
+}) {
+  if (data.length < 2) {
+    return (
+      <svg width={width} height={height} className="shrink-0">
+        <line x1={0} y1={height / 2} x2={width} y2={height / 2} stroke={color} strokeWidth={1} opacity={0.3} />
+      </svg>
+    )
+  }
+
+  const max = Math.max(...data, 1)
+  const padding = 2
+  const usableH = height - padding * 2
+  const stepX = width / (data.length - 1)
+
+  const points = data.map((v, i) => {
+    const x = i * stepX
+    const y = padding + usableH - (v / max) * usableH
+    return `${x},${y}`
+  })
+
+  const linePath = `M${points.join(' L')}`
+  const fillPath = `${linePath} L${width},${height} L0,${height} Z`
+
+  return (
+    <svg width={width} height={height} className="shrink-0">
+      {fillColor && <path d={fillPath} fill={fillColor} />}
+      <path d={linePath} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
+      {/* Latest value dot */}
+      {data.length > 0 && (() => {
+        const lastX = (data.length - 1) * stepX
+        const lastY = padding + usableH - (data[data.length - 1] / max) * usableH
+        return <circle cx={lastX} cy={lastY} r={2.5} fill={color} />
+      })()}
+    </svg>
+  )
+}
+
+// ─── Event Rate Pulse ─────────────────────────────────────────────────────────
+
+const BUCKET_SECONDS = 60 // 1-minute buckets
+const BUCKET_COUNT = 30   // 30 minutes of history
+
+function useEventRate() {
+  const liveEvents = useLiveStore((s) => s.events)
+  const connected = useLiveStore((s) => s.connected)
+  const [buckets, setBuckets] = useState<number[]>(() => new Array(BUCKET_COUNT).fill(0))
+  const bucketsRef = useRef(buckets)
+  bucketsRef.current = buckets
+  const lastTickRef = useRef(Math.floor(Date.now() / 1000 / BUCKET_SECONDS))
+  const eventCountRef = useRef(0)
+
+  // Count events as they arrive from SSE
+  const prevLenRef = useRef(liveEvents.length)
+  useEffect(() => {
+    const newCount = liveEvents.length - prevLenRef.current
+    if (newCount > 0) {
+      eventCountRef.current += newCount
+    } else if (liveEvents.length < prevLenRef.current) {
+      // Reset (store was cleared)
+      eventCountRef.current = 0
+    }
+    prevLenRef.current = liveEvents.length
+  }, [liveEvents.length])
+
+  // Tick every BUCKET_SECONDS to push a new bucket
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Math.floor(Date.now() / 1000 / BUCKET_SECONDS)
+      if (now > lastTickRef.current) {
+        lastTickRef.current = now
+        setBuckets((prev) => {
+          const next = [...prev.slice(1), eventCountRef.current]
+          eventCountRef.current = 0
+          return next
+        })
+      }
+    }, 5000) // Check every 5 seconds
+    return () => clearInterval(interval)
+  }, [])
+
+  const currentRate = eventCountRef.current
+  const avgRate = buckets.length > 0
+    ? Math.round(buckets.reduce((a, b) => a + b, 0) / buckets.filter((b) => b > 0).length || 0)
+    : 0
+  const peakRate = Math.max(...buckets, currentRate)
+
+  return { buckets, currentRate, avgRate, peakRate, connected }
+}
+
+function EventRatePulse() {
+  const { buckets, currentRate, avgRate, peakRate, connected } = useEventRate()
+
+  // Color based on rate: green = normal, amber = busy, red = flooding
+  const rateColor = currentRate > 20 ? '#ef4444' : currentRate > 10 ? '#f59e0b' : '#22c55e'
+  const fillColor = currentRate > 20 ? 'rgba(239,68,68,0.08)' : currentRate > 10 ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)'
+
+  return (
+    <div className="bg-surface rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-dim">Event Pulse</h3>
+          {connected ? (
+            <span className="flex items-center gap-1.5 text-[10px] text-green font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
+              LIVE
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-[10px] text-text-muted">
+              <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
+              OFFLINE
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-text-muted">30m window, 1m buckets</span>
+      </div>
+
+      {/* Sparkline */}
+      <div className="flex items-end gap-4">
+        <Sparkline
+          data={[...buckets, currentRate]}
+          width={400}
+          height={56}
+          color={rateColor}
+          fillColor={fillColor}
+        />
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <div className="flex items-baseline gap-1">
+            <span className="text-2xl font-bold tabular-nums" style={{ color: rateColor }}>
+              {currentRate}
+            </span>
+            <span className="text-xs text-text-muted">/min</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div className="flex items-center gap-6 mt-3 pt-3 border-t border-border">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">Avg</span>
+          <span className="text-sm font-semibold tabular-nums text-text-dim">{avgRate}/min</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">Peak</span>
+          <span className="text-sm font-semibold tabular-nums text-text-dim">{peakRate}/min</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">SSE Buffer</span>
+          <span className="text-sm font-semibold tabular-nums text-text-dim">
+            {useLiveStore.getState().events.length}/100
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Agent Activity Timeline ──────────────────────────────────────────────────
+
+function AgentActivityTimeline({ agents }: { agents: Agent[] }) {
+  const liveEvents = useLiveStore((s) => s.events)
+  const recentHeartbeats = useLiveStore((s) => s.recentHeartbeats)
+
+  // Group recent events by agent (last 5 minutes)
+  const agentActivity = useMemo(() => {
+    const cutoff = Date.now() - 5 * 60 * 1000
+    const activity = new Map<string, { count: number; lastEvent: string; lastTime: number }>()
+
+    for (const event of liveEvents) {
+      if (!event.agent) continue
+      const t = event.created_at ? new Date(event.created_at).getTime() : Date.now()
+      if (t < cutoff) continue
+
+      const prev = activity.get(event.agent)
+      if (!prev) {
+        activity.set(event.agent, { count: 1, lastEvent: event.type, lastTime: t })
+      } else {
+        prev.count++
+        if (t > prev.lastTime) {
+          prev.lastEvent = event.type
+          prev.lastTime = t
+        }
+      }
+    }
+    return activity
+  }, [liveEvents])
+
+  const onlineAgents = agents.filter((a) => a.status === 'online')
+  if (onlineAgents.length === 0) return null
+
+  return (
+    <div className="bg-surface rounded-lg border border-border p-4">
+      <h3 className="text-sm font-semibold text-text-dim mb-3">Agent Activity (5m)</h3>
+      <div className="space-y-2">
+        {onlineAgents.map((agent) => {
+          const activity = agentActivity.get(agent.id)
+          const hbTime = recentHeartbeats[agent.id]
+          const isRecent = hbTime && Date.now() - hbTime < 10_000
+
+          return (
+            <div key={agent.id} className="flex items-center gap-3">
+              <div className="flex items-center gap-2 w-36 shrink-0">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${isRecent ? 'bg-green animate-pulse' : 'bg-text-muted/30'}`} />
+                <span className="text-sm text-text truncate font-medium">
+                  {agent.name || agent.id}
+                </span>
+              </div>
+              {/* Mini bar showing event count */}
+              <div className="flex-1 h-4 bg-surface-raised rounded overflow-hidden">
+                {activity && activity.count > 0 && (
+                  <div
+                    className="h-full bg-accent/30 rounded transition-all duration-500"
+                    style={{ width: `${Math.min(100, (activity.count / 20) * 100)}%` }}
+                  />
+                )}
+              </div>
+              <span className="text-xs text-text-muted tabular-nums w-16 text-right shrink-0">
+                {activity ? `${activity.count} events` : 'idle'}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ─── Sections ─────────────────────────────────────────────────────────────────
@@ -600,15 +841,30 @@ export default function NetworkHealthPage() {
     refresh,
   } = useDashboardStore()
 
+  const liveEvents = useLiveStore((s) => s.events)
+
   useEffect(() => {
     refresh()
   }, [refresh])
 
-  // Auto-refresh every 30 seconds
+  // SSE-driven auto-refresh: refresh store data when significant events arrive
+  const lastRefreshRef = useRef(0)
   useEffect(() => {
-    const interval = setInterval(() => {
+    if (liveEvents.length === 0) return
+    const latest = liveEvents[0]
+    // Skip heartbeats for refresh triggers
+    if (latest.type === 'agent_heartbeat') return
+    const now = Date.now()
+    // Throttle: at most once per 10 seconds
+    if (now - lastRefreshRef.current > 10_000) {
+      lastRefreshRef.current = now
       refresh()
-    }, 30_000)
+    }
+  }, [liveEvents, refresh])
+
+  // Fallback poll every 60 seconds (reduced from 30s since SSE handles live)
+  useEffect(() => {
+    const interval = setInterval(() => refresh(), 60_000)
     return () => clearInterval(interval)
   }, [refresh])
 
@@ -645,7 +901,17 @@ export default function NetworkHealthPage() {
         instanceConfig={instanceConfig}
       />
 
-      {/* 2. Agents Grid */}
+      {/* 2. Event Pulse + Agent Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <EventRatePulse />
+        </div>
+        <div>
+          <AgentActivityTimeline agents={[...nonDroneAgents, ...drones]} />
+        </div>
+      </div>
+
+      {/* 3. Agents Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Agents
@@ -656,7 +922,7 @@ export default function NetworkHealthPage() {
         <AgentsGrid agents={nonDroneAgents} />
       </section>
 
-      {/* 3. Drones Grid */}
+      {/* 4. Drones Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Drones
@@ -667,7 +933,7 @@ export default function NetworkHealthPage() {
         <DronesGrid drones={drones} droneJobs={droneJobs} />
       </section>
 
-      {/* 4. Active Plans Progress */}
+      {/* 5. Active Plans Progress */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Active Plans
@@ -678,7 +944,7 @@ export default function NetworkHealthPage() {
         <ActivePlansProgress plans={plans} />
       </section>
 
-      {/* 5. Recent Activity Feed */}
+      {/* 6. Recent Activity Feed */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3">Recent Activity</h2>
         <RecentActivityFeed events={events} />
