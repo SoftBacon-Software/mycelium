@@ -84,8 +84,7 @@ import {
   isChannelMember, getChannelsByUser,
   markChannelRead, getUnreadCounts, getLatestChannelMessageId,
   listChannelMessages, createChannelMessage,
-  listGeneralChannelMessages, listTeamChatChannelMessages,
-  autoCreateEntityChannel, getOrCreateDmChannel,
+  getOrCreateDmChannel,
   createSavepoint, getLatestSavepoint, getSavepointHistory,
   updateSavepointNotes, computeSavepointDiff, pruneSavepoints,
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
@@ -720,10 +719,6 @@ router.post('/tasks', function (req, res) {
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
   var id = createDvTask(title, description, projectId, agentId, priority, tags);
-  // Auto-create channel for task
-  var taskMembers = [agentId];
-  if (req.body.assignee) taskMembers.push(req.body.assignee);
-  autoCreateEntityChannel('task', id, '#task-' + id + ': ' + title, agentId, taskMembers);
   // Handle optional fields
   var updates = {};
   if (req.body.assignee) updates.assignee = req.body.assignee;
@@ -1406,10 +1401,6 @@ router.post('/plans', function (req, res) {
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
   var id = createDvPlan(title, description, projectId, owner, priority, tags, agentId);
-  // Auto-create channel for plan
-  var planMembers = [];
-  if (owner) planMembers.push(owner);
-  autoCreateEntityChannel('plan', id, '#plan-' + id + ': ' + title, agentId, planMembers);
   emitEvent('plan_created', agentId, projectId, agentId + ' created plan: ' + title, { plan_id: id });
   dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, project_id: projectId, owner: owner });
   var result = { id: id, title: title };
@@ -2251,10 +2242,6 @@ router.post('/bugs', function (req, res) {
     diagStr = typeof diagnostic_data === 'string' ? diagnostic_data : JSON.stringify(diagnostic_data);
   }
   var id = createDvBug(projectId, title, description, category, severity, who, assignee, diagStr);
-  // Auto-create channel for bug
-  var bugMembers = [who];
-  if (assignee) bugMembers.push(assignee);
-  autoCreateEntityChannel('bug', id, '#bug-' + id + ': ' + title, who, bugMembers);
   emitEvent('bug_created', who, projectId || '', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
   dispatchWebhook('bug_created', who, { bug_id: id, title: title, project_id: projectId, severity: severity, reporter: who, assignee: assignee });
   res.json({ ok: true, id: id });
@@ -2490,14 +2477,7 @@ router.get('/channels/:id/messages', function (req, res) {
     after: req.query.after ? parseIntParam(req.query.after) : undefined,
     limit: parseLimit(req.query.limit, 50)
   };
-  var messages;
-  if (channel.slug === 'general') {
-    messages = listGeneralChannelMessages(channel.id, filters);
-  } else if (channel.slug === 'team-chat') {
-    messages = listTeamChatChannelMessages(channel.id, filters);
-  } else {
-    messages = listChannelMessages(channel.id, filters);
-  }
+  var messages = listChannelMessages(channel.id, filters);
   res.json(messages);
 });
 

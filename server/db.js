@@ -1482,35 +1482,12 @@ export function createChannelMessage(channelId, fromAgent, content, metadata) {
   return result.id;
 }
 
-export function listGeneralChannelMessages(generalChannelId, filters) {
-  var where = ['(channel_id = ? OR channel_id IS NULL)', "msg_type != 'chat'"];
-  var params = [generalChannelId];
-  if (filters.before) { where.push('id < ?'); params.push(filters.before); }
-  if (filters.after) { where.push('id > ?'); params.push(filters.after); }
-  params.push(filters.limit || 50);
-  return db.prepare(
-    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
-  ).all(...params);
-}
-
-export function listTeamChatChannelMessages(teamChatChannelId, filters) {
-  var where = ["(channel_id = ? OR (msg_type = 'chat' AND channel_id IS NULL))"];
-  var params = [teamChatChannelId];
-  if (filters.before) { where.push('id < ?'); params.push(filters.before); }
-  if (filters.after) { where.push('id > ?'); params.push(filters.after); }
-  params.push(filters.limit || 50);
-  return db.prepare(
-    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
-  ).all(...params);
-}
-
 // -- Channel Seeding + Auto-Creation --
 
 export function ensureDefaultChannels() {
   var defaults = [
     { name: '#general', slug: 'general', type: 'general', description: 'General discussion' },
-    { name: '#admin', slug: 'admin', type: 'announcement', description: 'Admin coordination' },
-    { name: '#team-chat', slug: 'team-chat', type: 'announcement', description: 'Team chat' }
+    { name: '#admin', slug: 'admin', type: 'announcement', description: 'Admin coordination' }
   ];
   for (var def of defaults) {
     var existing = getChannelBySlug(def.slug);
