@@ -1,327 +1,293 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { fetchInbox, markInboxItemRead, markInboxItemActioned, dismissInboxItem, castVote, resolveApproval } from '../api/endpoints'
 import { useAuthStore } from '../stores/authStore'
-import { getInboxItems, getInboxCount, markInboxRead, dismissInboxItem } from '../api/endpoints'
+import { useDashboardStore } from '../stores/dashboardStore'
+import { getSenderDisplay } from '../utils/sender'
+import { timeAgo } from '../utils/time'
+import Badge from '../components/shared/Badge'
 import type { InboxItem } from '../api/types'
-import { Inbox, MessageSquare, ShieldCheck, Megaphone, AtSign, CheckCheck, X, RefreshCw } from 'lucide-react'
+import {
+  Bell, ShieldCheck, AtSign, MessageSquare, Star, Megaphone,
+  Check, X, Eye, Trash2,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
-type FilterTab = 'unread' | 'all' | 'approval' | 'bip_draft' | 'mention'
+/* ── Config ── */
 
-const TABS: { key: FilterTab; label: string }[] = [
-  { key: 'unread', label: 'Unread' },
-  { key: 'all', label: 'All' },
-  { key: 'approval', label: 'Approvals' },
-  { key: 'bip_draft', label: 'Posts' },
-  { key: 'mention', label: 'Mentions' },
-]
-
-const TYPE_ICONS: Record<string, React.FC<{ className?: string }>> = {
-  approval: ({ className }) => <ShieldCheck className={className} strokeWidth={1.5} />,
-  bip_draft: ({ className }) => <Megaphone className={className} strokeWidth={1.5} />,
-  mention: ({ className }) => <AtSign className={className} strokeWidth={1.5} />,
-  message: ({ className }) => <MessageSquare className={className} strokeWidth={1.5} />,
+const typeConfig: Record<string, { icon: LucideIcon; label: string; variant: 'accent' | 'blue' | 'red' | 'green' | 'purple' }> = {
+  message: { icon: MessageSquare, label: 'Message', variant: 'accent' },
+  approval: { icon: ShieldCheck, label: 'Approval', variant: 'red' },
+  bip_draft: { icon: Megaphone, label: 'BIP Draft', variant: 'purple' },
+  mention: { icon: AtSign, label: 'Mention', variant: 'blue' },
+  feedback_request: { icon: Star, label: 'Feedback', variant: 'green' },
 }
 
-const TYPE_COLORS: Record<string, string> = {
-  approval: 'text-amber-400',
-  bip_draft: 'text-green-400',
-  mention: 'text-blue-400',
-  message: 'text-text-dim',
+const priorityStyle: Record<string, { bg: string; dot: string; label: string }> = {
+  urgent: { bg: 'bg-red/5 border-red/20', dot: 'bg-red', label: 'Urgent' },
+  normal: { bg: 'bg-surface-raised', dot: 'bg-accent', label: 'Normal' },
+  low: { bg: 'bg-surface', dot: 'bg-text-muted', label: 'Low / FYI' },
 }
 
-const PRIORITY_BADGE: Record<string, string> = {
-  urgent: 'bg-red/15 text-red text-xs px-1.5 py-0.5 rounded font-mono uppercase',
-  normal: '',
-  low: 'bg-surface text-text-muted text-xs px-1.5 py-0.5 rounded font-mono uppercase',
+function linkForItem(item: InboxItem): string {
+  if (item.type === 'approval') return '/approvals'
+  if (item.type === 'mention' || item.type === 'message') return '/messages'
+  if (item.type === 'feedback_request') return '/feedback'
+  return '/inbox'
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return Math.floor(diff / 60_000) + 'm ago'
-  if (diff < 86_400_000) return Math.floor(diff / 3_600_000) + 'h ago'
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-function getTypeIcon(type: string): React.FC<{ className?: string }> {
-  return TYPE_ICONS[type] || TYPE_ICONS.message
-}
+/* ── Component ── */
 
 export default function InboxPage() {
+  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
+  const refresh = useDashboardStore((s) => s.refresh)
   const [items, setItems] = useState<InboxItem[]>([])
-  const [unreadCount, setUnreadCount] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [tab, setTab] = useState<FilterTab>('unread')
-  const [selected, setSelected] = useState<InboxItem | null>(null)
-
-  const operatorId = user?.username || 'greatness'
+  const [loading, setLoading] = useState(true)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
     try {
-      const filters: Record<string, string> = { operator_id: operatorId }
-      if (tab !== 'all' && tab !== 'unread') filters.type = tab
-      if (tab === 'unread') filters.status = 'unread'
-      const data = await getInboxItems(filters)
+      const data = await fetchInbox()
       setItems(data)
-      const counts = await getInboxCount(operatorId)
-      setUnreadCount(counts.unread ?? 0)
-    } catch (e) {
-      toast.error('Failed to load inbox')
+    } catch {
+      // silent — next poll will retry
     } finally {
       setLoading(false)
     }
-  }, [operatorId, tab])
+  }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 10_000)
+    return () => clearInterval(interval)
+  }, [load])
 
-  const handleMarkRead = useCallback(async (item: InboxItem) => {
+  // Group by priority
+  const grouped = useMemo(() => {
+    const urgent = items.filter((i) => i.priority === 'urgent')
+    const normal = items.filter((i) => i.priority === 'normal')
+    const low = items.filter((i) => i.priority === 'low')
+    return { urgent, normal, low }
+  }, [items])
+
+  const unreadCount = useMemo(
+    () => items.filter((i) => i.status === 'unread').length,
+    [items],
+  )
+
+  async function handleMarkRead(item: InboxItem) {
     try {
-      await markInboxRead(item.id)
-      setItems((prev) => prev.map((i) => i.id === item.id ? { ...i, status: 'read' } : i))
-      setUnreadCount((c) => Math.max(0, c - (item.status === 'unread' ? 1 : 0)))
-      if (selected?.id === item.id) setSelected({ ...item, status: 'read' })
-    } catch (e) {
-      toast.error('Failed to mark read')
-    }
-  }, [selected])
+      await markInboxItemRead(item.id)
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
 
-  const handleDismiss = useCallback(async (item: InboxItem) => {
+  async function handleAction(item: InboxItem) {
+    try {
+      await markInboxItemActioned(item.id)
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
+
+  async function handleDismiss(item: InboxItem) {
     try {
       await dismissInboxItem(item.id)
-      setItems((prev) => prev.filter((i) => i.id !== item.id))
-      if (selected?.id === item.id) setSelected(null)
-      toast.success('Dismissed')
-    } catch (e) {
-      toast.error('Failed to dismiss')
-    }
-  }, [selected])
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
 
-  const handleSelectItem = useCallback((item: InboxItem) => {
-    setSelected(item)
+  async function handleApprovalVote(item: InboxItem, vote: 'approve' | 'deny') {
+    if (!user) return
+    try {
+      await castVote(item.entity_id, vote, null, user.username, 'operator')
+      await markInboxItemActioned(item.id)
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
+
+  function handleExpand(item: InboxItem) {
     if (item.status === 'unread') handleMarkRead(item)
-  }, [handleMarkRead])
+    setExpandedId((prev) => (prev === item.id ? null : item.id))
+  }
 
-  const filteredItems = items
+  if (loading && items.length === 0) {
+    return (
+      <div className="space-y-6">
+        <h2 className="text-xl font-semibold text-text">Inbox</h2>
+        <div className="bg-surface rounded-lg p-8 text-center">
+          <p className="text-text-muted text-sm">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Inbox size={18} className="text-accent" strokeWidth={1.5} />
-          <h1 className="text-xl font-semibold text-text">Inbox</h1>
-          {unreadCount > 0 && (
-            <span className="bg-accent text-bg text-xs font-mono px-2 py-0.5 rounded-full">
-              {unreadCount}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-accent transition-colors"
-        >
-          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} strokeWidth={1.5} />
-          {loading ? 'Loading...' : 'Refresh'}
-        </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 mb-4 border-b border-border pb-0">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 text-xs font-mono rounded-t transition-colors ${
-              tab === t.key
-                ? 'bg-surface text-accent border border-b-surface border-border -mb-px'
-                : 'text-text-muted hover:text-text'
-            }`}
-          >
-            {t.label}
-            {t.key === 'unread' && unreadCount > 0 && (
-              <span className="ml-1.5 bg-accent text-bg rounded-full px-1 py-0 text-[10px]">
-                {unreadCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-1 min-h-0 gap-3">
-        {/* Item list */}
-        <div className={`flex flex-col gap-1 overflow-y-auto ${selected ? 'w-80 flex-shrink-0' : 'flex-1'}`}>
-          {filteredItems.length === 0 && !loading && (
-            <div className="text-center py-12">
-              <Inbox size={32} className="text-text-muted mx-auto mb-3" strokeWidth={1} />
-              <p className="text-sm text-text-muted">
-                {tab === 'unread' ? 'All caught up' : 'No items'}
-              </p>
-            </div>
-          )}
-          {filteredItems.map((item) => {
-            const Icon = getTypeIcon(item.type)
-            const isSelected = selected?.id === item.id
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelectItem(item)}
-                className={`text-left w-full p-3 rounded border transition-colors group ${
-                  isSelected
-                    ? 'bg-surface border-accent/40'
-                    : item.status === 'unread'
-                    ? 'bg-surface/60 border-border hover:border-accent/30 hover:bg-surface'
-                    : 'bg-transparent border-transparent hover:border-border hover:bg-surface/40'
-                }`}
-              >
-                <div className="flex items-start gap-2.5">
-                  <Icon className={`mt-0.5 flex-shrink-0 w-4 h-4 ${TYPE_COLORS[item.type] || 'text-text-dim'}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      {item.status === 'unread' && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
-                      )}
-                      <span className={`text-sm font-medium truncate ${item.status === 'unread' ? 'text-text' : 'text-text-dim'}`}>
-                        {item.title}
-                      </span>
-                      {item.priority === 'urgent' && (
-                        <span className={PRIORITY_BADGE.urgent}>urgent</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-text-muted truncate">{item.summary}</p>
-                    <p className="text-xs text-text-muted mt-1 font-mono">{formatDate(item.created_at)}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); handleDismiss(item) }}
-                    className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text transition-opacity flex-shrink-0"
-                    title="Dismiss"
-                  >
-                    <X size={12} strokeWidth={1.5} />
-                  </button>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-
-        {/* Detail panel */}
-        {selected && (
-          <div className="flex-1 min-h-0 overflow-y-auto bg-surface border border-border rounded p-4">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-2">
-                {(() => { const Icon = getTypeIcon(selected.type); return <Icon className={`w-4 h-4 ${TYPE_COLORS[selected.type] || 'text-text-dim'}`} /> })()}
-                <h2 className="text-sm font-semibold text-text">{selected.title}</h2>
-                {selected.priority === 'urgent' && (
-                  <span className={PRIORITY_BADGE.urgent}>urgent</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {selected.status === 'unread' && (
-                  <button
-                    type="button"
-                    onClick={() => handleMarkRead(selected)}
-                    className="flex items-center gap-1 text-xs text-text-muted hover:text-accent transition-colors"
-                  >
-                    <CheckCheck size={12} strokeWidth={1.5} /> Mark read
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setSelected(null)}
-                  className="text-text-muted hover:text-text transition-colors"
-                >
-                  <X size={14} strokeWidth={1.5} />
-                </button>
-              </div>
-            </div>
-
-            <p className="text-xs text-text-muted mb-3 font-mono">{formatDate(selected.created_at)}</p>
-
-            <p className="text-sm text-text-dim mb-4">{selected.summary}</p>
-
-            {/* Linked entity actions */}
-            {selected.type === 'approval' && selected.data?.approval_id && (
-              <div className="border border-border rounded p-3 bg-surface/50">
-                <p className="text-xs text-text-muted mb-2">Approval #{selected.data.approval_id}</p>
-                <div className="flex gap-2">
-                  <Link
-                    to="/approvals"
-                    className="text-xs bg-accent text-bg px-3 py-1.5 rounded hover:bg-accent-light transition-colors font-medium"
-                  >
-                    Review in Approvals →
-                  </Link>
-                </div>
-              </div>
-            )}
-
-            {selected.type === 'bip_draft' && selected.data?.draft_id && (
-              <div className="border border-border rounded p-3 bg-surface/50">
-                <p className="text-xs text-text-muted mb-1">Draft #{selected.data.draft_id}</p>
-                {selected.data.content_preview && (
-                  <p className="text-xs text-text-dim italic mb-2">"{selected.data.content_preview}"</p>
-                )}
-                <p className="text-xs text-text-muted">
-                  Approve or reject in the Build in Public section.
-                </p>
-              </div>
-            )}
-
-            {selected.type === 'mention' && selected.data?.message_id && (
-              <div className="border border-border rounded p-3 bg-surface/50">
-                <p className="text-xs text-text-muted">
-                  From: <span className="text-text-dim">{selected.data.from || 'unknown'}</span>
-                </p>
-                {selected.data.project_id && (
-                  <p className="text-xs text-text-muted">
-                    Project: <span className="text-text-dim">{selected.data.project_id}</span>
-                  </p>
-                )}
-                <Link
-                  to="/messages"
-                  className="inline-block mt-2 text-xs text-accent hover:text-accent-light transition-colors"
-                >
-                  View in Agent Comms →
-                </Link>
-              </div>
-            )}
-
-            {selected.type === 'message' && (
-              <div className="border border-border rounded p-3 bg-surface/50">
-                <p className="text-xs text-text-muted">
-                  From: <span className="text-text-dim">{selected.data?.from || 'unknown'}</span>
-                </p>
-                <Link
-                  to="/messages"
-                  className="inline-block mt-2 text-xs text-accent hover:text-accent-light transition-colors"
-                >
-                  View in Agent Comms →
-                </Link>
-              </div>
-            )}
-
-            {/* Raw data (collapsed) */}
-            {selected.data && Object.keys(selected.data).length > 0 && (
-              <details className="mt-4">
-                <summary className="text-xs text-text-muted cursor-pointer hover:text-text">
-                  Raw data
-                </summary>
-                <pre className="mt-2 text-xs text-text-muted bg-surface/50 rounded p-2 overflow-x-auto">
-                  {JSON.stringify(selected.data, null, 2)}
-                </pre>
-              </details>
-            )}
-          </div>
+      <div className="flex items-center gap-3">
+        <h2 className="text-xl font-semibold text-text">Inbox</h2>
+        {unreadCount > 0 && (
+          <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
+            {unreadCount}
+          </span>
         )}
       </div>
+
+      {/* Empty state */}
+      {items.length === 0 && (
+        <div className="bg-surface rounded-lg p-12 text-center">
+          <Bell size={32} className="mx-auto text-text-muted mb-3 opacity-50" />
+          <p className="text-text-dim text-sm font-medium mb-1">Inbox clear</p>
+          <p className="text-text-muted text-xs">No items requiring your attention. Nice.</p>
+        </div>
+      )}
+
+      {/* Priority sections */}
+      {(['urgent', 'normal', 'low'] as const).map((priority) => {
+        const sectionItems = grouped[priority]
+        if (sectionItems.length === 0) return null
+        const style = priorityStyle[priority]
+
+        return (
+          <section key={priority}>
+            <div className="flex items-center gap-2 mb-2">
+              <div className={`w-2 h-2 rounded-full ${style.dot}`} />
+              <h3 className="text-sm font-semibold text-text-dim uppercase tracking-wider">
+                {style.label}
+              </h3>
+              <span className="text-xs text-text-muted">({sectionItems.length})</span>
+            </div>
+
+            <div className="space-y-2">
+              {sectionItems.map((item) => {
+                const tc = typeConfig[item.type] ?? typeConfig.message
+                const TypeIcon = tc.icon
+                const isExpanded = expandedId === item.id
+                const isUnread = item.status === 'unread'
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-lg border transition-colors ${style.bg} ${
+                      isUnread ? 'border-accent/30' : 'border-border/30'
+                    }`}
+                  >
+                    {/* Item row */}
+                    <button
+                      onClick={() => handleExpand(item)}
+                      className="w-full text-left p-4 flex items-start gap-3"
+                    >
+                      {/* Unread indicator */}
+                      <div className="mt-1 shrink-0">
+                        {isUnread ? (
+                          <div className="w-2 h-2 rounded-full bg-accent" />
+                        ) : (
+                          <div className="w-2 h-2" />
+                        )}
+                      </div>
+
+                      {/* Type icon */}
+                      <TypeIcon size={16} strokeWidth={1.5} className={`mt-0.5 shrink-0 text-${tc.variant === 'accent' ? 'accent' : tc.variant}`} />
+
+                      {/* Content */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <Badge variant={tc.variant}>{tc.label}</Badge>
+                          <span className={`text-sm font-medium truncate ${isUnread ? 'text-text' : 'text-text-dim'}`}>
+                            {item.title}
+                          </span>
+                        </div>
+                        <p className="text-xs text-text-muted truncate">{item.summary}</p>
+                        <span className="text-xs text-text-muted mt-1 block">{timeAgo(item.created_at)}</span>
+                      </div>
+
+                      {/* Expand indicator */}
+                      <svg
+                        viewBox="0 0 12 12"
+                        className={`w-3 h-3 text-text-muted shrink-0 mt-1.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        fill="none" stroke="currentColor" strokeWidth="2"
+                      >
+                        <path d="M2 4l4 4 4-4" />
+                      </svg>
+                    </button>
+
+                    {/* Expanded detail */}
+                    {isExpanded && (
+                      <div className="px-4 pb-4 pt-0 border-t border-border/30 mx-4 mb-0">
+                        <div className="pt-3 space-y-3">
+                          {/* Full summary */}
+                          <p className="text-sm text-text-dim whitespace-pre-wrap">{item.summary}</p>
+
+                          {/* Metadata */}
+                          <div className="flex items-center gap-3 text-xs text-text-muted">
+                            <span>Type: {item.entity_type}</span>
+                            {item.entity_id && (
+                              <>
+                                <span>&middot;</span>
+                                <span>#{item.entity_id}</span>
+                              </>
+                            )}
+                            <span>&middot;</span>
+                            <span>Status: {item.status}</span>
+                          </div>
+
+                          {/* Action buttons */}
+                          <div className="flex items-center gap-2 pt-1">
+                            {item.type === 'approval' ? (
+                              <>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleApprovalVote(item, 'approve') }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-green/15 text-green text-xs font-medium hover:bg-green/25 transition-colors"
+                                >
+                                  <Check size={12} /> Approve
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleApprovalVote(item, 'deny') }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-red/15 text-red text-xs font-medium hover:bg-red/25 transition-colors"
+                                >
+                                  <X size={12} /> Reject
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                {item.status !== 'actioned' && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleAction(item) }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors"
+                                  >
+                                    <Check size={12} /> Done
+                                  </button>
+                                )}
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); navigate(linkForItem(item)) }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-surface text-text-dim text-xs font-medium hover:bg-surface-raised transition-colors"
+                                >
+                                  <Eye size={12} /> View
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDismiss(item) }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-text-muted text-xs hover:text-red hover:bg-red/10 transition-colors ml-auto"
+                            >
+                              <Trash2 size={12} /> Dismiss
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )
+      })}
     </div>
   )
 }
