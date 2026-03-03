@@ -48,7 +48,7 @@ export interface Task {
 export interface Message {
   id: string;
   from_agent: string;
-  to_agent: string;
+  to_agent: string | null;
   project_id: string;
   content: string;
   msg_type: string;
