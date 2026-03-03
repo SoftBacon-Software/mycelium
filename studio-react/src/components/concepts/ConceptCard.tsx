@@ -33,7 +33,7 @@ export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left bg-surface-raised rounded-lg p-4 mb-3 cursor-pointer flex gap-3 transition-all hover:ring-1 ring-border hover:bg-surface-raised/80 group"
+      className="w-full text-left bg-surface-raised rounded-lg p-4 cursor-pointer flex gap-3 transition-all hover:ring-1 ring-border hover:bg-surface-raised/80 group"
     >
       {/* Type indicator bar */}
       <div className={`w-1 shrink-0 rounded-full self-stretch ${barColor}`} />

@@ -768,6 +768,15 @@ export function getBootPayload(agentId) {
   // --- Project record ---
   var project = getProject(agent.project_id);
 
+  // --- Project concepts: cross-project creative DNA ---
+  var concepts = [];
+  if (agent.project_id) {
+    concepts = getProjectConcepts(agent.project_id);
+    for (var con of concepts) {
+      try { con.data = JSON.parse(con.data); } catch (e) { /* keep as string */ }
+    }
+  }
+
   return {
     agent: safeAgent,
     project: project || null,
@@ -788,6 +797,7 @@ export function getBootPayload(agentId) {
     plans: myPlans,
     channels: myChannels,
     unread_counts: unreadMap,
+    concepts: concepts,
     plugins: listPluginRecords().filter(function (p) { return p.enabled; }),
     team_agents: otherAgents.filter(function (a) { return a.project_id === agent.project_id; }),
     server_time: new Date().toISOString()
