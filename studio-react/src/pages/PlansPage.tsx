@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useLiveStore } from '../stores/liveStore'
 import { createPlan, updatePlan, updatePlanStep, fetchPlan } from '../api/endpoints'
 import { toast } from 'sonner'
 import { formatDateTime } from '../utils/time'
@@ -289,6 +290,19 @@ function PlanDetail({ plan, onClose, onStepUpdate, onStatusChange }: PlanDetailP
 export default function PlansPage() {
   const plans = useDashboardStore((s) => s.plans)
   const refresh = useDashboardStore((s) => s.refresh)
+  const liveEvents = useLiveStore((s) => s.events)
+
+  // Auto-refresh when plan-related SSE events arrive
+  const lastLiveRef = useRef(0)
+  useEffect(() => {
+    const planEvent = liveEvents.find(
+      (e) => e.id > lastLiveRef.current && (e.type.startsWith('plan_') || e.type === 'plan_step_completed')
+    )
+    if (planEvent) {
+      lastLiveRef.current = planEvent.id
+      refresh()
+    }
+  }, [liveEvents, refresh])
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [projectFilter, setProjectFilter] = useState<string>('all')

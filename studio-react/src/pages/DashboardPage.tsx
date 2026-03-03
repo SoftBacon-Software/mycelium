@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useLiveStore } from '../stores/liveStore'
 import { formatTime as formatTimestamp, timeAgo as formatTimeAgo } from '../utils/time'
 import SummaryCard from '../components/dashboard/SummaryCard'
 import ActionRequired from '../components/dashboard/ActionRequired'
@@ -139,7 +140,20 @@ export default function DashboardPage() {
   const activeDroneJobs = droneJobs.filter((j) => j.status === 'pending' || j.status === 'claimed').length
   const characterCount = concepts.filter((c) => c.type === 'character').length
   const contextNamespaces = new Set(contextKeys.map((k) => k.namespace)).size
-  const recentEvents = events.slice(0, 20)
+  const liveEvents = useLiveStore((s) => s.events)
+  const recentHeartbeats = useLiveStore((s) => s.recentHeartbeats)
+  const recentEvents = useMemo(() => {
+    // Merge live events (newest first) with polled events, dedup by id, cap at 30
+    const seen = new Set<number>()
+    const merged: typeof events = []
+    for (const e of liveEvents) {
+      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e as typeof events[0]); }
+    }
+    for (const e of events) {
+      if (!seen.has(e.id)) { seen.add(e.id); merged.push(e); }
+    }
+    return merged.slice(0, 30)
+  }, [events, liveEvents])
   const { isConnected: voiceConnected, channelName, peers, join: joinVoice, leave: leaveVoice } = useVoiceStore()
 
   return (
@@ -299,8 +313,10 @@ export default function DashboardPage() {
                 ? agent.capabilities
                 : (() => { try { return JSON.parse(agent.capabilities as unknown as string) } catch { return [] } })()
 
+              const justHeartbeated = (Date.now() - (recentHeartbeats[agent.id] || 0)) < 10000
+
               return (
-                <div key={agent.id} className="bg-surface-raised rounded p-3 transition-all hover:ring-1 ring-border">
+                <div key={agent.id} className={`bg-surface-raised rounded p-3 transition-all hover:ring-1 ring-border ${justHeartbeated ? 'ring-1 ring-green/40' : ''}`}>
                   <div className="flex items-center gap-3 mb-1.5">
                     <div className={`w-9 h-9 rounded-lg ${avatarColor} flex items-center justify-center text-xs font-bold shrink-0`}>
                       {getAgentInitials(agent.name || agent.id)}
@@ -333,8 +349,8 @@ export default function DashboardPage() {
                         <Badge variant="muted">+{caps.length - 4}</Badge>
                       )}
                     </div>
-                    <span className="text-xs text-text-muted font-mono shrink-0 ml-2">
-                      {formatTimeAgo(agent.last_heartbeat)}
+                    <span className={`text-xs font-mono shrink-0 ml-2 ${justHeartbeated ? 'text-green' : 'text-text-muted'}`}>
+                      {justHeartbeated ? 'just now' : formatTimeAgo(agent.last_heartbeat)}
                     </span>
                   </div>
                 </div>

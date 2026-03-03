@@ -89,6 +89,7 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB
 } from '../db.js';
 import { loadPlugins, getPluginMcpTools } from '../plugins.js';
+import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
@@ -240,7 +241,8 @@ function checkAgentOrAdmin(req, res) {
 
 // ---- Event helper ----
 function emitEvent(type, agentId, projectId, summary, data) {
-  createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  broadcast({ type: type, agent: agentId || '', project_id: projectId || null, summary: summary || '', data: data || {}, id: id, created_at: new Date().toISOString() });
 }
 
 // ---- Approval gate helpers ----
@@ -264,6 +266,45 @@ function checkApprovalGate(req, who, actionType) {
 // ---- Router ----
 
 var router = Router();
+
+// ---- SSE: Live event stream ----
+router.get('/events/stream', function (req, res) {
+  // Auth: accept token as query param (SSE can't set headers)
+  var token = req.query.token;
+  if (token) {
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } else {
+    // Fall back to standard auth headers
+    var user = getStudioUser(req);
+    var adminKey = req.headers['x-admin-key'];
+    if (!user && adminKey !== ADMIN_KEY) {
+      return res.status(401).json({ error: 'Authentication required. Pass ?token= or use headers.' });
+    }
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('data: {"type":"connected","clients":' + (clientCount() + 1) + '}\n\n');
+
+  addClient(res);
+
+  // Keep-alive ping every 30s to prevent proxy/load-balancer timeouts
+  var keepAlive = setInterval(function () {
+    res.write(': ping\n\n');
+  }, 30000);
+
+  req.on('close', function () {
+    clearInterval(keepAlive);
+  });
+});
 
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
@@ -1116,8 +1157,11 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (req.body.linked_pr_url !== undefined) fields.linked_pr_url = req.body.linked_pr_url;
   if (req.body.phase !== undefined) fields.phase = escapeHtml(req.body.phase);
   updateDvPlanStep(parseInt(req.params.stepId), fields);
-  dispatchWebhook('plan_step_updated', agentId, { plan_id: parseInt(req.params.id), step_id: parseInt(req.params.stepId), fields: fields });
-  res.json({ ok: true, step_id: parseInt(req.params.stepId) });
+  var stepPlanId = parseInt(req.params.id);
+  var stepStepId = parseInt(req.params.stepId);
+  emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  res.json({ ok: true, step_id: stepStepId });
 });
 
 router.delete('/plans/:id/steps/:stepId', function (req, res) {
