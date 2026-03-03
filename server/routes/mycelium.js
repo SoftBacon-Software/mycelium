@@ -1826,7 +1826,7 @@ router.put('/admin/agents/:id/key', function (req, res) {
   clearAgentKeyCache();
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
-}));
+});
 
 // Self-service rekey — agent calls this with their current key to rotate to a new one.
 // Useful when an agent suspects their key was leaked or wants to rotate proactively.
