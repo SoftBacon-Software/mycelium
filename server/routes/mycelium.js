@@ -413,6 +413,56 @@ var router = Router();
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
 
+// ======== WAITLIST ========
+
+// POST /waitlist — public, no auth. Captures landing page signups.
+// Creates inbox item for greatness operator so they get notified.
+router.post('/waitlist', asyncHandler(async function (req, res) {
+  var { name, email, subdomain, use_case } = req.body;
+  if (!email) return apiError(res, 400, 'email is required');
+  var db = getDB();
+  // Ensure table exists (created on first use if migration hasn't run yet)
+  db.prepare(`CREATE TABLE IF NOT EXISTS dv_waitlist (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL DEFAULT '',
+    email       TEXT NOT NULL,
+    subdomain   TEXT NOT NULL DEFAULT '',
+    use_case    TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )`).run();
+  var result = db.prepare(
+    'INSERT INTO dv_waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
+  ).run(name || '', email, subdomain || '', use_case || '');
+  var waitlistId = result.lastInsertRowid;
+  // Create inbox item for greatness operator
+  try {
+    createInboxItem(
+      'greatness',
+      'message',
+      'waitlist',
+      String(waitlistId),
+      'New instance request: ' + (name || email),
+      (name ? name + ' (' + email + ')' : email) + (subdomain ? ' wants ' + subdomain + '.mycelium.fyi' : '') + (use_case ? ' — ' + use_case : ''),
+      JSON.stringify({ waitlist_id: waitlistId, name, email, subdomain, use_case }),
+      'urgent'
+    );
+  } catch (e) { /* non-fatal — still confirm signup */ }
+  emitEvent('waitlist_signup', '__system__', null, 'New waitlist signup: ' + email, { waitlist_id: waitlistId, email, subdomain });
+  res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
+}));
+
+// GET /waitlist — admin only, list all signups
+router.get('/waitlist', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  try {
+    var items = getDB().prepare('SELECT * FROM dv_waitlist ORDER BY created_at DESC').all();
+    res.json(items);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
 // ======== BOOT ========
 
 router.get('/boot/:agentId', function (req, res) {
