@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
-import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead } from '../api/endpoints'
+import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel } from '../api/endpoints'
 import type { Channel, ChannelMessage } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
 import { formatDateLabel } from '../utils/time'
+import { getSenderDisplay } from '../utils/sender'
 import { useVoice } from '../hooks/useVoice'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -33,11 +34,7 @@ function isSameDay(a: string, b: string): boolean {
   return new Date(a).toDateString() === new Date(b).toDateString()
 }
 
-function getSenderDisplay(fromAgent: string): string {
-  if (fromAgent === '__admin__') return 'Admin'
-  if (fromAgent.startsWith('__user:')) return fromAgent.slice(7)
-  return fromAgent
-}
+// getSenderDisplay imported from utils/sender
 
 // ─── Date Separator ─────────────────────────────────────────────────────────
 
@@ -218,12 +215,20 @@ function ChannelSidebar({
   activeId,
   unreadMap,
   onSelect,
+  onChannelCreated,
 }: {
   channels: Channel[]
   activeId: number | null
   unreadMap: Record<number, number>
   onSelect: (id: number) => void
+  onChannelCreated: () => void
 }) {
+  const [showCreate, setShowCreate] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newType, setNewType] = useState<ChannelType>('general')
+  const [newDesc, setNewDesc] = useState('')
+  const [creating, setCreating] = useState(false)
+
   const totalUnread = useMemo(
     () => Object.values(unreadMap).reduce((sum, n) => sum + n, 0),
     [unreadMap],
@@ -243,17 +248,92 @@ function ChannelSidebar({
     return map
   }, [channels])
 
+  async function handleCreate() {
+    const name = newName.trim()
+    if (!name || creating) return
+    setCreating(true)
+    try {
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      await createChannel({ name, slug, type: newType, description: newDesc.trim() || undefined })
+      setNewName('')
+      setNewDesc('')
+      setNewType('general')
+      setShowCreate(false)
+      onChannelCreated()
+    } catch (err) {
+      console.error('Failed to create channel:', err)
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return (
     <div className="w-60 bg-surface flex flex-col shrink-0 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border shrink-0">
-        <span className="font-semibold text-sm text-text">Channels</span>
-        {totalUnread > 0 && (
-          <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
-            {totalUnread}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-sm text-text">Channels</span>
+          {totalUnread > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
+              {totalUnread}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="text-text-muted hover:text-accent transition-colors p-0.5 rounded-sm hover:bg-surface-raised"
+          title="Create channel"
+        >
+          <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+        </button>
       </div>
+
+      {/* Create channel form */}
+      {showCreate && (
+        <div className="px-3 py-2 border-b border-border space-y-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Channel name"
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+          />
+          <select
+            value={newType}
+            onChange={(e) => setNewType(e.target.value as ChannelType)}
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
+          >
+            <option value="general">General</option>
+            <option value="announcement">Announcement</option>
+            <option value="plan">Plan</option>
+            <option value="bug">Bug</option>
+            <option value="task">Task</option>
+          </select>
+          <input
+            value={newDesc}
+            onChange={(e) => setNewDesc(e.target.value)}
+            placeholder="Description (optional)"
+            className="w-full bg-surface-raised border border-border rounded-sm px-2 py-1 text-xs text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={!newName.trim() || creating}
+              className="flex-1 px-2 py-1 rounded-sm text-xs font-medium bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-50"
+            >
+              {creating ? 'Creating...' : 'Create'}
+            </button>
+            <button
+              onClick={() => setShowCreate(false)}
+              className="px-2 py-1 rounded-sm text-xs text-text-muted hover:text-text transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Channel list */}
       <div className="flex-1 overflow-y-auto py-2">
@@ -546,6 +626,7 @@ export default function ChannelsPage() {
         activeId={activeChannelId}
         unreadMap={unreadMap}
         onSelect={handleSelectChannel}
+        onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
       />
       <ChatArea
         channel={activeChannel}
