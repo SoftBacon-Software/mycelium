@@ -293,9 +293,11 @@ function checkAgentOrAdmin(req, res) {
 var sseClients = new Set();
 
 // ---- Event helper ----
+import { broadcast, addClient, clientCount } from '../eventBus.js';
+
 function emitEvent(type, agentId, projectId, summary, data) {
   var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
-  // Broadcast to connected SSE clients
+  // Broadcast to connected SSE clients (with per-client filtering)
   if (sseClients.size > 0) {
     var payload = 'data: ' + JSON.stringify({
       id: id, type: type, agent: agentId || '',
@@ -315,6 +317,45 @@ function emitEvent(type, agentId, projectId, summary, data) {
     });
   }
 }
+
+// ---- SSE Event Stream ----
+router.get('/events/stream', function (req, res) {
+  // Auth: accept JWT token, admin key, or agent key
+  var token = req.query.token;
+  if (token) {
+    try { jwt.verify(token, JWT_SECRET); } catch (e) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  } else if (req.query.agent_key) {
+    // Verify agent key
+    var agents = listAgents();
+    var valid = false;
+    for (var a of agents) {
+      if (a.api_key_hash && bcrypt.compareSync(req.query.agent_key, a.api_key_hash)) {
+        valid = true;
+        break;
+      }
+    }
+    if (!valid) return res.status(401).json({ error: 'Invalid agent key' });
+  } else {
+    var user = getStudioUser(req);
+    var adminKey = req.headers['x-admin-key'];
+    if (!user && adminKey !== ADMIN_KEY) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('data: ' + JSON.stringify({ type: 'connected', clients: clientCount() + 1 }) + '\n\n');
+  addClient(res);
+  var keepAlive = setInterval(function () { res.write(': ping\n\n'); }, 30000);
+  req.on('close', function () { clearInterval(keepAlive); });
+});
 
 // ---- Approval gate helpers ----
 // Soft enforcement: warns agents but doesn't block (returns warning field).
