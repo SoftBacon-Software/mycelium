@@ -255,7 +255,7 @@ export default function DashboardPage() {
                   {event.agent && (
                     <span className="font-mono text-xs text-accent mr-1.5">{event.agent}</span>
                   )}
-                  <span className="truncate">{event.summary}</span>
+                  <span className="break-words">{event.summary}</span>
                 </span>
               </div>
             ))}
