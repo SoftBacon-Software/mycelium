@@ -448,7 +448,7 @@ function ChatArea({
   const config = CHANNEL_TYPE_CONFIG[channel.type] || DEFAULT_TYPE_CONFIG
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-bg">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-bg">
       {/* Channel header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
         <span className="text-base">{config.icon}</span>
@@ -632,7 +632,7 @@ export default function ChannelsPage() {
           onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
         />
       </div>
-      <div className={`${activeChannelId ? 'flex' : 'hidden sm:flex'} flex-col flex-1 min-w-0`}>
+      <div className={`${activeChannelId ? 'flex' : 'hidden sm:flex'} flex-col flex-1 min-w-0 min-h-0`}>
         {activeChannelId && (
           <button
             onClick={() => handleSelectChannel(null as any)}
