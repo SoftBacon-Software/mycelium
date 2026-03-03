@@ -245,12 +245,14 @@ function SubmitFeedbackModal({ agents, onClose, onSubmitted }: SubmitModalProps)
 function FeedbackCard({
   item,
   onDelete,
+  isConfirming,
+  onConfirmDelete,
 }: {
   item: Feedback
   onDelete: (id: string) => void
+  isConfirming: boolean
+  onConfirmDelete: (id: string | null) => void
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
   return (
     <div className="bg-surface rounded-lg p-4 border border-border hover:border-border/80 transition-colors">
       <div className="flex items-start justify-between gap-3 mb-2">
@@ -276,25 +278,24 @@ function FeedbackCard({
             <p className="text-sm font-medium text-text mt-1.5 leading-snug">{item.subject}</p>
           )}
         </div>
-        {confirmDelete ? (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[10px] text-red">Delete?</span>
+        {isConfirming ? (
+          <div className="flex items-center gap-1 shrink-0">
             <button
-              onClick={() => { onDelete(item.id); setConfirmDelete(false) }}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-red/20 text-red hover:bg-red/30 transition-colors font-medium"
+              onClick={() => onDelete(item.id)}
+              className="text-red text-xs font-medium px-1.5 py-0.5 rounded hover:bg-red/10 transition-colors"
             >
-              Yes
+              Delete
             </button>
             <button
-              onClick={() => setConfirmDelete(false)}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-surface-raised text-text-muted hover:text-text transition-colors"
+              onClick={() => onConfirmDelete(null)}
+              className="text-text-muted text-xs px-1.5 py-0.5 rounded hover:bg-surface-raised transition-colors"
             >
-              No
+              Cancel
             </button>
           </div>
         ) : (
           <button
-            onClick={() => setConfirmDelete(true)}
+            onClick={() => onConfirmDelete(item.id)}
             className="text-text-muted hover:text-red transition-colors text-xs shrink-0 opacity-50 hover:opacity-100 px-1 py-0.5"
             title="Delete feedback"
           >
@@ -456,10 +457,13 @@ export default function FeedbackPage() {
     return Array.from(set).sort()
   }, [items])
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
   async function handleDelete(id: string) {
     try {
       await deleteFeedbackItem(id)
       toast.success('Feedback deleted')
+      setConfirmDeleteId(null)
       load()
     } catch (err) {
       toast.error('Failed to delete')
@@ -586,7 +590,7 @@ export default function FeedbackPage() {
           )}
 
           <span className="ml-auto text-xs text-text-muted tabular-nums">
-            {loading ? 'Loading...' : `${filtered.length} item${filtered.length !== 1 ? 's' : ''}`}
+            {loading && items.length === 0 ? '...' : `${filtered.length} item${filtered.length !== 1 ? 's' : ''}`}
           </span>
         </div>
 
@@ -610,7 +614,7 @@ export default function FeedbackPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {filtered.map((item) => (
-                <FeedbackCard key={item.id} item={item} onDelete={handleDelete} />
+                <FeedbackCard key={item.id} item={item} onDelete={handleDelete} isConfirming={confirmDeleteId === item.id} onConfirmDelete={setConfirmDeleteId} />
               ))}
             </div>
           )}
