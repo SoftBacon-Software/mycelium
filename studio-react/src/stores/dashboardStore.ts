@@ -57,6 +57,24 @@ interface DashboardState {
   setError: (err: string | null) => void;
 }
 
+/** Normalize agent capabilities — API may return a JSON string or a parsed array */
+function normalizeCapabilities(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw as string[]
+  if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? (parsed as string[]) : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+function normalizeAgent(agent: Agent): Agent {
+  return { ...agent, capabilities: normalizeCapabilities(agent.capabilities) }
+}
+
 export const useDashboardStore = create<DashboardState>()((set) => ({
   // Data defaults
   agents: [],
@@ -94,7 +112,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
     try {
       const data = await fetchOverview();
       set({
-        agents: data.agents,
+        agents: (data.agents || []).map(normalizeAgent),
         events: data.events,
         tasks: data.tasks,
         messages: data.messages,
@@ -114,7 +132,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         instanceConfig: data.instance_config,
         channels: data.channels || [],
         channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
-        drones: data.drones || [],
+        drones: (data.drones || []).map(normalizeAgent),
         droneJobs: data.drone_jobs || [],
         plugins: data.plugins || [],
         loading: false,

@@ -589,9 +589,7 @@ export default function DashboardPage() {
             {agents.map((agent) => {
               const agentKey = agent.id.replace(/-claude$/, '')
               const avatarColor = agentAvatarColors[agentKey] || 'bg-accent/20 text-accent'
-              const caps: string[] = Array.isArray(agent.capabilities)
-                ? agent.capabilities
-                : (() => { try { return JSON.parse(agent.capabilities as unknown as string) } catch { return [] } })()
+              const caps: string[] = agent.capabilities
 
               const justHeartbeated = (Date.now() - (recentHeartbeats[agent.id] || 0)) < 10000
 
