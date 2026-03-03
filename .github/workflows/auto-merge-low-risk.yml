@@ -1,0 +1,84 @@
+name: Auto-merge low-risk PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if PR is low-risk
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            // Low-risk paths: dashboard UI, static assets, docs
+            const lowRiskPatterns = [
+              /^studio-react\//,
+              /^public\/studio\//,
+              /^public\/.*\.html$/,
+              /^README\.md$/,
+              /^docs\//,
+              /^\.github\/workflows\//,
+              /^railway\.json$/,
+              /^Dockerfile$/,
+            ];
+
+            // High-risk paths that should never auto-merge
+            const highRiskPatterns = [
+              /^server\/routes\/mycelium\.js$/,
+              /^server\/db\.js$/,
+              /^server\/schema\.sql$/,
+              /^server\/index\.js$/,
+              /^package\.json$/,
+              /^package-lock\.json$/,
+              /\.env/,
+            ];
+
+            const allFiles = files.map(f => f.filename);
+            const hasHighRisk = allFiles.some(f => highRiskPatterns.some(p => p.test(f)));
+            const allLowRisk = allFiles.every(f => lowRiskPatterns.some(p => p.test(f)));
+
+            console.log(`Files changed: ${allFiles.join(', ')}`);
+            console.log(`All low-risk: ${allLowRisk}, Has high-risk: ${hasHighRisk}`);
+
+            core.setOutput('is_low_risk', allLowRisk && !hasHighRisk ? 'true' : 'false');
+            core.setOutput('file_count', allFiles.length.toString());
+
+      - name: Auto-approve low-risk PR
+        if: steps.check.outputs.is_low_risk == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              event: 'APPROVE',
+              body: `Auto-approved: all ${${{ steps.check.outputs.file_count }}} files are in low-risk paths (dashboard UI, docs, static assets).`,
+            });
+
+      - name: Enable auto-merge
+        if: steps.check.outputs.is_low_risk == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              merge_method: 'squash',
+            });
+            console.log('PR auto-merged (low-risk)');
