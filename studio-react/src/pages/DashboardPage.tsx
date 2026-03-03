@@ -9,6 +9,7 @@ import SummaryCard from '../components/dashboard/SummaryCard'
 import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
+import Spinner from '../components/shared/Spinner'
 import { useVoiceStore } from '../stores/voiceStore'
 import { getSleepStatus, setSleepMode } from '../api/endpoints'
 
@@ -482,7 +483,7 @@ export default function DashboardPage() {
             disabled={loading}
             className="text-xs text-text-muted hover:text-accent transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-border disabled:opacity-50"
           >
-            {loading ? 'Refreshing...' : 'Refresh'}
+            {loading ? <Spinner size="sm" className="inline-block" /> : 'Refresh'}
           </button>
         </div>
       </div>
@@ -493,7 +494,7 @@ export default function DashboardPage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-3">
         <SummaryCard
           title="Agents"
           value={`${onlineAgents}/${agents.length}`}
@@ -596,7 +597,9 @@ export default function DashboardPage() {
               <p className="text-sm text-text-muted py-4 text-center">No recent events</p>
             )}
             {loading && recentEvents.length === 0 && (
-              <p className="text-sm text-text-muted py-4 text-center animate-pulse">Loading events...</p>
+              <div className="flex items-center justify-center py-6">
+                <Spinner size="sm" />
+              </div>
             )}
             {recentEvents.map((event) => (
               <div
@@ -684,7 +687,7 @@ export default function DashboardPage() {
       {/* Quick links */}
       <div>
         <h2 className="text-sm font-semibold text-text-dim mb-3">Quick Links</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {quickLinks.map((link) => (
             <Link
               key={link.to}

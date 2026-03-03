@@ -10,6 +10,7 @@ import type { Feedback, FeedbackSummary } from '../api/types'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { formatDateTime } from '../utils/time'
 import SummaryCard from '../components/dashboard/SummaryCard'
+import Spinner from '../components/shared/Spinner'
 
 // ─── Star Rating ─────────────────────────────────────────────────────────────
 
@@ -586,7 +587,9 @@ export default function FeedbackPage() {
         {/* Feed */}
         <div className="p-4">
           {loading ? (
-            <div className="text-center py-12 text-text-muted text-sm">Loading...</div>
+            <div className="flex items-center justify-center py-12">
+              <Spinner />
+            </div>
           ) : filtered.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-text-muted text-sm">No feedback yet.</p>

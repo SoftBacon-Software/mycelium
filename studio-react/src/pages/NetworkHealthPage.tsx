@@ -3,6 +3,7 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
+import Spinner from '../components/shared/Spinner'
 import { timeAgo, formatTime } from '../utils/time'
 import { getSenderDisplay } from '../utils/sender'
 import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry } from '../api/types'
@@ -962,7 +963,7 @@ export default function NetworkHealthPage() {
           disabled={loading}
           className="text-xs text-text-muted hover:text-accent transition-colors px-3 py-1.5 rounded bg-surface-raised hover:ring-1 ring-border disabled:opacity-50"
         >
-          {loading ? 'Refreshing...' : 'Refresh'}
+          {loading ? <Spinner size="sm" className="inline-block" /> : 'Refresh'}
         </button>
       </div>
 
