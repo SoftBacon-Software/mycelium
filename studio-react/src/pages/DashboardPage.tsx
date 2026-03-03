@@ -121,6 +121,8 @@ const quickLinks = [
   { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
   { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
   { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
+  { to: '/health', label: 'Network Health', desc: 'Mission control', color: 'text-green' },
+  { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-accent' },
 ]
 
 // -- Onboarding Checklist --
@@ -337,6 +339,7 @@ export default function DashboardPage() {
     events,
     tasks,
     messages,
+    pendingRequests,
     bugs,
     bugCounts,
     plans,
@@ -465,9 +468,9 @@ export default function DashboardPage() {
         />
         <SummaryCard
           title="Messages"
-          value={messages.length}
-          subtitle="total messages"
-          color="blue"
+          value={pendingRequests.length}
+          subtitle={pendingRequests.length === 1 ? '1 pending request' : pendingRequests.length > 0 ? `${pendingRequests.length} pending · ${messages.length} total` : `${messages.length} total`}
+          color={pendingRequests.length > 0 ? 'accent' : 'blue'}
           icon="messages"
         />
         <SummaryCard
