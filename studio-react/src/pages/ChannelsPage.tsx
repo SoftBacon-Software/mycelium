@@ -7,7 +7,6 @@ import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
 import { formatDateLabel } from '../utils/time'
 import { getSenderDisplay } from '../utils/sender'
-import { useVoice } from '../hooks/useVoice'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -77,66 +76,6 @@ function useAutoScroll(deps: unknown[]) {
   return { containerRef, handleScroll }
 }
 
-// ─── Voice Panel ────────────────────────────────────────────────────────────
-
-function VoicePanel() {
-  const { isConnected, isMuted, peers, error, join, leave, toggleMute } = useVoice()
-
-  const statusText = useMemo(() => {
-    if (!isConnected) return 'Not connected'
-    if (peers.length === 0) return 'Connected'
-    return `${peers.length} peer${peers.length !== 1 ? 's' : ''}`
-  }, [isConnected, peers.length])
-
-  return (
-    <div className="border-t border-border px-3 py-3">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-text-muted text-[10px] font-semibold tracking-wider uppercase">Voice</span>
-        <span
-          className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green' : 'bg-text-muted'}`}
-        />
-      </div>
-
-      {/* Status */}
-      <p className="text-text-dim text-xs mb-2">{statusText}</p>
-
-      {/* Error */}
-      {error && (
-        <p className="text-red text-xs mb-2">{error}</p>
-      )}
-
-      {/* Controls */}
-      {!isConnected ? (
-        <button
-          onClick={() => join('voice')}
-          className="w-full px-3 py-1.5 rounded-sm text-xs font-medium bg-green/15 text-green hover:bg-green/25 transition-colors"
-        >
-          Join
-        </button>
-      ) : (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={toggleMute}
-            className={`flex-1 px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
-              isMuted
-                ? 'bg-red/15 text-red hover:bg-red/25'
-                : 'bg-green/15 text-green hover:bg-green/25'
-            }`}
-          >
-            {isMuted ? 'Unmute' : 'Mute'}
-          </button>
-          <button
-            onClick={leave}
-            className="flex-1 px-3 py-1.5 rounded-sm text-xs font-medium bg-red/15 text-red hover:bg-red/25 transition-colors"
-          >
-            Leave
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── Channel Message ────────────────────────────────────────────────────────
 
@@ -371,6 +310,7 @@ function ChannelSidebar({
                 const isActive = ch.id === activeId
                 const unread = unreadMap[ch.id] || 0
                 const config = CHANNEL_TYPE_CONFIG[ch.type] || DEFAULT_TYPE_CONFIG
+                const isProtected = ['general', 'admin'].includes(ch.slug)
 
                 return (
                   <div
@@ -389,7 +329,7 @@ function ChannelSidebar({
                         {unread}
                       </span>
                     )}
-                    <button
+                    {!isProtected && <button
                       onClick={(e) => handleDelete(e, ch)}
                       disabled={deletingId === ch.id}
                       className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded text-text-muted hover:text-red hover:bg-red/10 transition-all"
@@ -398,7 +338,7 @@ function ChannelSidebar({
                       <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M2 2l8 8M10 2l-8 8" />
                       </svg>
-                    </button>
+                    </button>}
                   </div>
                 )
               })}
@@ -407,8 +347,6 @@ function ChannelSidebar({
         })}
       </div>
 
-      {/* Voice Panel */}
-      <VoicePanel />
     </div>
   )
 }

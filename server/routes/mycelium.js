@@ -2480,11 +2480,13 @@ router.put('/channels/:id', function (req, res) {
   res.json({ ok: true, id: channel.id });
 });
 
-// DELETE /channels/:id — delete channel (admin only)
+// DELETE /channels/:id — delete channel (admin only, protected slugs cannot be deleted)
+var PROTECTED_CHANNEL_SLUGS = ['general', 'admin'];
 router.delete('/channels/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  if (PROTECTED_CHANNEL_SLUGS.includes(channel.slug)) return res.status(403).json({ error: 'Cannot delete protected channel' });
   deleteChannel(channel.id);
   emitEvent('channel_deleted', getAdminDisplayName(req), null, 'Deleted channel ' + channel.name, { channel_id: channel.id });
   res.json({ ok: true, deleted: channel.id });
