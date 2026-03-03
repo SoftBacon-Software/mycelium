@@ -1299,7 +1299,8 @@ router.post('/messages', function (req, res) {
     var general = getChannelBySlug('general');
     if (general) channelId = general.id;
   }
-  var id = createDvMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId);
+  var msgPriority = req.body.priority || 'normal';
+  var id = createDvMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId, msgPriority);
   // Skip events/webhooks for system-to-system telemetry (runner health pings etc)
   if (!(agentId === '__system__' && toAgent === '__system__')) {
     var target = toAgent ? ' to ' + displayName(toAgent) : ' (broadcast)';
