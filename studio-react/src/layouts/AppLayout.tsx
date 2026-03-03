@@ -124,7 +124,11 @@ export default function AppLayout() {
         </header>
 
         {/* Content area */}
-        <main className={`flex-1 overflow-y-auto p-4 md:p-6 ${showFloatingVoice ? 'pb-16' : ''}`}>
+        <main className={
+          !showFloatingVoice
+            ? 'flex-1 overflow-hidden flex flex-col min-h-0'
+            : `flex-1 overflow-y-auto p-4 md:p-6 ${showFloatingVoice ? 'pb-16' : ''}`
+        }>
           <DirectiveBanner />
           <Outlet />
         </main>
