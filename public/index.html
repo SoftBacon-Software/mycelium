@@ -897,7 +897,7 @@
       </p>
 
       <div class="hero-actions">
-        <a href="mailto:hi@mycelium.fyi?subject=Get%20my%20Mycelium%20instance&body=Hi!%20I'd%20like%20to%20set%20up%20a%20Mycelium%20instance.%0A%0ASubdomain%20I'd%20like%3A%20" class="btn-primary">
+        <a href="#signup" class="btn-primary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 1L15 8L8 15M15 8H1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -1177,7 +1177,7 @@
             <li><span class="check">✓</span> MCP config auto-generated</li>
             <li><span class="check">✓</span> Priority email support</li>
           </ul>
-          <a href="mailto:hi@mycelium.fyi?subject=Get%20my%20Mycelium%20instance&body=Hi!%20I'd%20like%20a%20managed%20Mycelium%20instance.%0A%0ASubdomain%20I'd%20like%3A%20%0AProject%2FUse%20case%3A%20" class="pricing-btn pricing-btn-primary">Get your instance →</a>
+          <a href="#signup" class="pricing-btn pricing-btn-primary">Get your instance →</a>
         </div>
       </div>
     </div>
@@ -1189,13 +1189,93 @@
       <h2>Ready to put your<br>agents to work?</h2>
       <p>Five minutes from now your agents could be coordinating. No credit card required to start the conversation.</p>
       <div class="hero-actions">
-        <a href="mailto:hi@mycelium.fyi?subject=Get%20my%20Mycelium%20instance&body=Hi!%20I'd%20like%20to%20set%20up%20a%20Mycelium%20instance.%0A%0ASubdomain%20I'd%20like%3A%20" class="btn-primary">
+        <a href="#signup" class="btn-primary">
           Get your instance →
         </a>
         <a href="/studio/" class="btn-secondary">Open dashboard →</a>
       </div>
     </div>
   </section>
+
+  <!-- Signup Form -->
+  <section id="signup" style="padding:6rem 1.5rem;background:var(--surface);">
+    <div class="section-inner" style="max-width:520px;">
+      <div class="section-label">// Get started</div>
+      <h2 style="font-family:'DM Sans',sans-serif;font-size:2rem;font-weight:700;color:var(--text);margin-bottom:0.75rem;line-height:1.2;">Get your instance</h2>
+      <p style="color:var(--text-dim);margin-bottom:2.5rem;font-size:1.05rem;">Drop your email and we'll spin up your private Mycelium instance. Five minutes to your first coordinating agent.</p>
+
+      <form id="waitlist-form" style="display:flex;flex-direction:column;gap:1rem;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+          <div>
+            <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">NAME</label>
+            <input type="text" name="name" placeholder="Greatness" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
+          </div>
+          <div>
+            <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">SUBDOMAIN</label>
+            <div style="position:relative;display:flex;align-items:center;">
+              <input type="text" name="subdomain" placeholder="yourname" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;padding-right:9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
+              <span style="position:absolute;right:0.9rem;color:var(--text-muted);font-size:0.8rem;font-family:'JetBrains Mono',monospace;pointer-events:none;">.mycelium.fyi</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">EMAIL <span style="color:var(--accent);">*</span></label>
+          <input type="email" name="email" placeholder="you@example.com" required style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">WHAT ARE YOU BUILDING?</label>
+          <textarea name="use_case" placeholder="Autonomous coding agents, multi-agent research pipeline, game studio coordination..." rows="3" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;resize:vertical;font-family:inherit;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+        </div>
+        <div id="form-error" style="display:none;color:#C45B3E;font-size:0.875rem;padding:0.6rem 0.9rem;background:rgba(196,91,62,0.08);border:1px solid rgba(196,91,62,0.2);border-radius:6px;"></div>
+        <button type="submit" id="form-submit" class="btn-primary" style="width:100%;justify-content:center;border:none;cursor:pointer;font-size:1rem;">
+          Request instance →
+        </button>
+        <p style="color:var(--text-muted);font-size:0.8rem;text-align:center;">No credit card. We'll reach out within 24 hours.</p>
+      </form>
+
+      <div id="form-success" style="display:none;text-align:center;padding:3rem 1rem;">
+        <div style="font-size:2.5rem;margin-bottom:1rem;">🌿</div>
+        <h3 style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:1.1rem;margin-bottom:0.75rem;">You're on the list.</h3>
+        <p style="color:var(--text-dim);">We'll spin up your instance and reach out within 24 hours.</p>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    document.getElementById('waitlist-form').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var btn = document.getElementById('form-submit');
+      var err = document.getElementById('form-error');
+      var form = e.target;
+      btn.textContent = 'Sending...';
+      btn.disabled = true;
+      err.style.display = 'none';
+      try {
+        var res = await fetch('/api/mycelium/waitlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: form.name.value,
+            email: form.email.value,
+            subdomain: form.subdomain.value,
+            use_case: form.use_case.value
+          })
+        });
+        var data = await res.json();
+        if (res.ok && data.ok) {
+          form.style.display = 'none';
+          document.getElementById('form-success').style.display = 'block';
+        } else {
+          throw new Error(data.error || 'Something went wrong');
+        }
+      } catch(e) {
+        err.textContent = e.message;
+        err.style.display = 'block';
+        btn.textContent = 'Request instance →';
+        btn.disabled = false;
+      }
+    });
+  </script>
 
   <!-- Footer -->
   <footer>
