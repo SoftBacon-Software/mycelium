@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useDashboardStore } from '../../stores/dashboardStore'
-import { createDroneJob } from '../../api/endpoints'
+import { createDroneJob, resolveRequest, castVote } from '../../api/endpoints'
+import { useAuthStore } from '../../stores/authStore'
 import Badge from '../shared/Badge'
 import { timeAgo } from '../../utils/time'
 import type { Message, DroneJob, Bug, Approval } from '../../api/types'
@@ -13,9 +14,13 @@ function truncate(str: string, len = 60): string {
 
 const MAX_ITEMS = 3
 
-function RequestRow({ msg }: { msg: Message }) {
+function RequestRow({ msg, onResolve, resolving }: { msg: Message; onResolve: () => void; resolving: boolean }) {
+  const navigate = useNavigate()
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm">
+    <div
+      className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm cursor-pointer"
+      onClick={() => navigate('/messages')}
+    >
       <span className="text-text-muted font-mono text-xs shrink-0">#{msg.id}</span>
       <span className="text-text-dim truncate">
         <span className="text-accent font-mono text-xs">{msg.from_agent}</span>
@@ -23,14 +28,26 @@ function RequestRow({ msg }: { msg: Message }) {
         <span className="text-accent font-mono text-xs">{msg.to_agent}</span>
       </span>
       <span className="text-text-dim truncate flex-1 min-w-0">{truncate(msg.content)}</span>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onResolve() }}
+        disabled={resolving}
+        className="text-xs px-2 py-0.5 rounded bg-green/10 text-green hover:bg-green/20 transition-colors disabled:opacity-50 shrink-0"
+      >
+        {resolving ? '...' : 'Resolve'}
+      </button>
       <span className="text-text-muted text-xs font-mono shrink-0">{timeAgo(msg.created_at)}</span>
     </div>
   )
 }
 
 function FailedJobRow({ job, onRetry, retrying }: { job: DroneJob; onRetry: () => void; retrying: boolean }) {
+  const navigate = useNavigate()
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm">
+    <div
+      className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm cursor-pointer"
+      onClick={() => navigate('/drones')}
+    >
       <span className="text-text-muted font-mono text-xs shrink-0">#{job.id}</span>
       <span className="text-text-dim truncate flex-1 min-w-0">
         {job.title || job.command}
@@ -38,7 +55,7 @@ function FailedJobRow({ job, onRetry, retrying }: { job: DroneJob; onRetry: () =
       </span>
       <button
         type="button"
-        onClick={onRetry}
+        onClick={(e) => { e.stopPropagation(); onRetry() }}
         disabled={retrying}
         className="text-xs px-2 py-0.5 rounded bg-red/10 text-red hover:bg-red/20 transition-colors disabled:opacity-50 shrink-0"
       >
@@ -50,8 +67,12 @@ function FailedJobRow({ job, onRetry, retrying }: { job: DroneJob; onRetry: () =
 }
 
 function BugRow({ bug }: { bug: Bug }) {
+  const navigate = useNavigate()
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm">
+    <div
+      className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm cursor-pointer"
+      onClick={() => navigate('/bugs')}
+    >
       <span className="text-text-muted font-mono text-xs shrink-0">#{bug.id}</span>
       <Badge variant={bug.severity === 'high' || bug.severity === 'critical' ? 'red' : 'muted'}>
         {bug.severity}
@@ -62,14 +83,34 @@ function BugRow({ bug }: { bug: Bug }) {
   )
 }
 
-function ApprovalRow({ approval }: { approval: Approval }) {
+function ApprovalRow({ approval, onVote, voting }: { approval: Approval; onVote: (decision: string) => void; voting: boolean }) {
+  const navigate = useNavigate()
   return (
-    <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm">
+    <div
+      className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-raised/50 text-sm cursor-pointer"
+      onClick={() => navigate('/approvals')}
+    >
       <span className="text-text-muted font-mono text-xs shrink-0">#{approval.id}</span>
       <Badge variant="accent">{approval.risk_tier}</Badge>
       <span className="text-text-dim truncate flex-1 min-w-0">
         {approval.entity_type} by {approval.created_by}
       </span>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onVote('approve') }}
+        disabled={voting}
+        className="text-xs px-2 py-0.5 rounded bg-green/10 text-green hover:bg-green/20 transition-colors disabled:opacity-50 shrink-0"
+      >
+        {voting ? '...' : 'Approve'}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onVote('deny') }}
+        disabled={voting}
+        className="text-xs px-2 py-0.5 rounded bg-red/10 text-red hover:bg-red/20 transition-colors disabled:opacity-50 shrink-0"
+      >
+        Deny
+      </button>
       <span className="text-text-muted text-xs font-mono shrink-0">{timeAgo(approval.created_at)}</span>
     </div>
   )
@@ -101,7 +142,10 @@ function Category({ title, count, linkTo, children }: CategoryProps) {
 
 export default function ActionRequired() {
   const { pendingRequests, droneJobs, bugs, pendingApprovals, refresh } = useDashboardStore()
+  const user = useAuthStore((s) => s.user)
   const [retryingId, setRetryingId] = useState<number | null>(null)
+  const [resolvingId, setResolvingId] = useState<string | null>(null)
+  const [votingId, setVotingId] = useState<string | null>(null)
 
   const failedJobs = droneJobs.filter((j) => j.status === 'failed')
   const unassignedBugs = bugs.filter((b) => b.status === 'open' && !b.assignee)
@@ -129,6 +173,35 @@ export default function ActionRequired() {
     }
   }, [refresh])
 
+  const handleResolve = useCallback(async (id: string) => {
+    setResolvingId(id)
+    try {
+      await resolveRequest(id, 'Resolved from dashboard')
+      await refresh()
+      toast.success('Request resolved')
+    } catch (err) {
+      console.error('Resolve failed:', err)
+      toast.error('Failed to resolve request')
+    } finally {
+      setResolvingId(null)
+    }
+  }, [refresh])
+
+  const handleVote = useCallback(async (approvalId: string, decision: string) => {
+    setVotingId(approvalId)
+    try {
+      const voterId = user?.id || 'studio'
+      await castVote(approvalId, decision, null, voterId, 'operator')
+      await refresh()
+      toast.success(decision === 'approve' ? 'Approved' : 'Denied')
+    } catch (err) {
+      console.error('Vote failed:', err)
+      toast.error('Failed to cast vote')
+    } finally {
+      setVotingId(null)
+    }
+  }, [refresh, user])
+
   if (totalCount === 0) {
     return (
       <div className="bg-surface rounded-lg p-4 ring-1 ring-green/20">
@@ -152,7 +225,12 @@ export default function ActionRequired() {
         {pendingRequests.length > 0 && (
           <Category title="Pending Requests" count={pendingRequests.length} linkTo="/messages">
             {pendingRequests.slice(0, MAX_ITEMS).map((msg) => (
-              <RequestRow key={msg.id} msg={msg} />
+              <RequestRow
+                key={msg.id}
+                msg={msg}
+                onResolve={() => handleResolve(msg.id)}
+                resolving={resolvingId === msg.id}
+              />
             ))}
             {pendingRequests.length > MAX_ITEMS && (
               <p className="text-xs text-text-muted px-2 py-1">
@@ -196,7 +274,12 @@ export default function ActionRequired() {
         {pendingApprovalItems.length > 0 && (
           <Category title="Pending Approvals" count={pendingApprovalItems.length} linkTo="/approvals">
             {pendingApprovalItems.slice(0, MAX_ITEMS).map((approval) => (
-              <ApprovalRow key={approval.id} approval={approval} />
+              <ApprovalRow
+                key={approval.id}
+                approval={approval}
+                onVote={(decision) => handleVote(approval.id, decision)}
+                voting={votingId === approval.id}
+              />
             ))}
             {pendingApprovalItems.length > MAX_ITEMS && (
               <p className="text-xs text-text-muted px-2 py-1">
