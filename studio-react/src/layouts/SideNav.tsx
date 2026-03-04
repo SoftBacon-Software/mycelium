@@ -7,7 +7,7 @@ import {
   LayoutDashboard, CheckSquare, Map, Bug,
   MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database,
-  Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle,
+  Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -74,6 +74,7 @@ const navSections: NavSection[] = [
       { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
       { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true },
       { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true },
+      { to: '/spawns', label: 'Spawns', icon: Zap, adminOnly: true },
     ],
   },
   {
