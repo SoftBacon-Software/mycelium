@@ -88,8 +88,7 @@ export default function ApprovalsPage() {
       // Check if this vote meets quorum and auto-resolve
       const existingVotes = safeVotes(approval.votes)
       const currentVotes = existingVotes.length + 1
-      if (currentVotes >= approval.quorum_required) {
-        // Count approve/reject to determine decision
+      if (currentVotes >= approval.required_approvals) {
         const approveCount =
           existingVotes.filter((v) => v.vote === 'approve').length +
           (vote === 'approve' ? 1 : 0)
@@ -258,18 +257,18 @@ function ApprovalCard({ approval, onVote }: ApprovalCardProps) {
       {/* Header row */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
-          {/* Entity type */}
+          {/* Action type */}
           <span
             className={`shrink-0 text-xs px-2 py-0.5 rounded-full font-medium uppercase tracking-wider ${entityTypeBadge(
-              approval.entity_type,
+              approval.action_type,
             )}`}
           >
-            {approval.entity_type}
+            {approval.action_type}
           </span>
 
-          {/* Entity ID */}
-          <span className="font-mono text-sm text-text-dim truncate" title={approval.entity_id}>
-            {approval.entity_id}
+          {/* Title */}
+          <span className="text-sm text-text-dim truncate" title={approval.title}>
+            {approval.title}
           </span>
         </div>
 
@@ -280,7 +279,7 @@ function ApprovalCard({ approval, onVote }: ApprovalCardProps) {
       {/* Meta row */}
       <div className="flex items-center gap-3 text-xs text-text-muted">
         <span>
-          by <span className="text-text-dim">{getSenderDisplay(approval.created_by)}</span>
+          by <span className="text-text-dim">{getSenderDisplay(approval.requested_by)}</span>
         </span>
         <span>&middot;</span>
         <span>{formatDate(approval.created_at)}</span>
@@ -299,7 +298,7 @@ function ApprovalCard({ approval, onVote }: ApprovalCardProps) {
       </div>
 
       {/* Quorum bar */}
-      <QuorumBar current={voteCount} required={approval.quorum_required} />
+      <QuorumBar current={voteCount} required={approval.required_approvals} />
 
       {/* Voting UI (votes list + buttons) */}
       <VotingUI approval={approval} onVote={onVote} />
