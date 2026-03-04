@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { updateAsset, deleteAsset, uploadAsset } from '../api/endpoints'
+import { createAsset, updateAsset, deleteAsset, uploadAsset } from '../api/endpoints'
 import type { Asset } from '../api/types'
 import AssetCard from '../components/assets/AssetCard'
 import Badge from '../components/shared/Badge'
+import ModalOverlay from '../components/modals/ModalOverlay'
 
 type ViewMode = 'grid' | 'list'
 type StatusFilter = 'all' | 'requested' | 'queued' | 'generating' | 'ready' | 'delivered' | 'in_progress' | 'completed' | 'cancelled'
@@ -243,6 +244,152 @@ function AssetDetailModal({ asset, onClose, onUpload, onDelete, onStatusChange }
   )
 }
 
+// ─── Request Asset Modal ─────────────────────────────────────────────────────
+
+const ASSET_TYPES = ['sprite', 'tileset', 'background', 'audio', 'ui', 'animation', 'other']
+
+interface RequestAssetModalProps {
+  isOpen: boolean
+  onClose: () => void
+}
+
+function RequestAssetModal({ isOpen, onClose }: RequestAssetModalProps) {
+  const refresh = useDashboardStore((s) => s.refresh)
+  const projects = useDashboardStore((s) => s.projects)
+
+  const [name, setName] = useState('')
+  const [type, setType] = useState('sprite')
+  const [prompt, setPrompt] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function resetForm() {
+    setName('')
+    setType('sprite')
+    setPrompt('')
+    setProjectId('')
+    setError(null)
+  }
+
+  function handleClose() {
+    resetForm()
+    onClose()
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await createAsset({
+        name: name.trim(),
+        type,
+        prompt: prompt.trim(),
+        project_id: projectId || undefined,
+        status: 'requested',
+      })
+      await refresh()
+      handleClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to request asset')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <ModalOverlay isOpen={isOpen} onClose={handleClose} title="Request an Asset">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="flex items-start justify-between gap-2 px-3 py-2 rounded-sm bg-red/10 border border-red/20 text-red text-sm">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="shrink-0 text-red/60 hover:text-red transition-colors leading-none"
+              aria-label="Dismiss error"
+            >
+              &#x2715;
+            </button>
+          </div>
+        )}
+
+        <div>
+          <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">Name *</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Hero idle animation"
+            className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40"
+            autoFocus
+            required
+          />
+        </div>
+
+        <div>
+          <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">Type</label>
+          <select
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
+          >
+            {ASSET_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">Prompt / Brief</label>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={3}
+            placeholder="Describe what you need — style, size, mood, reference art..."
+            className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none"
+          />
+        </div>
+
+        {projects.length > 0 && (
+          <div>
+            <label className="text-text-muted text-xs uppercase tracking-wider block mb-1.5">Project</label>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full bg-surface-raised border border-border rounded-sm px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
+            >
+              <option value="">— none —</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name || p.id}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={handleClose}
+            className="px-3 py-1.5 rounded-sm text-sm text-text-dim bg-surface-raised hover:bg-surface-raised/80 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !name.trim()}
+            className="px-4 py-1.5 rounded-sm text-sm font-medium bg-blue/80 text-text hover:bg-blue/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Requesting...' : 'Request Asset'}
+          </button>
+        </div>
+      </form>
+    </ModalOverlay>
+  )
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function AssetsPage() {
@@ -253,6 +400,7 @@ export default function AssetsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
+  const [showRequestModal, setShowRequestModal] = useState(false)
 
   // Unique project values
   const projects = useMemo(() => {
@@ -308,6 +456,13 @@ export default function AssetsPage() {
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-semibold text-text">Assets</h2>
           <span className="text-text-muted text-sm">({filtered.length})</span>
+          <button
+            type="button"
+            onClick={() => setShowRequestModal(true)}
+            className="bg-blue/80 text-text px-4 py-1.5 rounded text-sm font-medium hover:bg-blue/90 transition-colors"
+          >
+            Request Asset
+          </button>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -363,11 +518,34 @@ export default function AssetsPage() {
       </div>
 
       {/* Empty state */}
-      {filtered.length === 0 && (
+      {assets.length === 0 ? (
+        /* True empty — no assets at all */
+        <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+          <div className="w-16 h-16 mb-5 rounded-2xl bg-blue/10 flex items-center justify-center">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-blue" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="6" width="24" height="20" rx="2" />
+              <circle cx="11" cy="13" r="2.5" />
+              <path d="M4 22l6-6 5 5 4-4 9 8" />
+            </svg>
+          </div>
+          <h2 className="text-base font-semibold text-text mb-1.5">No assets yet</h2>
+          <p className="text-sm text-text-muted max-w-sm mb-6">
+            Assets are generated art, audio, and files — created by drones or uploaded manually by your agents.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowRequestModal(true)}
+            className="bg-blue/80 text-text px-5 py-2 rounded text-sm font-medium hover:bg-blue/90 transition-colors"
+          >
+            Request an asset
+          </button>
+        </div>
+      ) : filtered.length === 0 ? (
+        /* Filter yielded no results */
         <div className="bg-surface rounded-lg p-12 text-center">
           <p className="text-text-muted text-sm">No assets match the current filters.</p>
         </div>
-      )}
+      ) : null}
 
       {/* Grid View */}
       {view === 'grid' && filtered.length > 0 && (
@@ -467,6 +645,12 @@ export default function AssetsPage() {
           onStatusChange={handleStatusChange}
         />
       )}
+
+      {/* Request Asset Modal */}
+      <RequestAssetModal
+        isOpen={showRequestModal}
+        onClose={() => setShowRequestModal(false)}
+      />
     </div>
   )
 }
