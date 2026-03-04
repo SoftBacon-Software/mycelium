@@ -366,10 +366,17 @@ function ChatArea({
 }) {
   const [input, setInput] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  const [allExpanded, setAllExpanded] = useState(false)
 
   const sorted = useMemo(
     () => [...messages].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [messages],
+  )
+
+  // Track which messages are truncatable
+  const truncatableIds = useMemo(
+    () => new Set(sorted.filter((m) => m.content.length > TRUNCATE_LENGTH).map((m) => m.id)),
+    [sorted],
   )
 
   const { containerRef, handleScroll } = useAutoScroll([sorted.length])
@@ -377,6 +384,7 @@ function ChatArea({
   // Reset expanded state when channel changes
   useEffect(() => {
     setExpandedIds(new Set())
+    setAllExpanded(false)
   }, [channel?.id])
 
   function toggleExpand(id: number) {
@@ -386,6 +394,17 @@ function ChatArea({
       else next.add(id)
       return next
     })
+    setAllExpanded(false)
+  }
+
+  function toggleExpandAll() {
+    if (allExpanded) {
+      setExpandedIds(new Set())
+      setAllExpanded(false)
+    } else {
+      setExpandedIds(new Set(truncatableIds))
+      setAllExpanded(true)
+    }
   }
 
   function handleSend() {
@@ -424,6 +443,15 @@ function ChatArea({
             <div className="w-px h-4 bg-border" />
             <span className="text-text-muted text-xs truncate">{channel.description}</span>
           </>
+        )}
+        <div className="flex-1" />
+        {truncatableIds.size > 0 && (
+          <button
+            onClick={toggleExpandAll}
+            className="text-text-muted hover:text-accent text-xs transition-colors shrink-0"
+          >
+            {allExpanded ? 'Show less' : 'Show all'}
+          </button>
         )}
       </div>
 
