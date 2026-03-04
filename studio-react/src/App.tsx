@@ -21,6 +21,7 @@ import AdminOpsPage from './pages/AdminOpsPage'
 import NetworkHealthPage from './pages/NetworkHealthPage'
 import OnboardingPage from './pages/OnboardingPage'
 import PluginsPage from './pages/PluginsPage'
+import SpawnsPage from './pages/SpawnsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import FeedbackPage from './pages/FeedbackPage'
 import InboxPage from './pages/InboxPage'
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="health" element={<NetworkHealthPage />} />
           <Route path="onboarding" element={<OnboardingPage />} />
           <Route path="plugins" element={<PluginsPage />} />
+          <Route path="spawns" element={<SpawnsPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="feedback" element={<FeedbackPage />} />
         </Route>
