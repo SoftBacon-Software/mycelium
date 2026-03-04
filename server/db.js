@@ -69,6 +69,8 @@ export function initDB() {
     ["dv_messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
     // Plan #30 — dynamic bug categories per project
     ["dv_projects", "bug_categories", "TEXT NOT NULL DEFAULT '[]'"],
+    // Operator presence tracking — who's currently in the dashboard
+    ["dv_studio_users", "last_seen", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -204,7 +206,11 @@ export function getAgentByKeyHash(apiKeyHash) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents2', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents WHERE project_id != 'drone' ORDER BY created_at").all();
+}
+
+export function listAllAgentsIncludingDrones() {
+  return stmt('dvListAllAgents', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
@@ -1287,7 +1293,18 @@ export function getStudioUserById(id) {
 }
 
 export function listStudioUsers() {
-  return db.prepare("SELECT id, username, display_name, role, created_at FROM dv_studio_users ORDER BY created_at").all();
+  return db.prepare("SELECT id, username, display_name, role, created_at, last_seen FROM dv_studio_users ORDER BY created_at").all();
+}
+
+export function touchStudioUserSeen(id) {
+  db.prepare("UPDATE dv_studio_users SET last_seen = datetime('now') WHERE id = ?").run(id);
+}
+
+export function getActiveStudioUsers(withinMinutes) {
+  var mins = withinMinutes || 5;
+  return db.prepare(
+    "SELECT id, username, display_name, role, last_seen FROM dv_studio_users WHERE last_seen >= datetime('now', '-' || ? || ' minutes') ORDER BY last_seen DESC"
+  ).all(mins);
 }
 
 export function deleteStudioUser(id) {
@@ -1942,7 +1959,8 @@ export function getDvOverview(userId) {
     instance_config: listInstanceConfig(),
     drones: listDrones(),
     drone_jobs: listDroneJobs({ limit: 50 }),
-    plugins: listPluginRecords()
+    plugins: listPluginRecords(),
+    active_operators: getActiveStudioUsers(5),
   };
 }
 

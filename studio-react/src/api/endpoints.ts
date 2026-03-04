@@ -391,6 +391,10 @@ export function createChannel(data: { name: string; slug: string; type?: string;
   return apiPost<{ id: number }>('/channels', data);
 }
 
+export function deleteChannel(id: number): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/channels/${id}`);
+}
+
 export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
   return apiGet<ChannelMember[]>(`/channels/${id}/members`);
 }

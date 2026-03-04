@@ -67,6 +67,12 @@ const statusBadgeVariant: Record<string, 'green' | 'blue' | 'accent' | 'muted' |
   resolved: 'muted',
 }
 
+const priorityDot: Record<string, { dot: string; label: string }> = {
+  urgent: { dot: 'bg-red', label: '🔴 Urgent' },
+  normal: { dot: 'bg-accent', label: '⚪ Normal' },
+  fyi:    { dot: 'bg-text-muted', label: '🔵 FYI' },
+}
+
 // ─── Agent Message ───────────────────────────────────────────────────────────
 
 function AgentMessage({
@@ -164,6 +170,12 @@ function AgentMessage({
             <span className="font-semibold text-sm text-text-dim">{getSenderDisplay(msg.to_agent)}</span>
             <Badge variant={msgTypeBadge[msg.msg_type] ?? 'default'}>{msg.msg_type}</Badge>
             <Badge variant={statusBadgeVariant[msg.status] ?? 'default'}>{msg.status}</Badge>
+            {msg.priority && msg.priority !== 'normal' && (
+              <span className={`inline-flex items-center gap-1 text-xs font-medium ${msg.priority === 'urgent' ? 'text-red' : 'text-text-muted'}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${priorityDot[msg.priority]?.dot ?? 'bg-text-muted'}`} />
+                {msg.priority === 'urgent' ? 'URGENT' : 'FYI'}
+              </span>
+            )}
             <span className="text-text-muted text-xs">{formatTime(msg.created_at)}</span>
           </div>
 
@@ -212,6 +224,7 @@ export default function MessagesPage() {
   const [composeTo, setComposeTo] = useState('')
   const [composeContent, setComposeContent] = useState('')
   const [composeMsgType, setComposeMsgType] = useState<'message' | 'request' | 'directive'>('message')
+  const [composePriority, setComposePriority] = useState<'urgent' | 'normal' | 'fyi'>('normal')
   const [sending, setSending] = useState(false)
   const [threadRootMsg, setThreadRootMsg] = useState<Message | null>(null)
   const [timeRange, setTimeRange] = useState<string>('3h')
@@ -258,6 +271,7 @@ export default function MessagesPage() {
           to_agent: composeTo.trim(),
           content: composeContent.trim(),
           msg_type: composeMsgType,
+          priority: composePriority,
         })
         toast.success('Message sent')
         setComposeContent('')
@@ -269,7 +283,7 @@ export default function MessagesPage() {
         setSending(false)
       }
     },
-    [composeContent, composeTo, composeMsgType, refresh],
+    [composeContent, composeTo, composeMsgType, composePriority, refresh],
   )
 
   const handleResolve = useCallback(
@@ -389,6 +403,22 @@ export default function MessagesPage() {
             <option value="message">message</option>
             <option value="request">request</option>
             <option value="directive">directive</option>
+          </select>
+          <select
+            value={composePriority}
+            onChange={(e) => setComposePriority(e.target.value as 'urgent' | 'normal' | 'fyi')}
+            className={`bg-surface-raised border rounded-sm px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent/40 w-full sm:w-20 shrink-0 ${
+              composePriority === 'urgent'
+                ? 'border-red/50 text-red'
+                : composePriority === 'fyi'
+                  ? 'border-border text-text-muted'
+                  : 'border-border text-text'
+            }`}
+            title="Message priority"
+          >
+            <option value="urgent">🔴 urgent</option>
+            <option value="normal">⚪ normal</option>
+            <option value="fyi">🔵 fyi</option>
           </select>
           <textarea
             value={composeContent}

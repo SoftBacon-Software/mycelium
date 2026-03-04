@@ -46,13 +46,13 @@ export default function AppLayout() {
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const { loading, refresh, instanceConfig } = useDashboardStore()
+  const { loading, refresh, instanceConfig, activeOperators } = useDashboardStore()
   const { lastRefresh } = usePolling(10_000)
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
-  const showFloatingVoice = location.pathname !== '/channels'
+  const isChannels = location.pathname === '/channels'
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
@@ -92,6 +92,28 @@ export default function AppLayout() {
               </span>
             )}
 
+            {/* Active operator presence */}
+            {activeOperators.length > 0 && (
+              <div className="hidden sm:flex items-center gap-1.5" title={
+                activeOperators.length === 1
+                  ? 'Only you are online'
+                  : activeOperators.map(o => o.display_name).join(', ') + ' online'
+              }>
+                {activeOperators.map((op) => (
+                  <span
+                    key={op.id}
+                    className="flex items-center gap-1 text-xs text-text-muted"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-moss inline-block" />
+                    <span className="hidden md:inline">{op.display_name}</span>
+                  </span>
+                ))}
+                {activeOperators.length === 1 && (
+                  <span className="text-xs text-text-muted font-mono hidden md:inline">only you</span>
+                )}
+              </div>
+            )}
+
             {/* User display name */}
             {user && (
               <span className="text-sm text-text-dim hidden sm:inline">{user.display_name}</span>
@@ -125,20 +147,18 @@ export default function AppLayout() {
 
         {/* Content area */}
         <main className={
-          !showFloatingVoice
+          isChannels
             ? 'flex-1 overflow-hidden flex flex-col min-h-0'
-            : `flex-1 overflow-y-auto p-4 md:p-6 ${showFloatingVoice ? 'pb-16' : ''}`
+            : 'flex-1 overflow-y-auto p-4 md:p-6 pb-16'
         }>
           <DirectiveBanner />
           <Outlet />
         </main>
 
-        {/* Floating voice bar (hidden on /channels where VoicePanel handles it) */}
-        {showFloatingVoice && (
-          <div className="shrink-0">
-            <VoiceBar />
-          </div>
-        )}
+        {/* Voice bar — always at the bottom, all pages */}
+        <div className="shrink-0">
+          <VoiceBar />
+        </div>
       </div>
     </div>
   )

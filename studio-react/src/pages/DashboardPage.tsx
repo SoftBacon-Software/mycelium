@@ -10,7 +10,6 @@ import ActionRequired from '../components/dashboard/ActionRequired'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
-import { useVoiceStore } from '../stores/voiceStore'
 import { getSleepStatus, setSleepMode } from '../api/endpoints'
 
 // -- Event type color mapping --
@@ -166,6 +165,8 @@ const quickLinks = [
 
 // -- Onboarding Checklist --
 
+const CHECKLIST_DISMISSED_KEY = 'mycelium_checklist_dismissed'
+
 function OnboardingChecklist({
   checks,
 }: {
@@ -175,59 +176,90 @@ function OnboardingChecklist({
   const total = checks.length
   const allDone = completed === total
 
-  if (allDone) return null
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(CHECKLIST_DISMISSED_KEY) === '1' } catch { return false }
+  })
+  const [dissolving, setDissolving] = useState(false)
+
+  if (allDone || dismissed) return null
+
+  function handleDismiss() {
+    setDissolving(true)
+    setTimeout(() => {
+      try { localStorage.setItem(CHECKLIST_DISMISSED_KEY, '1') } catch { /* */ }
+      setDismissed(true)
+    }, 900)
+  }
 
   return (
-    <div className="bg-surface rounded-lg border border-accent/20 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-accent">Getting Started</h2>
-        <span className="text-xs text-text-muted tabular-nums">
-          {completed}/{total} complete
-        </span>
-      </div>
-      <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden mb-3">
-        <div
-          className="h-full bg-accent rounded-full transition-all duration-500"
-          style={{ width: `${(completed / total) * 100}%` }}
-        />
-      </div>
-      <div className="space-y-1.5">
-        {checks.map((check) => (
-          <Link
-            key={check.label}
-            to={check.to}
-            className={`flex items-center gap-2.5 py-1.5 px-2 rounded transition-colors ${
-              check.done
-                ? 'text-text-muted'
-                : 'text-text hover:bg-surface-raised'
-            }`}
-          >
-            <span
-              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                check.done
-                  ? 'bg-green/20 border-green/40 text-green'
-                  : 'border-border'
+    <>
+      <style>{`
+        @keyframes slime-dissolve {
+          0%   { opacity: 1; filter: blur(0px) contrast(1); transform: scale(1); clip-path: inset(0% 0% 0% 0% round 8px); }
+          20%  { filter: blur(0px) contrast(1.4); transform: scale(1.01); }
+          40%  { filter: blur(1px) contrast(1.8); clip-path: inset(5% 3% 8% 2% round 12px); }
+          60%  { filter: blur(3px) contrast(2.5); clip-path: inset(15% 8% 20% 12% round 40%); transform: scale(0.96); opacity: 0.7; }
+          80%  { filter: blur(6px) contrast(3); clip-path: inset(30% 25% 35% 28% round 50%); opacity: 0.3; }
+          100% { filter: blur(12px) contrast(1); clip-path: inset(48% 48% 48% 48% round 50%); opacity: 0; transform: scale(0.88); }
+        }
+        .slime-dissolve { animation: slime-dissolve 0.9s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+      `}</style>
+      <div className={`bg-surface rounded-lg border border-accent/20 p-4 relative ${dissolving ? 'slime-dissolve' : ''}`}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-accent">Getting Started</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted tabular-nums">{completed}/{total} complete</span>
+            <button
+              onClick={handleDismiss}
+              className="text-text-muted hover:text-text transition-colors p-0.5 rounded hover:bg-surface-raised"
+              title="Dismiss"
+            >
+              <svg viewBox="0 0 12 12" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M2 2l8 8M10 2l-8 8" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden mb-3">
+          <div
+            className="h-full bg-accent rounded-full transition-all duration-500"
+            style={{ width: `${(completed / total) * 100}%` }}
+          />
+        </div>
+        <div className="space-y-1.5">
+          {checks.map((check) => (
+            <Link
+              key={check.label}
+              to={check.to}
+              className={`flex items-center gap-2.5 py-1.5 px-2 rounded transition-colors ${
+                check.done ? 'text-text-muted' : 'text-text hover:bg-surface-raised'
               }`}
             >
-              {check.done && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M2.5 6l2.5 2.5 4.5-5" />
-                </svg>
-              )}
-            </span>
-            <span className={`text-sm ${check.done ? 'line-through' : 'font-medium'}`}>
-              {check.label}
-            </span>
-          </Link>
-        ))}
+              <span
+                className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                  check.done ? 'bg-green/20 border-green/40 text-green' : 'border-border'
+                }`}
+              >
+                {check.done && (
+                  <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M2.5 6l2.5 2.5 4.5-5" />
+                  </svg>
+                )}
+              </span>
+              <span className={`text-sm ${check.done ? 'line-through' : 'font-medium'}`}>
+                {check.label}
+              </span>
+            </Link>
+          ))}
+        </div>
+        <Link
+          to="/onboarding"
+          className="block mt-3 text-center text-xs text-accent hover:text-accent-light transition-colors"
+        >
+          Open setup wizard
+        </Link>
       </div>
-      <Link
-        to="/onboarding"
-        className="block mt-3 text-center text-xs text-accent hover:text-accent-light transition-colors"
-      >
-        Open setup wizard
-      </Link>
-    </div>
+    </>
   )
 }
 
@@ -443,7 +475,6 @@ export default function DashboardPage() {
     }
     return merged.slice(0, 30)
   }, [events, liveEvents])
-  const { isConnected: voiceConnected, channelName, peers, join: joinVoice, leave: leaveVoice } = useVoiceStore()
 
   const handleSleepActivate = useCallback(async (directive: string, approvalPolicy: string) => {
     try {
@@ -563,26 +594,6 @@ export default function DashboardPage() {
       {/* Action Required */}
       <ActionRequired />
 
-      {/* Voice Chat */}
-      <div className="bg-surface rounded-lg p-3 flex items-center gap-3">
-        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${voiceConnected ? 'bg-green animate-pulse' : 'bg-text-muted/30'}`} />
-        <span className="text-sm font-medium text-text">Voice Chat</span>
-        {voiceConnected ? (
-          <>
-            <span className="text-xs text-accent font-mono">#{channelName}</span>
-            <span className="text-xs text-text-muted">{peers.length} peer{peers.length !== 1 ? 's' : ''}</span>
-            <div className="flex-1" />
-            <Link to="/channels" className="text-xs text-accent hover:underline">Open</Link>
-            <button onClick={leaveVoice} className="text-xs px-2 py-0.5 rounded bg-red/20 text-red hover:bg-red/30 transition-colors">Leave</button>
-          </>
-        ) : (
-          <>
-            <span className="text-xs text-text-muted">Not connected</span>
-            <div className="flex-1" />
-            <button onClick={() => joinVoice()} className="text-xs px-2 py-0.5 rounded bg-green/20 text-green hover:bg-green/30 transition-colors">Join</button>
-          </>
-        )}
-      </div>
 
       {/* Onboarding checklist (hidden when all done) */}
       <OnboardingChecklist checks={onboardingChecks} />

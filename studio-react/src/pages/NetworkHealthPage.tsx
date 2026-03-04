@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
+import { fetchContextKey } from '../api/endpoints'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
@@ -450,6 +451,203 @@ function AgentActivityTimeline({ agents }: { agents: Agent[] }) {
 }
 
 // ─── Sections ─────────────────────────────────────────────────────────────────
+
+// ─── API Limits Panel ─────────────────────────────────────────────────────────
+
+interface ApiLimitsData {
+  requests_limit: number | null
+  requests_remaining: number | null
+  requests_reset: string | null
+  tokens_limit: number | null
+  tokens_remaining: number | null
+  tokens_reset: string | null
+  input_tokens_limit: number | null
+  input_tokens_remaining: number | null
+  input_tokens_reset: string | null
+  output_tokens_limit: number | null
+  output_tokens_remaining: number | null
+  output_tokens_reset: string | null
+  token_pct: number | null
+  input_token_pct: number | null
+  request_pct: number | null
+  primary_pct: number | null
+  below_threshold: boolean
+  threshold: number
+  drone_mode_recommended: boolean
+  checked_at: string
+  http_status: number
+  model_probed?: string
+}
+
+function limitBarColor(pct: number | null): string {
+  if (pct === null) return 'bg-surface-raised'
+  if (pct < 10) return 'bg-red'
+  if (pct < 25) return 'bg-accent'
+  return 'bg-green'
+}
+
+function limitTextColor(pct: number | null): string {
+  if (pct === null) return 'text-text-muted'
+  if (pct < 10) return 'text-red'
+  if (pct < 25) return 'text-accent'
+  return 'text-green'
+}
+
+function LimitBar({
+  label,
+  remaining,
+  limit,
+  pct,
+  reset,
+}: {
+  label: string
+  remaining: number | null
+  limit: number | null
+  pct: number | null
+  reset: string | null
+}) {
+  const barColor = limitBarColor(pct)
+  const textColor = limitTextColor(pct)
+  const displayPct = pct !== null ? Math.round(pct) : null
+  const barWidth = pct !== null ? `${Math.max(0, Math.min(100, pct))}%` : '0%'
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-text-dim font-medium">{label}</span>
+        <div className="flex items-center gap-3 text-text-muted">
+          {remaining !== null && limit !== null && (
+            <span className="font-mono tabular-nums">
+              {remaining.toLocaleString()} / {limit.toLocaleString()}
+            </span>
+          )}
+          {displayPct !== null && (
+            <span className={`font-bold tabular-nums w-10 text-right ${textColor}`}>
+              {displayPct}%
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="h-2 bg-surface-raised rounded-full overflow-hidden">
+        <div
+          className={`h-full ${barColor} rounded-full transition-all duration-500`}
+          style={{ width: barWidth }}
+        />
+      </div>
+      {reset && (
+        <p className="text-[10px] text-text-muted font-mono">
+          resets {new Date(reset).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ApiLimitsPanel() {
+  const [data, setData] = useState<ApiLimitsData | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [lastChecked, setLastChecked] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const entry = await fetchContextKey('admin', 'api_limits')
+      const raw = (entry as any)?.value ?? (entry as any)?.data ?? null
+      if (raw) {
+        const parsed: ApiLimitsData = typeof raw === 'string' ? JSON.parse(raw) : raw
+        setData(parsed)
+        setLastChecked(new Date().toISOString())
+        setError(null)
+      } else {
+        setError('No limit data — run check_limits.py to populate')
+      }
+    } catch {
+      setError('No limit data — run check_limits.py to populate')
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 60_000)
+    return () => clearInterval(interval)
+  }, [load])
+
+  return (
+    <div className="bg-surface rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-dim">Anthropic API Limits</h3>
+          {data?.drone_mode_recommended && (
+            <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-red/10 text-red font-semibold">
+              ⚠ DRONE MODE RECOMMENDED
+            </span>
+          )}
+        </div>
+        {lastChecked && (
+          <span className="text-[10px] text-text-muted font-mono">
+            checked {timeAgo(lastChecked)}
+          </span>
+        )}
+      </div>
+
+      {error || !data ? (
+        <p className="text-xs text-text-muted italic">{error ?? 'Loading…'}</p>
+      ) : (
+        <>
+          <div className="space-y-4">
+            {/* Tokens */}
+            {(data.tokens_limit != null || data.token_pct != null) && (
+              <LimitBar
+                label="Tokens"
+                remaining={data.tokens_remaining}
+                limit={data.tokens_limit}
+                pct={data.token_pct}
+                reset={data.tokens_reset}
+              />
+            )}
+
+            {/* Input tokens — only show separately if different from combined tokens */}
+            {data.input_tokens_limit != null && data.input_tokens_limit !== data.tokens_limit && (
+              <LimitBar
+                label="Input Tokens"
+                remaining={data.input_tokens_remaining}
+                limit={data.input_tokens_limit}
+                pct={data.input_token_pct}
+                reset={data.input_tokens_reset}
+              />
+            )}
+
+            {/* Output tokens — only show if reported */}
+            {data.output_tokens_limit != null && (
+              <LimitBar
+                label="Output Tokens"
+                remaining={data.output_tokens_remaining}
+                limit={data.output_tokens_limit}
+                pct={null}
+                reset={data.output_tokens_reset}
+              />
+            )}
+
+            {/* Requests */}
+            {data.requests_limit != null && (
+              <LimitBar
+                label="Requests"
+                remaining={data.requests_remaining}
+                limit={data.requests_limit}
+                pct={data.request_pct}
+                reset={data.requests_reset}
+              />
+            )}
+          </div>
+
+          <div className="flex items-center justify-between mt-4 pt-3 border-t border-border text-[10px] text-text-muted font-mono">
+            <span>sampled {new Date(data.checked_at).toLocaleString()}</span>
+            <span>HTTP {data.http_status}{data.model_probed ? ` · ${data.model_probed}` : ''}</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 function NetworkStatusBar({
   agents,
@@ -986,7 +1184,10 @@ export default function NetworkHealthPage() {
         </div>
       </div>
 
-      {/* 3. Agents Grid */}
+      {/* 3. API Limits */}
+      <ApiLimitsPanel />
+
+      {/* 4. Agents Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Agents
@@ -997,7 +1198,7 @@ export default function NetworkHealthPage() {
         <AgentsGrid agents={nonDroneAgents} />
       </section>
 
-      {/* 4. Drones Grid */}
+      {/* 5. Drones Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Drones
@@ -1008,7 +1209,7 @@ export default function NetworkHealthPage() {
         <DronesGrid drones={drones} droneJobs={droneJobs} />
       </section>
 
-      {/* 5. Active Plans Progress */}
+      {/* 6. Active Plans Progress */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Active Plans
@@ -1019,7 +1220,7 @@ export default function NetworkHealthPage() {
         <ActivePlansProgress plans={plans} />
       </section>
 
-      {/* 6. Recent Activity Feed */}
+      {/* 7. Recent Activity Feed */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3">Recent Activity</h2>
         <RecentActivityFeed events={events} />

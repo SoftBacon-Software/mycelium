@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
-import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel } from '../api/endpoints'
+import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel, deleteChannel } from '../api/endpoints'
 import type { Channel, ChannelMessage } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
 import { formatDateLabel } from '../utils/time'
 import { getSenderDisplay } from '../utils/sender'
-import { useVoice } from '../hooks/useVoice'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -77,66 +76,6 @@ function useAutoScroll(deps: unknown[]) {
   return { containerRef, handleScroll }
 }
 
-// ─── Voice Panel ────────────────────────────────────────────────────────────
-
-function VoicePanel() {
-  const { isConnected, isMuted, peers, error, join, leave, toggleMute } = useVoice()
-
-  const statusText = useMemo(() => {
-    if (!isConnected) return 'Not connected'
-    if (peers.length === 0) return 'Connected'
-    return `${peers.length} peer${peers.length !== 1 ? 's' : ''}`
-  }, [isConnected, peers.length])
-
-  return (
-    <div className="border-t border-border px-3 py-3">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-text-muted text-[10px] font-semibold tracking-wider uppercase">Voice</span>
-        <span
-          className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green' : 'bg-text-muted'}`}
-        />
-      </div>
-
-      {/* Status */}
-      <p className="text-text-dim text-xs mb-2">{statusText}</p>
-
-      {/* Error */}
-      {error && (
-        <p className="text-red text-xs mb-2">{error}</p>
-      )}
-
-      {/* Controls */}
-      {!isConnected ? (
-        <button
-          onClick={() => join('voice')}
-          className="w-full px-3 py-1.5 rounded-sm text-xs font-medium bg-green/15 text-green hover:bg-green/25 transition-colors"
-        >
-          Join
-        </button>
-      ) : (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={toggleMute}
-            className={`flex-1 px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
-              isMuted
-                ? 'bg-red/15 text-red hover:bg-red/25'
-                : 'bg-green/15 text-green hover:bg-green/25'
-            }`}
-          >
-            {isMuted ? 'Unmute' : 'Mute'}
-          </button>
-          <button
-            onClick={leave}
-            className="flex-1 px-3 py-1.5 rounded-sm text-xs font-medium bg-red/15 text-red hover:bg-red/25 transition-colors"
-          >
-            Leave
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── Channel Message ────────────────────────────────────────────────────────
 
@@ -219,18 +158,35 @@ function ChannelSidebar({
   unreadMap,
   onSelect,
   onChannelCreated,
+  onChannelDeleted,
 }: {
   channels: Channel[]
   activeId: number | null
   unreadMap: Record<number, number>
   onSelect: (id: number) => void
   onChannelCreated: () => void
+  onChannelDeleted: (id: number) => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
   const [newName, setNewName] = useState('')
   const [newType, setNewType] = useState<ChannelType>('general')
   const [newDesc, setNewDesc] = useState('')
   const [creating, setCreating] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+
+  async function handleDelete(e: React.MouseEvent, ch: Channel) {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${ch.name}"? This cannot be undone.`)) return
+    setDeletingId(ch.id)
+    try {
+      await deleteChannel(ch.id)
+      onChannelDeleted(ch.id)
+    } catch (err) {
+      console.error('Failed to delete channel:', err)
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const totalUnread = useMemo(
     () => Object.values(unreadMap).reduce((sum, n) => sum + n, 0),
@@ -354,16 +310,17 @@ function ChannelSidebar({
                 const isActive = ch.id === activeId
                 const unread = unreadMap[ch.id] || 0
                 const config = CHANNEL_TYPE_CONFIG[ch.type] || DEFAULT_TYPE_CONFIG
+                const isProtected = ['general', 'admin'].includes(ch.slug)
 
                 return (
-                  <button
+                  <div
                     key={ch.id}
-                    onClick={() => onSelect(ch.id)}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
+                    className={`group w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer ${
                       isActive
                         ? 'bg-surface-raised text-text'
                         : 'text-text-dim hover:text-text hover:bg-surface-raised/50'
                     }`}
+                    onClick={() => onSelect(ch.id)}
                   >
                     <span className="w-5 text-center shrink-0 text-xs">{config.icon}</span>
                     <span className="truncate flex-1">{ch.name}</span>
@@ -372,7 +329,17 @@ function ChannelSidebar({
                         {unread}
                       </span>
                     )}
-                  </button>
+                    {!isProtected && <button
+                      onClick={(e) => handleDelete(e, ch)}
+                      disabled={deletingId === ch.id}
+                      className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded text-text-muted hover:text-red hover:bg-red/10 transition-all"
+                      title="Delete channel"
+                    >
+                      <svg viewBox="0 0 12 12" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M2 2l8 8M10 2l-8 8" />
+                      </svg>
+                    </button>}
+                  </div>
                 )
               })}
             </div>
@@ -380,8 +347,6 @@ function ChannelSidebar({
         })}
       </div>
 
-      {/* Voice Panel */}
-      <VoicePanel />
     </div>
   )
 }
@@ -630,6 +595,10 @@ export default function ChannelsPage() {
           unreadMap={unreadMap}
           onSelect={handleSelectChannel}
           onChannelCreated={() => { useDashboardStore.getState().refresh(); loadUnread() }}
+          onChannelDeleted={(id) => {
+            if (activeChannelId === id) setActiveChannelId(null)
+            useDashboardStore.getState().refresh()
+          }}
         />
       </div>
       <div className={`${activeChannelId ? 'flex' : 'hidden sm:flex'} flex-col flex-1 min-w-0 min-h-0`}>

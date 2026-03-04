@@ -42,7 +42,7 @@ var artifactStorage = multer.diskStorage({
 });
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
-  createAgent, getAgent, listAgents, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
+  createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   createProject, listProjects, getProject, updateProject,
   createDvTask, getDvTask, listDvTasks, updateDvTask,
@@ -63,6 +63,7 @@ import {
   completeLinkedPlanSteps,
   createStudioUser, getStudioUserByUsername, getStudioUserById,
   listStudioUsers, deleteStudioUser, updateStudioUser,
+  touchStudioUserSeen, getActiveStudioUsers,
   createConcept, getConcept, listConcepts, updateConcept, deleteConcept,
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
   createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
@@ -214,7 +215,10 @@ function getStudioUser(req) {
   if (!auth || !auth.startsWith('Bearer ')) return null;
   try {
     var decoded = jwt.verify(auth.slice(7), JWT_SECRET);
-    if (decoded && decoded.studioUser) return decoded;
+    if (decoded && decoded.studioUser) {
+      if (decoded.userId) touchStudioUserSeen(decoded.userId);
+      return decoded;
+    }
     return null;
   } catch (e) { return null; }
 }
@@ -257,7 +261,7 @@ function checkAgent(req, res) {
     return cached.id;
   }
   // DB lookup: SHA-256 direct comparison, bcrypt fallback for legacy hashes
-  var agents = listAgents();
+  var agents = listAllAgentsIncludingDrones();
   for (var a of agents) {
     var full = getAgent(a.id);
     if (!full || !full.api_key_hash) continue;
@@ -2522,11 +2526,13 @@ router.put('/channels/:id', function (req, res) {
   res.json({ ok: true, id: channel.id });
 });
 
-// DELETE /channels/:id — delete channel (admin only)
+// DELETE /channels/:id — delete channel (admin only, protected slugs cannot be deleted)
+var PROTECTED_CHANNEL_SLUGS = ['general', 'admin'];
 router.delete('/channels/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  if (PROTECTED_CHANNEL_SLUGS.includes(channel.slug)) return res.status(403).json({ error: 'Cannot delete protected channel' });
   deleteChannel(channel.id);
   emitEvent('channel_deleted', getAdminDisplayName(req), null, 'Deleted channel ' + channel.name, { channel_id: channel.id });
   res.json({ ok: true, deleted: channel.id });
