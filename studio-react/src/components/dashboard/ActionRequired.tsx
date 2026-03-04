@@ -184,7 +184,7 @@ export default function ActionRequired() {
   const handleVote = useCallback(async (approvalId: string, decision: string) => {
     setVotingId(approvalId)
     try {
-      const voterId = user?.id || 'studio'
+      const voterId = user?.username || 'studio'
       await castVote(approvalId, decision, null, voterId, 'operator')
       await refresh()
       toast.success(decision === 'approve' ? 'Approved' : 'Denied')

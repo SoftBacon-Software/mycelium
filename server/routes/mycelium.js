@@ -97,7 +97,7 @@ import {
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox
 } from '../db.js';
-import { loadPlugins, getPluginMcpTools, callEventHooks, registerEventHook } from '../plugins.js';
+import { loadPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -3115,6 +3115,12 @@ router.get('/plugins/mcp-tools', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(getPluginMcpTools());
+});
+
+// GET /plugins/workers — worker plugin process status (admin)
+router.get('/plugins/workers', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  res.json(getWorkerStatus());
 });
 
 router.get('/plugins/:name', function (req, res) {
