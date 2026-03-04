@@ -648,11 +648,35 @@ export default function ConceptsPage() {
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-surface rounded-lg p-12 text-center">
-          <p className="text-text-muted text-sm">
-            {concepts.length === 0 ? 'No concepts yet. Create your first concept to get started.' : 'No concepts match the current filter.'}
+      ) : concepts.length === 0 ? (
+        /* True empty — no concepts at all */
+        <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
+          <div className="w-16 h-16 mb-5 rounded-2xl bg-purple/10 flex items-center justify-center">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-purple" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="16" cy="12" r="6" />
+              <path d="M10 12c0-1.5.5-3 1.5-4" />
+              <path d="M22 12c0-1.5-.5-3-1.5-4" />
+              <path d="M13 18v3a3 3 0 006 0v-3" />
+              <path d="M16 21v3" />
+              <path d="M12 24h8" />
+            </svg>
+          </div>
+          <h2 className="text-base font-semibold text-text mb-1.5">No concepts yet</h2>
+          <p className="text-sm text-text-muted max-w-sm mb-6">
+            Concepts are shared design DNA — characters, styles, and rulesets — that your agents reuse across every project.
           </p>
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="bg-purple/80 text-text px-5 py-2 rounded text-sm font-medium hover:bg-purple/90 transition-colors"
+          >
+            Create your first concept
+          </button>
+        </div>
+      ) : filtered.length === 0 ? (
+        /* Filter yielded no results */
+        <div className="bg-surface rounded-lg p-12 text-center">
+          <p className="text-text-muted text-sm">No concepts match the current filter.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
