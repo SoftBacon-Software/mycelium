@@ -3,6 +3,8 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { cancelDroneJob, createDroneJob } from '../api/endpoints'
 import { timeAgo } from '../utils/time'
 import type { DroneJob } from '../api/types'
+import ModalOverlay from '../components/modals/ModalOverlay'
+import { toast } from 'sonner'
 
 const statusColors: Record<string, string> = {
   pending: 'bg-yellow/20 text-yellow',
@@ -22,6 +24,130 @@ function formatSize(bytes: number): string {
   return Math.round(bytes / 1024) + ' KB'
 }
 
+// ─── Create Job Modal ─────────────────────────────────────────────────────────
+
+function CreateJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const refresh = useDashboardStore((s) => s.refresh)
+  const [title, setTitle] = useState('')
+  const [command, setCommand] = useState('')
+  const [requires, setRequires] = useState('')
+  const [priority, setPriority] = useState(5)
+  const [inputData, setInputData] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function resetAndClose() {
+    setTitle(''); setCommand(''); setRequires(''); setPriority(5); setInputData(''); setError(null)
+    onClose()
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!title.trim() || !command.trim()) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      await createDroneJob({
+        title: title.trim(),
+        command: command.trim(),
+        requires: requires.trim() || 'gpu',
+        priority,
+        input_data: inputData.trim() || '{}',
+      })
+      toast.success('Drone job queued')
+      await refresh()
+      resetAndClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create job')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <ModalOverlay isOpen={isOpen} onClose={resetAndClose} title="Queue Drone Job">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-text-dim mb-1">Title</label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Generate trailer thumbnails"
+            autoFocus
+            disabled={submitting}
+            className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 disabled:opacity-50"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-dim mb-1">Command</label>
+          <textarea
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="generate_thumbnails --input video.mp4 --count 5"
+            rows={2}
+            disabled={submitting}
+            className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none disabled:opacity-50"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-text-dim mb-1">Requires</label>
+            <input
+              type="text"
+              value={requires}
+              onChange={(e) => setRequires(e.target.value)}
+              placeholder="gpu"
+              disabled={submitting}
+              className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-text-dim mb-1">Priority (1-10)</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={priority}
+              onChange={(e) => setPriority(Number(e.target.value))}
+              disabled={submitting}
+              className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent/40 disabled:opacity-50"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-dim mb-1">
+            Input Data <span className="text-text-muted">(JSON, optional)</span>
+          </label>
+          <textarea
+            value={inputData}
+            onChange={(e) => setInputData(e.target.value)}
+            placeholder='{"source": "video.mp4"}'
+            rows={3}
+            disabled={submitting}
+            className="w-full bg-surface-raised border border-border rounded px-3 py-2 text-sm text-text font-mono placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none disabled:opacity-50"
+          />
+        </div>
+
+        {error && <p className="text-red text-xs">{error}</p>}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={resetAndClose} className="px-4 py-2 rounded text-sm text-text-dim hover:text-text transition-colors">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !title.trim() || !command.trim()}
+            className="px-5 py-2 rounded text-sm font-semibold bg-accent text-bg hover:bg-accent-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Queuing...' : 'Queue Job'}
+          </button>
+        </div>
+      </form>
+    </ModalOverlay>
+  )
+}
+
 type TabId = 'jobs' | 'drones' | 'artifacts'
 
 export default function DronesPage() {
@@ -32,6 +158,7 @@ export default function DronesPage() {
   const [artifacts, setArtifacts] = useState<{ name: string; size: number; uploaded: string; url: string }[]>([])
 
   const [actionLoading, setActionLoading] = useState<number | null>(null)
+  const [showCreateJob, setShowCreateJob] = useState(false)
 
   useEffect(() => {
     refresh()
@@ -116,8 +243,14 @@ export default function DronesPage() {
       {/* Jobs tab */}
       {activeTab === 'jobs' && (
         <div className="flex flex-col flex-1 min-h-0">
-          {/* Status filter pills */}
+          {/* Status filter pills + create button */}
           <div className="flex items-center gap-2 mb-4">
+            <button
+              onClick={() => setShowCreateJob(true)}
+              className="px-3 py-1 rounded-full text-xs font-medium bg-accent text-bg hover:bg-accent-light transition-colors mr-2"
+            >
+              + Queue Job
+            </button>
             <button
               onClick={() => setStatusFilter('all')}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${statusFilter === 'all' ? 'bg-accent text-bg' : 'bg-surface-raised text-text-dim hover:text-text'}`}
@@ -295,6 +428,8 @@ export default function DronesPage() {
           ))}
         </div>
       )}
+
+      {showCreateJob && <CreateJobModal isOpen={showCreateJob} onClose={() => setShowCreateJob(false)} />}
     </div>
   )
 }
