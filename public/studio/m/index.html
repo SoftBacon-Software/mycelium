@@ -318,7 +318,7 @@ html, body {
   color: var(--text);
   flex: 1;
 }
-.agent-game {
+.agent-project {
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -327,10 +327,6 @@ html, body {
   border-radius: 4px;
   background: var(--accent-glow);
   color: var(--accent);
-}
-.agent-game.kc {
-  background: rgba(167, 139, 250, 0.15);
-  color: var(--purple);
 }
 .agent-working {
   font-size: 13px;
@@ -1012,7 +1008,7 @@ html, body {
 (function () {
   'use strict';
 
-  var API_BASE = '/api/dioverse';
+  var API_BASE = '/api/mycelium';
   var authToken = sessionStorage.getItem('mycelium_token');
   var currentUser = null;
   var pollTimer = null;
@@ -1269,9 +1265,7 @@ html, body {
       var top = el('div', { className: 'agent-top' });
       top.appendChild(el('span', { className: 'agent-dot ' + (isOnline ? 'online' : '') }));
       top.appendChild(el('span', { className: 'agent-name', textContent: agent.name || agent.id }));
-      var gameClass = 'agent-game';
-      if (agent.game && agent.game.indexOf('king') !== -1) gameClass += ' kc';
-      top.appendChild(el('span', { className: gameClass, textContent: agent.game || 'none' }));
+      top.appendChild(el('span', { className: 'agent-project', textContent: agent.project_id || agent.game || '' }));
       card.appendChild(top);
 
       if (agent.working_on) {
@@ -1707,7 +1701,7 @@ html, body {
     if (!content) return;
     var to = document.getElementById('agent-msg-to').value;
     input.value = '';
-    var body = { from_agent: 'admin', content: content, game: 'willing-sacrifice' };
+    var body = { from_agent: 'admin', content: content, project_id: '' };
     if (to) body.to_agent = to;
     apiPost('/messages', body, function (err) {
       if (err) { input.value = content; return; }

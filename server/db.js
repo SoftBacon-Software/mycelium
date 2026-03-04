@@ -67,6 +67,8 @@ export function initDB() {
     ["dv_operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
     // Step #197 — message priority tiers (urgent/normal/fyi)
     ["dv_messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
+    // Plan #30 — dynamic bug categories per project
+    ["dv_projects", "bug_categories", "TEXT NOT NULL DEFAULT '[]'"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -125,13 +127,13 @@ export function initDB() {
 
   // Update agent roles (agents may not exist yet, so wrap in try/catch)
   try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('admin', 'greatness', 'willing-sacrifice', 'greatness-claude');
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('admin', 'greatness', 'mycelium', 'greatness-claude');
   } catch (e) { /* agent may not exist */ }
   try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('agent', 'hijack', 'king-city', 'hijack-claude');
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('agent', 'hijack', 'king-city', 'hijack-claude');
   } catch (e) { /* agent may not exist */ }
   try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
+    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
   } catch (e) { /* agent may not exist */ }
 
   ensureDefaultChannels();
@@ -184,7 +186,7 @@ function stmt(key, sql) {
   return _stmts[key];
 }
 
-// =============== DIOVERSE HUB ===============
+// =============== MYCELIUM PLATFORM ===============
 
 // -- Agents --
 
@@ -380,6 +382,7 @@ export function updateProject(id, fields) {
   if (fields.org_id !== undefined) { sets.push('org_id = ?'); values.push(fields.org_id); }
   if (fields.type !== undefined) { sets.push('type = ?'); values.push(fields.type); }
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (fields.bug_categories !== undefined) { sets.push('bug_categories = ?'); values.push(typeof fields.bug_categories === 'string' ? fields.bug_categories : JSON.stringify(fields.bug_categories)); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE dv_projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
@@ -1079,7 +1082,7 @@ export function getNextUnassignedPlanStep() {
 
 var _autoTaskFromAsset = null;
 
-export function initDioverseTransactions() {
+export function initTransactions() {
   _autoTaskFromAsset = db.transaction(function (assetId, projectId, requester) {
     var agents = db.prepare("SELECT id FROM dv_agents WHERE capabilities LIKE '%assets%'").all();
     var assignee = agents.length > 0 ? agents[0].id : null;
@@ -1302,7 +1305,7 @@ export function updateStudioUser(id, fields) {
   db.prepare('UPDATE dv_studio_users SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
-// -- Dioverse Webhooks --
+// -- Webhooks --
 
 export function createDvWebhook(agentId, url, events, secret) {
   var eventsJson = Array.isArray(events) ? JSON.stringify(events) : (events || '["task_created","request_created","message_sent"]');
@@ -1762,14 +1765,12 @@ export function getConceptProjects(conceptId) {
     WHERE pc.concept_id = ? ORDER BY p.name`).all(conceptId);
 }
 
-// -- Dioverse Hub init (seed default projects + admin user) --
+// -- Init (no default seed data — new instances start blank) --
 
-export function initDioverse() {
-  createProject('willing-sacrifice', 'Willing Sacrifice', 'Autobattler RPG where Dio is the arena master');
-  createProject('king-city', 'King City', 'Zombie survival town builder where Dio appears as a chibi narrator');
+export function initDefaults() {
+  // No default projects seeded. New instances create their own via onboarding.
 }
 
-// -- Dioverse Hub admin overview --
 
 // =============== APPROVALS ===============
 

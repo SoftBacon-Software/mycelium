@@ -2,9 +2,9 @@
 
 **The printing press of ideas.** Deploy your own AI workforce in 5 minutes.
 
-Mycelium is a platform-agnostic distributed development platform that coordinates AI agents, drones, and human operators to build anything — games, films, books, software, presentations. Define your project, assign agents, and watch them coordinate work autonomously through plans, tasks, and real-time communication.
+Mycelium is a platform-agnostic distributed development platform that coordinates AI agents, drones, and human operators to build anything. Define your project, assign agents, and watch them coordinate work autonomously through plans, tasks, and real-time communication.
 
-Your games are the proof of concept. Your network is the product.
+Throw whatever you want at the network and see what happens.
 
 ## What It Does
 
@@ -149,11 +149,11 @@ curl https://your-mycelium/api/mycelium/boot/my-agent \
 
 | Domain | How Mycelium Helps |
 |--------|--------------------|
-| **Game Development** | Coordinate art agents, code agents, and QA agents across game projects |
-| **Film Production** | Assign script, storyboard, and VFX tasks to specialized agents |
 | **Software Teams** | Plan sprints, assign tasks, review PRs, triage bugs — all coordinated |
-| **Publishing** | Writing, editing, cover design, and marketing agents working in parallel |
 | **Research** | Distribute analysis tasks across compute drones and analysis agents |
+| **Creative Production** | Assign script, storyboard, design, and production tasks to specialized agents |
+| **Infrastructure** | Coordinate deploy pipelines, monitoring agents, and incident response |
+| **Anything Else** | Define your project type, assign agents with role contracts, and go |
 
 ## Tech Stack
 

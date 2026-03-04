@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useDashboardStore } from '../../stores/dashboardStore'
-import { createDroneJob, resolveRequest, castVote } from '../../api/endpoints'
+import { dismissDroneJob, resolveRequest, castVote } from '../../api/endpoints'
 import { useAuthStore } from '../../stores/authStore'
 import Badge from '../shared/Badge'
 import { timeAgo } from '../../utils/time'
@@ -41,7 +41,7 @@ function RequestRow({ msg, onResolve, resolving }: { msg: Message; onResolve: ()
   )
 }
 
-function FailedJobRow({ job, onRetry, retrying }: { job: DroneJob; onRetry: () => void; retrying: boolean }) {
+function FailedJobRow({ job, onDismiss, dismissing }: { job: DroneJob; onDismiss: () => void; dismissing: boolean }) {
   const navigate = useNavigate()
   return (
     <div
@@ -55,11 +55,11 @@ function FailedJobRow({ job, onRetry, retrying }: { job: DroneJob; onRetry: () =
       </span>
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); onRetry() }}
-        disabled={retrying}
-        className="text-xs px-2 py-0.5 rounded bg-red/10 text-red hover:bg-red/20 transition-colors disabled:opacity-50 shrink-0"
+        onClick={(e) => { e.stopPropagation(); onDismiss() }}
+        disabled={dismissing}
+        className="text-xs px-2 py-0.5 rounded bg-text-muted/10 text-text-muted hover:bg-text-muted/20 transition-colors disabled:opacity-50 shrink-0"
       >
-        {retrying ? '...' : 'Retry'}
+        {dismissing ? '...' : 'Dismiss'}
       </button>
       <span className="text-text-muted text-xs font-mono shrink-0">{timeAgo(job.created_at)}</span>
     </div>
@@ -143,7 +143,7 @@ function Category({ title, count, linkTo, children }: CategoryProps) {
 export default function ActionRequired() {
   const { pendingRequests, droneJobs, bugs, pendingApprovals, refresh } = useDashboardStore()
   const user = useAuthStore((s) => s.user)
-  const [retryingId, setRetryingId] = useState<number | null>(null)
+  const [dismissingId, setDismissingId] = useState<number | null>(null)
   const [resolvingId, setResolvingId] = useState<string | null>(null)
   const [votingId, setVotingId] = useState<string | null>(null)
 
@@ -153,23 +153,17 @@ export default function ActionRequired() {
 
   const totalCount = pendingRequests.length + failedJobs.length + unassignedBugs.length + pendingApprovalItems.length
 
-  const handleRetry = useCallback(async (job: DroneJob) => {
-    setRetryingId(job.id)
+  const handleDismiss = useCallback(async (job: DroneJob) => {
+    setDismissingId(job.id)
     try {
-      await createDroneJob({
-        title: job.title,
-        command: job.command,
-        requires: job.requires,
-        priority: job.priority,
-        input_data: job.input_data,
-      })
+      await dismissDroneJob(job.id)
       await refresh()
-      toast.success('Job queued for retry')
+      toast.success('Job dismissed')
     } catch (err) {
-      console.error('Retry failed:', err)
-      toast.error('Failed to retry job')
+      console.error('Dismiss failed:', err)
+      toast.error('Failed to dismiss job')
     } finally {
-      setRetryingId(null)
+      setDismissingId(null)
     }
   }, [refresh])
 
@@ -246,14 +240,25 @@ export default function ActionRequired() {
               <FailedJobRow
                 key={job.id}
                 job={job}
-                onRetry={() => handleRetry(job)}
-                retrying={retryingId === job.id}
+                onDismiss={() => handleDismiss(job)}
+                dismissing={dismissingId === job.id}
               />
             ))}
             {failedJobs.length > MAX_ITEMS && (
-              <p className="text-xs text-text-muted px-2 py-1">
-                +{failedJobs.length - MAX_ITEMS} more
-              </p>
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-xs text-text-muted">+{failedJobs.length - MAX_ITEMS} more</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    for (const job of failedJobs) await dismissDroneJob(job.id)
+                    await refresh()
+                    toast.success(`Dismissed ${failedJobs.length} failed jobs`)
+                  }}
+                  className="text-xs px-2 py-0.5 rounded bg-text-muted/10 text-text-muted hover:bg-text-muted/20 transition-colors"
+                >
+                  Dismiss all
+                </button>
+              </div>
             )}
           </Category>
         )}

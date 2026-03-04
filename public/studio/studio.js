@@ -1,7 +1,7 @@
 // Mycelium Dashboard — v2 Interactive
 // Security: All dynamic content is escaped via esc() which uses textContent round-trip.
 (function () {
-  var API_BASE = '/api/dioverse';
+  var API_BASE = '/api/mycelium';
   var POLL_MS = 10000;
   var authToken = '';
   var currentUser = null;
@@ -153,7 +153,7 @@
       document.getElementById(id).value = '';
     });
     document.getElementById('task-priority').value = 'normal';
-    document.getElementById('task-game').value = 'willing-sacrifice';
+    document.getElementById('task-game').value = '';
     document.getElementById('task-approval').checked = false;
     document.getElementById('task-form-error').textContent = '';
     openModal(modalCreateTask);
@@ -186,7 +186,7 @@
     document.getElementById('msg-to').value = '';
     document.getElementById('msg-content').value = '';
     document.getElementById('msg-type').value = 'message';
-    document.getElementById('msg-game').value = 'willing-sacrifice';
+    document.getElementById('msg-game').value = '';
     document.getElementById('msg-auto-task').checked = false;
     document.getElementById('request-options').style.display = 'none';
     document.getElementById('msg-form-error').textContent = '';
@@ -257,7 +257,7 @@
     createPlanBtn.addEventListener('click', function () {
       document.getElementById('plan-title').value = '';
       document.getElementById('plan-desc').value = '';
-      document.getElementById('plan-game').value = 'dioverse';
+      document.getElementById('plan-game').value = '';
       document.getElementById('plan-priority').value = 'normal';
       document.getElementById('plan-owner').value = '';
       document.getElementById('plan-form-error').textContent = '';
@@ -289,7 +289,7 @@
   document.getElementById('file-bug-btn').addEventListener('click', function () {
     document.getElementById('bug-title').value = '';
     document.getElementById('bug-desc').value = '';
-    document.getElementById('bug-game').value = 'dioverse';
+    document.getElementById('bug-game').value = '';
     document.getElementById('bug-severity').value = 'normal';
     document.getElementById('bug-category').value = 'other';
     document.getElementById('bug-assignee').value = '';
@@ -899,8 +899,7 @@
         var agentAvUrl = m.from_agent ? agentAvatarMap[m.from_agent] : null;
         var isAdmin = !m.from_agent || m.from_agent === '__admin__' || m.from_agent === 'admin';
         if (isAdmin) {
-          // Dio sprite for admin
-          topRow.appendChild(el('img', { src: 'dio_avatar.png', className: 'msg-avatar msg-avatar-img' }));
+          topRow.appendChild(el('img', { src: 'fungal_horror.png', className: 'msg-avatar msg-avatar-img' }));
         } else if (agentAvUrl) {
           topRow.appendChild(el('img', { src: agentAvUrl, className: 'msg-avatar msg-avatar-img' }));
         } else {
@@ -1133,9 +1132,9 @@
     var c = document.getElementById('games-list');
     if (!games || !games.length) { c.textContent = ''; c.appendChild(el('div', { className: 'queue-empty', textContent: 'No projects' })); return; }
     clearAndAppend(c, games.map(function (g) {
-      var tile = el('div', { className: 'queue-tile tile-game' });
+      var tile = el('div', { className: 'queue-tile tile-project' });
       tile.appendChild(el('div', { className: 'tile-row' }, [
-        el('span', { className: 'tile-dot dot-game' }),
+        el('span', { className: 'tile-dot dot-project' }),
         el('span', { className: 'tile-label', textContent: g.name })
       ]));
       var detail = el('div', { className: 'tile-detail' });
@@ -1165,7 +1164,7 @@
       if (b.severity === 'high' || b.severity === 'critical') {
         badges.appendChild(el('span', { className: 'tile-badge tile-badge-sev-' + b.severity, textContent: b.severity }));
       }
-      badges.appendChild(el('span', { className: 'tile-badge tile-badge-game', textContent: b.game }));
+      badges.appendChild(el('span', { className: 'tile-badge tile-badge-project', textContent: b.game }));
       detail.appendChild(badges);
       detail.appendChild(el('div', { className: 'tile-meta', textContent: (b.reporter || '?') + ' \u00B7 ' + timeAgo(b.created_at) }));
       tile.appendChild(detail);
@@ -1279,7 +1278,7 @@
       var detail = el('div', { className: 'tile-detail' });
       var badges = el('div', { className: 'tile-badges' });
       badges.appendChild(el('span', { className: 'tile-badge tile-badge-plan-' + p.status, textContent: p.status }));
-      badges.appendChild(el('span', { className: 'tile-badge tile-badge-game', textContent: p.game }));
+      badges.appendChild(el('span', { className: 'tile-badge tile-badge-project', textContent: p.game }));
       detail.appendChild(badges);
       detail.appendChild(el('div', { className: 'tile-meta', textContent: (p.owner || 'unowned') + ' \u00B7 ' + timeAgo(p.updated_at) }));
       if (prog.total > 0) {
@@ -1679,7 +1678,7 @@
           from_agent: 'admin',
           to_agent: agent,
           content: text,
-          game: 'dioverse'
+          game: ''
         }, function (err) {
           if (err) { dictateError.textContent = 'Error: ' + err.message; return; }
           closeAllModals(); fetchOverview();
@@ -1689,7 +1688,7 @@
           from_agent: 'admin',
           to_agent: agent,
           content: text,
-          game: 'dioverse'
+          game: ''
         }, function (err) {
           if (err) { dictateError.textContent = 'Error: ' + err.message; return; }
           closeAllModals(); fetchOverview();
