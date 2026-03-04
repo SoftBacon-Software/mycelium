@@ -1873,12 +1873,12 @@ router.put('/admin/sleep', function (req, res) {
     }), who);
 
     var autonomous = isNetworkAutonomous();
-    if (autonomous && directive) {
-      // Broadcast night directive to all online agents
+    // Send night directive to all online agents whenever sleep mode activates — operator explicitly said they're away
+    if (directive) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createDvMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+          createDvMessage('__system__', agent.id, null, 'SLEEP MODE ACTIVE — ' + who + ' is away. Night directive: ' + directive, 'directive');
         }
       }
     }
@@ -1937,6 +1937,31 @@ router.put('/admin/sleep', function (req, res) {
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
         createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+      }
+    }
+
+    // Send morning summary as inbox message to the waking operator so it shows up on next boot
+    if (log && operatorId2) {
+      var summaryLines = ['Good morning! Here\'s what happened while you were away:'];
+      if (log.tasks_completed && log.tasks_completed.length > 0) {
+        summaryLines.push('\nTasks completed (' + log.tasks_completed.length + '):');
+        for (var t of log.tasks_completed) summaryLines.push('  ✓ ' + (t.title || t.id));
+      }
+      if (log.steps_completed && log.steps_completed.length > 0) {
+        summaryLines.push('\nPlan steps completed (' + log.steps_completed.length + '):');
+        for (var s of log.steps_completed) summaryLines.push('  ✓ ' + (s.title || s.id));
+      }
+      if (log.approvals_queued && log.approvals_queued.length > 0) {
+        summaryLines.push('\nApprovals waiting (' + log.approvals_queued.length + '):');
+        for (var a of log.approvals_queued) summaryLines.push('  ! ' + (a.title || a.id));
+      }
+      if (log.dispatches && log.dispatches.length > 0) summaryLines.push('\nAgent dispatches: ' + log.dispatches.length);
+      if (log.messages_sent && log.messages_sent > 0) summaryLines.push('Messages sent: ' + log.messages_sent);
+      if (summaryLines.length === 1) summaryLines.push('\nNothing to report — quiet night.');
+      if (mySleptAt) summaryLines.push('\nSlept since: ' + mySleptAt);
+      var wakeUpAgent = listAgents().find(function(a) { return a.operator_id === operatorId2; });
+      if (wakeUpAgent) {
+        createDvMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
       }
     }
 
