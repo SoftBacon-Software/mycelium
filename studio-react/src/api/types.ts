@@ -386,6 +386,7 @@ export interface Overview {
   drones: Agent[];
   drone_jobs: DroneJob[];
   plugins: Plugin[];
+  active_operators?: { id: number; username: string; display_name: string; last_seen: string }[];
 }
 
 export interface InboxItem {
