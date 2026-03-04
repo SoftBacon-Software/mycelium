@@ -1873,12 +1873,12 @@ router.put('/admin/sleep', function (req, res) {
     }), who);
 
     var autonomous = isNetworkAutonomous();
-    // Send night directive to all online agents whenever sleep mode activates — operator explicitly said they're away
-    if (directive) {
+    if (autonomous && directive) {
+      // Broadcast night directive only when all operators are away — don't interrupt if others are working
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createDvMessage('__system__', agent.id, null, 'SLEEP MODE ACTIVE — ' + who + ' is away. Night directive: ' + directive, 'directive');
+          createDvMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
         }
       }
     }

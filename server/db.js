@@ -283,7 +283,14 @@ export function getAvailableOperators() {
 }
 
 export function isNetworkAutonomous() {
-  var count = db.prepare("SELECT COUNT(*) as c FROM dv_operators WHERE status = 'active' AND availability = 'available'").get();
+  // An operator counts as "present" if they are available AND have had an agent heartbeat in the last 8 hours.
+  // Operators whose agents haven't been seen recently don't block autonomous mode.
+  var cutoff = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+  var count = db.prepare(
+    "SELECT COUNT(DISTINCT o.id) as c FROM dv_operators o " +
+    "JOIN dv_agents a ON a.operator_id = o.id " +
+    "WHERE o.status = 'active' AND o.availability = 'available' AND a.last_heartbeat > ?"
+  ).get(cutoff);
   return count.c === 0;
 }
 
