@@ -192,7 +192,7 @@ export default function DronesPage() {
   useEffect(() => {
     if (activeTab === 'artifacts') {
       fetch('/api/mycelium/drones/artifacts', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('studio_token')}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem('mycelium_token')}` },
       })
         .then((r) => r.json())
         .then((data) => { if (Array.isArray(data)) setArtifacts(data) })

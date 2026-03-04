@@ -204,7 +204,11 @@ export function getAgentByKeyHash(apiKeyHash) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents2', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents WHERE project_id != 'drone' ORDER BY created_at").all();
+}
+
+export function listAllAgentsIncludingDrones() {
+  return stmt('dvListAllAgents', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
