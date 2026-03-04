@@ -1,0 +1,12 @@
+{
+  "name": "_template",
+  "version": "1.0.0",
+  "displayName": "Plugin Template",
+  "description": "Starter template — copy this directory and rename to build your own plugin.",
+  "author": "",
+  "enabled": false,
+  "routePrefix": "/template",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}
