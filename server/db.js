@@ -71,6 +71,11 @@ export function initDB() {
     ["dv_projects", "bug_categories", "TEXT NOT NULL DEFAULT '[]'"],
     // Operator presence tracking — who's currently in the dashboard
     ["dv_studio_users", "last_seen", "TEXT"],
+    // Drone profiles — link jobs to required profiles
+    ["dv_drone_jobs", "profile_id", "TEXT"],
+    // Drone system overhaul — smart job routing
+    ["dv_agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
+    ["dv_drone_jobs", "job_type", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -137,6 +142,9 @@ export function initDB() {
   try {
     db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
   } catch (e) { /* agent may not exist */ }
+
+  // Seed job templates (upsert — adds new ones, updates existing)
+  seedJobTemplates();
 
   ensureDefaultChannels();
 
@@ -238,6 +246,7 @@ export function updateAgent(id, fields) {
   if (fields.llm_model !== undefined) { sets.push('llm_model = ?'); values.push(fields.llm_model); }
   if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
   if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); values.push(fields.capabilities); }
+  if (fields.system_diagnostics !== undefined) { sets.push('system_diagnostics = ?'); values.push(typeof fields.system_diagnostics === 'string' ? fields.system_diagnostics : JSON.stringify(fields.system_diagnostics)); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
@@ -1649,9 +1658,9 @@ export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
 
 // -- Drone Jobs --
 
-export function createDroneJob(title, command, inputData, requires, requester, priority, workspaceRepo, workspaceBranch) {
+export function createDroneJob(title, command, inputData, requires, requester, priority, workspaceRepo, workspaceBranch, profileId) {
   var result = db.prepare(
-    "INSERT INTO dv_drone_jobs (title, command, input_data, requires, requester, priority, workspace_repo, workspace_branch) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO dv_drone_jobs (title, command, input_data, requires, requester, priority, workspace_repo, workspace_branch, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(
     title,
     command || '',
@@ -1660,7 +1669,8 @@ export function createDroneJob(title, command, inputData, requires, requester, p
     requester,
     priority || 0,
     workspaceRepo || null,
-    workspaceBranch || 'main'
+    workspaceBranch || 'main',
+    profileId || null
   );
   return result.id;
 }
@@ -1671,6 +1681,7 @@ export function getDroneJob(id) {
 
 export function claimDroneJob(droneId, capabilities) {
   // Atomic: find oldest pending job where requires is a subset of capabilities
+  // If job has profile_id, drone must have completed setup for that profile
   var caps = Array.isArray(capabilities) ? capabilities : [];
   var pending = db.prepare(
     "SELECT * FROM dv_drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
@@ -1679,13 +1690,18 @@ export function claimDroneJob(droneId, capabilities) {
     var reqs = [];
     try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
     var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
-    if (matched) {
-      var result = db.prepare(
-        "UPDATE dv_drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
-      ).run(droneId, job.id);
-      if (result.changes > 0) return getDroneJob(job.id);
-      // Another drone claimed it first, try next candidate
+    if (!matched) continue;
+    // Check profile requirement — drone must have setup_done=1 for this profile
+    if (job.profile_id) {
+      var assignment = db.prepare(
+        "SELECT setup_done FROM dv_drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
+      ).get(droneId, job.profile_id);
+      if (!assignment || !assignment.setup_done) continue;
     }
+    var result = db.prepare(
+      "UPDATE dv_drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
+    ).run(droneId, job.id);
+    if (result.changes > 0) return getDroneJob(job.id);
   }
   return null;
 }
@@ -1694,6 +1710,8 @@ export function updateDroneJob(id, fields) {
   var sets = [];
   var values = [];
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
+  if (fields.command !== undefined) { sets.push('command = ?'); values.push(fields.command); }
+  if (fields.input_data !== undefined) { sets.push('input_data = ?'); values.push(typeof fields.input_data === 'string' ? fields.input_data : JSON.stringify(fields.input_data)); }
   if (fields.result_url !== undefined) { sets.push('result_url = ?'); values.push(fields.result_url); }
   if (fields.result_data !== undefined) { sets.push('result_data = ?'); values.push(typeof fields.result_data === 'string' ? fields.result_data : JSON.stringify(fields.result_data)); }
   if (fields.error !== undefined) { sets.push('error = ?'); values.push(fields.error); }
@@ -1719,6 +1737,85 @@ export function listDrones() {
   return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents WHERE project_id = 'drone' ORDER BY created_at").all();
 }
 
+// -- Drone Profiles --
+
+export function createDroneProfile(id, name, description, requires, artifacts, setupScript, workspace, env) {
+  db.prepare(
+    "INSERT INTO dv_drone_profiles (id, name, description, requires, artifacts, setup_script, workspace, env) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    id, name, description || '',
+    typeof requires === 'string' ? requires : JSON.stringify(requires || {}),
+    typeof artifacts === 'string' ? artifacts : JSON.stringify(artifacts || []),
+    setupScript || '',
+    workspace || '',
+    typeof env === 'string' ? env : JSON.stringify(env || {})
+  );
+  return getDroneProfile(id);
+}
+
+export function getDroneProfile(id) {
+  return db.prepare("SELECT * FROM dv_drone_profiles WHERE id = ?").get(id);
+}
+
+export function listDroneProfiles() {
+  return db.prepare("SELECT * FROM dv_drone_profiles ORDER BY created_at").all();
+}
+
+export function updateDroneProfile(id, fields) {
+  var sets = [];
+  var values = [];
+  for (var key of ['name', 'description', 'setup_script', 'workspace']) {
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+  }
+  for (var jsonKey of ['requires', 'artifacts', 'env']) {
+    if (fields[jsonKey] !== undefined) {
+      sets.push(jsonKey + ' = ?');
+      values.push(typeof fields[jsonKey] === 'string' ? fields[jsonKey] : JSON.stringify(fields[jsonKey]));
+    }
+  }
+  if (sets.length === 0) return getDroneProfile(id);
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  db.prepare('UPDATE dv_drone_profiles SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  // Invalidate setup_done for all drones assigned to this profile
+  db.prepare("UPDATE dv_drone_profile_assignments SET setup_done = 0, checksum = '' WHERE profile_id = ?").run(id);
+  return getDroneProfile(id);
+}
+
+export function deleteDroneProfile(id) {
+  return db.prepare("DELETE FROM dv_drone_profiles WHERE id = ?").run(id);
+}
+
+export function assignDroneProfile(droneId, profileId) {
+  db.prepare(
+    "INSERT OR REPLACE INTO dv_drone_profile_assignments (drone_id, profile_id, setup_done, checksum) VALUES (?, ?, 0, '')"
+  ).run(droneId, profileId);
+}
+
+export function unassignDroneProfile(droneId, profileId) {
+  return db.prepare("DELETE FROM dv_drone_profile_assignments WHERE drone_id = ? AND profile_id = ?").run(droneId, profileId);
+}
+
+export function getDroneProfileAssignments(droneId) {
+  return db.prepare(
+    "SELECT a.*, p.name, p.description, p.requires, p.artifacts, p.setup_script, p.workspace, p.env, p.updated_at as profile_updated_at " +
+    "FROM dv_drone_profile_assignments a JOIN dv_drone_profiles p ON a.profile_id = p.id WHERE a.drone_id = ? ORDER BY p.created_at"
+  ).all(droneId);
+}
+
+export function markProfileSetupDone(droneId, profileId, checksum) {
+  db.prepare(
+    "UPDATE dv_drone_profile_assignments SET setup_done = 1, setup_at = datetime('now'), checksum = ? WHERE drone_id = ? AND profile_id = ?"
+  ).run(checksum || '', droneId, profileId);
+}
+
+export function getDronesWithProfile(profileId) {
+  return db.prepare(
+    "SELECT a.drone_id, a.setup_done, a.setup_at, a.checksum, ag.status, ag.last_heartbeat " +
+    "FROM dv_drone_profile_assignments a JOIN dv_agents ag ON a.drone_id = ag.id WHERE a.profile_id = ?"
+  ).all(profileId);
+}
+
 export function bulkCancelDroneJobs(statuses, olderThanDays) {
   var where = "status IN ('" + statuses.join("','") + "')";
   if (olderThanDays > 0) {
@@ -1730,6 +1827,296 @@ export function bulkCancelDroneJobs(statuses, olderThanDays) {
     db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + ids.join(',') + ")").run();
   }
   return jobs;
+}
+
+// -- Job Templates --
+
+function seedJobTemplates() {
+  var templates = [
+    {
+      id: 'kc_art_gen',
+      name: 'King City Art Generation',
+      project_id: 'king-city',
+      requires: '["gpu"]',
+      min_vram_gb: 12,
+      min_disk_gb: 20,
+      python_deps: '["safetensors","PIL","transformers","diffusers","einops","accelerate","pydantic","requests","huggingface_hub"]',
+      python_deps_install: '-q --only-binary :all: safetensors Pillow transformers requests huggingface_hub diffusers einops accelerate pydantic',
+      artifacts: '["generate_kc.py","kc_pixel.safetensors"]',
+      setup_repo: 'https://github.com/ostris/ai-toolkit.git',
+      command_template: '{{python}} {{workspace}}/generate_kc.py --batch {{batch}}',
+      workspace_name: 'kc_art_gen',
+    },
+    {
+      id: 'ws_art_gen',
+      name: 'Willing Sacrifice Art Generation',
+      project_id: 'willing-sacrifice',
+      requires: '["cpu"]',
+      min_vram_gb: 0,
+      min_disk_gb: 2,
+      python_deps: '["openai","requests","PIL"]',
+      python_deps_install: '-q openai requests Pillow',
+      artifacts: '["generate_painterly.py"]',
+      setup_repo: '',
+      command_template: '{{python}} {{workspace}}/generate_painterly.py --batch {{batch}}',
+      workspace_name: 'ws_art_gen',
+    }
+  ];
+  for (var t of templates) {
+    db.prepare(
+      "INSERT OR IGNORE INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb, python_deps, python_deps_install, artifacts, setup_repo, command_template, workspace_name) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(t.id, t.name, t.project_id, t.requires, t.min_vram_gb, t.min_disk_gb, t.python_deps, t.python_deps_install, t.artifacts, t.setup_repo, t.command_template, t.workspace_name);
+  }
+}
+
+export function createJobTemplate(id, fields) {
+  db.prepare(
+    "INSERT INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb, python_deps, python_deps_install, artifacts, setup_repo, command_template, workspace_name) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    id,
+    fields.name || id,
+    fields.project_id || '',
+    typeof fields.requires === 'string' ? fields.requires : JSON.stringify(fields.requires || ['cpu']),
+    fields.min_vram_gb || 0,
+    fields.min_disk_gb || 5,
+    typeof fields.python_deps === 'string' ? fields.python_deps : JSON.stringify(fields.python_deps || []),
+    fields.python_deps_install || '',
+    typeof fields.artifacts === 'string' ? fields.artifacts : JSON.stringify(fields.artifacts || []),
+    fields.setup_repo || '',
+    fields.command_template || '',
+    fields.workspace_name || ''
+  );
+  return getJobTemplate(id);
+}
+
+export function getJobTemplate(id) {
+  return db.prepare("SELECT * FROM dv_job_templates WHERE id = ?").get(id);
+}
+
+export function listJobTemplates() {
+  return db.prepare("SELECT * FROM dv_job_templates ORDER BY created_at").all();
+}
+
+export function updateJobTemplate(id, fields) {
+  var sets = [];
+  var values = [];
+  for (var key of ['name', 'project_id', 'python_deps_install', 'setup_repo', 'command_template', 'workspace_name']) {
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+  }
+  for (var numKey of ['min_vram_gb', 'min_disk_gb']) {
+    if (fields[numKey] !== undefined) { sets.push(numKey + ' = ?'); values.push(fields[numKey]); }
+  }
+  for (var jsonKey of ['requires', 'python_deps', 'artifacts']) {
+    if (fields[jsonKey] !== undefined) {
+      sets.push(jsonKey + ' = ?');
+      values.push(typeof fields[jsonKey] === 'string' ? fields[jsonKey] : JSON.stringify(fields[jsonKey]));
+    }
+  }
+  if (sets.length === 0) return getJobTemplate(id);
+  values.push(id);
+  db.prepare('UPDATE dv_job_templates SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return getJobTemplate(id);
+}
+
+export function deleteJobTemplate(id) {
+  return db.prepare("DELETE FROM dv_job_templates WHERE id = ?").run(id);
+}
+
+// -- Drone Diagnostics --
+
+export function updateDroneDiagnostics(agentId, diagnostics) {
+  var json = typeof diagnostics === 'string' ? diagnostics : JSON.stringify(diagnostics);
+  db.prepare("UPDATE dv_agents SET system_diagnostics = ? WHERE id = ?").run(json, agentId);
+}
+
+export function getDroneDiagnostics(agentId) {
+  var row = db.prepare("SELECT system_diagnostics FROM dv_agents WHERE id = ?").get(agentId);
+  if (!row) return null;
+  try { return JSON.parse(row.system_diagnostics || '{}'); } catch (e) { return {}; }
+}
+
+// -- Platform Resolver + Command Renderer --
+
+export function renderJobForDrone(templateId, droneId, inputData) {
+  var template = getJobTemplate(templateId);
+  if (!template) return { error: 'Template not found: ' + templateId };
+
+  var diag = getDroneDiagnostics(droneId);
+  if (!diag || Object.keys(diag).length === 0) {
+    // Fall back to savepoint system_info
+    var savepoint = getLatestSavepoint(droneId);
+    if (savepoint) {
+      try {
+        var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+        diag = snapshot.system_info || {};
+      } catch (e) { diag = {}; }
+    }
+  }
+  if (!diag || Object.keys(diag).length === 0) {
+    return { error: 'No diagnostics available for drone ' + droneId + '. Drone must heartbeat first.' };
+  }
+
+  // Compatibility checks
+  var templateReqs = [];
+  try { templateReqs = JSON.parse(template.requires || '["cpu"]'); } catch (e) { templateReqs = ['cpu']; }
+
+  // Check GPU requirement
+  if (templateReqs.indexOf('gpu') !== -1) {
+    if (!diag.cuda_available && !diag.gpu_name) {
+      return { error: 'Template requires GPU but drone has none', incompatible: true };
+    }
+    if (template.min_vram_gb > 0 && diag.gpu_vram_gb && diag.gpu_vram_gb < template.min_vram_gb) {
+      return { error: 'Template requires ' + template.min_vram_gb + ' GB VRAM but drone has ' + diag.gpu_vram_gb + ' GB', incompatible: true };
+    }
+  }
+
+  // Check disk
+  if (template.min_disk_gb > 0 && diag.disk_free_gb && diag.disk_free_gb < template.min_disk_gb) {
+    return { error: 'Template requires ' + template.min_disk_gb + ' GB free disk but drone has ' + diag.disk_free_gb + ' GB', incompatible: true };
+  }
+
+  // Resolve platform vars
+  var isWindows = (diag.os || '').toLowerCase() === 'windows';
+  var pythonPath = diag.python_path || (isWindows ? 'python' : 'python3');
+  var home = diag.home || (isWindows ? 'C:/Users/' + (diag.username || 'user') : '/home/' + (diag.username || 'user'));
+  var workspaceName = template.workspace_name || templateId;
+  var workspace = home + '/.mycelium/workspaces/' + workspaceName;
+  var nullDev = isWindows ? 'NUL' : '/dev/null';
+  var pipInstall = pythonPath + ' -m pip install';
+  var pathSep = isWindows ? ';' : ':';
+
+  // Build setup steps
+  var setupSteps = [];
+
+  // Step 1: Download artifacts (handled by worker from input_data.artifacts)
+  var templateArtifacts = [];
+  try { templateArtifacts = JSON.parse(template.artifacts || '[]'); } catch (e) { templateArtifacts = []; }
+
+  // Step 2: Clone setup_repo if specified
+  if (template.setup_repo) {
+    var repoDir = workspace + '/ai-toolkit';
+    var checkClone = isWindows
+      ? 'if exist "' + repoDir.replace(/\//g, '\\') + '" (exit /b 0) else (exit /b 1)'
+      : 'test -d "' + repoDir + '"';
+    setupSteps.push({
+      name: 'Clone setup repo',
+      check: checkClone,
+      run: 'git clone "' + template.setup_repo + '" "' + repoDir + '"',
+      skip_if_check_passes: true,
+    });
+  }
+
+  // Step 3: Install CUDA torch (if GPU required)
+  if (templateReqs.indexOf('gpu') !== -1) {
+    setupSteps.push({
+      name: 'Check/install CUDA PyTorch',
+      check: pythonPath + ' -c "import torch; assert torch.cuda.is_available(), \'no cuda\'"',
+      run: pipInstall + ' torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124',
+      skip_if_check_passes: true,
+    });
+  }
+
+  // Step 4: Install python deps
+  if (template.python_deps_install) {
+    var depsList = [];
+    try { depsList = JSON.parse(template.python_deps || '[]'); } catch (e) { depsList = []; }
+    var importChecks = depsList.map(function (d) {
+      // PIL -> Pillow, map common package names
+      var mod = d === 'PIL' ? 'PIL' : d;
+      return 'import ' + mod;
+    }).join('; ');
+    setupSteps.push({
+      name: 'Install Python dependencies',
+      check: pythonPath + ' -c "' + importChecks + '"',
+      run: pipInstall + ' ' + template.python_deps_install,
+      skip_if_check_passes: true,
+    });
+  }
+
+  // Render command template
+  var vars = {
+    python: pythonPath,
+    pip_install: pipInstall,
+    workspace: workspace,
+    null_dev: nullDev,
+    path_sep: pathSep,
+  };
+  // Merge inputData vars
+  if (inputData && typeof inputData === 'object') {
+    for (var k of Object.keys(inputData)) {
+      if (!k.startsWith('_')) vars[k] = inputData[k];
+    }
+  }
+  var command = template.command_template;
+  for (var [varName, varVal] of Object.entries(vars)) {
+    command = command.replace(new RegExp('\\{\\{' + varName + '\\}\\}', 'g'), String(varVal));
+  }
+
+  return {
+    command: command,
+    setup_steps: setupSteps,
+    artifacts: templateArtifacts,
+    requires: templateReqs,
+    workspace: workspace,
+    workspace_name: workspaceName,
+    template_id: templateId,
+    drone_diagnostics: {
+      os: diag.os,
+      python_path: pythonPath,
+      gpu_name: diag.gpu_name,
+      gpu_vram_gb: diag.gpu_vram_gb,
+    },
+  };
+}
+
+export function checkDroneCompatibility(droneId) {
+  var templates = listJobTemplates();
+  var diag = getDroneDiagnostics(droneId);
+  if (!diag || Object.keys(diag).length === 0) {
+    var savepoint = getLatestSavepoint(droneId);
+    if (savepoint) {
+      try {
+        var snapshot = JSON.parse(savepoint.state_snapshot || '{}');
+        diag = snapshot.system_info || {};
+      } catch (e) { diag = {}; }
+    }
+  }
+  if (!diag || Object.keys(diag).length === 0) {
+    return { drone_id: droneId, error: 'No diagnostics available', compatible: [], incompatible: [] };
+  }
+
+  var compatible = [];
+  var incompatible = [];
+
+  for (var t of templates) {
+    var reqs = [];
+    try { reqs = JSON.parse(t.requires || '["cpu"]'); } catch (e) { reqs = ['cpu']; }
+    var issues = [];
+
+    if (reqs.indexOf('gpu') !== -1) {
+      if (!diag.cuda_available && !diag.gpu_name) {
+        issues.push('Requires GPU, none detected');
+      } else if (t.min_vram_gb > 0 && diag.gpu_vram_gb && diag.gpu_vram_gb < t.min_vram_gb) {
+        issues.push('Requires ' + t.min_vram_gb + ' GB VRAM, has ' + diag.gpu_vram_gb + ' GB');
+      }
+    }
+    if (t.min_disk_gb > 0 && diag.disk_free_gb && diag.disk_free_gb < t.min_disk_gb) {
+      issues.push('Requires ' + t.min_disk_gb + ' GB disk, has ' + diag.disk_free_gb + ' GB');
+    }
+
+    if (issues.length === 0) {
+      var notes = [];
+      if (diag.gpu_name) notes.push(diag.gpu_name + ' ' + (diag.gpu_vram_gb || '?') + ' GB VRAM');
+      if (diag.disk_free_gb) notes.push(diag.disk_free_gb + ' GB free disk');
+      compatible.push({ template: t.id, name: t.name, status: 'ready', notes: notes.join(', ') });
+    } else {
+      incompatible.push({ template: t.id, name: t.name, status: 'incompatible', reasons: issues });
+    }
+  }
+
+  return { drone_id: droneId, compatible: compatible, incompatible: incompatible };
 }
 
 // -- Shared Concepts --

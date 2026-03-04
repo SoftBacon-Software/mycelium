@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS dv_drone_jobs (
   priority        INTEGER NOT NULL DEFAULT 0,
   workspace_repo  TEXT,
   workspace_branch TEXT NOT NULL DEFAULT 'main',
+  profile_id      TEXT,
   result_url      TEXT,
   result_data     TEXT NOT NULL DEFAULT '{}',
   error           TEXT,
@@ -495,6 +496,49 @@ CREATE TABLE IF NOT EXISTS dv_feedback (
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_agent ON dv_feedback(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_entity ON dv_feedback(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_created ON dv_feedback(created_at DESC);
+
+-- Drone profiles (per-drone setup & dependency definitions)
+CREATE TABLE IF NOT EXISTS dv_drone_profiles (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  requires    TEXT NOT NULL DEFAULT '{}',
+  artifacts   TEXT NOT NULL DEFAULT '[]',
+  setup_script TEXT NOT NULL DEFAULT '',
+  workspace   TEXT NOT NULL DEFAULT '',
+  env         TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Drone-to-profile assignments (tracks setup status per drone)
+CREATE TABLE IF NOT EXISTS dv_drone_profile_assignments (
+  drone_id    TEXT NOT NULL,
+  profile_id  TEXT NOT NULL REFERENCES dv_drone_profiles(id) ON DELETE CASCADE,
+  setup_done  INTEGER NOT NULL DEFAULT 0,
+  setup_at    TEXT,
+  checksum    TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (drone_id, profile_id)
+);
+CREATE INDEX IF NOT EXISTS idx_drone_profile_assignments_drone ON dv_drone_profile_assignments(drone_id);
+CREATE INDEX IF NOT EXISTS idx_drone_profile_assignments_profile ON dv_drone_profile_assignments(profile_id);
+
+-- Job templates: reusable job type definitions for smart routing
+CREATE TABLE IF NOT EXISTS dv_job_templates (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  project_id          TEXT NOT NULL DEFAULT '',
+  requires            TEXT NOT NULL DEFAULT '["cpu"]',
+  min_vram_gb         REAL NOT NULL DEFAULT 0,
+  min_disk_gb         REAL NOT NULL DEFAULT 5,
+  python_deps         TEXT NOT NULL DEFAULT '[]',
+  python_deps_install TEXT NOT NULL DEFAULT '',
+  artifacts           TEXT NOT NULL DEFAULT '[]',
+  setup_repo          TEXT NOT NULL DEFAULT '',
+  command_template    TEXT NOT NULL DEFAULT '',
+  workspace_name      TEXT NOT NULL DEFAULT '',
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Plugin config: per-plugin key/value store (supports secrets)
 CREATE TABLE IF NOT EXISTS dv_plugin_config (
