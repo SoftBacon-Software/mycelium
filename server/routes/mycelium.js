@@ -2936,6 +2936,7 @@ router.post('/drones/claim', function (req, res) {
 });
 
 // Submit a drone job
+// Accepts optional job_type — when provided, auto-fills requires from template and command is rendered at claim time
 router.post('/drones/jobs', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -2948,11 +2949,43 @@ router.post('/drones/jobs', function (req, res) {
   var workspaceRepo = req.body.workspace_repo || null;
   var workspaceBranch = req.body.workspace_branch || 'main';
   var profileId = req.body.profile_id || null;
+  var jobType = req.body.job_type || null;
   if (profileId && !getDroneProfile(profileId)) return res.status(400).json({ error: 'Profile not found: ' + profileId });
+  // When job_type is provided, auto-fill requires from template
+  if (jobType) {
+    var template = getJobTemplate(jobType);
+    if (!template) return res.status(400).json({ error: 'Job template not found: ' + jobType });
+    try { requires = JSON.parse(template.requires || '["cpu"]'); } catch (e) { requires = ['cpu']; }
+    if (!command) command = ''; // Command will be rendered at claim time
+  }
   var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch, profileId);
-  emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id });
-  dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who });
-  res.json({ ok: true, id: id, title: title });
+  if (jobType) {
+    try { getDB().prepare("UPDATE dv_drone_jobs SET job_type = ? WHERE id = ?").run(jobType, id); } catch (e) { /* col may not exist */ }
+  }
+  emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id, job_type: jobType });
+  dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: jobType });
+  res.json({ ok: true, id: id, title: title, job_type: jobType });
+});
+
+// Convenience: create a job from a template with minimal params
+router.post('/drones/jobs/from-template', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var templateId = req.body.template_id;
+  if (!templateId) return res.status(400).json({ error: 'template_id is required' });
+  var template = getJobTemplate(templateId);
+  if (!template) return res.status(404).json({ error: 'Template not found: ' + templateId });
+  var inputData = req.body.input_data || {};
+  var priority = parseInt(req.body.priority) || 0;
+  var requires = [];
+  try { requires = JSON.parse(template.requires || '["cpu"]'); } catch (e) { requires = ['cpu']; }
+  var title = template.name;
+  if (inputData.batch) title += ' (batch ' + inputData.batch + ')';
+  var id = createDroneJob(title, '', inputData, requires, who, priority, null, 'main', null);
+  try { getDB().prepare("UPDATE dv_drone_jobs SET job_type = ? WHERE id = ?").run(templateId, id); } catch (e) { /* col may not exist */ }
+  emitEvent('drone_job_created', who, 'drone', who + ' submitted ' + templateId + ' job: ' + title, { job_id: id, job_type: templateId });
+  dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: templateId });
+  res.json({ ok: true, id: id, title: title, job_type: templateId });
 });
 
 // List drone jobs (filterable by status, drone_id, requester)
@@ -3092,6 +3125,62 @@ router.delete('/drones/jobs', function (req, res) {
   var jobs = bulkCancelDroneJobs(statuses, days);
   emitEvent('drone_jobs_cleanup', getAdminDisplayName(req), 'drone', 'Bulk cancelled ' + jobs.length + ' ' + statusFilter + ' drone jobs', { count: jobs.length });
   res.json({ ok: true, cancelled: jobs.length, jobs: jobs.map(function (j) { return { id: j.id, title: j.title }; }) });
+});
+
+// ======== JOB TEMPLATES (reusable job type definitions for smart routing) ========
+// Must be before /drones/:id to prevent :id from catching "templates"
+
+router.get('/drones/templates', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listJobTemplates());
+});
+
+router.get('/drones/templates/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var template = getJobTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'Template not found' });
+  res.json(template);
+});
+
+router.post('/drones/templates', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var id = req.body.id;
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  if (getJobTemplate(id)) return res.status(409).json({ error: 'Template already exists: ' + id });
+  var template = createJobTemplate(id, req.body);
+  emitEvent('job_template_created', getAdminDisplayName(req), 'drone', 'Created job template: ' + id);
+  res.json(template);
+});
+
+router.put('/drones/templates/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var template = getJobTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'Template not found' });
+  var updated = updateJobTemplate(req.params.id, req.body);
+  emitEvent('job_template_updated', getAdminDisplayName(req), 'drone', 'Updated job template: ' + req.params.id);
+  res.json(updated);
+});
+
+router.delete('/drones/templates/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var template = getJobTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'Template not found' });
+  deleteJobTemplate(req.params.id);
+  emitEvent('job_template_deleted', getAdminDisplayName(req), 'drone', 'Deleted job template: ' + req.params.id);
+  res.json({ ok: true, deleted: req.params.id });
+});
+
+// ======== DRONE COMPATIBILITY CHECK ========
+
+router.get('/drones/:id/compatibility', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Drone not found' });
+  var result = checkDroneCompatibility(req.params.id);
+  res.json(result);
 });
 
 // ======== DRONE PROFILES (per-drone setup & dependency definitions) ========
