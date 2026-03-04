@@ -1158,7 +1158,7 @@ export function listDvPlans(filters) {
   params.push(limit, offset);
   var plans = db.prepare('SELECT * FROM dv_plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
   for (var p of plans) {
-    var steps = db.prepare("SELECT status, title FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
+    var steps = db.prepare("SELECT id, status, title, assignee FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
     var total = steps.length;
     var completed = steps.filter(function (s) { return s.status === 'completed'; }).length;
     p.step_count = total;
