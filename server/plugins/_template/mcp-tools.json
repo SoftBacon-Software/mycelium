@@ -1,0 +1,39 @@
+[
+  {
+    "name": "mycelium_template_list",
+    "description": "List items from the template plugin. Returns active items by default.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["active", "archived"],
+          "description": "Filter by item status"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max items to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_template_create",
+    "description": "Create a new template item.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Item title"
+        },
+        "data": {
+          "type": "object",
+          "description": "Arbitrary JSON data to attach to the item"
+        }
+      }
+    }
+  }
+]
