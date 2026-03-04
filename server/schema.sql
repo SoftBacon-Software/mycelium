@@ -6,11 +6,16 @@ CREATE TABLE IF NOT EXISTS dv_agents (
   id              TEXT PRIMARY KEY,
   name            TEXT NOT NULL,
   project_id      TEXT NOT NULL,
+  project         TEXT NOT NULL DEFAULT '',
   api_key_hash    TEXT NOT NULL,
   status          TEXT NOT NULL DEFAULT 'offline',
   working_on      TEXT NOT NULL DEFAULT '',
   last_heartbeat  TEXT,
   capabilities    TEXT NOT NULL DEFAULT '[]',
+  avatar_url      TEXT NOT NULL DEFAULT '',
+  role            TEXT NOT NULL DEFAULT '',
+  operator_id     TEXT NOT NULL DEFAULT '',
+  system_diagnostics TEXT NOT NULL DEFAULT '{}',
   agent_type      TEXT NOT NULL DEFAULT 'agent',
   llm_backend     TEXT NOT NULL DEFAULT '',
   llm_model       TEXT NOT NULL DEFAULT '',
@@ -244,16 +249,6 @@ CREATE TABLE IF NOT EXISTS dv_task_comments (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_task_comments_task ON dv_task_comments(task_id);
-
--- Plan step comments (operator input gate responses)
-CREATE TABLE IF NOT EXISTS dv_plan_step_comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  step_id INTEGER NOT NULL REFERENCES dv_plan_steps(id) ON DELETE CASCADE,
-  author TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_plan_step_comments_step ON dv_plan_step_comments(step_id);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_status ON dv_tasks(status);
@@ -550,3 +545,22 @@ CREATE TABLE IF NOT EXISTS dv_plugin_config (
   PRIMARY KEY (plugin_name, key)
 );
 CREATE INDEX IF NOT EXISTS idx_dv_plugin_config_plugin ON dv_plugin_config(plugin_name);
+
+-- Runner spawns (agent SDK session queue for mycelium-runner)
+CREATE TABLE IF NOT EXISTS dv_runner_spawns (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  tier           TEXT NOT NULL DEFAULT 'agent',
+  model          TEXT NOT NULL DEFAULT '',
+  cwd            TEXT NOT NULL DEFAULT '',
+  max_turns      INTEGER NOT NULL DEFAULT 100,
+  title          TEXT NOT NULL DEFAULT '',
+  work_context   TEXT NOT NULL DEFAULT '',
+  requested_by   TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'pending',
+  runner_id      TEXT NOT NULL DEFAULT '',
+  claimed_at     TEXT,
+  result         TEXT NOT NULL DEFAULT '',
+  done_at        TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_runner_spawns_status ON dv_runner_spawns(status);
