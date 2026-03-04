@@ -91,7 +91,7 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent,
+  countPendingForAgent, archiveOldMessages, archiveOldEvents,
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox
@@ -1744,6 +1744,27 @@ router.put('/admin/config/:key', function (req, res) {
   setInstanceConfig(req.params.key, typeof value === 'string' ? value : JSON.stringify(value), who);
   emitEvent('config_changed', who, null, 'Config ' + req.params.key + ' updated');
   res.json({ key: req.params.key, value: getInstanceConfig(req.params.key) });
+});
+
+// ======== CLEANUP ========
+
+router.post('/admin/cleanup', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var messageDays = req.body.message_days || 90;
+  var eventDays = req.body.event_days || 60;
+  var messagesArchived = archiveOldMessages(messageDays);
+  var eventsArchived = archiveOldEvents(eventDays);
+  var webhooksArchived = pruneWebhookDeliveries(eventDays);
+  var savepointsPruned = pruneSavepoints(eventDays);
+  emitEvent('admin_cleanup', getAdminDisplayName(req), null,
+    'Cleanup: ' + messagesArchived + ' messages, ' + eventsArchived + ' events, ' + webhooksArchived + ' webhook deliveries, ' + savepointsPruned + ' savepoints pruned');
+  res.json({
+    ok: true,
+    messages_archived: messagesArchived,
+    events_archived: eventsArchived,
+    webhooks_archived: webhooksArchived,
+    savepoints_pruned: savepointsPruned,
+  });
 });
 
 // ======== KILL SWITCH ========

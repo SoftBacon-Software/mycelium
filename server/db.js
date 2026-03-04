@@ -689,6 +689,27 @@ export function listDvThreads(limit) {
     GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(Math.min(limit || 20, 500));
 }
 
+// Archive resolved messages older than N days (default 90)
+// Deletes from dv_messages, returns count of rows removed
+export function archiveOldMessages(daysOld) {
+  daysOld = daysOld || 90;
+  var cutoff = "datetime('now', '-" + daysOld + " days')";
+  // Only archive resolved requests/directives and old info messages
+  var result = db.prepare(
+    "DELETE FROM dv_messages WHERE created_at < " + cutoff +
+    " AND (status = 'resolved' OR msg_type = 'info')"
+  ).run();
+  return result.changes;
+}
+
+// Archive old events older than N days (default 60)
+export function archiveOldEvents(daysOld) {
+  daysOld = daysOld || 60;
+  var cutoff = "datetime('now', '-" + daysOld + " days')";
+  var result = db.prepare("DELETE FROM dv_events WHERE created_at < " + cutoff).run();
+  return result.changes;
+}
+
 export function bulkDeleteMessages(filters) {
   var conditions = [];
   var params = [];
