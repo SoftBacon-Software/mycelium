@@ -303,7 +303,7 @@ export default function OnboardingPage() {
     setSubmitting(true)
     setError(null)
     try {
-      const res = await apiPost<{ agent: { id: string }; api_key: string }>('/agents', {
+      const res = await apiPost<{ id: string; api_key: string; message: string }>('/admin/agents', {
         id: data.agentId.trim(),
         name: data.agentName.trim(),
         project_id: data.agentProject.trim(),

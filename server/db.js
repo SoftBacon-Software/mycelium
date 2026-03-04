@@ -816,9 +816,10 @@ export function getBootPayload(agentId) {
     ).all();
   }
 
+  // Only include agents active in last 7 days or in the same project
   var otherAgents = db.prepare(
-    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? ORDER BY created_at"
-  ).all(agentId);
+    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
+  ).all(agentId, agent.project_id);
 
   var projectContext = getDvContext(agent.project_id);
   var contextKeys = listDvContextKeys(agent.project_id);
@@ -831,15 +832,8 @@ export function getBootPayload(agentId) {
   var recentEvents = listDvEvents({ limit: 20 });
   var openBugs = listDvBugs({ status: 'open', limit: 20 });
 
-  // Active/draft plans for agent's project
+  // Active/draft plans for agent's project — summaries only in boot (agents use check_plans for full steps)
   var myPlans = listDvPlans({ project_id: agent.project_id, limit: 20 });
-  // Enrich with full steps for active/draft plans
-  for (var pl of myPlans) {
-    if (pl.status === 'active' || pl.status === 'draft') {
-      var full = getDvPlan(pl.id);
-      if (full) pl.steps = full.steps;
-    }
-  }
 
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
