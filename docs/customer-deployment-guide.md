@@ -7,7 +7,43 @@ A new customer gets their **own Railway project** — fully isolated SQLite DB, 
 Each customer = one Railway project. No shared state. No shared DB.
 
 - Customer's data never touches our Railway account long-term
-- We test deployments in our account first, then hand off via Railway project transfer or Kurtis creates his own Railway account and deploys himself
+- We test deployments in our account first, then hand off via Railway project transfer or customer creates their own Railway account
+
+## Update Delivery Model — Release Branch Auto-Deploy
+
+All customer instances deploy from the `stable` branch. Development happens on `master`.
+
+### How It Works
+
+1. **`master`** — active development, internal only
+2. **`stable`** — customer-facing, Railway auto-deploys from this branch
+3. We merge `master → stable` when ready to release using `scripts/release.sh`
+4. Railway detects the push to `stable` and auto-deploys all connected instances
+
+### Releasing Updates
+
+```bash
+./scripts/release.sh              # Auto-tag from date (v2026.03.04)
+./scripts/release.sh v1.2.0       # Explicit tag
+./scripts/release.sh --dry-run    # Preview without changing anything
+```
+
+### Rollback
+
+**Option A** — Revert the merge:
+```bash
+git checkout stable && git revert HEAD && git push origin stable
+```
+
+**Option B** — Railway dashboard → Deployments → Redeploy previous build
+
+### Breaking Migrations
+
+Never bundle schema changes + feature code in the same release:
+
+1. Merge migration-only commit to `stable` first
+2. Wait for all instances to run migration (monitor Railway logs)
+3. Then merge the feature code to `stable`
 
 ## Quick Start for a New Customer Instance
 
@@ -50,8 +86,18 @@ Setting `DATA_DIR=/data` without a volume = **immediate crash on startup** (EACC
 
 ### 4. Deploy
 
+Customer instances should track the `stable` branch for automatic updates.
+
+**Via Railway GitHub integration (preferred):**
+1. In Railway dashboard: service → Settings → Source
+2. Connect to the `SoftBacon-Software/mycelium` repo
+3. Set deploy branch to `stable`
+4. Railway auto-deploys on every push to `stable`
+
+**Manual deploy (one-off):**
 ```bash
-cd D:/mycelium
+cd /path/to/mycelium
+git checkout stable
 MSYS_NO_PATHCONV=1 railway up --service <service-name> --detach
 ```
 
