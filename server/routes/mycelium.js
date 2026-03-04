@@ -1829,13 +1829,23 @@ router.put('/admin/sleep', function (req, res) {
     var priorities = req.body.priorities || [];
     var approvalPolicy = req.body.approval_policy || 'queue_high';
     var autoWakeAt = req.body.auto_wake_at || null;
+    var sleptAt = new Date().toISOString();
 
-    // Find the operator linked to this admin user
+    // Mark operator as sleeping and record their personal sleep start time
     var operatorId = req.body.operator_id;
     if (operatorId) {
       var op = getOperator(operatorId);
       if (op) setOperatorAvailability(operatorId, 'sleeping', directive);
     }
+
+    // Track per-operator sleep start times so each gets a personal morning summary
+    var sleepStarts = {};
+    try {
+      var existing = getInstanceConfig('sleep_mode_operator_starts');
+      if (existing) sleepStarts = JSON.parse(existing);
+    } catch (_) {}
+    sleepStarts[operatorId || who] = sleptAt;
+    setInstanceConfig('sleep_mode_operator_starts', JSON.stringify(sleepStarts), who);
 
     var config = {
       active: true,
@@ -1843,7 +1853,7 @@ router.put('/admin/sleep', function (req, res) {
       priorities: priorities,
       approval_policy: approvalPolicy,
       auto_wake_at: autoWakeAt,
-      started_at: new Date().toISOString(),
+      started_at: sleptAt,
       started_by: who
     };
     setInstanceConfig('sleep_mode', JSON.stringify(config), who);
@@ -1868,33 +1878,65 @@ router.put('/admin/sleep', function (req, res) {
 
   } else {
     // action === 'off'
+    // Any operator can end sleep mode — if they were sleeping, wake them; always end global sleep mode.
     var operatorId2 = req.body.operator_id;
+    var wasAlreadyAwake = false;
     if (operatorId2) {
       var op2 = getOperator(operatorId2);
-      if (op2) setOperatorAvailability(operatorId2, 'available', '');
+      if (op2) {
+        wasAlreadyAwake = op2.availability === 'available';
+        setOperatorAvailability(operatorId2, 'available', '');
+      }
     }
 
+    // Get this operator's personal sleep start time for their summary
+    var mySleptAt = null;
+    try {
+      var startsVal = getInstanceConfig('sleep_mode_operator_starts');
+      if (startsVal) {
+        var starts = JSON.parse(startsVal);
+        mySleptAt = starts[operatorId2 || who] || null;
+        // Clear this operator's entry
+        delete starts[operatorId2 || who];
+        setInstanceConfig('sleep_mode_operator_starts', JSON.stringify(starts), who);
+      }
+    } catch (_) {}
+
+    // Build personal morning summary from the shared log
     var log = null;
     var logVal = getInstanceConfig('sleep_mode_log');
     try { log = logVal ? JSON.parse(logVal) : null; } catch (e) { log = null; }
 
-    // Only clear global sleep mode and notify agents if ALL operators are now available
-    // (another operator might still be sleeping)
-    var stillSleeping = isNetworkAutonomous();
-    if (!stillSleeping) {
-      setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
-      emitEvent('sleep_mode_off', who, null, who + ' is back — all operators now available');
-      var agents2 = listAgents();
-      for (var agent2 of agents2) {
-        if (agent2.status === 'online' || agent2.status === 'idle') {
-          createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
-        }
+    // Always end global sleep mode — any operator can kill it for everyone
+    // Wake up any operators still marked as sleeping
+    var allOps = listOperators ? listOperators() : [];
+    for (var sleepingOp of allOps) {
+      if (sleepingOp.availability === 'sleeping') {
+        setOperatorAvailability(sleepingOp.id, 'available', '');
       }
-    } else {
-      emitEvent('operator_wake', who, null, (operatorId2 || who) + ' woke up — other operators still sleeping');
+    }
+    setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
+    setInstanceConfig('sleep_mode_operator_starts', '{}', who);
+
+    var wakeMsg = wasAlreadyAwake
+      ? who + ' ended sleep mode (override)'
+      : who + ' is back — sleep mode ended';
+    emitEvent('sleep_mode_off', who, null, wakeMsg);
+
+    var agents2 = listAgents();
+    for (var agent2 of agents2) {
+      if (agent2.status === 'online' || agent2.status === 'idle') {
+        createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+      }
     }
 
-    res.json({ ok: true, sleep_mode: { active: stillSleeping }, morning_summary: stillSleeping ? null : log });
+    res.json({
+      ok: true,
+      sleep_mode: { active: false },
+      was_override: wasAlreadyAwake,
+      slept_since: mySleptAt,
+      morning_summary: log
+    });
   }
 });
 
