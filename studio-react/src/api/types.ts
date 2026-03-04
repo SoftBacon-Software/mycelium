@@ -323,6 +323,21 @@ export interface AdminOps {
   open_prs: { number: number; title: string; url: string; author: string; created_at: string }[]
 }
 
+export interface PluginConfigField {
+  key: string
+  label: string
+  type: 'string' | 'secret' | 'boolean' | 'number' | 'select' | 'text'
+  description?: string
+  default?: string
+  options?: string[]   // for type=select
+  required?: boolean
+}
+
+export interface PluginMcpTool {
+  name: string
+  description: string
+}
+
 export interface Plugin {
   name: string
   display_name: string
@@ -334,6 +349,12 @@ export interface Plugin {
   mcp_tool_count: number
   installed_at: string
   updated_at: string
+  // Enriched fields from detail endpoint
+  type?: string
+  config_schema?: PluginConfigField[]
+  mcp_tools?: PluginMcpTool[]
+  hooks?: string[]
+  gated_actions?: string[]
 }
 
 export interface PluginConfigField {

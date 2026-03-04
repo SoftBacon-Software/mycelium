@@ -495,3 +495,14 @@ CREATE TABLE IF NOT EXISTS dv_feedback (
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_agent ON dv_feedback(agent_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_entity ON dv_feedback(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_dv_feedback_created ON dv_feedback(created_at DESC);
+
+-- Plugin config: per-plugin key/value store (supports secrets)
+CREATE TABLE IF NOT EXISTS dv_plugin_config (
+  plugin_name  TEXT NOT NULL,
+  key          TEXT NOT NULL,
+  value        TEXT NOT NULL DEFAULT '',
+  is_secret    INTEGER NOT NULL DEFAULT 0,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (plugin_name, key)
+);
+CREATE INDEX IF NOT EXISTS idx_dv_plugin_config_plugin ON dv_plugin_config(plugin_name);
