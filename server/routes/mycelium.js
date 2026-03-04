@@ -45,31 +45,31 @@ import {
   createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   createProject, listProjects, getProject, updateProject,
-  createDvTask, getDvTask, listDvTasks, updateDvTask,
+  createTask, getTask, listTasks, updateTask,
   setTaskDependency, resolveTaskDependencies,
-  approveDvTask, listTasksNeedingApproval,
-  getDvContext, getAllDvContext, upsertDvContext,
-  upsertDvContextKey, getDvContextKey, listDvContextKeys, deleteDvContextKey,
-  createDvAsset, getDvAsset, listDvAssets, updateDvAsset, deleteDvAsset,
+  approveTask, listTasksNeedingApproval,
+  getContext, getAllContext, upsertContext,
+  upsertContextKey, getContextKey, listContextKeys, deleteContextKey,
+  createAsset, getAsset, listAssets, updateAsset, deleteAsset,
   autoTaskFromAsset,
-  createDvEvent, listDvEvents,
-  createDvMessage, createDvRequest, getDvMessage,
-  acknowledgeDvMessage, resolveDvMessage, listPendingRequests,
-  listDvMessages, listDvThreads, bulkDeleteMessages,
-  getBootPayload, getDvOverview,
-  createDvBug, getDvBug, listDvBugs, updateDvBug, deleteDvBug, countDvBugs,
-  createDvPlan, getDvPlan, listDvPlans, updateDvPlan, deleteDvPlan,
-  createDvPlanStep, updateDvPlanStep, deleteDvPlanStep, reorderDvPlanSteps, createPlanStepComment, listPlanStepComments,
+  createEvent, listEvents,
+  createMessage, createRequest, getMessage,
+  acknowledgeMessage, resolveMessage, listPendingRequests,
+  listMessages, listThreads, bulkDeleteMessages,
+  getBootPayload, getOverview,
+  createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
+  createPlan, getPlan, listPlans, updatePlan, deletePlan,
+  createPlanStep, updatePlanStep, deletePlanStep, reorderPlanSteps, createPlanStepComment, listPlanStepComments,
   completeLinkedPlanSteps,
   createStudioUser, getStudioUserByUsername, getStudioUserById,
   listStudioUsers, deleteStudioUser, updateStudioUser,
   touchStudioUserSeen, getActiveStudioUsers,
   createConcept, getConcept, listConcepts, updateConcept, deleteConcept,
   linkConceptToProject, unlinkConceptFromProject, getProjectConcepts, getConceptProjects,
-  createDvWebhook, listDvWebhooks, deleteDvWebhook, dispatchWebhook,
+  createWebhook, listWebhooks, deleteWebhook, dispatchWebhook,
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
-  createDvTeamChat, listDvTeamChat,
+  createTeamChat, listTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
   addTaskComment, getTaskComments, deleteTaskComment,
   addPlanStepComment, getPlanStepComments,
@@ -342,7 +342,7 @@ var sseClients = new Set();
 // ---- Event helper ----
 
 function emitEvent(type, agentId, projectId, summary, data) {
-  var id = createDvEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  var id = createEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
   var eventObj = {
     id: id, type: type, agent: agentId || '',
     project_id: projectId || null, summary: summary || '',
@@ -395,8 +395,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
 
   for (var agent of idleAgents) {
     // Skip if agent already has assigned open/in_progress tasks
-    var agentTasks = listDvTasks({ assignee: agent.id, status: 'open' });
-    var inProgress = listDvTasks({ assignee: agent.id, status: 'in_progress' });
+    var agentTasks = listTasks({ assignee: agent.id, status: 'open' });
+    var inProgress = listTasks({ assignee: agent.id, status: 'in_progress' });
     if (inProgress.length > 0) continue; // already working
     if (agentTasks.length > 0) continue; // has queued work
 
@@ -404,9 +404,9 @@ function dispatchWorkToIdleAgents(triggerContext) {
     var step = getNextUnassignedPlanStep();
     if (step) {
       // Assign plan step
-      updateDvPlanStep(step.id, { assignee: agent.id, status: 'pending' });
+      updatePlanStep(step.id, { assignee: agent.id, status: 'pending' });
       var content = 'AUTO-DISPATCH: Plan step assigned. Plan: "' + step.plan_title + '", Step: "' + step.title + '" (step #' + step.id + ', plan #' + step.plan_id + '). Claim and start working.';
-      createDvMessage('__system__', agent.id, null, null, content, JSON.stringify({ auto_dispatch: true, plan_step_id: step.id, plan_id: step.plan_id, trigger: triggerContext }), 'directive', null);
+      createMessage('__system__', agent.id, null, null, content, JSON.stringify({ auto_dispatch: true, plan_step_id: step.id, plan_id: step.plan_id, trigger: triggerContext }), 'directive', null);
       emitEvent('auto_dispatch', '__system__', null, 'Auto-dispatched plan step "' + step.title + '" to ' + agent.id, { agent_id: agent.id, plan_step_id: step.id, trigger: triggerContext });
       dispatched.push({ agent: agent.id, type: 'plan_step', id: step.id, title: step.title });
       continue;
@@ -415,10 +415,10 @@ function dispatchWorkToIdleAgents(triggerContext) {
     var task = getNextUnassignedTask(claimedTaskIds);
     if (task) {
       // Assign task
-      updateDvTask(task.id, { assignee: agent.id });
+      updateTask(task.id, { assignee: agent.id });
       claimedTaskIds.push(task.id);
       var content = 'AUTO-DISPATCH: Task #' + task.id + ' assigned: "' + task.title + '". ' + (task.description || '').substring(0, 300);
-      createDvMessage('__system__', agent.id, null, task.project_id, content, JSON.stringify({ auto_dispatch: true, task_id: task.id, trigger: triggerContext }), 'directive', null);
+      createMessage('__system__', agent.id, null, task.project_id, content, JSON.stringify({ auto_dispatch: true, task_id: task.id, trigger: triggerContext }), 'directive', null);
       emitEvent('auto_dispatch', '__system__', task.project_id, 'Auto-dispatched task #' + task.id + ' to ' + agent.id, { agent_id: agent.id, task_id: task.id, trigger: triggerContext });
       dispatched.push({ agent: agent.id, type: 'task', id: task.id, title: task.title });
       continue;
@@ -535,17 +535,17 @@ router.get('/work/:agentId', function (req, res) {
       // Directives and requests aren't claimable — just return them
       claimed = top;
     } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
-      updateDvPlanStep(top.id, { assignee: agentId, status: 'in_progress' });
+      updatePlanStep(top.id, { assignee: agentId, status: 'in_progress' });
       emitEvent('work_claimed', agentId, null, agentId + ' auto-claimed plan step: ' + top.title, { plan_step_id: top.id, plan_id: top.plan_id });
       claimed = top;
       claimed.claimed = true;
     } else if (top.type === 'task') {
-      updateDvTask(top.id, { assignee: agentId, status: 'in_progress' });
-      var fullTask = getDvTask(top.id);
+      updateTask(top.id, { assignee: agentId, status: 'in_progress' });
+      var fullTask = getTask(top.id);
       emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed task #' + top.id + ': ' + top.title, { task_id: top.id });
       claimed = { ...top, description: fullTask ? fullTask.description : '', claimed: true };
     } else if (top.type === 'bug' || top.type === 'bug_unassigned') {
-      updateDvBug(top.id, { assignee: agentId, status: 'in_progress' });
+      updateBug(top.id, { assignee: agentId, status: 'in_progress' });
       emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed bug #' + top.id + ': ' + top.title, { bug_id: top.id });
       claimed = top;
       claimed.claimed = true;
@@ -734,7 +734,7 @@ router.get('/tasks', function (req, res) {
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
-  res.json(listDvTasks(filters));
+  res.json(listTasks(filters));
 });
 
 router.post('/tasks', function (req, res) {
@@ -746,12 +746,12 @@ router.post('/tasks', function (req, res) {
   var projectId = escapeHtml(req.body.project_id || '');
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
-  var id = createDvTask(title, description, projectId, agentId, priority, tags);
+  var id = createTask(title, description, projectId, agentId, priority, tags);
   // Handle optional fields
   var updates = {};
   if (req.body.assignee) updates.assignee = req.body.assignee;
   if (req.body.needs_approval) updates.needs_approval = 1;
-  if (Object.keys(updates).length > 0) updateDvTask(id, updates);
+  if (Object.keys(updates).length > 0) updateTask(id, updates);
   emitEvent('task_created', agentId, projectId, agentId + ' created task: ' + title, { task_id: id });
   if (req.body.assignee) {
     dispatchWebhook('task_created', req.body.assignee, { task_id: id, title: title });
@@ -762,7 +762,7 @@ router.post('/tasks', function (req, res) {
 router.get('/tasks/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 });
@@ -770,7 +770,7 @@ router.get('/tasks/:id', function (req, res) {
 router.put('/tasks/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
   if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
@@ -786,7 +786,7 @@ router.put('/tasks/:id', function (req, res) {
   if (req.body.branch !== undefined) fields.branch = req.body.branch;
   if (req.body.pr_url !== undefined) fields.pr_url = req.body.pr_url;
   if (req.body.repo !== undefined) fields.repo = req.body.repo;
-  updateDvTask(task.id, fields);
+  updateTask(task.id, fields);
 
   var result = { ok: true, id: task.id };
 
@@ -802,7 +802,7 @@ router.put('/tasks/:id', function (req, res) {
     }
     // Auto-deliver linked asset
     if (task.linked_asset_id) {
-      updateDvAsset(task.linked_asset_id, { status: 'delivered' });
+      updateAsset(task.linked_asset_id, { status: 'delivered' });
       emitEvent('asset_delivered', agentId, task.project_id, 'Asset #' + task.linked_asset_id + ' auto-delivered (task #' + task.id + ' done)', { asset_id: task.linked_asset_id, task_id: task.id });
     }
     // Auto-complete linked plan steps
@@ -820,9 +820,9 @@ router.put('/tasks/:id', function (req, res) {
     // Auto-resolve linked request
     if (task.request_id) {
       try {
-        var linkedReq = getDvMessage(task.request_id);
+        var linkedReq = getMessage(task.request_id);
         if (linkedReq && linkedReq.status !== 'resolved') {
-          resolveDvMessage(task.request_id, agentId);
+          resolveMessage(task.request_id, agentId);
           emitEvent('request_resolved', agentId, task.project_id, 'Request #' + task.request_id + ' auto-resolved (task #' + task.id + ' done)', { message_id: task.request_id, task_id: task.id });
         }
       } catch (e) { /* non-critical */ }
@@ -862,11 +862,11 @@ router.post('/tasks/:id/dependency', function (req, res) {
 // Task approval (admin only)
 router.put('/tasks/:id/approve', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!task.needs_approval) return res.status(400).json({ error: 'Task does not require approval' });
   if (task.approved_by) return res.status(400).json({ error: 'Task already approved by ' + task.approved_by });
-  approveDvTask(task.id, '__admin__');
+  approveTask(task.id, '__admin__');
   emitEvent('task_approved', '__admin__', task.project_id, 'Admin approved task #' + task.id + ': ' + task.title, { task_id: task.id });
   res.json({ ok: true, id: task.id, approved: true });
 });
@@ -876,7 +876,7 @@ router.put('/tasks/:id/approve', function (req, res) {
 router.get('/tasks/:id/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(getTaskComments(task.id));
 });
@@ -884,7 +884,7 @@ router.get('/tasks/:id/comments', function (req, res) {
 router.post('/tasks/:id/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   var author = escapeHtml(req.body.author || who);
   var content = escapeHtml(req.body.content);
@@ -897,7 +897,7 @@ router.post('/tasks/:id/comments', function (req, res) {
 router.delete('/tasks/:id/comments/:commentId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var task = getDvTask(parseIntParam(req.params.id));
+  var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id)) return;
   var deleted = deleteTaskComment(parseIntParam(req.params.commentId));
@@ -912,19 +912,19 @@ router.get('/context/keys', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var namespace = req.query.namespace;
-  res.json(listDvContextKeys(namespace));
+  res.json(listContextKeys(namespace));
 });
 
 router.get('/context/keys/:namespace', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listDvContextKeys(req.params.namespace));
+  res.json(listContextKeys(req.params.namespace));
 });
 
 router.get('/context/keys/:namespace/:key', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var ctx = getDvContextKey(req.params.namespace, req.params.key);
+  var ctx = getContextKey(req.params.namespace, req.params.key);
   if (!ctx) return res.status(404).json({ error: 'Context key not found' });
   res.json(ctx);
 });
@@ -935,14 +935,14 @@ router.put('/context/keys/:namespace/:key', function (req, res) {
   var data = req.body.data;
   if (data === undefined) return res.status(400).json({ error: 'data field is required' });
   var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-  upsertDvContextKey(req.params.namespace, req.params.key, dataStr, agentId);
+  upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId);
   emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
   res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
 });
 
 router.delete('/context/keys/:namespace/:key', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  deleteDvContextKey(req.params.namespace, req.params.key);
+  deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
 });
 
@@ -950,13 +950,13 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
 router.get('/context', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(getAllDvContext());
+  res.json(getAllContext());
 });
 
 router.get('/context/:projectId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var ctx = getDvContext(req.params.projectId);
+  var ctx = getContext(req.params.projectId);
   if (!ctx) return res.json({ project_id: req.params.projectId, data: '{}', updated_at: null, updated_by: '' });
   res.json(ctx);
 });
@@ -967,7 +967,7 @@ router.put('/context/:projectId', function (req, res) {
   var data = req.body.data;
   if (data === undefined) return res.status(400).json({ error: 'data field is required' });
   var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-  upsertDvContext(req.params.projectId, dataStr, agentId);
+  upsertContext(req.params.projectId, dataStr, agentId);
   emitEvent('context_updated', agentId, req.params.projectId, agentId + ' updated context for ' + req.params.projectId);
   res.json({ ok: true, project_id: req.params.projectId });
 });
@@ -984,7 +984,7 @@ router.get('/assets', function (req, res) {
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
-  res.json(listDvAssets(filters));
+  res.json(listAssets(filters));
 });
 
 router.post('/assets', function (req, res) {
@@ -998,7 +998,7 @@ router.post('/assets', function (req, res) {
   if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var assetPath = req.body.path || '';
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createDvAsset(name, type, projectId, status, assetPath, metadata, agentId);
+  var id = createAsset(name, type, projectId, status, assetPath, metadata, agentId);
   emitEvent('asset_registered', agentId, projectId, agentId + ' registered asset: ' + name, { asset_id: id });
 
   var result = { id: id, name: name };
@@ -1019,7 +1019,7 @@ router.post('/assets', function (req, res) {
 router.get('/assets/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseIntParam(req.params.id));
+  var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   res.json(asset);
 });
@@ -1027,7 +1027,7 @@ router.get('/assets/:id', function (req, res) {
 router.put('/assets/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var asset = getDvAsset(parseIntParam(req.params.id));
+  var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var fields = {};
@@ -1039,7 +1039,7 @@ router.put('/assets/:id', function (req, res) {
   if (req.body.file_path !== undefined) fields.file_path = req.body.file_path;
   if (req.body.download_url !== undefined) fields.download_url = req.body.download_url;
   if (req.body.prompt !== undefined) fields.prompt = req.body.prompt;
-  updateDvAsset(asset.id, fields);
+  updateAsset(asset.id, fields);
   if (fields.status) {
     emitEvent('asset_' + fields.status, agentId, asset.project_id, agentId + ' set asset ' + asset.name + ' to ' + fields.status, { asset_id: asset.id });
   }
@@ -1049,13 +1049,13 @@ router.put('/assets/:id', function (req, res) {
 router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseIntParam(req.params.id));
+  var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   var filePath = req.file.path;
   var downloadUrl = '/api/mycelium/assets/' + asset.id + '/download';
-  updateDvAsset(asset.id, { status: 'ready', file_path: filePath, download_url: downloadUrl, path: req.file.filename });
+  updateAsset(asset.id, { status: 'ready', file_path: filePath, download_url: downloadUrl, path: req.file.filename });
   emitEvent('asset_uploaded', who, asset.project_id, 'Asset #' + asset.id + ' (' + asset.name + ') uploaded');
   res.json({ ok: true, asset_id: asset.id, download_url: downloadUrl });
 });
@@ -1063,7 +1063,7 @@ router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
 router.get('/assets/:id/download', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var asset = getDvAsset(parseIntParam(req.params.id));
+  var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   if (!asset.file_path && !asset.path) return res.status(404).json({ error: 'No file attached to this asset' });
 
@@ -1083,14 +1083,14 @@ router.put('/assets/link-job', function (req, res) {
   var job = getDroneJob(parseIntParam(drone_job_id));
   if (!job) return res.status(404).json({ error: 'Drone job #' + drone_job_id + ' not found' });
   // Validate all asset IDs exist before making any changes
-  var missing = asset_ids.filter(function (id) { return !getDvAsset(parseIntParam(id)); });
+  var missing = asset_ids.filter(function (id) { return !getAsset(parseIntParam(id)); });
   if (missing.length > 0) return res.status(404).json({ error: 'Assets not found: ' + missing.join(', ') });
   if (!validateEnum(res, status, ASSET_STATUSES, 'status')) return;
   var updated = 0;
   for (var id of asset_ids) {
     var fields = { drone_job_id: drone_job_id };
     if (status) fields.status = status;
-    var result = updateDvAsset(parseInt(id), fields);
+    var result = updateAsset(parseInt(id), fields);
     if (result.changes) updated++;
   }
   emitEvent('assets_linked_to_job', who, null, updated + ' assets linked to drone job #' + drone_job_id, { asset_ids: asset_ids, drone_job_id: drone_job_id });
@@ -1100,9 +1100,9 @@ router.put('/assets/link-job', function (req, res) {
 // Delete asset (admin only)
 router.delete('/assets/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var asset = getDvAsset(parseIntParam(req.params.id));
+  var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
-  deleteDvAsset(asset.id);
+  deleteAsset(asset.id);
   emitEvent('asset_deleted', getAdminDisplayName(req), asset.project_id, 'Deleted asset #' + asset.id + ': ' + asset.name, { asset_id: asset.id });
   res.json({ ok: true, id: asset.id });
 });
@@ -1120,7 +1120,7 @@ router.get('/events', function (req, res) {
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
-  res.json(listDvEvents(filters));
+  res.json(listEvents(filters));
 });
 
 router.post('/events', function (req, res) {
@@ -1130,7 +1130,7 @@ router.post('/events', function (req, res) {
   var projectId = req.body.project_id || null;
   var summary = escapeHtml(req.body.summary || '');
   var data = req.body.data ? JSON.stringify(req.body.data) : '{}';
-  var id = createDvEvent(type, agentId, projectId, summary, data);
+  var id = createEvent(type, agentId, projectId, summary, data);
   res.json({ id: id });
 });
 
@@ -1178,7 +1178,7 @@ router.get('/events/stream', function (req, res) {
     if (filters.project_id) recentFilters.project_id = filters.project_id;
     if (filters.type) recentFilters.type = filters.type;
     if (filters.agent) recentFilters.agent = filters.agent;
-    var recent = listDvEvents(recentFilters);
+    var recent = listEvents(recentFilters);
     recent.reverse().forEach(function (ev) {
       res.write('data: ' + JSON.stringify(ev) + '\n\n');
     });
@@ -1222,7 +1222,7 @@ router.post('/requests', function (req, res) {
   var threadId = req.body.thread_id || null;
   var projectId = req.body.project_id || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createDvRequest(agentId, toAgent, threadId, projectId, content, metadata);
+  var id = createRequest(agentId, toAgent, threadId, projectId, content, metadata);
   var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
   emitEvent('request_created', agentId, projectId, agentId + ' sent request' + target, { message_id: id });
   if (toAgent) {
@@ -1234,8 +1234,8 @@ router.post('/requests', function (req, res) {
   // Auto-create task if requested
   if (req.body.auto_task && toAgent) {
     var title = escapeHtml(req.body.task_title || content.substring(0, 80));
-    var taskId = createDvTask(title, content, projectId || '', agentId, req.body.priority || 'normal', '[]');
-    updateDvTask(taskId, { assignee: toAgent, request_id: id });
+    var taskId = createTask(title, content, projectId || '', agentId, req.body.priority || 'normal', '[]');
+    updateTask(taskId, { assignee: toAgent, request_id: id });
     result.task_id = taskId;
     emitEvent('task_created', agentId, projectId, 'Auto-task from request: ' + title + ' \u2192 ' + toAgent, { task_id: taskId, message_id: id });
   }
@@ -1246,7 +1246,7 @@ router.post('/requests', function (req, res) {
 router.put('/requests/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseIntParam(req.params.id));
+  var msg = getMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Request not found' });
   if (msg.msg_type !== 'request') return res.status(400).json({ error: 'Message #' + msg.id + ' is not a request' });
 
@@ -1254,17 +1254,17 @@ router.put('/requests/:id', function (req, res) {
   if (!status) return res.status(400).json({ error: 'status is required (acknowledged, resolved, completed)' });
 
   if (status === 'acknowledged' || status === 'ack') {
-    acknowledgeDvMessage(msg.id);
+    acknowledgeMessage(msg.id);
     emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
     return res.json({ ok: true, id: msg.id, status: 'acknowledged' });
   }
 
   if (status === 'resolved' || status === 'completed' || status === 'done') {
-    resolveDvMessage(msg.id, agentId);
+    resolveMessage(msg.id, agentId);
     emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
     var result = { ok: true, id: msg.id, status: 'resolved' };
     if (req.body.response) {
-      var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
+      var responseId = createMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
       result.response_id = responseId;
     }
     return res.json(result);
@@ -1290,7 +1290,7 @@ router.get('/messages', function (req, res) {
     offset: parseInt(req.query.offset) || 0,
     channel_id: req.query.channel_id ? parseIntParam(req.query.channel_id) : undefined
   };
-  res.json(listDvMessages(filters));
+  res.json(listMessages(filters));
 });
 
 router.post('/messages', function (req, res) {
@@ -1324,7 +1324,7 @@ router.post('/messages', function (req, res) {
     if (general) channelId = general.id;
   }
   var msgPriority = req.body.priority || 'normal';
-  var id = createDvMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId, msgPriority);
+  var id = createMessage(agentId, toAgent, threadId, projectId, content, metadata, msgType, channelId, msgPriority);
   // Skip events/webhooks for system-to-system telemetry (runner health pings etc)
   if (!(agentId === '__system__' && toAgent === '__system__')) {
     var target = toAgent ? ' to ' + displayName(toAgent) : ' (broadcast)';
@@ -1360,9 +1360,9 @@ router.post('/messages', function (req, res) {
 router.put('/messages/:id/ack', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseIntParam(req.params.id));
+  var msg = getMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
-  acknowledgeDvMessage(msg.id);
+  acknowledgeMessage(msg.id);
   emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
   res.json({ ok: true, id: msg.id, status: 'acknowledged' });
 });
@@ -1370,16 +1370,16 @@ router.put('/messages/:id/ack', function (req, res) {
 router.put('/messages/:id/resolve', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var msg = getDvMessage(parseIntParam(req.params.id));
+  var msg = getMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
-  resolveDvMessage(msg.id, agentId);
+  resolveMessage(msg.id, agentId);
   emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
 
   var result = { ok: true, id: msg.id, status: 'resolved' };
 
   // Optionally send a response message back
   if (req.body.response) {
-    var responseId = createDvMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
+    var responseId = createMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
     result.response_id = responseId;
   }
 
@@ -1389,7 +1389,7 @@ router.put('/messages/:id/resolve', function (req, res) {
 router.get('/messages/threads', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  res.json(listDvThreads(parseLimit(req.query.limit, 20)));
+  res.json(listThreads(parseLimit(req.query.limit, 20)));
 });
 
 // Admin-only bulk message cleanup
@@ -1415,7 +1415,7 @@ router.get('/plans', function (req, res) {
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
-  res.json(listDvPlans(filters));
+  res.json(listPlans(filters));
 });
 
 router.post('/plans', function (req, res) {
@@ -1429,7 +1429,7 @@ router.post('/plans', function (req, res) {
   var owner = escapeHtml(req.body.owner || '');
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
-  var id = createDvPlan(title, description, projectId, owner, priority, tags, agentId);
+  var id = createPlan(title, description, projectId, owner, priority, tags, agentId);
   emitEvent('plan_created', agentId, projectId, agentId + ' created plan: ' + title, { plan_id: id });
   dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, project_id: projectId, owner: owner });
   var result = { id: id, title: title };
@@ -1440,7 +1440,7 @@ router.post('/plans', function (req, res) {
 router.get('/plans/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   res.json(plan);
@@ -1449,7 +1449,7 @@ router.get('/plans/:id', function (req, res) {
 router.put('/plans/:id', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   if (!validateEnum(res, req.body.status, PLAN_STATUSES, 'status')) return;
@@ -1461,7 +1461,7 @@ router.put('/plans/:id', function (req, res) {
   if (req.body.priority !== undefined) fields.priority = req.body.priority;
   if (req.body.tags !== undefined) fields.tags = req.body.tags;
   if (req.body.project_id !== undefined) fields.project_id = escapeHtml(req.body.project_id);
-  updateDvPlan(plan.id, fields);
+  updatePlan(plan.id, fields);
   if (fields.status) {
     emitEvent('plan_' + fields.status, agentId, plan.project_id, agentId + ' set plan #' + plan.id + ' to ' + fields.status, { plan_id: plan.id });
   }
@@ -1473,10 +1473,10 @@ router.delete('/plans/:id', function (req, res) {
   if (!who) return;
   var gate = checkApprovalGate(req, who, 'delete');
   if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
-  deleteDvPlan(plan.id);
+  deletePlan(plan.id);
   emitEvent('plan_deleted', who, plan.project_id, who + ' deleted plan #' + plan.id + ': ' + plan.title, { plan_id: plan.id });
   var result = { ok: true, deleted: plan.id };
   if (gate.warning) result.approval_warning = gate.warning;
@@ -1488,7 +1488,7 @@ router.delete('/plans/:id', function (req, res) {
 router.post('/plans/:id/steps', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var title = escapeHtml(req.body.title);
@@ -1496,13 +1496,13 @@ router.post('/plans/:id/steps', function (req, res) {
   var description = escapeHtml(req.body.description || '');
   var assignee = req.body.assignee || null;
   var phase = escapeHtml(req.body.phase || '');
-  var stepId = createDvPlanStep(plan.id, title, description, assignee, phase);
+  var stepId = createPlanStep(plan.id, title, description, assignee, phase);
   // Optionally link task/branch/PR at creation
   var updates = {};
   if (req.body.linked_task_id !== undefined) updates.linked_task_id = req.body.linked_task_id;
   if (req.body.linked_branch !== undefined) updates.linked_branch = req.body.linked_branch;
   if (req.body.linked_pr_url !== undefined) updates.linked_pr_url = req.body.linked_pr_url;
-  if (Object.keys(updates).length > 0) updateDvPlanStep(stepId, updates);
+  if (Object.keys(updates).length > 0) updatePlanStep(stepId, updates);
   emitEvent('plan_step_added', agentId, plan.project_id, agentId + ' added step to plan #' + plan.id + ': ' + title, { plan_id: plan.id, step_id: stepId });
   res.json({ id: stepId, plan_id: plan.id });
 });
@@ -1510,7 +1510,7 @@ router.post('/plans/:id/steps', function (req, res) {
 router.put('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   var stepId0 = parseIntParam(req.params.stepId);
   var planStep = plan.steps ? plan.steps.find(function (s) { return s.id === stepId0; }) : null;
@@ -1527,7 +1527,7 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (req.body.phase !== undefined) fields.phase = escapeHtml(req.body.phase);
   var stepPlanId = parseIntParam(req.params.id);
   var stepStepId = parseIntParam(req.params.stepId);
-  updateDvPlanStep(stepStepId, fields);
+  updatePlanStep(stepStepId, fields);
   if (fields.status === 'done' && getSleepMode().active) {
     appendSleepLog('steps_completed', { id: stepStepId, plan_id: stepPlanId, agent: agentId, time: new Date().toISOString() });
   }
@@ -1539,10 +1539,10 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
 router.delete('/plans/:id/steps/:stepId', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
-  deleteDvPlanStep(parseIntParam(req.params.stepId));
+  deletePlanStep(parseIntParam(req.params.stepId));
   res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
 });
 
@@ -1551,7 +1551,7 @@ router.delete('/plans/:id/steps/:stepId', function (req, res) {
 router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var stepId = parseIntParam(req.params.stepId);
@@ -1568,7 +1568,7 @@ router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
 router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var stepId = parseIntParam(req.params.stepId);
@@ -1578,12 +1578,12 @@ router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
 router.put('/plans/:id/reorder', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var order = req.body.order;
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
-  reorderDvPlanSteps(parseIntParam(req.params.id), order);
+  reorderPlanSteps(parseIntParam(req.params.id), order);
   res.json({ ok: true, plan_id: parseIntParam(req.params.id) });
 });
 
@@ -1592,7 +1592,7 @@ router.put('/plans/:id/reorder', function (req, res) {
 router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var comments = listPlanStepComments(parseIntParam(req.params.stepId));
@@ -1602,7 +1602,7 @@ router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
 router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var plan = getDvPlan(parseIntParam(req.params.id));
+  var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var stepId = parseIntParam(req.params.stepId);
@@ -1878,7 +1878,7 @@ router.put('/admin/sleep', function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createDvMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+          createMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
         }
       }
     }
@@ -1936,7 +1936,7 @@ router.put('/admin/sleep', function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createDvMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+        createMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
       }
     }
 
@@ -1961,7 +1961,7 @@ router.put('/admin/sleep', function (req, res) {
       if (mySleptAt) summaryLines.push('\nSlept since: ' + mySleptAt);
       var wakeUpAgent = listAgents().find(function(a) { return a.operator_id === operatorId2; });
       if (wakeUpAgent) {
-        createDvMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
+        createMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
       }
     }
 
@@ -2012,7 +2012,7 @@ router.put('/operators/:id/availability', function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createDvMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
+          createMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
         }
       }
     }
@@ -2025,7 +2025,7 @@ router.put('/operators/:id/availability', function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createDvMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
+        createMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
       }
     }
   }
@@ -2154,7 +2154,7 @@ router.post('/agents/:id/savepoint', function (req, res) {
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
-  res.json(getDvOverview(who));
+  res.json(getOverview(who));
 });
 
 // Actionable items needing decisions (admin only)
@@ -2170,7 +2170,7 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
 
   // Check cache first
   try {
-    var cached = getDvContextKey('admin', 'api_limits');
+    var cached = getContextKey('admin', 'api_limits');
     if (cached && cached.data) {
       var raw = typeof cached.data === 'string' ? JSON.parse(cached.data) : cached.data;
       var age = Date.now() - new Date(raw.checked_at || 0).getTime();
@@ -2261,7 +2261,7 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
     };
 
     // Cache in context
-    try { upsertDvContextKey('admin', 'api_limits', JSON.stringify(data), 'system'); } catch (_) {}
+    try { upsertContextKey('admin', 'api_limits', JSON.stringify(data), 'system'); } catch (_) {}
 
     res.json({ cached: false, data });
   } catch (err) {
@@ -2539,7 +2539,7 @@ router.post('/bugs', function (req, res) {
   if (diagnostic_data) {
     diagStr = typeof diagnostic_data === 'string' ? diagnostic_data : JSON.stringify(diagnostic_data);
   }
-  var id = createDvBug(projectId, title, description, category, severity, who, assignee, diagStr);
+  var id = createBug(projectId, title, description, category, severity, who, assignee, diagStr);
   emitEvent('bug_created', who, projectId || '', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
   dispatchWebhook('bug_created', who, { bug_id: id, title: title, project_id: projectId, severity: severity, reporter: who, assignee: assignee });
   res.json({ ok: true, id: id });
@@ -2558,8 +2558,8 @@ router.get('/bugs', function (req, res) {
   if (req.query.category) filters.category = req.query.category;
   filters.limit = parseLimit(req.query.limit, 50);
   filters.offset = parseInt(req.query.offset) || 0;
-  var bugs = listDvBugs(filters);
-  var counts = countDvBugs();
+  var bugs = listBugs(filters);
+  var counts = countBugs();
   res.json({ bugs: bugs, counts: counts });
 });
 
@@ -2567,7 +2567,7 @@ router.get('/bugs', function (req, res) {
 router.get('/bugs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var bug = getDvBug(parseIntParam(req.params.id));
+  var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   res.json(bug);
 });
@@ -2576,7 +2576,7 @@ router.get('/bugs/:id', function (req, res) {
 router.put('/bugs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var bug = getDvBug(parseIntParam(req.params.id));
+  var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
   if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
@@ -2586,7 +2586,7 @@ router.put('/bugs/:id', function (req, res) {
   if (req.body.assignee !== undefined) updates.assignee = req.body.assignee;
   if (req.body.admin_notes !== undefined) updates.admin_notes = req.body.admin_notes;
   if (req.body.severity !== undefined) updates.severity = req.body.severity;
-  updateDvBug(bug.id, updates);
+  updateBug(bug.id, updates);
   if (updates.status) {
     emitEvent('bug_updated', who, bug.project_id, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
   }
@@ -2602,9 +2602,9 @@ router.put('/bugs/:id', function (req, res) {
 // Delete bug (admin only)
 router.delete('/bugs/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var bug = getDvBug(parseIntParam(req.params.id));
+  var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  deleteDvBug(bug.id);
+  deleteBug(bug.id);
   emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
   res.json({ ok: true, id: bug.id });
 });
@@ -2620,7 +2620,7 @@ router.get('/team-chat', function (req, res) {
     if (key !== ADMIN_KEY) return res.status(403).json({ error: 'Studio login required' });
   }
   var limit = parseLimit(req.query.limit, 50);
-  res.json(listDvTeamChat(limit));
+  res.json(listTeamChat(limit));
 });
 
 // POST /team-chat — send a chat message (studio users only)
@@ -2630,7 +2630,7 @@ router.post('/team-chat', function (req, res) {
   var content = (req.body.content || '').trim();
   if (!content) return res.status(400).json({ error: 'content is required' });
   var sender = '__user:' + (user.displayName || user.username);
-  var id = createDvTeamChat(sender, escapeHtml(content));
+  var id = createTeamChat(sender, escapeHtml(content));
   res.json({ ok: true, id: id });
 });
 
@@ -2817,7 +2817,7 @@ router.post('/webhooks', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { agent_id, url, events, secret } = req.body;
   if (!agent_id || !url) return res.status(400).json({ error: 'agent_id and url are required' });
-  var id = createDvWebhook(agent_id, url, events, secret);
+  var id = createWebhook(agent_id, url, events, secret);
   res.json({ ok: true, id: id });
 });
 
@@ -2825,13 +2825,13 @@ router.post('/webhooks', function (req, res) {
 router.get('/webhooks', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agentId = req.query.agent_id || null;
-  res.json(listDvWebhooks(agentId));
+  res.json(listWebhooks(agentId));
 });
 
 // DELETE /webhooks/:id — remove a webhook
 router.delete('/webhooks/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  deleteDvWebhook(parseIntParam(req.params.id));
+  deleteWebhook(parseIntParam(req.params.id));
   res.json({ ok: true });
 });
 
@@ -2961,7 +2961,7 @@ router.put('/drones/jobs/:id', function (req, res) {
       var linkedAssets = listAssetsByDroneJob(job.id);
       var assetStatus = fields.status === 'done' ? 'ready' : 'requested';
       for (var asset of linkedAssets) {
-        updateDvAsset(asset.id, { status: assetStatus });
+        updateAsset(asset.id, { status: assetStatus });
       }
       if (linkedAssets.length > 0) {
         emitEvent('assets_status_updated', who, null, linkedAssets.length + ' assets set to ' + assetStatus + ' (job #' + job.id + ' ' + fields.status + ')', { job_id: job.id, asset_count: linkedAssets.length });
@@ -3288,7 +3288,7 @@ router.post('/work/request', function (req, res) {
 
   // Create as a work_request message to Claude Admin
   var adminAgentId = getInstanceConfig('admin_agent_id') || 'greatness-claude';
-  var msgId = createDvRequest(who, adminAgentId, null, null,
+  var msgId = createRequest(who, adminAgentId, null, null,
     JSON.stringify({ type: type, target: target || null, description: description || '', priority: priority || 'normal' }),
     JSON.stringify({ work_request: true, type: type })
   );
