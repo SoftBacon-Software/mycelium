@@ -96,6 +96,14 @@ if (fs.existsSync(landingPage)) {
   });
 }
 
+// One-liner install script: curl -fsSL https://mycelium.fyi/install.sh | bash
+var installScript = path.join(__dirname, '..', 'tools', 'install.sh');
+if (fs.existsSync(installScript)) {
+  app.get('/install.sh', function (req, res) {
+    res.type('text/plain').sendFile(installScript);
+  });
+}
+
 // ---- Health check (public, no auth) ----
 var serverStartTime = Date.now();
 app.get('/health', function (req, res) {
