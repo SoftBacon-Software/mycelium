@@ -406,17 +406,17 @@ export function updateProject(id, fields) {
 
 // -- Tasks --
 
-export function createDvTask(title, description, projectId, requester, priority, tags) {
+export function createTask(title, description, projectId, requester, priority, tags) {
   var result = stmt('dvCreateTask', `INSERT INTO dv_tasks (title, description, project_id, requester, priority, tags)
     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(title, description || '', projectId || '', requester, priority || 'normal', tags || '[]');
   return result.id;
 }
 
-export function getDvTask(id) {
+export function getTask(id) {
   return stmt('dvGetTask', 'SELECT * FROM dv_tasks WHERE id = ?').get(id);
 }
 
-export function listDvTasks(filters) {
+export function listTasks(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -430,7 +430,7 @@ export function listDvTasks(filters) {
   return db.prepare('SELECT * FROM dv_tasks WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
-export function updateDvTask(id, fields) {
+export function updateTask(id, fields) {
   var sets = ["updated_at = datetime('now')"];
   var values = [];
   if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
@@ -452,8 +452,8 @@ export function updateDvTask(id, fields) {
 // -- Task dependencies --
 
 export function setTaskDependency(taskId, blockedById) {
-  var task = getDvTask(taskId);
-  var blocker = getDvTask(blockedById);
+  var task = getTask(taskId);
+  var blocker = getTask(blockedById);
   if (!task || !blocker) return false;
 
   var blockedBy = [];
@@ -473,14 +473,14 @@ export function setTaskDependency(taskId, blockedById) {
 }
 
 export function resolveTaskDependencies(completedTaskId) {
-  var task = getDvTask(completedTaskId);
+  var task = getTask(completedTaskId);
   if (!task) return [];
   var blocks = [];
   try { blocks = JSON.parse(task.blocks || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocks (task: ' + completedTaskId + '):', e.message); }
 
   var unblocked = [];
   for (var blockedId of blocks) {
-    var blocked = getDvTask(blockedId);
+    var blocked = getTask(blockedId);
     if (!blocked) continue;
     var deps = [];
     try { deps = JSON.parse(blocked.blocked_by || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocked_by (task: ' + blockedId + '):', e.message); }
@@ -493,7 +493,7 @@ export function resolveTaskDependencies(completedTaskId) {
 
 // -- Task approval --
 
-export function approveDvTask(taskId, approvedBy) {
+export function approveTask(taskId, approvedBy) {
   db.prepare("UPDATE dv_tasks SET approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(approvedBy, taskId);
 }
 
@@ -538,15 +538,15 @@ export function getPlanStepComments(stepId) {
 
 // -- Context --
 
-export function getDvContext(projectId) {
+export function getContext(projectId) {
   return stmt('dvGetContext', 'SELECT * FROM dv_context WHERE project_id = ?').get(projectId);
 }
 
-export function getAllDvContext() {
+export function getAllContext() {
   return stmt('dvGetAllContext', 'SELECT * FROM dv_context ORDER BY updated_at DESC').all();
 }
 
-export function upsertDvContext(projectId, data, agentId) {
+export function upsertContext(projectId, data, agentId) {
   stmt('dvUpsertContext', `INSERT INTO dv_context (project_id, data, updated_by, updated_at)
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(project_id) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`).run(projectId, data, agentId);
@@ -554,17 +554,17 @@ export function upsertDvContext(projectId, data, agentId) {
 
 // -- Assets --
 
-export function createDvAsset(name, type, projectId, status, assetPath, metadata, requester) {
+export function createAsset(name, type, projectId, status, assetPath, metadata, requester) {
   var result = stmt('dvCreateAsset', `INSERT INTO dv_assets (name, type, project_id, status, path, metadata, requester)
     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(name, type || 'sprite', projectId || 'shared', status || 'requested', assetPath || '', metadata || '{}', requester || '');
   return result.id;
 }
 
-export function getDvAsset(id) {
+export function getAsset(id) {
   return stmt('dvGetAsset', 'SELECT * FROM dv_assets WHERE id = ?').get(id);
 }
 
-export function listDvAssets(filters) {
+export function listAssets(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -576,7 +576,7 @@ export function listDvAssets(filters) {
   return db.prepare('SELECT * FROM dv_assets WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
-export function updateDvAsset(id, fields) {
+export function updateAsset(id, fields) {
   var sets = ["updated_at = datetime('now')"];
   var values = [];
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
@@ -592,7 +592,7 @@ export function updateDvAsset(id, fields) {
   return db.prepare('UPDATE dv_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
-export function deleteDvAsset(id) {
+export function deleteAsset(id) {
   return db.prepare('DELETE FROM dv_assets WHERE id = ?').run(id);
 }
 
@@ -602,13 +602,13 @@ export function listAssetsByDroneJob(droneJobId) {
 
 // -- Events --
 
-export function createDvEvent(type, agent, projectId, summary, data) {
+export function createEvent(type, agent, projectId, summary, data) {
   var result = stmt('dvCreateEvent', `INSERT INTO dv_events (type, agent, project_id, summary, data)
     VALUES (?, ?, ?, ?, ?) RETURNING id`).get(type, agent || '', projectId || null, summary || '', data || '{}');
   return result.id;
 }
 
-export function listDvEvents(filters) {
+export function listEvents(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
@@ -625,7 +625,7 @@ export function listDvEvents(filters) {
 
 var VALID_MSG_PRIORITIES = ['urgent', 'normal', 'fyi'];
 
-export function createDvMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId, priority) {
+export function createMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId, priority) {
   var prio = VALID_MSG_PRIORITIES.includes(priority) ? priority : 'normal';
   if (msgType && msgType !== 'message') {
     var result = db.prepare(
@@ -639,18 +639,18 @@ export function createDvMessage(fromAgent, toAgent, threadId, projectId, content
   return result.id;
 }
 
-export function createDvRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
+export function createRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
   var result = db.prepare(
     "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status, priority) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending', 'urgent') RETURNING id"
   ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}');
   return result.id;
 }
 
-export function acknowledgeDvMessage(id) {
+export function acknowledgeMessage(id) {
   db.prepare("UPDATE dv_messages SET status = 'acknowledged' WHERE id = ?").run(id);
 }
 
-export function resolveDvMessage(id, resolvedBy) {
+export function resolveMessage(id, resolvedBy) {
   db.prepare("UPDATE dv_messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?").run(resolvedBy, id);
 }
 
@@ -670,11 +670,11 @@ export function countPendingForAgent(agentId) {
   return row;
 }
 
-export function getDvMessage(id) {
+export function getMessage(id) {
   return db.prepare("SELECT * FROM dv_messages WHERE id = ?").get(id);
 }
 
-export function listDvMessages(filters) {
+export function listMessages(filters) {
   var where = ["msg_type != 'chat'"];
   var params = [];
   // Exclude system-to-system telemetry (runner health, etc) unless explicitly requested
@@ -700,7 +700,7 @@ export function listDvMessages(filters) {
   return db.prepare('SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY ' + orderBy + ' LIMIT ? OFFSET ?').all(...params);
 }
 
-export function listDvThreads(limit) {
+export function listThreads(limit) {
   return db.prepare(`SELECT thread_id, COUNT(*) as message_count,
     MAX(created_at) as last_message_at,
     (SELECT from_agent FROM dv_messages m2 WHERE m2.thread_id = dv_messages.thread_id ORDER BY created_at DESC LIMIT 1) as last_sender
@@ -742,7 +742,7 @@ export function bulkDeleteMessages(filters) {
 
 // -- Namespaced context --
 
-export function upsertDvContextKey(namespace, key, data, agentId) {
+export function upsertContextKey(namespace, key, data, agentId) {
   var existing = db.prepare("SELECT data FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
@@ -761,35 +761,35 @@ export function upsertDvContextKey(namespace, key, data, agentId) {
   ).run(namespace, key, merged, agentId);
 }
 
-export function getDvContextKey(namespace, key) {
+export function getContextKey(namespace, key) {
   return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
 }
 
-export function listDvContextKeys(namespace) {
+export function listContextKeys(namespace) {
   if (namespace) {
     return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? ORDER BY key").all(namespace);
   }
   return db.prepare("SELECT * FROM dv_context_keys ORDER BY namespace, key").all();
 }
 
-export function deleteDvContextKey(namespace, key) {
+export function deleteContextKey(namespace, key) {
   db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
 }
 
 // -- Bugs --
 
-export function createDvBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {
+export function createBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {
   var result = db.prepare(
     "INSERT INTO dv_bugs (project_id, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(projectId || '', title, description, category || 'other', severity || 'normal', reporter || 'admin', assignee || null, diagnosticData || null);
   return result.id;
 }
 
-export function getDvBug(id) {
+export function getBug(id) {
   return db.prepare("SELECT * FROM dv_bugs WHERE id = ?").get(id);
 }
 
-export function listDvBugs(filters) {
+export function listBugs(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -804,7 +804,7 @@ export function listDvBugs(filters) {
   return db.prepare('SELECT * FROM dv_bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
-export function updateDvBug(id, updates) {
+export function updateBug(id, updates) {
   var sets = ["updated_at = datetime('now')"];
   var params = [];
   if (updates.status !== undefined) { sets.push('status = ?'); params.push(updates.status); }
@@ -815,11 +815,11 @@ export function updateDvBug(id, updates) {
   db.prepare('UPDATE dv_bugs SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
 }
 
-export function deleteDvBug(id) {
+export function deleteBug(id) {
   return db.prepare('DELETE FROM dv_bugs WHERE id = ?').run(id);
 }
 
-export function countDvBugs() {
+export function countBugs() {
   return db.prepare("SELECT SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open, SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress, SUM(CASE WHEN status = 'fixed' THEN 1 ELSE 0 END) as fixed, COUNT(*) as total FROM dv_bugs").get();
 }
 
@@ -859,19 +859,19 @@ export function getBootPayload(agentId) {
     "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
   ).all(agentId, agent.project_id);
 
-  var projectContext = getDvContext(agent.project_id);
-  var contextKeys = listDvContextKeys(agent.project_id);
+  var projectContext = getContext(agent.project_id);
+  var contextKeys = listContextKeys(agent.project_id);
   // Include platform-wide context (mycelium namespace) so agents get conventions on boot
-  var platformKeys = agent.project_id !== 'mycelium' ? listDvContextKeys('mycelium') : [];
+  var platformKeys = agent.project_id !== 'mycelium' ? listContextKeys('mycelium') : [];
   // Also include agent-specific context
-  var agentKeys = listDvContextKeys(agentId);
+  var agentKeys = listContextKeys(agentId);
 
   var approvalQueue = listTasksNeedingApproval();
-  var recentEvents = listDvEvents({ limit: 20 });
-  var openBugs = listDvBugs({ status: 'open', limit: 20 });
+  var recentEvents = listEvents({ limit: 20 });
+  var openBugs = listBugs({ status: 'open', limit: 20 });
 
   // Active/draft plans for agent's project — summaries only in boot (agents use check_plans for full steps)
-  var myPlans = listDvPlans({ project_id: agent.project_id, limit: 20 });
+  var myPlans = listPlans({ project_id: agent.project_id, limit: 20 });
 
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
@@ -953,7 +953,7 @@ function buildRoleContract(agent, agentId) {
   };
 
   // Check for agent-specific role contract in context: namespace "roles", key = agentId
-  var agentRole = getDvContextKey('roles', agentId);
+  var agentRole = getContextKey('roles', agentId);
   if (agentRole) {
     try {
       var roleData = typeof agentRole.data === 'string' ? JSON.parse(agentRole.data) : agentRole.data;
@@ -965,7 +965,7 @@ function buildRoleContract(agent, agentId) {
   }
 
   // Check for project-level guidelines: namespace = project_id, key = "guidelines"
-  var projGuidelines = getDvContextKey(agent.project_id, 'guidelines');
+  var projGuidelines = getContextKey(agent.project_id, 'guidelines');
   if (projGuidelines && !contract.guidelines) {
     try {
       var gData = typeof projGuidelines.data === 'string' ? JSON.parse(projGuidelines.data) : projGuidelines.data;
@@ -1103,10 +1103,10 @@ export function initTransactions() {
     var agents = db.prepare("SELECT id FROM dv_agents WHERE capabilities LIKE '%assets%'").all();
     var assignee = agents.length > 0 ? agents[0].id : null;
 
-    var asset = getDvAsset(assetId);
+    var asset = getAsset(assetId);
     if (!asset) return null;
 
-    var taskId = createDvTask(
+    var taskId = createTask(
       'Generate asset: ' + asset.name,
       'Auto-created from asset request #' + assetId + '. Type: ' + asset.type + '. Project: ' + projectId,
       projectId,
@@ -1128,14 +1128,14 @@ export function autoTaskFromAsset(assetId, projectId, requester) {
 
 // -- Plans --
 
-export function createDvPlan(title, description, projectId, owner, priority, tags, createdBy) {
+export function createPlan(title, description, projectId, owner, priority, tags, createdBy) {
   var result = db.prepare(
     "INSERT INTO dv_plans (title, description, project_id, owner, priority, tags, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(title, description || '', projectId || '', owner || '', priority || 'normal', tags || '[]', createdBy || '');
   return result.id;
 }
 
-export function getDvPlan(id) {
+export function getPlan(id) {
   var plan = db.prepare("SELECT * FROM dv_plans WHERE id = ?").get(id);
   if (!plan) return null;
   var steps = db.prepare("SELECT * FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order, id").all(id);
@@ -1156,7 +1156,7 @@ export function getDvPlan(id) {
   return plan;
 }
 
-export function listDvPlans(filters) {
+export function listPlans(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -1181,7 +1181,7 @@ export function listDvPlans(filters) {
   return plans;
 }
 
-export function updateDvPlan(id, fields) {
+export function updatePlan(id, fields) {
   var sets = ["updated_at = datetime('now')"];
   var values = [];
   if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
@@ -1195,12 +1195,12 @@ export function updateDvPlan(id, fields) {
   return db.prepare('UPDATE dv_plans SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
-export function deleteDvPlan(id) {
+export function deletePlan(id) {
   db.prepare("DELETE FROM dv_plan_steps WHERE plan_id = ?").run(id);
   db.prepare("DELETE FROM dv_plans WHERE id = ?").run(id);
 }
 
-export function createDvPlanStep(planId, title, description, assignee, phase) {
+export function createPlanStep(planId, title, description, assignee, phase) {
   var maxOrder = db.prepare("SELECT MAX(step_order) as m FROM dv_plan_steps WHERE plan_id = ?").get(planId);
   var order = (maxOrder && maxOrder.m !== null) ? maxOrder.m + 1 : 0;
   var result = db.prepare(
@@ -1210,7 +1210,7 @@ export function createDvPlanStep(planId, title, description, assignee, phase) {
   return result.id;
 }
 
-export function updateDvPlanStep(stepId, fields) {
+export function updatePlanStep(stepId, fields) {
   var sets = ["updated_at = datetime('now')"];
   var values = [];
   if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
@@ -1230,13 +1230,13 @@ export function updateDvPlanStep(stepId, fields) {
   if (step) db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
 }
 
-export function deleteDvPlanStep(stepId) {
+export function deletePlanStep(stepId) {
   var step = db.prepare("SELECT plan_id FROM dv_plan_steps WHERE id = ?").get(stepId);
   db.prepare("DELETE FROM dv_plan_steps WHERE id = ?").run(stepId);
   if (step) db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
 }
 
-export function reorderDvPlanSteps(planId, stepIds) {
+export function reorderPlanSteps(planId, stepIds) {
   var reorder = db.transaction(function () {
     for (var i = 0; i < stepIds.length; i++) {
       db.prepare("UPDATE dv_plan_steps SET step_order = ? WHERE id = ? AND plan_id = ?").run(i, stepIds[i], planId);
@@ -1334,7 +1334,7 @@ export function updateStudioUser(id, fields) {
 
 // -- Webhooks --
 
-export function createDvWebhook(agentId, url, events, secret) {
+export function createWebhook(agentId, url, events, secret) {
   var eventsJson = Array.isArray(events) ? JSON.stringify(events) : (events || '["task_created","request_created","message_sent"]');
   var result = db.prepare(
     "INSERT INTO dv_webhooks (agent_id, url, events, secret) VALUES (?, ?, ?, ?) RETURNING id"
@@ -1342,14 +1342,14 @@ export function createDvWebhook(agentId, url, events, secret) {
   return result.id;
 }
 
-export function listDvWebhooks(agentId) {
+export function listWebhooks(agentId) {
   if (agentId) {
     return db.prepare("SELECT * FROM dv_webhooks WHERE agent_id = ? AND active = 1").all(agentId);
   }
   return db.prepare("SELECT * FROM dv_webhooks WHERE active = 1").all();
 }
 
-export function deleteDvWebhook(id) {
+export function deleteWebhook(id) {
   db.prepare("DELETE FROM dv_webhooks WHERE id = ?").run(id);
 }
 
@@ -1432,14 +1432,14 @@ export function pruneWebhookDeliveries(keepDays) {
 
 // -- Team Chat (human-only messages) --
 
-export function createDvTeamChat(fromUser, content) {
+export function createTeamChat(fromUser, content) {
   var result = db.prepare(
     "INSERT INTO dv_messages (from_agent, content, msg_type) VALUES (?, ?, 'chat') RETURNING id"
   ).get(fromUser, content);
   return result.id;
 }
 
-export function listDvTeamChat(limit) {
+export function listTeamChat(limit) {
   return db.prepare(
     "SELECT * FROM dv_messages WHERE msg_type = 'chat' ORDER BY created_at DESC LIMIT ?"
   ).all(limit || 50);
@@ -1907,26 +1907,26 @@ export function resolveStaleRequests(hoursOld) {
   return stale.length;
 }
 
-export function getDvOverview(userId) {
+export function getOverview(userId) {
   var agents = listAgents();
-  var events = listDvEvents({ limit: 50 });
-  var openTasks = listDvTasks({ status: 'open', limit: 20 });
-  var inProgressTasks = listDvTasks({ status: 'in_progress', limit: 20 });
-  var reviewTasks = listDvTasks({ status: 'review', limit: 20 });
-  var recentDone = listDvTasks({ status: 'done', limit: 10 });
-  var messages = listDvMessages({ limit: 30 });
-  var context = getAllDvContext();
-  var contextKeys = listDvContextKeys();
+  var events = listEvents({ limit: 50 });
+  var openTasks = listTasks({ status: 'open', limit: 20 });
+  var inProgressTasks = listTasks({ status: 'in_progress', limit: 20 });
+  var reviewTasks = listTasks({ status: 'review', limit: 20 });
+  var recentDone = listTasks({ status: 'done', limit: 10 });
+  var messages = listMessages({ limit: 30 });
+  var context = getAllContext();
+  var contextKeys = listContextKeys();
   var projects = listProjects();
   var approvalQueue = listTasksNeedingApproval();
   var pendingRequests = db.prepare(
     "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 20"
   ).all();
-  var assets = listDvAssets({ limit: 50 });
-  var bugs = listDvBugs({ limit: 50 });
-  var bugCounts = countDvBugs();
-  var plans = listDvPlans({ exclude_status: 'cancelled', limit: 50 });
-  var teamChat = listDvTeamChat(50);
+  var assets = listAssets({ limit: 50 });
+  var bugs = listBugs({ limit: 50 });
+  var bugCounts = countBugs();
+  var plans = listPlans({ exclude_status: 'cancelled', limit: 50 });
+  var teamChat = listTeamChat(50);
   var allChannels = listChannels({ limit: 200, status: 'all' });
   var activeChannelCount = allChannels.filter(function (c) { return c.status === 'active'; }).length;
   var archivedChannelCount = allChannels.filter(function (c) { return c.status === 'archived'; }).length;
