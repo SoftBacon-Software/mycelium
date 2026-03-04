@@ -349,14 +349,20 @@ export default function OnboardingPage() {
     }
   }
 
-  // ------ Copy to clipboard helper ------
+  // ------ Copy to clipboard helpers ------
   const [copied, setCopied] = useState(false)
+  const [copiedBlock, setCopiedBlock] = useState<string | null>(null)
   const copyKey = () => {
     if (data.generatedApiKey) {
       navigator.clipboard.writeText(data.generatedApiKey)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
+  }
+  const copyBlock = (id: string, text: string) => {
+    navigator.clipboard.writeText(text)
+    setCopiedBlock(id)
+    setTimeout(() => setCopiedBlock(null), 2000)
   }
 
   // -----------------------------------------------------------------------
@@ -365,47 +371,140 @@ export default function OnboardingPage() {
 
   // Finished state
   if (finished) {
+    const instanceUrl = window.location.origin
+    const apiUrl = `${instanceUrl}/api/mycelium`
+
+    const mcpConfig = JSON.stringify({
+      mcpServers: {
+        mycelium: {
+          command: 'npx',
+          args: ['-y', 'mycelium-mcp'],
+          env: {
+            MYCELIUM_API_URL: apiUrl,
+            MYCELIUM_ROLE: 'agent',
+            MYCELIUM_API_KEY: data.generatedApiKey ?? 'YOUR_API_KEY',
+            MYCELIUM_AGENT_ID: data.agentId,
+          },
+        },
+      },
+    }, null, 2)
+
+    const responsibilities = data.roleResponsibilities
+      ? data.roleResponsibilities.split('\n').filter(Boolean).map(r => `- ${r}`).join('\n')
+      : '- Execute tasks from the Mycelium task board\n- Report progress via heartbeats'
+
+    const claudeMd = `# CLAUDE.md — ${data.agentName || data.agentId}
+
+## Mycelium Network Agent
+
+You are a Mycelium network agent. On every session start:
+
+1. Call \`studio_boot\` — loads your tasks, messages, plans, and work queue
+2. Work through your queue — claim the top item, do the work, mark it done
+3. Send heartbeats as you work to keep the network updated
+
+## Your Identity
+
+- **Agent ID**: \`${data.agentId}\`
+- **Project**: \`${data.projectId}\`
+- **Instance**: ${apiUrl}
+
+## Role
+
+${data.roleDescription || 'Execute assigned tasks and coordinate via the Mycelium network.'}
+
+## Responsibilities
+
+${responsibilities}
+
+## Rules
+
+- Always check the task board before starting new work
+- Use MCP tools for all network operations (do not use curl)
+- Send \`studio_heartbeat\` with what you are working on
+- Mark tasks complete when done, file bugs when you find them
+- No deployments or external communications without human approval
+`
+
     return (
-      <div className="max-w-xl mx-auto py-16 px-4">
-        <div className="bg-surface border border-border rounded-lg p-8 text-center">
+      <div className="max-w-2xl mx-auto py-12 px-4">
+        {/* Success header */}
+        <div className="bg-surface border border-border rounded-lg p-8 text-center mb-6">
           <div className="w-16 h-16 rounded-full bg-green/20 flex items-center justify-center mx-auto mb-5">
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-green">
               <path d="M6 14.5L11.5 20L22 8" />
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-text mb-2">Your Mycelium network is ready!</h1>
-          <p className="text-sm text-text-dim mb-6">
-            Organization <span className="font-mono text-accent">{data.orgId}</span> with project{' '}
-            <span className="font-mono text-accent">{data.projectId}</span> and agent{' '}
-            <span className="font-mono text-accent">{data.agentId}</span> are configured and online.
+          <p className="text-sm text-text-dim">
+            <span className="font-mono text-accent">{data.orgId}</span> /
+            <span className="font-mono text-accent"> {data.projectId}</span> /
+            <span className="font-mono text-accent"> {data.agentId}</span> — configured and online.
+          </p>
+        </div>
+
+        {/* API Key */}
+        {data.generatedApiKey && (
+          <div className="bg-surface border border-red/20 rounded-lg p-4 mb-4">
+            <p className="text-xs font-semibold text-red mb-2">Save this API key — it cannot be shown again</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-sm font-mono text-accent bg-bg rounded px-3 py-2 break-all select-all">
+                {data.generatedApiKey}
+              </code>
+              <button type="button" onClick={copyKey}
+                className="shrink-0 text-xs bg-surface border border-border rounded px-3 py-2 text-text-dim hover:text-accent transition-colors">
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Bootstrap kit */}
+        <div className="bg-surface border border-border rounded-lg p-6 mb-4">
+          <h2 className="text-sm font-semibold text-text mb-1">Connect your agent to the network</h2>
+          <p className="text-xs text-text-muted mb-4">
+            Paste these into your project to make <span className="font-mono text-accent">{data.agentId}</span> Mycelium-aware.
+            No Claude needed for setup — just copy these files.
           </p>
 
-          {data.generatedApiKey && (
-            <div className="bg-surface-raised border border-border rounded p-4 mb-6 text-left">
-              <p className="text-xs text-text-muted mb-1.5">Agent API Key (save this now — you cannot view it again)</p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 text-sm font-mono text-accent bg-bg rounded px-3 py-2 break-all select-all">
-                  {data.generatedApiKey}
-                </code>
-                <button
-                  type="button"
-                  onClick={copyKey}
-                  className="shrink-0 text-xs bg-surface border border-border rounded px-3 py-2 text-text-dim hover:text-accent transition-colors"
-                >
-                  {copied ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
+          {/* MCP config */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-text-dim">1. Add to <code className="font-mono bg-surface-raised px-1 py-0.5 rounded">~/.claude/settings.json</code> (MCP config)</span>
+              <button type="button" onClick={() => copyBlock('mcp', mcpConfig)}
+                className="text-xs text-text-muted hover:text-accent transition-colors px-2 py-0.5 rounded bg-surface-raised">
+                {copiedBlock === 'mcp' ? 'Copied!' : 'Copy'}
+              </button>
             </div>
-          )}
+            <pre className="bg-bg border border-border rounded p-3 text-xs font-mono text-text-dim overflow-x-auto whitespace-pre-wrap break-all">{mcpConfig}</pre>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="bg-accent text-bg px-6 py-2.5 rounded text-sm font-semibold hover:bg-accent-light transition-colors"
-          >
-            Go to Dashboard
-          </button>
+          {/* CLAUDE.md */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-text-dim">2. Add to your project's <code className="font-mono bg-surface-raised px-1 py-0.5 rounded">CLAUDE.md</code></span>
+              <button type="button" onClick={() => copyBlock('claude', claudeMd)}
+                className="text-xs text-text-muted hover:text-accent transition-colors px-2 py-0.5 rounded bg-surface-raised">
+                {copiedBlock === 'claude' ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            <pre className="bg-bg border border-border rounded p-3 text-xs font-mono text-text-dim overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">{claudeMd}</pre>
+          </div>
         </div>
+
+        {/* What's next */}
+        <div className="bg-surface border border-border rounded-lg p-4 mb-6 text-sm text-text-muted space-y-1.5">
+          <p className="text-text-dim font-medium text-xs mb-2">What happens next</p>
+          <p>1. Paste the MCP config — this installs the Mycelium tools into Claude Code</p>
+          <p>2. Paste the CLAUDE.md — this tells Claude to boot into the network on every session</p>
+          <p>3. Open Claude Code in your project — it will call <code className="font-mono text-accent">studio_boot</code> automatically</p>
+          <p>4. Create tasks from the dashboard — your agent will pick them up</p>
+        </div>
+
+        <button type="button" onClick={() => navigate('/')}
+          className="w-full bg-accent text-bg px-6 py-2.5 rounded text-sm font-semibold hover:bg-accent-light transition-colors">
+          Go to Dashboard
+        </button>
       </div>
     )
   }
