@@ -358,11 +358,15 @@ function ChatArea({
   messages,
   onSend,
   sending,
+  showAll,
+  onToggleShowAll,
 }: {
   channel: Channel | null
   messages: ChannelMessage[]
   onSend: (content: string) => void
   sending: boolean
+  showAll: boolean
+  onToggleShowAll: () => void
 }) {
   const [input, setInput] = useState('')
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
@@ -444,15 +448,15 @@ function ChatArea({
             <span className="text-text-muted text-xs truncate">{channel.description}</span>
           </>
         )}
-        <div className="flex-1" />
-        {truncatableIds.size > 0 && (
+        <div className="ml-auto shrink-0">
           <button
-            onClick={toggleExpandAll}
-            className="text-text-muted hover:text-accent text-xs transition-colors shrink-0"
+            onClick={() => { onToggleShowAll(); toggleExpandAll() }}
+            className="text-xs px-2 py-1 rounded-sm font-medium transition-colors border border-border hover:border-accent/40 hover:text-accent text-text-muted"
+            title={showAll ? 'Show recent messages only' : 'Load all messages and expand for Ctrl+F search'}
           >
-            {allExpanded ? 'Show less' : 'Show all'}
+            {showAll ? 'Show Less' : 'Show All'}
           </button>
-        )}
+        </div>
       </div>
 
       {/* Message list */}
@@ -480,7 +484,7 @@ function ChatArea({
                 <ChannelMsg
                   message={msg}
                   isGrouped={isGrouped}
-                  isExpanded={expandedIds.has(msg.id)}
+                  isExpanded={showAll || expandedIds.has(msg.id)}
                   onToggleExpand={() => toggleExpand(msg.id)}
                 />
               </div>
@@ -524,6 +528,7 @@ export default function ChannelsPage() {
   const [messages, setMessages] = useState<ChannelMessage[]>([])
   const [unreadMap, setUnreadMap] = useState<Record<number, number>>({})
   const [sending, setSending] = useState(false)
+  const [showAll, setShowAll] = useState(false)
 
   const activeChannel = useMemo(
     () => channels.find((ch) => ch.id === activeChannelId) ?? null,
@@ -558,18 +563,19 @@ export default function ChannelsPage() {
   const loadMessages = useCallback(async () => {
     if (activeChannelId === null) return
     try {
-      const msgs = await fetchChannelMessages(activeChannelId, 100)
+      const msgs = await fetchChannelMessages(activeChannelId, showAll ? 500 : 100)
       setMessages(msgs)
     } catch (err) {
       console.error('Failed to fetch channel messages:', err)
     }
-  }, [activeChannelId])
+  }, [activeChannelId, showAll])
 
   // Mark channel as read and load messages when selecting a channel
   const handleSelectChannel = useCallback(
     async (id: number) => {
       setActiveChannelId(id)
       setMessages([])
+      setShowAll(false)
       try {
         await markChannelRead(id)
         setUnreadMap((prev) => {
@@ -644,6 +650,8 @@ export default function ChannelsPage() {
           messages={messages}
           onSend={handleSend}
           sending={sending}
+          showAll={showAll}
+          onToggleShowAll={() => setShowAll(prev => !prev)}
         />
       </div>
     </div>
