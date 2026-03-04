@@ -21,6 +21,7 @@ const routeTitles: Record<string, string> = {
   '/operators': 'Operators',
   '/approvals': 'Approvals',
   '/drones': 'Drones',
+  '/spawns': 'Spawns',
   '/concepts': 'Concepts',
   '/context': 'Context Keys',
   '/webhooks': 'Webhooks',

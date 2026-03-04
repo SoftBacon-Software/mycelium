@@ -183,6 +183,19 @@ var server = app.listen(PORT, function () {
   }
 });
 
+// ---- Graceful shutdown: stop worker plugins ----
+import { stopAllWorkers } from './plugins.js';
+process.on('SIGTERM', function () {
+  console.log('[shutdown] SIGTERM received, stopping workers...');
+  stopAllWorkers();
+  server.close(function () { process.exit(0); });
+});
+process.on('SIGINT', function () {
+  console.log('[shutdown] SIGINT received, stopping workers...');
+  stopAllWorkers();
+  server.close(function () { process.exit(0); });
+});
+
 // ---- SQLite backup system ----
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 var BACKUP_DIR = path.join(DATA_DIR, 'backups');
