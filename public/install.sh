@@ -108,8 +108,8 @@ log "Starting Mycelium on port ${PORT}..."
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
-  -p "${PORT}:${PORT}" \
-  -e PORT="${PORT}" \
+  -p "${PORT}:3002" \
+  -e PORT="3002" \
   -e ADMIN_KEY="${ADMIN_KEY}" \
   -e JWT_SECRET="${JWT_SECRET}" \
   -e DATA_DIR="/data" \
@@ -119,7 +119,7 @@ docker run -d \
 # ── Wait for healthy ──────────────────────────────────────────────────────────
 log "Waiting for Mycelium to start..."
 ATTEMPTS=0
-until curl -sf "http://localhost:${PORT}/api/mycelium/health" &>/dev/null; do
+until curl -sf "http://localhost:${PORT}/health" &>/dev/null; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [[ $ATTEMPTS -gt 30 ]]; then
     err "Mycelium did not start in time. Check logs: docker logs ${CONTAINER_NAME}"
