@@ -2001,6 +2001,29 @@ export function recordPluginMigration(pluginName, version, description) {
   db.prepare('INSERT INTO dv_plugin_migrations (plugin_name, version, description) VALUES (?, ?, ?)').run(pluginName, version, description || '');
 }
 
+// ======== PLUGIN CONFIG ========
+
+export function getPluginConfig(pluginName) {
+  var rows = db.prepare('SELECT key, value, is_secret FROM dv_plugin_config WHERE plugin_name = ?').all(pluginName);
+  return rows;
+}
+
+export function getPluginConfigValue(pluginName, key) {
+  var row = db.prepare('SELECT value FROM dv_plugin_config WHERE plugin_name = ? AND key = ?').get(pluginName, key);
+  return row ? row.value : null;
+}
+
+export function setPluginConfig(pluginName, key, value, isSecret) {
+  db.prepare(
+    `INSERT INTO dv_plugin_config (plugin_name, key, value, is_secret, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(plugin_name, key) DO UPDATE SET value = excluded.value, is_secret = excluded.is_secret, updated_at = excluded.updated_at`
+  ).run(pluginName, key, String(value), isSecret ? 1 : 0);
+}
+
+export function deletePluginConfig(pluginName, key) {
+  db.prepare('DELETE FROM dv_plugin_config WHERE plugin_name = ? AND key = ?').run(pluginName, key);
+}
+
 // ======== AGENT SAVEPOINTS ========
 
 export function createSavepoint(agentId, data) {
@@ -2218,6 +2241,39 @@ export function countUnreadInbox(operatorId) {
 
 export function countAllUnreadInbox() {
   return db.prepare("SELECT operator_id, COUNT(*) as count FROM dv_operator_inbox WHERE status = 'unread' GROUP BY operator_id").all();
+}
+
+// ======== RUNNER SPAWNS (dynamic agent swarm) ========
+
+export function createRunnerSpawn(tier, model, cwd, maxTurns, title, workContext, requestedBy) {
+  var result = db.prepare(
+    'INSERT INTO dv_runner_spawns (tier, model, cwd, max_turns, title, work_context, requested_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+  ).get(tier || 'agent', model || '', cwd || '', maxTurns || 50, title || '', JSON.stringify(workContext || {}), requestedBy || '');
+  return result.id;
+}
+
+export function getRunnerSpawn(id) {
+  var row = db.prepare('SELECT * FROM dv_runner_spawns WHERE id = ?').get(id);
+  if (row) { try { row.work_context = JSON.parse(row.work_context); } catch (e) { row.work_context = {}; } }
+  return row;
+}
+
+export function listRunnerSpawns(status) {
+  var rows = status
+    ? db.prepare("SELECT * FROM dv_runner_spawns WHERE status = ? ORDER BY created_at DESC LIMIT 100").all(status)
+    : db.prepare("SELECT * FROM dv_runner_spawns ORDER BY created_at DESC LIMIT 100").all();
+  return rows.map(function (r) {
+    try { r.work_context = JSON.parse(r.work_context); } catch (e) { r.work_context = {}; }
+    return r;
+  });
+}
+
+export function claimRunnerSpawn(id, runnerId) {
+  db.prepare("UPDATE dv_runner_spawns SET status = 'claimed', runner_id = ?, claimed_at = datetime('now') WHERE id = ? AND status = 'pending'").run(runnerId || 'runner', id);
+}
+
+export function doneRunnerSpawn(id, result, status) {
+  db.prepare("UPDATE dv_runner_spawns SET status = ?, result = ?, done_at = datetime('now') WHERE id = ?").run(status || 'done', result || '', id);
 }
 
 export function getFeedbackSummary() {
