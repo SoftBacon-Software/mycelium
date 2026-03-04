@@ -8,6 +8,7 @@ import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { usePolling } from '../hooks/usePolling'
 import { useMediaQuery } from '../hooks/useMediaQuery'
+import { useLiveEvents } from '../hooks/useLiveEvents'
 
 const routeTitles: Record<string, string> = {
   '/': 'Dashboard',
@@ -44,6 +45,7 @@ function formatTime(date: Date | null): string {
 }
 
 export default function AppLayout() {
+  useLiveEvents()
   const location = useLocation()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
-import { fetchContextKey } from '../api/endpoints'
+import { fetchApiLimits } from '../api/endpoints'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
@@ -156,7 +156,7 @@ function computeNetworkHealth(
   if (isFrozen) return { level: 'red', label: 'Frozen' }
 
   const allWorkers = [...agents, ..._drones]
-  const onlineWorkers = allWorkers.filter((a) => a.status === 'online').length
+  const onlineWorkers = allWorkers.filter((a) => a.status === 'online' || a.status === 'idle').length
   const totalWorkers = allWorkers.length
   const criticalBugs = bugs.filter(
     (b) => b.severity === 'critical' && b.status !== 'fixed' && b.status !== 'closed',
@@ -550,18 +550,23 @@ function ApiLimitsPanel() {
 
   const load = useCallback(async () => {
     try {
-      const entry = await fetchContextKey('admin', 'api_limits')
-      const raw = (entry as any)?.value ?? (entry as any)?.data ?? null
+      const result = await fetchApiLimits()
+      const raw = result?.data ?? null
       if (raw) {
-        const parsed: ApiLimitsData = typeof raw === 'string' ? JSON.parse(raw) : raw
+        const parsed: ApiLimitsData = typeof raw === 'string' ? JSON.parse(raw) : raw as unknown as ApiLimitsData
         setData(parsed)
         setLastChecked(new Date().toISOString())
         setError(null)
       } else {
-        setError('No limit data — run check_limits.py to populate')
+        setError('No limit data available')
       }
-    } catch {
-      setError('No limit data — run check_limits.py to populate')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('ANTHROPIC_API_KEY')) {
+        setError('ANTHROPIC_API_KEY not set on server')
+      } else {
+        setError('Could not fetch API limits')
+      }
     }
   }, [])
 
@@ -746,10 +751,11 @@ function AgentsGrid({ agents }: { agents: Agent[] }) {
     )
   }
 
-  // Sort: online first, then by name
+  // Sort: online first, then idle, then offline
+  const statusRank = (s: string) => s === 'online' ? 0 : s === 'idle' ? 1 : 2
   const sorted = [...agents].sort((a, b) => {
-    if (a.status === 'online' && b.status !== 'online') return -1
-    if (a.status !== 'online' && b.status === 'online') return 1
+    const r = statusRank(a.status) - statusRank(b.status)
+    if (r !== 0) return r
     return (a.name || a.id).localeCompare(b.name || b.id)
   })
 
@@ -791,20 +797,22 @@ function AgentCard({ agent }: { agent: Agent }) {
       </div>
 
       {/* LLM info */}
-      {(agent.llm_backend || agent.llm_model) && (
-        <div className="flex items-center gap-1.5 mb-2 ml-[52px]">
-          {agent.llm_backend && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-raised text-text-muted">
-              {agent.llm_backend}
-            </span>
-          )}
-          {agent.llm_model && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-raised text-text-dim">
-              {agent.llm_model}
-            </span>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-1.5 mb-2 ml-[52px]">
+        {agent.llm_backend && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-raised text-text-muted">
+            {agent.llm_backend}
+          </span>
+        )}
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-raised text-text-dim">
+          {agent.llm_model
+            ? agent.llm_model
+                .replace('claude-opus-4-6', 'opus-4.6')
+                .replace('claude-sonnet-4-6', 'sonnet-4.6')
+                .replace('claude-haiku-4-5-20251001', 'haiku-4.5')
+                .replace('claude-', '')
+            : '—'}
+        </span>
+      </div>
 
       {/* Working on */}
       {agent.working_on && (

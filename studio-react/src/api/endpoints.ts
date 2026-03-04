@@ -522,3 +522,7 @@ export function markInboxItemActioned(id: number): Promise<{ ok: boolean }> {
 export function dismissInboxItem(id: number): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/inbox/${id}`);
 }
+
+export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string, unknown> }> {
+  return apiGet('/admin/api-limits');
+}
