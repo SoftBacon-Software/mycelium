@@ -53,6 +53,7 @@ export interface Message {
   content: string;
   msg_type: string;
   status: string;
+  priority: 'urgent' | 'normal' | 'fyi';
   created_at: string;
   metadata: Record<string, unknown> | null;
   thread_id: string | null;
@@ -355,7 +356,6 @@ export interface FeedbackSummary {
   rating_dist: { rating: number; count: number }[]
   recent: Feedback[]
 }
-
 
 export interface InboxCountResponse {
   count: number;
