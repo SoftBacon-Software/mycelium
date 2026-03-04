@@ -607,10 +607,18 @@ router.post('/agents/heartbeat', function (req, res) {
 
   // Write savepoint on every heartbeat
   var messagesAcked = [];
-  try { messagesAcked = JSON.parse(req.body.messages_acked || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for messages_acked (agent: ' + agentId + '):', e.message); }
+  if (Array.isArray(req.body.messages_acked)) {
+    messagesAcked = req.body.messages_acked;
+  } else {
+    try { messagesAcked = JSON.parse(req.body.messages_acked || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for messages_acked (agent: ' + agentId + '):', e.message); }
+  }
   var sessionId = req.body.session_id || null;
   var stateSnapshot = {};
-  try { stateSnapshot = JSON.parse(req.body.state_snapshot || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for state_snapshot (agent: ' + agentId + '):', e.message); }
+  if (typeof req.body.state_snapshot === 'object' && req.body.state_snapshot !== null) {
+    stateSnapshot = req.body.state_snapshot;
+  } else {
+    try { stateSnapshot = JSON.parse(req.body.state_snapshot || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for state_snapshot (agent: ' + agentId + '):', e.message); }
+  }
 
   createSavepoint(agentId, {
     session_id: sessionId,
