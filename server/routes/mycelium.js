@@ -90,6 +90,7 @@ import {
   createSavepoint, getLatestSavepoint, getSavepointHistory,
   updateSavepointNotes, computeSavepointDiff, pruneSavepoints,
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
+  getPluginConfig, setPluginConfig, deletePluginConfig,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
   countPendingForAgent, archiveOldMessages, archiveOldEvents,
@@ -97,7 +98,7 @@ import {
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox
 } from '../db.js';
-import { loadPlugins, getPluginMcpTools, callEventHooks, registerEventHook } from '../plugins.js';
+import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook } from '../plugins.js';
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
@@ -3121,7 +3122,49 @@ router.get('/plugins/:name', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
-  res.json(record);
+  // Enrich with loaded manifest data (configSchema, hooks, gatedActions)
+  var loaded = getLoadedPlugins().find(function (p) { return p.name === req.params.name; });
+  var mcpTools = getPluginMcpTools().filter(function (t) { return t.plugin === req.params.name; });
+  res.json({
+    ...record,
+    type: loaded ? (loaded.type || 'legacy') : 'legacy',
+    config_schema: loaded ? (loaded.configSchema || []) : [],
+    mcp_tools: mcpTools.map(function (t) { return { name: t.name, description: t.description || '' }; }),
+    hooks: loaded ? (loaded.hooks || []) : [],
+    gated_actions: loaded ? (loaded.gatedActions || []) : [],
+  });
+});
+
+router.get('/plugins/:name/config', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var record = getPluginRecord(req.params.name);
+  if (!record) return res.status(404).json({ error: 'Plugin not found' });
+  var rows = getPluginConfig(req.params.name);
+  // Return config as key→value map; mask secrets
+  var config = {};
+  for (var row of rows) {
+    config[row.key] = row.is_secret ? '••••••••' : row.value;
+  }
+  res.json(config);
+});
+
+router.put('/plugins/:name/config', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var record = getPluginRecord(req.params.name);
+  if (!record) return res.status(404).json({ error: 'Plugin not found' });
+  var body = req.body || {};
+  // Get the loaded manifest to know which keys are secrets
+  var loaded = getLoadedPlugins().find(function (p) { return p.name === req.params.name; });
+  var schema = loaded ? (loaded.configSchema || []) : [];
+  for (var [key, value] of Object.entries(body)) {
+    // Skip if the value is the masked placeholder (user didn't change a secret)
+    if (value === '••••••••') continue;
+    var schemaField = schema.find(function (f) { return f.key === key; });
+    var isSecret = schemaField ? (schemaField.type === 'secret') : false;
+    setPluginConfig(req.params.name, key, value, isSecret);
+  }
+  emitEvent('plugin_config_updated', getAdminDisplayName(req), null, 'Updated config for plugin: ' + req.params.name);
+  res.json({ ok: true });
 });
 
 router.put('/plugins/:name/enable', function (req, res) {
