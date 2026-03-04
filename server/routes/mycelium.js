@@ -1824,6 +1824,16 @@ router.put('/admin/sleep', function (req, res) {
     return res.status(400).json({ error: 'action must be on or off' });
   }
 
+  // Resolve operator_id — explicit body param, or auto-detect from JWT studio user
+  function resolveOperatorId(bodyId) {
+    if (bodyId) return bodyId;
+    var studioUser = getStudioUser(req);
+    if (!studioUser) return null;
+    var allOps = listOperators();
+    var linked = allOps.find(function(o) { return String(o.studio_user_id) === String(studioUser.userId); });
+    return linked ? linked.id : null;
+  }
+
   if (action === 'on') {
     var directive = req.body.directive || '';
     var priorities = req.body.priorities || [];
@@ -1832,7 +1842,7 @@ router.put('/admin/sleep', function (req, res) {
     var sleptAt = new Date().toISOString();
 
     // Mark operator as sleeping and record their personal sleep start time
-    var operatorId = req.body.operator_id;
+    var operatorId = resolveOperatorId(req.body.operator_id);
     if (operatorId) {
       var op = getOperator(operatorId);
       if (op) setOperatorAvailability(operatorId, 'sleeping', directive);
@@ -1879,7 +1889,7 @@ router.put('/admin/sleep', function (req, res) {
   } else {
     // action === 'off'
     // Any operator can end sleep mode — if they were sleeping, wake them; always end global sleep mode.
-    var operatorId2 = req.body.operator_id;
+    var operatorId2 = resolveOperatorId(req.body.operator_id);
     var wasAlreadyAwake = false;
     if (operatorId2) {
       var op2 = getOperator(operatorId2);
