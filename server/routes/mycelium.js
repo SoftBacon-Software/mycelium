@@ -629,6 +629,14 @@ router.post('/agents/heartbeat', function (req, res) {
     } catch (e) { /* non-critical */ }
   }
 
+  // Include work queue so agents discover new work on heartbeat
+  try {
+    var payload = getBootPayload(agentId);
+    if (payload && payload.work_queue && payload.work_queue.length > 0) {
+      response.work_queue = payload.work_queue;
+    }
+  } catch (e) { /* non-critical */ }
+
   res.json(response);
 });
 
