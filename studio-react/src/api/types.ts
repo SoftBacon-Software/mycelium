@@ -117,15 +117,21 @@ export interface Vote {
 
 export interface Approval {
   id: string;
-  entity_type: string;
-  entity_id: string;
+  action_type: string;
+  title: string;
+  description?: string;
   risk_tier: string;
-  quorum_required: number;
+  required_approvals: number;
+  current_approvals: number;
   status: string;
   created_at: string;
-  created_by: string;
-  resolved_at: string | null;
-  resolved_by: string | null;
+  requested_by: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  executed_at: string | null;
+  payload?: Record<string, unknown> | string;
+  reason?: string;
+  admin_notes?: string;
   votes?: Vote[];
 }
 
@@ -323,15 +329,6 @@ export interface AdminOps {
   open_prs: { number: number; title: string; url: string; author: string; created_at: string }[]
 }
 
-export interface PluginConfigField {
-  key: string
-  label: string
-  type: 'string' | 'secret' | 'boolean' | 'number' | 'select' | 'text'
-  description?: string
-  default?: string
-  options?: string[]   // for type=select
-  required?: boolean
-}
 
 export interface PluginMcpTool {
   name: string
@@ -358,10 +355,12 @@ export interface Plugin {
 }
 
 export interface PluginConfigField {
+  key: string
   type: 'string' | 'secret' | 'boolean' | 'number' | 'select' | 'url' | 'text'
   label: string
+  description?: string
   required?: boolean
-  default?: string | boolean | number | string[]
+  default?: string
   help?: string
   options?: string[]
   multiple?: boolean

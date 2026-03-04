@@ -191,7 +191,7 @@ export default function AdminOpsPage() {
                   <span className="text-text-muted font-mono text-xs shrink-0">#{approval.id}</span>
                   <Badge variant="accent">{approval.risk_tier}</Badge>
                   <span className="text-text-dim truncate flex-1 min-w-0">
-                    {approval.entity_type} by {getSenderDisplay(approval.created_by)}
+                    {approval.title || approval.action_type} by {getSenderDisplay(approval.requested_by)}
                   </span>
                   <span className="text-text-muted text-xs font-mono shrink-0">{timeAgo(approval.created_at)}</span>
                 </div>
