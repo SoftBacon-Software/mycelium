@@ -1253,24 +1253,6 @@ export function reorderPlanSteps(planId, stepIds) {
   reorder();
 }
 
-// -- Plan Step Comments --
-
-export function createPlanStepComment(stepId, planId, author, content) {
-  var result = db.prepare(
-    "INSERT INTO dv_plan_step_comments (step_id, plan_id, author, content) VALUES (?, ?, ?, ?) RETURNING id"
-  ).get(stepId, planId, author, content);
-  db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
-  return result.id;
-}
-
-export function listPlanStepComments(stepId) {
-  return db.prepare("SELECT * FROM dv_plan_step_comments WHERE step_id = ? ORDER BY created_at ASC").all(stepId);
-}
-
-export function listPlanComments(planId) {
-  return db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(planId);
-}
-
 export function completeLinkedPlanSteps(taskId) {
   var steps = db.prepare("SELECT id, plan_id FROM dv_plan_steps WHERE linked_task_id = ? AND status != 'completed'").all(taskId);
   var affectedPlanIds = [];
@@ -2178,11 +2160,6 @@ export function getConceptProjects(conceptId) {
 }
 
 // -- Init (no default seed data — new instances start blank) --
-
-export function initDefaults() {
-  // No default projects seeded. New instances create their own via onboarding.
-}
-
 
 // =============== APPROVALS ===============
 
