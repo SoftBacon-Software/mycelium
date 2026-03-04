@@ -336,15 +336,12 @@ async function handleBugCreated(data) {
   }
 
   var result = await askJson(
-    'Triage this bug. Suggest an assignee based on the project. Return JSON with: ' +
+    'Triage this bug. Suggest an assignee based on the bug\'s project matching an agent\'s project assignment. Return JSON with: ' +
     '{"severity": "low|normal|high|critical", "suggested_assignee": "agent-id or null", "reason": "brief reason"}.\n' +
-    'Available agents and their projects:\n' +
-    '- greatness-claude: willing-sacrifice, mycelium platform\n' +
-    '- hijack-claude: king-city, UI/UX\n' +
-    'If the bug is for "dioverse" (shared), assign to greatness-claude.\n' +
-    'If you cannot determine, set suggested_assignee to null.',
+    'Look up agents and their projects from the boot payload or GET /agents. Match the bug\'s project_id to an agent\'s project_id.\n' +
+    'If you cannot determine a match, set suggested_assignee to null.',
     'Bug #' + bug.id + ': ' + bug.title + '\n' +
-    'Project: ' + bug.game + '\n' +
+    'Project: ' + (bug.project_id || bug.game || '') + '\n' +
     'Description: ' + bug.description + '\n' +
     'Current severity: ' + bug.severity + '\n' +
     'Reporter: ' + bug.reporter
