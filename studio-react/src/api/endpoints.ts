@@ -480,6 +480,18 @@ export function fetchPlugins(): Promise<Plugin[]> {
   return apiGet<Plugin[]>('/plugins');
 }
 
+export function fetchPlugin(name: string): Promise<Plugin> {
+  return apiGet<Plugin>(`/plugins/${encodeURIComponent(name)}`);
+}
+
+export function fetchPluginConfig(name: string): Promise<Record<string, string>> {
+  return apiGet<Record<string, string>>(`/plugins/${encodeURIComponent(name)}/config`);
+}
+
+export function savePluginConfig(name: string, config: Record<string, string>): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/config`, config);
+}
+
 export function enablePlugin(name: string): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/enable`, {});
 }

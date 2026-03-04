@@ -515,12 +515,12 @@ ACTIONS:
 {"action":"claim_bug","bug_id":N,"assignee":"AGENT"}
 
 AGENTS:
-- greatness-claude: Admin. Project: mycelium.
+- greatness-claude: Admin. Mycelium platform.
 - macbook-claude: Builder. Mycelium platform/dashboard/API.
-- hijack-claude: Builder. Project: king-city.
-- unakron-gpu: Drone. GPU compute.
+- hijack-claude: Builder. Client projects.
+- unakron-gpu: Drone. GPU compute tasks.
 
-PROJECTS: Discovered dynamically from GET /projects. Do not hardcode.
+PROJECTS: Discovered dynamically from the API. Query /api/mycelium/projects for the current project list.
 
 GUIDELINES:
 - Idle agent + open unassigned tasks = assign the task
