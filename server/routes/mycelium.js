@@ -71,6 +71,10 @@ import {
   getAdminOps, resolveStaleRequests,
   createTeamChat, listTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
+  createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
+  updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
+  createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
+  assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
   addTaskComment, getTaskComments, deleteTaskComment,
   addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
@@ -616,6 +620,11 @@ router.post('/agents/heartbeat', function (req, res) {
   });
   // Prune old savepoints (keep last 100)
   pruneSavepoints(agentId, 100);
+
+  // Persist system_diagnostics for drones (smart job routing)
+  if (stateSnapshot.system_info && typeof stateSnapshot.system_info === 'object') {
+    try { updateDroneDiagnostics(agentId, stateSnapshot.system_info); } catch (e) { /* non-critical */ }
+  }
 
   // Include pending counts so agents know if they have unread messages
   var pending = countPendingForAgent(agentId);
@@ -2890,12 +2899,38 @@ router.get('/drones', function (req, res) {
 });
 
 // Claim next job matching drone capabilities (drone-side)
+// If the job has a job_type, render platform-specific commands from the template
 router.post('/drones/claim', function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var capabilities = req.body.capabilities || [];
   var job = claimDroneJob(agentId, capabilities);
   if (!job) return res.json({ job: null });
+
+  // If job has a job_type, render commands from template
+  if (job.job_type) {
+    var inputData = {};
+    try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { inputData = {}; }
+    var rendered = renderJobForDrone(job.job_type, agentId, inputData);
+    if (rendered.error) {
+      // Incompatible — unclaim and skip
+      updateDroneJob(job.id, { status: 'pending' });
+      // Remove drone_id by updating the raw record
+      try { var db2 = getDB(); db2.prepare("UPDATE dv_drone_jobs SET status = 'pending', drone_id = NULL, started_at = NULL WHERE id = ?").run(job.id); } catch (e) { /* fallback already set status */ }
+      return res.json({ job: null, skipped: { job_id: job.id, reason: rendered.error } });
+    }
+    // Write rendered command back to the job
+    updateDroneJob(job.id, { command: rendered.command });
+    // Inject setup_steps and artifacts into the job's input_data
+    inputData.setup_steps = rendered.setup_steps;
+    inputData.artifacts = rendered.artifacts;
+    inputData.workspace_dir = rendered.workspace_name;
+    updateDroneJob(job.id, { input_data: JSON.stringify(inputData) });
+    // Return enriched job
+    job.command = rendered.command;
+    job.input_data = JSON.stringify(inputData);
+  }
+
   emitEvent('drone_job_claimed', agentId, 'drone', agentId + ' claimed drone job #' + job.id + ': ' + job.title, { job_id: job.id });
   res.json({ job: job });
 });
@@ -2912,7 +2947,9 @@ router.post('/drones/jobs', function (req, res) {
   var priority = parseInt(req.body.priority) || 0;
   var workspaceRepo = req.body.workspace_repo || null;
   var workspaceBranch = req.body.workspace_branch || 'main';
-  var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch);
+  var profileId = req.body.profile_id || null;
+  if (profileId && !getDroneProfile(profileId)) return res.status(400).json({ error: 'Profile not found: ' + profileId });
+  var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch, profileId);
   emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id });
   dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who });
   res.json({ ok: true, id: id, title: title });
@@ -3001,7 +3038,7 @@ router.put('/drones/jobs/:id', function (req, res) {
           _failed_drones: failedDrones,
           _original_job_id: originalJobId
         });
-        var retryId = createDroneJob(job.title + ' (retry ' + (retryCount + 1) + ')', job.command, retryInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch);
+        var retryId = createDroneJob(job.title + ' (retry ' + (retryCount + 1) + ')', job.command, retryInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
         emitEvent('drone_job_retry', who, 'drone', 'Auto-retry #' + (retryCount + 1) + ' for job #' + originalJobId + ' -> new job #' + retryId, { original_job_id: originalJobId, retry_job_id: retryId, retry_count: retryCount + 1 });
       } else {
         // 3 failures on this drone — add to failed list, check if all drones exhausted
@@ -3023,7 +3060,7 @@ router.put('/drones/jobs/:id', function (req, res) {
             _failed_drones: failedDrones,
             _original_job_id: originalJobId
           });
-          var requeueId = createDroneJob(job.title + ' (requeue)', job.command, resetInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch);
+          var requeueId = createDroneJob(job.title + ' (requeue)', job.command, resetInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
           emitEvent('drone_job_requeue', who, 'drone', 'Job #' + originalJobId + ' requeued as #' + requeueId + ' after 3 failures on ' + failedDroneId, { original_job_id: originalJobId, requeue_job_id: requeueId, failed_drone: failedDroneId });
         }
       }
@@ -3055,6 +3092,123 @@ router.delete('/drones/jobs', function (req, res) {
   var jobs = bulkCancelDroneJobs(statuses, days);
   emitEvent('drone_jobs_cleanup', getAdminDisplayName(req), 'drone', 'Bulk cancelled ' + jobs.length + ' ' + statusFilter + ' drone jobs', { count: jobs.length });
   res.json({ ok: true, cancelled: jobs.length, jobs: jobs.map(function (j) { return { id: j.id, title: j.title }; }) });
+});
+
+// ======== DRONE PROFILES (per-drone setup & dependency definitions) ========
+// Must be before /drones/:id to prevent :id from catching "profiles"
+
+// List all profiles
+router.get('/drones/profiles', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var profiles = listDroneProfiles();
+  profiles = profiles.map(function (p) {
+    p.requires = JSON.parse(p.requires || '{}');
+    p.artifacts = JSON.parse(p.artifacts || '[]');
+    p.env = JSON.parse(p.env || '{}');
+    p.drones = getDronesWithProfile(p.id);
+    return p;
+  });
+  res.json(profiles);
+});
+
+// Create a profile (admin only)
+router.post('/drones/profiles', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var id = req.body.id;
+  if (!id) return res.status(400).json({ error: 'id is required (slug, e.g. "kc-art-gen")' });
+  if (!req.body.name) return res.status(400).json({ error: 'name is required' });
+  if (getDroneProfile(id)) return res.status(409).json({ error: 'Profile already exists: ' + id });
+  var profile = createDroneProfile(
+    id, req.body.name, req.body.description,
+    req.body.requires, req.body.artifacts,
+    req.body.setup_script, req.body.workspace, req.body.env
+  );
+  emitEvent('drone_profile_created', '__admin__', 'drone', 'Created drone profile: ' + id);
+  res.json(profile);
+});
+
+// Get single profile
+router.get('/drones/profiles/:profileId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var profile = getDroneProfile(req.params.profileId);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  profile.requires = JSON.parse(profile.requires || '{}');
+  profile.artifacts = JSON.parse(profile.artifacts || '[]');
+  profile.env = JSON.parse(profile.env || '{}');
+  profile.drones = getDronesWithProfile(profile.id);
+  res.json(profile);
+});
+
+// Update a profile (admin only) — invalidates setup_done for all assigned drones
+router.put('/drones/profiles/:profileId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var profile = getDroneProfile(req.params.profileId);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  var updated = updateDroneProfile(req.params.profileId, req.body);
+  updated.requires = JSON.parse(updated.requires || '{}');
+  updated.artifacts = JSON.parse(updated.artifacts || '[]');
+  updated.env = JSON.parse(updated.env || '{}');
+  emitEvent('drone_profile_updated', '__admin__', 'drone', 'Updated drone profile: ' + req.params.profileId + ' (all drone setups invalidated)');
+  res.json(updated);
+});
+
+// Delete a profile (admin only)
+router.delete('/drones/profiles/:profileId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var profile = getDroneProfile(req.params.profileId);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  deleteDroneProfile(req.params.profileId);
+  emitEvent('drone_profile_deleted', '__admin__', 'drone', 'Deleted drone profile: ' + req.params.profileId);
+  res.json({ ok: true, deleted: req.params.profileId });
+});
+
+// Assign profile to drone
+router.post('/drones/profiles/:profileId/assign', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var profileId = req.params.profileId;
+  var droneId = req.body.drone_id;
+  if (!droneId) return res.status(400).json({ error: 'drone_id is required' });
+  if (!getDroneProfile(profileId)) return res.status(404).json({ error: 'Profile not found: ' + profileId });
+  var agent = getAgent(droneId);
+  if (!agent) return res.status(404).json({ error: 'Drone not found: ' + droneId });
+  assignDroneProfile(droneId, profileId);
+  emitEvent('drone_profile_assigned', '__admin__', 'drone', 'Assigned profile ' + profileId + ' to drone ' + droneId);
+  res.json({ ok: true, drone_id: droneId, profile_id: profileId });
+});
+
+// Unassign profile from drone
+router.delete('/drones/profiles/:profileId/assign/:droneId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  unassignDroneProfile(req.params.droneId, req.params.profileId);
+  res.json({ ok: true, unassigned: true });
+});
+
+// Get profiles assigned to a drone (used by worker at boot)
+router.get('/drones/profiles/by-drone/:droneId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var assignments = getDroneProfileAssignments(req.params.droneId);
+  assignments = assignments.map(function (a) {
+    a.requires = JSON.parse(a.requires || '{}');
+    a.artifacts = JSON.parse(a.artifacts || '[]');
+    a.env = JSON.parse(a.env || '{}');
+    return a;
+  });
+  res.json(assignments);
+});
+
+// Drone reports profile setup complete
+router.post('/drones/profiles/:profileId/setup-complete', function (req, res) {
+  var agentId = checkAgent(req, res);
+  if (!agentId) return;
+  var profileId = req.params.profileId;
+  if (!getDroneProfile(profileId)) return res.status(404).json({ error: 'Profile not found' });
+  var checksum = req.body.checksum || '';
+  markProfileSetupDone(agentId, profileId, checksum);
+  emitEvent('drone_profile_setup_done', agentId, 'drone', agentId + ' completed setup for profile ' + profileId);
+  res.json({ ok: true, profile_id: profileId, setup_done: true });
 });
 
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
@@ -3144,6 +3298,12 @@ router.get('/drones/:id', function (req, res) {
       };
     });
   }
+  // Include profile assignments
+  safe.profiles = getDroneProfileAssignments(req.params.id).map(function (a) {
+    a.requires = JSON.parse(a.requires || '{}');
+    a.artifacts = JSON.parse(a.artifacts || '[]');
+    return a;
+  });
   res.json(safe);
 });
 
