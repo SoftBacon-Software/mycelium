@@ -2086,6 +2086,112 @@ router.get('/admin/ops', function (req, res) {
   res.json(getAdminOps());
 });
 
+// Probe Anthropic API limits by making a minimal request and reading headers
+// Caches result in context key admin/api_limits for 5 minutes
+router.get('/admin/api-limits', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+
+  // Check cache first
+  try {
+    var cached = getDvContextKey('admin', 'api_limits');
+    if (cached && cached.data) {
+      var raw = typeof cached.data === 'string' ? JSON.parse(cached.data) : cached.data;
+      var age = Date.now() - new Date(raw.checked_at || 0).getTime();
+      if (age < 5 * 60 * 1000) {
+        return res.json({ cached: true, data: raw });
+      }
+    }
+  } catch (_) {}
+
+  var apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on server' });
+  }
+
+  try {
+    var https = require('https');
+    var payload = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'hi' }]
+    });
+
+    var result = await new Promise(function (resolve, reject) {
+      var reqOpts = {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(payload),
+        }
+      };
+      var r = https.request(reqOpts, function (resp) {
+        var body = '';
+        resp.on('data', function (d) { body += d; });
+        resp.on('end', function () { resolve({ headers: resp.headers, status: resp.statusCode, body }); });
+      });
+      r.on('error', reject);
+      r.setTimeout(8000, function () { r.destroy(new Error('timeout')); });
+      r.write(payload);
+      r.end();
+    });
+
+    var h = result.headers;
+    function hnum(name) { var v = h[name]; return v != null ? parseInt(v, 10) : null; }
+    function hstr(name) { return h[name] || null; }
+
+    var tokensLimit = hnum('anthropic-ratelimit-tokens-limit');
+    var tokensRemaining = hnum('anthropic-ratelimit-tokens-remaining');
+    var inputLimit = hnum('anthropic-ratelimit-input-tokens-limit');
+    var inputRemaining = hnum('anthropic-ratelimit-input-tokens-remaining');
+    var outputLimit = hnum('anthropic-ratelimit-output-tokens-limit');
+    var outputRemaining = hnum('anthropic-ratelimit-output-tokens-remaining');
+    var requestsLimit = hnum('anthropic-ratelimit-requests-limit');
+    var requestsRemaining = hnum('anthropic-ratelimit-requests-remaining');
+
+    var tokenPct = tokensLimit ? Math.round((tokensRemaining / tokensLimit) * 100) : null;
+    var inputPct = inputLimit ? Math.round((inputRemaining / inputLimit) * 100) : null;
+    var requestPct = requestsLimit ? Math.round((requestsRemaining / requestsLimit) * 100) : null;
+    var primaryPct = tokenPct !== null ? tokenPct : inputPct;
+    var threshold = 20;
+
+    var data = {
+      requests_limit: requestsLimit,
+      requests_remaining: requestsRemaining,
+      requests_reset: hstr('anthropic-ratelimit-requests-reset'),
+      tokens_limit: tokensLimit,
+      tokens_remaining: tokensRemaining,
+      tokens_reset: hstr('anthropic-ratelimit-tokens-reset'),
+      input_tokens_limit: inputLimit,
+      input_tokens_remaining: inputRemaining,
+      input_tokens_reset: hstr('anthropic-ratelimit-input-tokens-reset'),
+      output_tokens_limit: outputLimit,
+      output_tokens_remaining: outputRemaining,
+      output_tokens_reset: hstr('anthropic-ratelimit-output-tokens-reset'),
+      token_pct: tokenPct,
+      input_token_pct: inputPct,
+      request_pct: requestPct,
+      primary_pct: primaryPct,
+      below_threshold: primaryPct !== null && primaryPct < threshold,
+      threshold,
+      drone_mode_recommended: primaryPct !== null && primaryPct < threshold,
+      checked_at: new Date().toISOString(),
+      http_status: result.status,
+      model_probed: 'claude-haiku-4-5-20251001',
+    };
+
+    // Cache in context
+    try { upsertDvContextKey('admin', 'api_limits', JSON.stringify(data), 'system'); } catch (_) {}
+
+    res.json({ cached: false, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}));
+
 // =============== ORGANIZATIONS ===============
 
 router.get('/orgs', function (req, res) {
