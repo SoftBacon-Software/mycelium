@@ -24,7 +24,7 @@ const SEVERITY_OPTIONS = ['all', 'critical', 'high', 'normal', 'low']
 // ─── File Bug Modal ──────────────────────────────────────────────────────────
 
 const SEVERITY_CHOICES = ['normal', 'high', 'critical', 'low']
-const CATEGORY_OPTIONS = ['other', 'gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance']
+const CATEGORY_OPTIONS = ['bug', 'feature', 'ui', 'crash', 'api', 'infrastructure', 'other']
 
 interface FileBugModalProps {
   isOpen: boolean

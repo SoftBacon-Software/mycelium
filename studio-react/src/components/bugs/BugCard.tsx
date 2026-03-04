@@ -30,12 +30,12 @@ const statusBadgeVariant: Record<string, 'red' | 'blue' | 'green' | 'muted' | 'd
 }
 
 const categoryBadgeVariant: Record<string, 'purple' | 'pink' | 'accent' | 'blue' | 'red' | 'default'> = {
-  gameplay: 'purple',
+  bug: 'purple',
+  feature: 'accent',
   ui: 'pink',
   crash: 'red',
   api: 'blue',
   infrastructure: 'accent',
-  balance: 'green' as any,
   other: 'default',
 }
 
