@@ -1848,6 +1848,34 @@ router.put('/admin/sleep', function (req, res) {
       if (op) setOperatorAvailability(operatorId, 'sleeping', directive);
     }
 
+    // Auto-detect inactive operators and mark them away.
+    // If an operator hasn't been on the dashboard in 30 min, they're not at
+    // the computer — don't let them block autonomous mode.
+    var INACTIVE_THRESHOLD_MINUTES = 30;
+    var allOpsForSleep = listOperators();
+    var activeStudioUsers = getActiveStudioUsers(INACTIVE_THRESHOLD_MINUTES);
+    var activeStudioUserIds = new Set(activeStudioUsers.map(function(u) { return u.id; }));
+    var autoAwayOps = [];
+
+    for (var otherOp of allOpsForSleep) {
+      if (otherOp.id === operatorId) continue;
+      if (otherOp.status !== 'active') continue;
+      if (otherOp.availability !== 'available') continue;
+
+      var isActive = otherOp.studio_user_id && activeStudioUserIds.has(otherOp.studio_user_id);
+      if (!isActive) {
+        setOperatorAvailability(otherOp.id, 'away', 'Auto-marked away — no dashboard activity at sleep mode activation');
+        autoAwayOps.push(otherOp.id);
+        emitEvent('operator_availability', '__system__', null,
+          displayName(otherOp.id) + ' auto-marked away (no recent dashboard activity)');
+      }
+    }
+
+    // Store auto-away list so we can restore them on wake
+    if (autoAwayOps.length > 0) {
+      setInstanceConfig('sleep_mode_auto_away', JSON.stringify(autoAwayOps), who);
+    }
+
     // Track per-operator sleep start times so each gets a personal morning summary
     var sleepStarts = {};
     try {
@@ -1884,7 +1912,7 @@ router.put('/admin/sleep', function (req, res) {
     }
 
     emitEvent('sleep_mode_on', who, null, who + ' activated sleep mode' + (autonomous ? ' (network autonomous)' : ''));
-    res.json({ ok: true, sleep_mode: config, autonomous: autonomous });
+    res.json({ ok: true, sleep_mode: config, autonomous: autonomous, auto_away_operators: autoAwayOps });
 
   } else {
     // action === 'off'
@@ -1925,8 +1953,27 @@ router.put('/admin/sleep', function (req, res) {
         setOperatorAvailability(sleepingOp.id, 'available', '');
       }
     }
+
+    // Restore operators that were auto-marked away during sleep activation
+    var autoAwayVal = getInstanceConfig('sleep_mode_auto_away');
+    if (autoAwayVal) {
+      try {
+        var autoAwayIds = JSON.parse(autoAwayVal);
+        for (var awayId of autoAwayIds) {
+          var awayOp = getOperator(awayId);
+          // Only restore if still away — respect manual status changes during the night
+          if (awayOp && awayOp.availability === 'away') {
+            setOperatorAvailability(awayId, 'available', '');
+            emitEvent('operator_availability', '__system__', null,
+              displayName(awayId) + ' restored to available (sleep mode ended)');
+          }
+        }
+      } catch (_) {}
+    }
+
     setInstanceConfig('sleep_mode', JSON.stringify({ active: false }), who);
     setInstanceConfig('sleep_mode_operator_starts', '{}', who);
+    setInstanceConfig('sleep_mode_auto_away', '[]', who);
 
     var wakeMsg = wasAlreadyAwake
       ? who + ' ended sleep mode (override)'

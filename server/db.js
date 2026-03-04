@@ -283,16 +283,14 @@ export function getAvailableOperators() {
 }
 
 export function isNetworkAutonomous() {
-  // An operator counts as "present" if they are available AND have been recently active.
-  // Activity = agent heartbeat in last 8h (runner/Claude session) OR dashboard last_seen in last 2h (human in the dash).
+  // An operator counts as "present" only if they are available AND their linked
+  // dashboard user has been active recently. Agent heartbeats are automated and
+  // do NOT indicate human presence.
   var count = db.prepare(
     "SELECT COUNT(DISTINCT o.id) as c FROM dv_operators o " +
-    "LEFT JOIN dv_agents a ON a.operator_id = o.id " +
     "LEFT JOIN dv_studio_users u ON u.id = o.studio_user_id " +
-    "WHERE o.status = 'active' AND o.availability = 'available' AND (" +
-    "  (a.last_heartbeat > datetime('now', '-8 hours')) OR " +
-    "  (u.last_seen > datetime('now', '-2 hours'))" +
-    ")"
+    "WHERE o.status = 'active' AND o.availability = 'available' AND " +
+    "  u.last_seen > datetime('now', '-30 minutes')"
   ).get();
   return count.c === 0;
 }
