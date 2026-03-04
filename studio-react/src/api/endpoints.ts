@@ -413,6 +413,10 @@ export function cancelDroneJob(id: number): Promise<DroneJob> {
   return apiPut<DroneJob>(`/drones/jobs/${id}`, { status: 'cancelled' });
 }
 
+export function dismissDroneJob(id: number): Promise<DroneJob> {
+  return apiPut<DroneJob>(`/drones/jobs/${id}`, { status: 'dismissed' });
+}
+
 // Webhook Deliveries
 
 export function fetchWebhookDeliveries(params?: {

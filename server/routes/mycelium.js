@@ -92,7 +92,7 @@ import {
   listPluginRecords, getPluginRecord, updatePluginEnabled, getDB,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent,
+  countPendingForAgent, archiveOldMessages, archiveOldEvents,
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox
@@ -155,9 +155,22 @@ var PLAN_STATUSES = ['draft', 'active', 'completed', 'cancelled'];
 var PLAN_STEP_STATUSES = ['pending', 'in_progress', 'completed', 'blocked'];
 var BUG_STATUSES = ['open', 'in_progress', 'fixed', 'closed'];
 var BUG_SEVERITIES = ['low', 'normal', 'high', 'critical'];
-var BUG_CATEGORIES = ['gameplay', 'ui', 'crash', 'api', 'infrastructure', 'balance', 'other'];
+var DEFAULT_BUG_CATEGORIES = ['bug', 'feature', 'ui', 'crash', 'api', 'infrastructure', 'other'];
+
+function getBugCategories(projectId) {
+  if (projectId) {
+    var project = db.getProject(projectId);
+    if (project && project.bug_categories) {
+      try {
+        var cats = JSON.parse(project.bug_categories);
+        if (Array.isArray(cats) && cats.length > 0) return cats;
+      } catch (e) { /* fall through to defaults */ }
+    }
+  }
+  return DEFAULT_BUG_CATEGORIES;
+}
 var CHANNEL_STATUSES = ['active', 'archived'];
-var DRONE_JOB_STATUSES = ['done', 'completed', 'failed', 'cancelled'];
+var DRONE_JOB_STATUSES = ['done', 'completed', 'failed', 'cancelled', 'dismissed'];
 
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
@@ -1195,6 +1208,7 @@ router.post('/requests', function (req, res) {
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   var toAgent = req.body.to_agent || null;
+  if (!toAgent) return res.status(400).json({ error: 'to_agent is required for requests — use POST /messages for broadcasts' });
   var threadId = req.body.thread_id || null;
   var projectId = req.body.project_id || null;
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
@@ -1750,6 +1764,27 @@ router.put('/admin/config/:key', function (req, res) {
   res.json({ key: req.params.key, value: getInstanceConfig(req.params.key) });
 });
 
+// ======== CLEANUP ========
+
+router.post('/admin/cleanup', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var messageDays = req.body.message_days || 90;
+  var eventDays = req.body.event_days || 60;
+  var messagesArchived = archiveOldMessages(messageDays);
+  var eventsArchived = archiveOldEvents(eventDays);
+  var webhooksArchived = pruneWebhookDeliveries(eventDays);
+  var savepointsPruned = pruneSavepoints(eventDays);
+  emitEvent('admin_cleanup', getAdminDisplayName(req), null,
+    'Cleanup: ' + messagesArchived + ' messages, ' + eventsArchived + ' events, ' + webhooksArchived + ' webhook deliveries, ' + savepointsPruned + ' savepoints pruned');
+  res.json({
+    ok: true,
+    messages_archived: messagesArchived,
+    events_archived: eventsArchived,
+    webhooks_archived: webhooksArchived,
+    savepoints_pruned: savepointsPruned,
+  });
+});
+
 // ======== KILL SWITCH ========
 
 router.put('/admin/override', function (req, res) {
@@ -2120,6 +2155,13 @@ router.put('/projects/:id', function (req, res) {
   res.json(getProject(req.params.id));
 });
 
+// GET /projects/:id/bug-categories — get bug categories for a project (dynamic or defaults)
+router.get('/projects/:id/bug-categories', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json({ project_id: req.params.id, categories: getBugCategories(req.params.id) });
+});
+
 // =============== SHARED CONCEPTS ===============
 
 // List all concepts (optional ?type= filter)
@@ -2298,7 +2340,7 @@ router.post('/bugs', function (req, res) {
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
   var projectId = project_id;
   if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
-  if (!validateEnum(res, category, BUG_CATEGORIES, 'category')) return;
+  if (!validateEnum(res, category, getBugCategories(projectId), 'category')) return;
   if (!validateEnum(res, severity, BUG_SEVERITIES, 'severity')) return;
   var diagStr = null;
   if (diagnostic_data) {

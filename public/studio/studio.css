@@ -431,7 +431,7 @@ header h1 {
 .queue-header-plan { color: var(--blue); }
 .queue-header-context { color: var(--purple); }
 .queue-header-asset { color: var(--green); }
-.queue-header-game { color: var(--cyan); }
+.queue-header-project { color: var(--cyan); }
 
 /* Plan tile dots */
 .dot-plan-active { background: var(--green); box-shadow: 0 0 4px var(--glow-green); }
@@ -495,7 +495,7 @@ header h1 {
 .tile-asset-status.status-requested { color: var(--yellow); }
 
 /* Project tiles */
-.dot-game { background: var(--cyan); box-shadow: 0 0 4px rgba(94, 158, 160, 0.3); }
+.dot-project { background: var(--cyan); box-shadow: 0 0 4px rgba(94, 158, 160, 0.3); }
 
 /* ---- Queue Tiles (Approvals / Requests / Bugs) ---- */
 .queue-panel {
@@ -621,7 +621,7 @@ header h1 {
 .tile-badge-wontfix { background: rgba(168, 147, 120, 0.1); color: var(--text-dim); }
 .tile-badge-sev-critical { background: rgba(196, 91, 62, 0.15); color: var(--red); }
 .tile-badge-sev-high { background: rgba(212, 168, 71, 0.15); color: var(--yellow); }
-.tile-badge-game { background: rgba(168, 147, 120, 0.08); color: var(--text-muted); }
+.tile-badge-project { background: rgba(168, 147, 120, 0.08); color: var(--text-muted); }
 
 /* ---- Projects (handled by tile system) ---- */
 
@@ -756,7 +756,7 @@ header h1 {
 .badge-bug-wontfix { background: rgba(168, 147, 120, 0.1); color: var(--text-dim); }
 .badge-severity-critical { background: rgba(196, 91, 62, 0.15); color: var(--red); }
 .badge-severity-high { background: rgba(212, 168, 71, 0.15); color: var(--yellow); }
-.badge-game { background: rgba(168, 147, 120, 0.1); color: var(--text-dim); }
+.badge-project { background: rgba(168, 147, 120, 0.1); color: var(--text-dim); }
 .bug-diag {
   font-size: 0.6rem; color: var(--text-dim); background: var(--bg);
   border: 1px solid var(--ring); border-radius: var(--radius); padding: 0.5rem;

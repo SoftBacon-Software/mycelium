@@ -517,10 +517,10 @@ ACTIONS:
 AGENTS:
 - greatness-claude: Admin. Project: mycelium.
 - macbook-claude: Builder. Mycelium platform/dashboard/API.
-- hijack-claude: Builder. King City game.
-- unakron-gpu: Drone. GPU art generation.
+- hijack-claude: Builder. Project: king-city.
+- unakron-gpu: Drone. GPU compute.
 
-PROJECTS: mycelium, willing-sacrifice, king-city
+PROJECTS: Discovered dynamically from GET /projects. Do not hardcode.
 
 GUIDELINES:
 - Idle agent + open unassigned tasks = assign the task

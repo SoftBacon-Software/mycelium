@@ -36,7 +36,7 @@ echo "====================================="
 echo ""
 echo "On the other machine:"
 echo ""
-echo "1) git clone https://github.com/grbarajas-soymd/dioverse-mcp.git && cd dioverse-mcp && npm install"
+echo "1) git clone https://github.com/grbarajas-soymd/mycelium-mcp.git && cd mycelium-mcp && npm install"
 echo ""
 echo "2) Add to ~/.claude/settings.json:"
 echo ""
@@ -44,7 +44,7 @@ echo '{
   "mcpServers": {
     "mycelium": {
       "command": "node",
-      "args": ["'$HOME'/dioverse-mcp/index.js"],
+      "args": ["'$HOME'/mycelium-mcp/index.js"],
       "env": {
         "MYCELIUM_API_URL": "'"$API"'",
         "MYCELIUM_ROLE": "agent",

@@ -4,7 +4,7 @@
 
 Mycelium — standalone distributed development platform. "The printing press of ideas." Dashboard + API for coordinating AI agents, tasks, plans, bugs, concepts, and inter-agent communication. Deployed at `mycelium.fyi` (Railway project: `patient-rebirth`).
 
-Extracted from `dioverse-server` as a standalone Express + SQLite app. The WS game server stays at `willingsacrifice.com`; Mycelium handles all platform/studio concerns.
+Development-agnostic — works for any project type (software, creative, research, infrastructure).
 
 ## Critical Rules
 
@@ -96,7 +96,7 @@ Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
 - **Priority order**: directives > requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > bugs
 
 ### Tasks
-- `GET /tasks` — List tasks (filter: `?game=`, `?status=`, `?assignee=`)
+- `GET /tasks` — List tasks (filter: `?project_id=`, `?status=`, `?assignee=`)
 - `POST /tasks` — Create task
 - `PUT /tasks/:id` — Update task
 
@@ -150,7 +150,5 @@ Railway project: `patient-rebirth`. Manual deploy only (`railway up`). Dockerfil
 
 | Repo | What |
 |------|------|
-| `dioverse-server` | WS game server (`D:/dioverse-server/`, deployed at `willingsacrifice.com`) |
-| `dioverse-mcp` | Mycelium MCP server wrapping this API (`D:/dioverse-mcp/`) |
-| `willing-sacrifice` | WS Godot 4.6 game source (`D:/willing-sacrifice/`) |
-| `dioverse` | Art tools, Discord bot, LoRA training (`D:/dioverse/`) |
+| `mycelium-mcp` | MCP server wrapping this API |
+| `mycelium-runner` | Agent runner for autonomous sessions |

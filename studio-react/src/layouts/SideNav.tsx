@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useAuthStore } from '../stores/authStore'
 import { useVoiceStore } from '../stores/voiceStore'
 import {
   LayoutDashboard, CheckSquare, Map, Bug,
@@ -17,6 +18,7 @@ interface NavItem {
   to: string
   label: string
   icon: LucideIcon
+  adminOnly?: boolean
 }
 
 interface NavSection {
@@ -34,6 +36,7 @@ const navSections: NavSection[] = [
     label: null,
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/inbox', label: 'Inbox', icon: Inbox },
     ],
   },
   {
@@ -49,35 +52,40 @@ const navSections: NavSection[] = [
     id: 'communicate',
     label: 'Communicate',
     items: [
-      { to: '/inbox', label: 'Inbox', icon: Inbox },
+      { to: '/messages', label: 'Activity Log', icon: Radio },
       { to: '/channels', label: 'Channels', icon: MessageSquare },
-      { to: '/messages', label: 'Agent Comms', icon: Radio },
-      { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
     ],
   },
   {
-    id: 'network',
-    label: 'Network',
+    id: 'observe',
+    label: 'Observe',
+    items: [
+      { to: '/health', label: 'Network Health', icon: Activity },
+      { to: '/analytics', label: 'Analytics', icon: BarChart3 },
+      { to: '/feedback', label: 'Feedback', icon: MessageCircle },
+    ],
+  },
+  {
+    id: 'manage',
+    label: 'Manage',
     items: [
       { to: '/operators', label: 'Operators', icon: Users },
-      { to: '/drones', label: 'Drones', icon: Cpu },
-      { to: '/assets', label: 'Assets', icon: FolderOpen },
-      { to: '/concepts', label: 'Concepts', icon: Lightbulb },
-      { to: '/context', label: 'Context', icon: Database },
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },
+      { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
+      { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true },
+      { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true },
     ],
   },
   {
-    id: 'system',
-    label: 'System',
+    id: 'advanced',
+    label: 'Advanced',
     defaultCollapsed: true,
     items: [
-      { to: '/ops', label: 'Admin Ops', icon: Settings },
-      { to: '/health', label: 'Network Health', icon: Activity },
-      { to: '/webhooks', label: 'Webhooks', icon: Webhook },
-      { to: '/plugins', label: 'Plugins', icon: Puzzle },
-      { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-      { to: '/onboarding', label: 'Onboarding', icon: Rocket },
-      { to: '/feedback', label: 'Feedback', icon: MessageCircle },
+      { to: '/plugins', label: 'Plugins', icon: Puzzle, adminOnly: true },
+      { to: '/webhooks', label: 'Webhooks', icon: Webhook, adminOnly: true },
+      { to: '/context', label: 'Config Store', icon: Database },
+      { to: '/ops', label: 'Ops Console', icon: Settings, adminOnly: true },
+      { to: '/onboarding', label: 'Onboarding', icon: Rocket, adminOnly: true },
     ],
   },
 ]
@@ -116,6 +124,8 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   const [collapsedSections, setCollapsedSections] = useState(loadCollapsedSections)
   const agents = useDashboardStore((s) => s.agents)
   const inboxUnread = useDashboardStore((s) => s.inboxUnread)
+  const userRole = useAuthStore((s) => s.user?.role)
+  const isAdmin = userRole === 'admin'
   const voiceConnected = useVoiceStore((s) => s.isConnected)
   const voiceChannel = useVoiceStore((s) => s.channelName)
   const voicePeers = useVoiceStore((s) => s.peers)
@@ -182,6 +192,11 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
       {/* Navigation sections */}
       <div className="flex flex-col flex-1 py-2 overflow-y-auto">
         {navSections.map((section, sectionIdx) => {
+          const visibleItems = isAdmin
+            ? section.items
+            : section.items.filter((item) => !item.adminOnly)
+          if (visibleItems.length === 0) return null
+
           const isSectionCollapsed = section.label && !isNarrow
             ? collapsedSections[section.id] ?? false
             : false
@@ -215,7 +230,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
               {/* Nav items */}
               {!isSectionCollapsed && (
                 <div className="flex flex-col gap-0.5 px-2">
-                  {section.items.map((item) => (
+                  {visibleItems.map((item) => (
                     <NavLink
                       key={item.to}
                       to={item.to}
