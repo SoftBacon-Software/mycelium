@@ -336,6 +336,37 @@ export interface Plugin {
   updated_at: string
 }
 
+export interface PluginConfigField {
+  type: 'string' | 'secret' | 'boolean' | 'number' | 'select' | 'url' | 'text'
+  label: string
+  required?: boolean
+  default?: string | boolean | number | string[]
+  help?: string
+  options?: string[]
+  multiple?: boolean
+}
+
+export interface PluginTool {
+  name: string
+  description: string
+  schema?: Record<string, { type: string; required?: boolean; description?: string }>
+}
+
+export interface PluginManifest {
+  name: string
+  display_name: string
+  version: string
+  type: 'hook' | 'worker' | 'drone_workflow' | string
+  author: string
+  description: string
+  homepage?: string
+  license?: string
+  config: Record<string, PluginConfigField>
+  tools: PluginTool[]
+  events: string[]
+  permissions: string[]
+}
+
 export interface Feedback {
   id: string
   entity_type: string
