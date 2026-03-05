@@ -17,7 +17,7 @@ Setup:
   5. python local-admin-agent.py --admin-key YOUR_KEY
 
 Usage:
-  python local-admin-agent.py --admin-key KPeO7ZspKsAQotZsrvnZ2vYk
+  python local-admin-agent.py --admin-key YOUR_ADMIN_KEY
   python local-admin-agent.py --admin-key KEY --model qwen2.5:72b --interval 120
   python local-admin-agent.py --check       # Validate setup without starting loop
   python local-admin-agent.py --once        # Run one cycle and exit (for testing)

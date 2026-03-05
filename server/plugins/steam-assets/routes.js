@@ -2,7 +2,7 @@ import { Router } from 'express';
 import createSteamDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
-var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
+var WSAC_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
 
 // Default game facts for Willing Sacrifice store copy generation
 var DEFAULT_GAME_FACTS = {

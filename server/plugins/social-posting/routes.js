@@ -4,7 +4,7 @@ import { createDroneJob, getDroneJob } from '../../db.js';
 
 var POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed'];
 
-var WSAC_REPO = 'https://github.com/grbarajas-soymd/wsac-agent';
+var WSAC_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
 
 // Dio's system prompt for caption generation
 var DIO_SYSTEM_PROMPT =
