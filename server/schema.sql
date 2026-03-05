@@ -250,6 +250,23 @@ CREATE TABLE IF NOT EXISTS dv_task_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_task_comments_task ON dv_task_comments(task_id);
 
+-- Support tickets (customer support)
+CREATE TABLE IF NOT EXISTS dv_support_tickets (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  instance_id     TEXT NOT NULL DEFAULT '',
+  subject         TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  category        TEXT NOT NULL DEFAULT 'general',
+  priority        TEXT NOT NULL DEFAULT 'normal',
+  status          TEXT NOT NULL DEFAULT 'open',
+  reporter_email  TEXT NOT NULL DEFAULT '',
+  reporter_name   TEXT NOT NULL DEFAULT '',
+  assignee        TEXT,
+  resolution      TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_status ON dv_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dv_tasks_project ON dv_tasks(project_id);
@@ -564,3 +581,6 @@ CREATE TABLE IF NOT EXISTS dv_runner_spawns (
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dv_runner_spawns_status ON dv_runner_spawns(status);
+CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_status ON dv_support_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_instance ON dv_support_tickets(instance_id);
+CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_priority ON dv_support_tickets(priority);

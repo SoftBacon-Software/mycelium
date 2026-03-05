@@ -2602,3 +2602,39 @@ export function getFeedbackSummary() {
   var recent = db.prepare('SELECT * FROM dv_feedback ORDER BY created_at DESC LIMIT 5').all();
   return { total, avg_rating: avgRating, by_agent: byAgent, by_type: byType, rating_dist: ratingDist, recent };
 }
+
+// ---- Support Tickets ----
+export function createSupportTicket(data) {
+  var result = db.prepare(
+    'INSERT INTO dv_support_tickets (instance_id, subject, description, category, priority, reporter_email, reporter_name) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *'
+  ).get(data.instance_id || '', data.subject, data.description || '', data.category || 'general', data.priority || 'normal', data.reporter_email || '', data.reporter_name || '');
+  return result;
+}
+
+export function getSupportTicket(id) {
+  return db.prepare('SELECT * FROM dv_support_tickets WHERE id = ?').get(id);
+}
+
+export function listSupportTickets(filters) {
+  var where = [];
+  var params = [];
+  if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters && filters.instance_id) { where.push('instance_id = ?'); params.push(filters.instance_id); }
+  if (filters && filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
+  var sql = 'SELECT * FROM dv_support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
+  return db.prepare(sql).all.apply(db.prepare(sql), params);
+}
+
+export function updateSupportTicket(id, updates) {
+  var sets = [];
+  var params = [];
+  var allowed = ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution'];
+  for (var key of allowed) {
+    if (updates[key] !== undefined) { sets.push(key + ' = ?'); params.push(updates[key]); }
+  }
+  if (sets.length === 0) return getSupportTicket(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE dv_support_tickets SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE dv_support_tickets SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  return getSupportTicket(id);
+}
