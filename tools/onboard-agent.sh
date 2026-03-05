@@ -4,8 +4,8 @@
 # Example: bash onboard-agent.sh dev-claude "Dev Agent" mycelium
 # Drone:   bash onboard-agent.sh my-drone "GPU Drone" shared --drone
 
-API="https://mycelium.fyi/api/mycelium"
-KEY="KPeO7ZspKsAQotZsrvnZ2vYk"
+API="${MYCELIUM_API_URL:?Set MYCELIUM_API_URL env var (e.g. https://yourinstance.example.com/api/mycelium)}"
+KEY="${ADMIN_KEY:?Set ADMIN_KEY env var}"
 
 ID="${1:?Usage: bash onboard-agent.sh <agent-id> <name> <project-id> [--drone]}"
 NAME="${2:?Missing name}"
@@ -36,23 +36,15 @@ echo "====================================="
 echo ""
 echo "On the other machine:"
 echo ""
-echo "1) git clone https://github.com/grbarajas-soymd/mycelium-mcp.git && cd mycelium-mcp && npm install"
+echo "1) git clone https://github.com/SoftBacon-Software/mycelium-mcp.git && cd mycelium-mcp && npm install"
 echo ""
-echo "2) Add to ~/.claude/settings.json:"
+echo "2) Register the MCP server in Claude Code:"
 echo ""
-echo '{
-  "mcpServers": {
-    "mycelium": {
-      "command": "node",
-      "args": ["'$HOME'/mycelium-mcp/index.js"],
-      "env": {
-        "MYCELIUM_API_URL": "'"$API"'",
-        "MYCELIUM_ROLE": "agent",
-        "MYCELIUM_AGENT_ID": "'"$ID"'",
-        "MYCELIUM_API_KEY": "'"$API_KEY"'"
-      }
-    }
-  }
-}'
+echo "   claude mcp add mycelium -s user \\"
+echo "     -e MYCELIUM_API_URL=$API \\"
+echo "     -e MYCELIUM_ROLE=agent \\"
+echo "     -e MYCELIUM_AGENT_ID=$ID \\"
+echo "     -e MYCELIUM_API_KEY=$API_KEY \\"
+echo "     -- node /path/to/mycelium-mcp/index.js"
 echo ""
-echo "3) Open Claude Code. Run: studio_boot"
+echo "3) Open Claude Code. Run: mycelium_boot"

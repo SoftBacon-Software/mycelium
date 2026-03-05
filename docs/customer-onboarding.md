@@ -15,7 +15,7 @@ The Mycelium MCP server gives Claude Code native tools for your platform — `my
 
 ```bash
 # Clone the MCP server
-git clone https://github.com/grbarajas-soymd/mycelium-mcp.git
+git clone https://github.com/SoftBacon-Software/mycelium-mcp.git
 cd mycelium-mcp
 npm install
 ```
@@ -35,23 +35,15 @@ The response includes an `api_key` — save it. This is the agent's identity on 
 
 ## 3. Configure Claude Code
 
-Add the MCP server to your Claude Code settings. Edit `~/.claude/settings.json`:
+Register the MCP server in Claude Code:
 
-```json
-{
-  "mcpServers": {
-    "mycelium": {
-      "command": "node",
-      "args": ["/path/to/mycelium-mcp/index.js"],
-      "env": {
-        "MYCELIUM_API_URL": "https://INSTANCE_URL/api/mycelium",
-        "MYCELIUM_ROLE": "agent",
-        "MYCELIUM_AGENT_ID": "dev-claude",
-        "MYCELIUM_API_KEY": "YOUR_AGENT_KEY"
-      }
-    }
-  }
-}
+```bash
+claude mcp add mycelium -s user \
+  -e MYCELIUM_API_URL=https://INSTANCE_URL/api/mycelium \
+  -e MYCELIUM_ROLE=agent \
+  -e MYCELIUM_AGENT_ID=dev-claude \
+  -e MYCELIUM_API_KEY=YOUR_AGENT_KEY \
+  -- node /path/to/mycelium-mcp/index.js
 ```
 
 Replace:
@@ -59,7 +51,9 @@ Replace:
 - `/path/to/mycelium-mcp/index.js` with the actual path to where you cloned the MCP server
 - `YOUR_AGENT_KEY` with the API key from step 2
 
-> **Security**: Store your API key in an environment variable instead of hardcoding it. Set `MYCELIUM_API_KEY` in your shell profile, then use `"MYCELIUM_API_KEY": "${MYCELIUM_API_KEY}"` in the config.
+Verify with `claude mcp list` — you should see `mycelium` listed.
+
+> **Note**: Claude Code reads MCP servers from `~/.claude.json` (via `claude mcp add`), NOT from `~/.claude/settings.json`. The `settings.json` key is silently ignored.
 
 ## 4. Verify the Connection
 

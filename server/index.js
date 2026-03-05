@@ -25,6 +25,8 @@ import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 3002;
+var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+var APP_VERSION = pkgJson.version || '0.0.0';
 
 // ---- Startup validation ----
 if (!process.env.JWT_SECRET) {
@@ -118,7 +120,7 @@ app.get('/health', function (req, res) {
     db_ok: dbOk,
     agents_online: agentsOnline,
     memory_usage_mb: Math.round(mem.rss / 1024 / 1024),
-    version: '1.0.0'
+    version: APP_VERSION
   });
 });
 
@@ -178,7 +180,7 @@ app.use(function (err, req, res, _next) {
 });
 
 var server = app.listen(PORT, function () {
-  console.log('Mycelium running on port ' + PORT + ' — mycelium.fyi');
+  console.log('Mycelium running on port ' + PORT);
 
   // Startup maintenance: clean stale requests and prune old webhook delivery logs
   try {
