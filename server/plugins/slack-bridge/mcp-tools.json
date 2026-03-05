@@ -1,0 +1,36 @@
+[
+  {
+    "name": "mycelium_slack_send",
+    "description": "Send a message to a Slack channel via the Slack Bridge. Requires the plugin to be enabled and a bot token configured.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["channel", "message"],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Slack channel ID to send to (e.g. C0123456789)"
+        },
+        "message": {
+          "type": "string",
+          "description": "Message text to send"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_slack_channels",
+    "description": "List all Slack-to-Mycelium channel mappings configured in the Slack Bridge plugin.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "mycelium_slack_test",
+    "description": "Send a test message to the default Slack channel to verify the Slack Bridge connection is working.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]
