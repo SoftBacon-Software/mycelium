@@ -138,29 +138,6 @@ To set up `<customer>.mycelium.fyi`:
 | "Application not found" 404 from domain | No successful deployment yet — no healthy instance to serve. Normal until first healthy deploy. | Just wait for first healthy deploy. |
 | Railway deploy fails (source not found) | GitHub outage. Railway pulls from GitHub. | Check https://www.githubstatus.com, wait for resolution. |
 
-## Flatiron Instance (First Customer — Kurtis, Flatiron Automation)
-
-**Status**: Test deployment in our Railway account (`grbarajas-soymd`). Production should move to Kurtis's own Railway account.
-
-| Item | Value |
-|------|-------|
-| Railway project | `flatiron-mycelium` (`cf4bceb4-e59b-46d8-a83a-23461753ebcc`) |
-| Service | `flatiron-mycelium` (`e1fe6b78-249f-41a5-859b-5dd438f6e6e7`) |
-| Domain | `flatiron-mycelium-production.up.railway.app` |
-| Custom domain (planned) | `flatiron.mycelium.fyi` |
-| Admin key | In Railway env vars (`ADMIN_KEY`) |
-| Kurtis's email | `kurtis@flatironautomation.com` |
-| NDA | `docs/beta-nda-template.md` — send via DocuSign |
-
-**Next steps for Flatiron:**
-1. Wait for GitHub outage to resolve
-2. Redeploy (`railway up --service flatiron-mycelium --detach`) — DATA_DIR fix already applied
-3. Verify health check passes
-4. Set up `flatiron.mycelium.fyi` DNS CNAME in Cloudflare
-5. Add custom domain in Railway dashboard
-6. Create Kurtis's admin account via API
-7. Send NDA via DocuSign + onboarding package from macbook-claude
-
 ## Long-Term: Customer Owns Their Railway Account
 
 Preferred path for production customers:

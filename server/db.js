@@ -101,22 +101,7 @@ export function initDB() {
     try { db.exec('ALTER TABLE dv_messages DROP COLUMN ' + dc); } catch (e) { /* doesn't exist or older SQLite — skip */ }
   }
 
-  // Seed operators (if table is empty)
-  var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
-  if (opCount.c === 0) {
-    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities, email) VALUES (?, ?, ?, ?, ?)").run(
-      'greatness', 'Greatness', 'owner', 'Platform dev, WS game, asset generation, coordination', 'grbarajas@gmail.com'
-    );
-    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
-      'hijack', 'Hijack', 'ui_lead', 'UI/UX, King City development, visual design'
-    );
-    db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
-      'unakron', 'Unakron', 'member', 'Legal, security, penetration testing, breaking things on purpose. GPU compute.'
-    );
-    console.log('Seeded dv_operators with 3 team members');
-  }
-
-  // Seed instance config (if table is empty)
+  // Seed instance config defaults (if table is empty — fresh instance)
   var cfgCount = db.prepare('SELECT COUNT(*) as c FROM dv_instance_config').get();
   if (cfgCount.c === 0) {
     var riskTiers = JSON.stringify({
@@ -126,25 +111,11 @@ export function initDB() {
       money_action: 'critical', delete_agent: 'critical', instance_config: 'critical'
     });
     db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('instance_mode', 'developer', 'system');
-    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_agent_id', 'greatness-claude', 'system');
+    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_agent_id', '', 'system');
     db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_status', 'coordinator', 'system');
     db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('risk_tiers', riskTiers, 'system');
-    console.log('Seeded dv_instance_config with 4 keys');
+    console.log('Seeded dv_instance_config with defaults (set admin_agent_id via dashboard or API)');
   }
-
-  // Update agent roles (agents may not exist yet, so wrap in try/catch)
-  try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('admin', 'greatness', 'mycelium', 'greatness-claude');
-  } catch (e) { /* agent may not exist */ }
-  try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('agent', 'hijack', 'king-city', 'hijack-claude');
-  } catch (e) { /* agent may not exist */ }
-  try {
-    db.prepare("UPDATE dv_agents SET role = ?, operator_id = ?, project_id = ? WHERE id = ?").run('drone', 'unakron', 'drone', 'unakron-gpu');
-  } catch (e) { /* agent may not exist */ }
-
-  // Seed job templates (upsert — adds new ones, updates existing)
-  seedJobTemplates();
 
   ensureDefaultChannels();
 
@@ -1813,44 +1784,8 @@ export function bulkCancelDroneJobs(statuses, olderThanDays) {
 
 // -- Job Templates --
 
-function seedJobTemplates() {
-  var templates = [
-    {
-      id: 'kc_art_gen',
-      name: 'King City Art Generation',
-      project_id: 'king-city',
-      requires: '["gpu"]',
-      min_vram_gb: 12,
-      min_disk_gb: 20,
-      python_deps: '["safetensors","PIL","transformers","diffusers","einops","accelerate","pydantic","requests","huggingface_hub"]',
-      python_deps_install: '-q --only-binary :all: safetensors Pillow transformers requests huggingface_hub diffusers einops accelerate pydantic',
-      artifacts: '["generate_kc.py","kc_pixel.safetensors"]',
-      setup_repo: 'https://github.com/ostris/ai-toolkit.git',
-      command_template: '{{python}} {{workspace}}/generate_kc.py --batch {{batch}}',
-      workspace_name: 'kc_art_gen',
-    },
-    {
-      id: 'ws_art_gen',
-      name: 'Willing Sacrifice Art Generation',
-      project_id: 'willing-sacrifice',
-      requires: '["cpu"]',
-      min_vram_gb: 0,
-      min_disk_gb: 2,
-      python_deps: '["openai","requests","PIL"]',
-      python_deps_install: '-q openai requests Pillow',
-      artifacts: '["generate_painterly.py"]',
-      setup_repo: '',
-      command_template: '{{python}} {{workspace}}/generate_painterly.py --batch {{batch}}',
-      workspace_name: 'ws_art_gen',
-    }
-  ];
-  for (var t of templates) {
-    db.prepare(
-      "INSERT OR IGNORE INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb, python_deps, python_deps_install, artifacts, setup_repo, command_template, workspace_name) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(t.id, t.name, t.project_id, t.requires, t.min_vram_gb, t.min_disk_gb, t.python_deps, t.python_deps_install, t.artifacts, t.setup_repo, t.command_template, t.workspace_name);
-  }
-}
+// Job templates are created via the API — no hardcoded seed data.
+// Use POST /drones/templates to create custom job templates for your project.
 
 export function createJobTemplate(id, fields) {
   db.prepare(
