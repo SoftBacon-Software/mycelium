@@ -4,7 +4,7 @@
 
 **Goal:** Port wsac-agent outreach pipeline into Mycelium as a first-class platform feature with DB tables, API routes, and MCP tools.
 
-**Architecture:** Add outreach tables to Mycelium SQLite, CRUD + pipeline action routes in Express, external API modules (YouTube, Hunter.io, Claude, Gmail) as server-side JS, and MCP tools in dioverse-mcp.
+**Architecture:** Add outreach tables to Mycelium SQLite, CRUD + pipeline action routes in Express, external API modules (YouTube, Hunter.io, Claude, Gmail) as server-side JS, and MCP tools in mycelium-mcp.
 
 **Tech Stack:** Express, better-sqlite3, googleapis (YouTube + Gmail), @anthropic-ai/sdk, node-fetch
 
@@ -355,7 +355,7 @@ router.get('/outreach/status', function (req, res) {
 ### Task 7: MCP Outreach Tools
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js` (add outreach tool registrations)
+- Modify: `D:/mycelium-mcp/src/tools.js` (add outreach tool registrations)
 
 **Step 1: Add outreach tools** — Register 9 tools with registerDual():
 - mycelium_outreach_discover

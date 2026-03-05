@@ -229,7 +229,7 @@ Platform conventions (message types, work priority order, channel types) baked i
 
 1. Merge compaction snapshots PR #2 first (MCP state tracking must be stable)
 2. Ship server changes + MCP updates together (don't break mid-deploy)
-3. Both MCP repos (dioverse-mcp + mycelium-runner/mcp) must update simultaneously
+3. Both MCP repos (mycelium-mcp + mycelium-runner/mcp) must update simultaneously
 
 ## Migration
 
