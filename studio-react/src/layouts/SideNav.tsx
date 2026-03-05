@@ -1,8 +1,10 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
 import { useVoiceStore } from '../stores/voiceStore'
+import { fetchPluginNav } from '../api/endpoints'
+import type { PluginNavEntry } from '../api/endpoints'
 import {
   LayoutDashboard, CheckSquare, Map, Bug,
   MessageSquare, Radio, ShieldCheck, Inbox,
@@ -30,7 +32,7 @@ interface NavSection {
 
 /* ── Navigation structure ── */
 
-const navSections: NavSection[] = [
+const staticNavSections: NavSection[] = [
   {
     id: 'pinned',
     label: null,
@@ -102,7 +104,7 @@ function loadCollapsedSections(): Record<string, boolean> {
     if (stored) return JSON.parse(stored)
   } catch { /* ignore */ }
   return Object.fromEntries(
-    navSections.filter((s) => s.label).map((s) => [s.id, s.defaultCollapsed ?? false])
+    staticNavSections.filter((s) => s.label).map((s) => [s.id, s.defaultCollapsed ?? false])
   )
 }
 
@@ -132,6 +134,34 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   const voicePeers = useVoiceStore((s) => s.peers)
   const voiceLeave = useVoiceStore((s) => s.leave)
   const location = useLocation()
+
+  // Plugin page nav entries
+  const [pluginNav, setPluginNav] = useState<PluginNavEntry[]>([])
+  useEffect(() => {
+    if (!isAdmin) return
+    fetchPluginNav().then(setPluginNav).catch(() => {})
+  }, [isAdmin])
+
+  // Build nav sections with plugin pages injected
+  const navSections = useMemo(() => {
+    const sections = staticNavSections.map((s) => ({
+      ...s,
+      items: [...s.items],
+    }))
+    for (const entry of pluginNav) {
+      for (const page of entry.pages) {
+        const section = sections.find((s) => s.id === (page.nav_section || 'advanced'))
+        if (section) {
+          section.items.push({
+            to: `/plugins/${entry.name}${page.path}`,
+            label: page.title,
+            icon: Puzzle,
+          })
+        }
+      }
+    }
+    return sections
+  }, [pluginNav])
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
 
