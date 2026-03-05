@@ -96,7 +96,7 @@ All routes are prefixed with `/api/mycelium/outreach`.
 | email | TEXT | Email address |
 | outlet | TEXT | Channel/outlet name |
 | tier | TEXT | T1 (500k+), T2 (50k+), T3 (<50k) |
-| archetype | TEXT | roguelike_specialist, hidden_gem, etc. |
+| archetype | TEXT | genre_specialist, hidden_gem, etc. |
 | subscriber_count | INTEGER | YouTube subscriber count |
 | status | TEXT | Pipeline status (discovered through closed) |
 | pitch_subject | TEXT | Generated email subject |

@@ -1,5 +1,5 @@
 // Content research for outreach contacts
-// Port of wsac-agent/outreach/researcher.py
+// Ported from Python worker scripts
 
 import { google } from 'googleapis';
 

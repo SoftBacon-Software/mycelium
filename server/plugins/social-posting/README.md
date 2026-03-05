@@ -1,8 +1,8 @@
 # Social Posting
 
-Dio-voiced social media posting with caption generation, scheduling, and publishing.
+Social media posting with character-voiced caption generation, scheduling, and publishing.
 
-Manages social media posts across TikTok, Twitter, Instagram, and YouTube Shorts. Generates in-character caption prompts (Dio narrator voice), queues posts with per-platform scheduling windows, and publishes via drone jobs using Buffer API or Instagram Graph API. Publishing is a gated action requiring approval.
+Manages social media posts across TikTok, Twitter, Instagram, and YouTube Shorts. Generates in-character caption prompts (configurable persona via `caption_persona` plugin config), queues posts with per-platform scheduling windows, and publishes via drone jobs using Buffer API or Instagram Graph API. Publishing is a gated action requiring approval.
 
 ## Configuration
 
@@ -21,7 +21,7 @@ All routes are prefixed with `/api/mycelium/social`.
 | GET | `/accounts` | Admin | List accounts (credentials redacted) |
 | PUT | `/accounts/:id` | Admin | Update account |
 | DELETE | `/accounts/:id` | Admin | Delete account |
-| POST | `/captions/generate` | Agent/Admin | Build a Dio-voiced caption prompt for a highlight clip |
+| POST | `/captions/generate` | Agent/Admin | Build a character-voiced caption prompt for a highlight clip |
 | POST | `/posts` | Agent/Admin | Create a post (draft or scheduled) |
 | GET | `/posts` | Agent/Admin | List posts (filter by project, platform, status, video_session_id) |
 | GET | `/posts/:id` | Agent/Admin | Get post details (includes drone job status if linked) |
@@ -37,7 +37,7 @@ All routes are prefixed with `/api/mycelium/social`.
 
 | Tool | Description |
 |------|-------------|
-| `mycelium_social_generate_caption` | Generate a Dio-voiced caption prompt for a gameplay highlight clip |
+| `mycelium_social_generate_caption` | Generate a character-voiced caption prompt for a gameplay highlight clip |
 | `mycelium_social_create_post` | Create a social media post (draft or scheduled) |
 | `mycelium_social_list_posts` | List posts with optional filters |
 | `mycelium_social_schedule_post` | Schedule a draft post (auto-selects time window if no `scheduled_at`) |
