@@ -1,0 +1,21 @@
+{
+  "name": "project-tracker-sync",
+  "version": "1.0.0",
+  "displayName": "Project Tracker Sync",
+  "description": "Bidirectional task sync with Linear and Jira. Status mapping, comment sync, and conflict resolution.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/tracker",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "provider", "type": "select", "label": "Provider", "description": "External project tracker", "options": ["linear", "jira"], "required": true },
+    { "key": "api_key", "type": "secret", "label": "API Key", "description": "Linear API key or Jira API token", "required": true },
+    { "key": "jira_domain", "type": "string", "label": "Jira Domain", "description": "Your Jira domain (e.g. myteam.atlassian.net). Only for Jira.", "required": false },
+    { "key": "jira_email", "type": "string", "label": "Jira Email", "description": "Email for Jira API auth. Only for Jira.", "required": false },
+    { "key": "sync_direction", "type": "select", "label": "Sync Direction", "description": "Which direction to sync", "options": ["bidirectional", "outbound", "inbound"], "default": "bidirectional" },
+    { "key": "default_project", "type": "string", "label": "Default Mycelium Project", "description": "Mycelium project ID for inbound items" },
+    { "key": "external_project", "type": "string", "label": "External Project ID", "description": "Linear team ID or Jira project key" }
+  ]
+}

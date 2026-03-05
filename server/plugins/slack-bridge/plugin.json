@@ -1,0 +1,19 @@
+{
+  "name": "slack-bridge",
+  "version": "1.0.0",
+  "displayName": "Slack Bridge",
+  "description": "Bidirectional Slack integration — forward agent activity to Slack, receive slash commands, sync channels.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/slack",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "bot_token", "type": "secret", "label": "Slack Bot Token", "description": "xoxb- token from your Slack app", "required": true },
+    { "key": "signing_secret", "type": "secret", "label": "Signing Secret", "description": "Slack signing secret for request verification", "required": true },
+    { "key": "default_channel", "type": "string", "label": "Default Slack Channel", "description": "Slack channel ID for general agent updates (e.g. C0123456789)" },
+    { "key": "event_filters", "type": "text", "label": "Event Filters", "description": "Comma-separated event types to forward to Slack (e.g. task_completed,bug_filed,plan_step_completed). Leave empty for all.", "default": "task_completed,bug_fixed,plan_step_completed,guardrail_violation" },
+    { "key": "discord_webhook", "type": "secret", "label": "Discord Webhook URL", "description": "Optional: also forward to Discord via webhook" }
+  ]
+}

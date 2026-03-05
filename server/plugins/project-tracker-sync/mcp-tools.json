@@ -1,0 +1,60 @@
+[
+  {
+    "name": "mycelium_tracker_links",
+    "description": "List sync links between Mycelium tasks and external project tracker issues (Linear or Jira). Shows which items are linked and their sync status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["linear", "jira"],
+          "description": "Filter links by provider. Omit to get all."
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_tracker_link",
+    "description": "Manually link a Mycelium task to an external issue in Linear or Jira. Creates a sync link so future changes propagate between systems.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["external_id", "mycelium_id"],
+      "properties": {
+        "external_id": {
+          "type": "string",
+          "description": "External issue ID (Linear issue ID or Jira issue ID)"
+        },
+        "external_key": {
+          "type": "string",
+          "description": "Human-readable key (e.g. Linear identifier like ENG-123, or Jira key like PROJ-456)"
+        },
+        "mycelium_id": {
+          "type": "integer",
+          "description": "Mycelium task ID to link"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_tracker_sync",
+    "description": "Force re-sync a linked item. Fetches current state from the external tracker and reconciles with the Mycelium task.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["link_id"],
+      "properties": {
+        "link_id": {
+          "type": "integer",
+          "description": "ID of the tracker link to re-sync"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_tracker_status",
+    "description": "Get sync status and stats. Shows linked item counts, recent sync activity, and any conflicts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

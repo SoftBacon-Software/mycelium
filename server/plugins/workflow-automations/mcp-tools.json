@@ -1,0 +1,63 @@
+[
+  {
+    "name": "mycelium_automation_list",
+    "description": "List automation rules. Returns enabled rules by default. Filter by trigger event or enabled status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trigger_event": {
+          "type": "string",
+          "description": "Filter by trigger event type (e.g. task_completed, bug_filed)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Filter by enabled status"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_automation_trigger",
+    "description": "Manually trigger a specific automation rule. Executes all actions with the provided event data.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["rule_id"],
+      "properties": {
+        "rule_id": {
+          "type": "integer",
+          "description": "ID of the automation rule to trigger"
+        },
+        "event_data": {
+          "type": "object",
+          "description": "Event data to pass to the rule's actions. Supports template variables like {{title}}, {{agent}}, etc."
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_automation_log",
+    "description": "View recent automation execution log. Shows which rules fired, what actions were taken, and any errors.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rule_id": {
+          "type": "integer",
+          "description": "Filter log entries by rule ID"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max entries to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_automation_stats",
+    "description": "Automation execution statistics. Shows counts by status, top rules, and last 24h activity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

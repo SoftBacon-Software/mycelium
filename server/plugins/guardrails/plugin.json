@@ -1,0 +1,16 @@
+{
+  "name": "guardrails",
+  "version": "1.0.0",
+  "displayName": "Guardrails",
+  "description": "Automated quality checks and rule enforcement. Configurable rules that validate agent actions before they land — block or warn on violations.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/guardrails",
+  "schema": "schema.sql",
+  "gatedActions": ["guardrails_override"],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "enforcement_mode", "type": "select", "label": "Default Enforcement", "description": "Default mode for new rules", "options": ["block", "warn"], "default": "warn" },
+    { "key": "notify_on_violation", "type": "boolean", "label": "Notify on Violation", "description": "Send inbox notification on every violation", "default": "true" }
+  ]
+}
