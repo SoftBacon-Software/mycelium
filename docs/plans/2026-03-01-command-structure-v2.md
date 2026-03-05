@@ -1094,7 +1094,7 @@ cd D:/mycelium && git add public/studio/ && git commit -m "feat: kill switch but
 ### Task 22: MCP — `studio_request_work`
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js` (add tool after approval tools, around line 764)
+- Modify: `D:/mycelium-mcp/src/tools.js` (add tool after approval tools, around line 764)
 
 **Step 1: Add tool**
 
@@ -1123,7 +1123,7 @@ cd D:/mycelium && git add public/studio/ && git commit -m "feat: kill switch but
 **Step 2: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_request_work MCP tool"
+cd D:/mycelium-mcp && git add src/tools.js && git commit -m "feat: studio_request_work MCP tool"
 ```
 
 ---
@@ -1131,7 +1131,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_reques
 ### Task 23: MCP — `studio_file_directive`
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js`
+- Modify: `D:/mycelium-mcp/src/tools.js`
 
 **Step 1: Add tool**
 
@@ -1160,7 +1160,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_reques
 **Step 2: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_file_directive MCP tool"
+cd D:/mycelium-mcp && git add src/tools.js && git commit -m "feat: studio_file_directive MCP tool"
 ```
 
 ---
@@ -1168,7 +1168,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_file_d
 ### Task 24: MCP — `studio_upload_asset`
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js`
+- Modify: `D:/mycelium-mcp/src/tools.js`
 
 **Step 1: Add tool**
 
@@ -1195,7 +1195,7 @@ Note: MCP tool can't directly upload files (no multipart support). Instead, upda
 **Step 2: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_upload_asset MCP tool"
+cd D:/mycelium-mcp && git add src/tools.js && git commit -m "feat: studio_upload_asset MCP tool"
 ```
 
 ---
@@ -1203,7 +1203,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_upload
 ### Task 25: MCP — `studio_download_asset`
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js`
+- Modify: `D:/mycelium-mcp/src/tools.js`
 
 **Step 1: Add tool**
 
@@ -1227,7 +1227,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_upload
 **Step 2: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_download_asset MCP tool"
+cd D:/mycelium-mcp && git add src/tools.js && git commit -m "feat: studio_download_asset MCP tool"
 ```
 
 ---
@@ -1235,7 +1235,7 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: studio_downlo
 ### Task 26: Update Boot Tool for Session Context + Directives
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/tools.js:72-134` (update boot handler output)
+- Modify: `D:/mycelium-mcp/src/tools.js:72-134` (update boot handler output)
 
 **Step 1: Update boot handler**
 
@@ -1280,7 +1280,7 @@ In `formatOverview` (around line 935), add sections for operators and instance c
 **Step 3: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: boot tool shows directives, operators, instance config"
+cd D:/mycelium-mcp && git add src/tools.js && git commit -m "feat: boot tool shows directives, operators, instance config"
 ```
 
 ---
@@ -1288,11 +1288,11 @@ cd D:/dioverse-mcp && git add src/tools.js && git commit -m "feat: boot tool sho
 ### Task 27: Shutdown Hook for Session Summary
 
 **Files:**
-- Modify: `D:/dioverse-mcp/src/state.js` (update shutdown to write session summary)
+- Modify: `D:/mycelium-mcp/src/state.js` (update shutdown to write session summary)
 
 **Step 1: Read current state.js**
 
-Read `D:/dioverse-mcp/src/state.js` to find the shutdown handler.
+Read `D:/mycelium-mcp/src/state.js` to find the shutdown handler.
 
 **Step 2: Update shutdown**
 
@@ -1315,7 +1315,7 @@ In the shutdown handler, before the final heartbeat, write session context:
 **Step 3: Commit**
 
 ```bash
-cd D:/dioverse-mcp && git add src/state.js && git commit -m "feat: auto-save session summary on shutdown"
+cd D:/mycelium-mcp && git add src/state.js && git commit -m "feat: auto-save session summary on shutdown"
 ```
 
 ---

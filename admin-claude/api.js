@@ -1,5 +1,5 @@
 // HTTP client for the Mycelium API — admin-claude edition
-// Based on dioverse-mcp/src/api.js pattern
+// Based on mycelium-mcp/src/api.js pattern
 
 import { MYCELIUM_API_URL, MYCELIUM_ADMIN_KEY, AGENT_ID } from './config.js';
 
