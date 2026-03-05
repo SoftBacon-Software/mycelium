@@ -2683,6 +2683,7 @@ export function listInboxItems(filters) {
   var params = [];
   if (filters.operator_id) { where.push('operator_id = ?'); params.push(filters.operator_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
+  else { where.push("status != 'dismissed'"); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.entity_type) { where.push('entity_type = ?'); params.push(filters.entity_type); }
   var limit = Math.min(filters.limit || 50, 200);
