@@ -594,6 +594,96 @@ router.get('/stats/public', function (req, res) {
   }
 });
 
+// GET /public/activity — no auth, sanitized live activity feed for public dashboard
+// SECURITY: Strict allowlist — only expose what's explicitly safe. No project details,
+// no task/bug descriptions, no message content, no working_on specifics.
+router.get('/public/activity', function (req, res) {
+  try {
+    var db = getDB();
+    var today = new Date().toISOString().slice(0, 10);
+
+    // Online agents — names and status only, no working_on details
+    var agents = db.prepare(
+      "SELECT name, status FROM dv_agents WHERE role != 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
+    ).all().map(function (a) {
+      return { name: a.name, online: a.status === 'online' };
+    });
+
+    // Aggregate stats — counts only, no details
+    var tasksToday = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done' AND updated_at >= ?"
+    ).get(today).c;
+    var bugsToday = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_bugs WHERE status IN ('fixed','closed') AND updated_at >= ?"
+    ).get(today).c;
+    var plansActive = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_plans WHERE status = 'active'"
+    ).get().c;
+    var agentsOnline = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_agents WHERE status = 'online' AND role != 'drone'"
+    ).get().c;
+    var totalTasksDone = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done'"
+    ).get().c;
+    var totalBugsFixed = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_bugs WHERE status IN ('fixed','closed')"
+    ).get().c;
+
+    // Recent events — ONLY event type + agent + timestamp, NO descriptions or data
+    // Filter to safe event types only
+    var safeEventTypes = [
+      'task_completed', 'task_created', 'bug_filed', 'bug_fixed',
+      'plan_step_completed', 'plan_created', 'agent_heartbeat',
+      'drone_job_completed', 'pr_merged', 'bip_draft_created'
+    ];
+    var placeholders = safeEventTypes.map(function () { return '?'; }).join(',');
+    var evtStmt = db.prepare(
+      'SELECT event_type, agent_id, created_at FROM dv_events WHERE event_type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
+    );
+    var events = evtStmt.all.apply(evtStmt, safeEventTypes).map(function (e) {
+      return {
+        type: e.event_type,
+        agent: e.agent_id || 'system',
+        time: e.created_at
+      };
+    });
+
+    // Mycelium project plans only — title + progress, no other project plans
+    var plans = db.prepare(
+      "SELECT id, title FROM dv_plans WHERE status = 'active' AND (project_id = 'mycelium' OR project_id = '' OR project_id IS NULL) ORDER BY updated_at DESC LIMIT 5"
+    ).all().map(function (p) {
+      var steps = db.prepare(
+        'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM dv_plan_steps WHERE plan_id = ?'
+      ).get(p.id);
+      return {
+        title: p.title,
+        progress: steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
+      };
+    });
+
+    res.json({
+      agents: agents,
+      stats: {
+        agents_online: agentsOnline,
+        tasks_completed_today: tasksToday,
+        bugs_fixed_today: bugsToday,
+        plans_active: plansActive,
+        total_tasks_done: totalTasksDone,
+        total_bugs_fixed: totalBugsFixed
+      },
+      events: events,
+      plans: plans,
+      updated_at: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error('[public/activity] Error:', e.message);
+    res.json({
+      agents: [], stats: { agents_online: 0, tasks_completed_today: 0, bugs_fixed_today: 0, plans_active: 0, total_tasks_done: 0, total_bugs_fixed: 0 },
+      events: [], plans: [], updated_at: new Date().toISOString()
+    });
+  }
+});
+
 // GET /waitlist — admin only, list all signups
 router.get('/waitlist', function (req, res) {
   if (!checkAdmin(req, res)) return;

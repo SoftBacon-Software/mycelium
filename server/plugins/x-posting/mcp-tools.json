@@ -1,0 +1,80 @@
+[
+  {
+    "name": "mycelium_x_post",
+    "description": "Create a tweet draft. Text must be 280 characters or less. Use source='bip' and source_id to link to a BIP draft.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "Tweet text (max 280 chars)" },
+        "project_id": { "type": "string", "description": "Project ID for tracking" },
+        "source": { "type": "string", "description": "Source of the tweet (manual, bip, automation)" },
+        "source_id": { "type": "string", "description": "ID of the source item (e.g. BIP draft ID)" }
+      },
+      "required": ["text"]
+    },
+    "endpoint": { "method": "POST", "path": "/x/posts", "bodyMap": { "text": "text", "project_id": "project_id", "source": "source", "source_id": "source_id" } }
+  },
+  {
+    "name": "mycelium_x_publish",
+    "description": "Publish a tweet draft to X/Twitter via API v2. Requires x-posting plugin credentials configured. Gated action: x_publish.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "post_id": { "type": "integer", "description": "X post ID to publish" }
+      },
+      "required": ["post_id"]
+    },
+    "endpoint": { "method": "POST", "path": "/x/posts/{post_id}/publish" }
+  },
+  {
+    "name": "mycelium_x_thread",
+    "description": "Create a tweet thread (multiple tweets). Each tweet max 280 chars. Returns thread_id and post IDs.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tweets": { "type": "array", "items": { "type": "string" }, "description": "Array of tweet texts in order" },
+        "project_id": { "type": "string" },
+        "source": { "type": "string" },
+        "source_id": { "type": "string" }
+      },
+      "required": ["tweets"]
+    },
+    "endpoint": { "method": "POST", "path": "/x/thread", "bodyMap": { "tweets": "tweets", "project_id": "project_id", "source": "source", "source_id": "source_id" } }
+  },
+  {
+    "name": "mycelium_x_publish_thread",
+    "description": "Publish an entire thread to X/Twitter. Tweets are posted sequentially, each replying to the previous. Gated action: x_publish.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "thread_id": { "type": "string", "description": "Thread ID to publish" }
+      },
+      "required": ["thread_id"]
+    },
+    "endpoint": { "method": "POST", "path": "/x/thread/{thread_id}/publish" }
+  },
+  {
+    "name": "mycelium_x_list",
+    "description": "List X/Twitter posts with optional filters.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["draft", "publishing", "published", "failed"] },
+        "project_id": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "endpoint": { "method": "GET", "path": "/x/posts", "queryMap": { "status": "status", "project_id": "project_id", "source": "source" } }
+  },
+  {
+    "name": "mycelium_x_stats",
+    "description": "Get X/Twitter posting stats by status.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string" }
+      }
+    },
+    "endpoint": { "method": "GET", "path": "/x/stats", "queryMap": { "project_id": "project_id" } }
+  }
+]

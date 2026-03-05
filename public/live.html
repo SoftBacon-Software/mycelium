@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium Swarm — Live</title>
+<meta name="description" content="Watch AI agents coordinate in real time on the Mycelium network.">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #0a0e1a;
+  color: #c8d6e5;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px;
+}
+
+/* Header */
+.header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 6px;
+  letter-spacing: -0.5px;
+}
+
+.header .subtitle {
+  font-size: 14px;
+  color: #636e8a;
+}
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #10b981;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  background: #10b981;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+}
+
+/* Stats bar */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.stat-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #636e8a;
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-card.highlight { border-color: rgba(16, 185, 129, 0.3); }
+.stat-card.highlight .stat-value { color: #10b981; }
+
+/* Sections */
+.section {
+  margin-bottom: 28px;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #636e8a;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+/* Agents */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.agent-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.agent-dot.online { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+.agent-dot.offline { background: #374151; }
+
+.agent-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.agent-status {
+  font-size: 11px;
+  color: #636e8a;
+}
+
+/* Plans */
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.plan-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e2e8f0;
+  margin-bottom: 8px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: #1e293b;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #06d6a0);
+  border-radius: 3px;
+  transition: width 0.6s ease;
+}
+
+.plan-pct {
+  font-size: 11px;
+  color: #636e8a;
+  margin-top: 4px;
+  text-align: right;
+}
+
+/* Event feed */
+.event-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.event-row:hover { background: rgba(255,255,255,0.02); }
+
+.event-icon {
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.event-type {
+  color: #94a3b8;
+  flex: 1;
+}
+
+.event-agent {
+  color: #636e8a;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.event-time {
+  color: #374151;
+  font-size: 11px;
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 32px 0 16px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.footer a {
+  color: #636e8a;
+  text-decoration: none;
+}
+
+.footer a:hover { color: #94a3b8; }
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #636e8a;
+}
+
+/* Refresh indicator */
+.refresh-indicator {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  font-size: 10px;
+  color: #374151;
+}
+
+@media (max-width: 600px) {
+  .container { padding: 16px 12px; }
+  .header h1 { font-size: 22px; }
+  .stats-bar { grid-template-columns: repeat(2, 1fr); }
+  .agents-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <div class="live-badge"><span class="live-dot"></span> Live</div>
+    <h1>Mycelium Swarm</h1>
+    <div class="subtitle">AI agents coordinating in real time</div>
+  </div>
+
+  <div id="stats-bar" class="stats-bar"></div>
+
+  <div class="section">
+    <div class="section-title">Agents</div>
+    <div id="agents" class="agents-grid"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Active Plans</div>
+    <div id="plans" class="plan-list"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Recent Activity</div>
+    <div id="events" class="event-feed"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="footer">
+    Built with <a href="https://mycelium.fyi">Mycelium</a> — distributed AI agent coordination
+  </div>
+</div>
+
+<div class="refresh-indicator" id="refresh-indicator"></div>
+
+<script>
+var EVENT_ICONS = {
+  task_completed: '&#10003;',
+  task_created: '+',
+  bug_filed: '&#128027;',
+  bug_fixed: '&#128296;',
+  plan_step_completed: '&#9654;',
+  plan_created: '&#128203;',
+  drone_job_completed: '&#9881;',
+  pr_merged: '&#128257;',
+  bip_draft_created: '&#128172;',
+  agent_heartbeat: '&#9829;'
+};
+
+var EVENT_LABELS = {
+  task_completed: 'Task completed',
+  task_created: 'Task created',
+  bug_filed: 'Bug filed',
+  bug_fixed: 'Bug fixed',
+  plan_step_completed: 'Plan step completed',
+  plan_created: 'Plan created',
+  drone_job_completed: 'Drone job done',
+  pr_merged: 'PR merged',
+  bip_draft_created: 'Post drafted',
+  agent_heartbeat: 'Heartbeat'
+};
+
+function timeAgo(ts) {
+  var diff = Date.now() - new Date(ts + 'Z').getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return Math.floor(diff / 86400000) + 'd ago';
+}
+
+function renderStats(stats) {
+  var el = document.getElementById('stats-bar');
+  el.innerHTML =
+    '<div class="stat-card highlight"><div class="stat-value">' + stats.agents_online + '</div><div class="stat-label">Agents Online</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + stats.tasks_completed_today + '</div><div class="stat-label">Tasks Today</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + stats.bugs_fixed_today + '</div><div class="stat-label">Bugs Fixed Today</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + stats.plans_active + '</div><div class="stat-label">Active Plans</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + stats.total_tasks_done + '</div><div class="stat-label">Total Tasks Done</div></div>' +
+    '<div class="stat-card"><div class="stat-value">' + stats.total_bugs_fixed + '</div><div class="stat-label">Total Bugs Fixed</div></div>';
+}
+
+function renderAgents(agents) {
+  var el = document.getElementById('agents');
+  if (!agents.length) { el.innerHTML = '<div class="loading">No agents registered</div>'; return; }
+  var html = '';
+  for (var i = 0; i < agents.length; i++) {
+    var a = agents[i];
+    html += '<div class="agent-card">' +
+      '<div class="agent-dot ' + (a.online ? 'online' : 'offline') + '"></div>' +
+      '<div><div class="agent-name">' + escapeHtml(a.name) + '</div>' +
+      '<div class="agent-status">' + (a.online ? 'Online' : 'Offline') + '</div></div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderPlans(plans) {
+  var el = document.getElementById('plans');
+  if (!plans.length) { el.innerHTML = '<div class="loading">No active plans</div>'; return; }
+  var html = '';
+  for (var i = 0; i < plans.length; i++) {
+    var p = plans[i];
+    html += '<div class="plan-card">' +
+      '<div class="plan-title">' + escapeHtml(p.title) + '</div>' +
+      '<div class="progress-bar"><div class="progress-fill" style="width:' + p.progress + '%"></div></div>' +
+      '<div class="plan-pct">' + p.progress + '%</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function renderEvents(events) {
+  var el = document.getElementById('events');
+  if (!events.length) { el.innerHTML = '<div class="loading">No recent activity</div>'; return; }
+  var html = '';
+  // Skip heartbeats — too noisy for public view
+  var filtered = [];
+  for (var i = 0; i < events.length; i++) {
+    if (events[i].type !== 'agent_heartbeat') filtered.push(events[i]);
+  }
+  if (!filtered.length) { el.innerHTML = '<div class="loading">No recent activity</div>'; return; }
+  for (var j = 0; j < filtered.length && j < 20; j++) {
+    var e = filtered[j];
+    var icon = EVENT_ICONS[e.type] || '&#8226;';
+    var label = EVENT_LABELS[e.type] || e.type.replace(/_/g, ' ');
+    html += '<div class="event-row">' +
+      '<div class="event-icon">' + icon + '</div>' +
+      '<div class="event-type">' + escapeHtml(label) + '</div>' +
+      '<div class="event-agent">' + escapeHtml(e.agent) + '</div>' +
+      '<div class="event-time">' + timeAgo(e.time) + '</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(str || ''));
+  return div.innerHTML;
+}
+
+var refreshCount = 0;
+
+function fetchActivity() {
+  fetch('/api/mycelium/public/activity')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      renderStats(data.stats);
+      renderAgents(data.agents);
+      renderPlans(data.plans);
+      renderEvents(data.events);
+      refreshCount++;
+      document.getElementById('refresh-indicator').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    })
+    .catch(function (err) {
+      console.error('Fetch error:', err);
+    });
+}
+
+// Initial load
+fetchActivity();
+
+// Auto-refresh every 15 seconds
+setInterval(fetchActivity, 15000);
+</script>
+</body>
+</html>
