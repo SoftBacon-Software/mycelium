@@ -1,0 +1,63 @@
+[
+  {
+    "name": "mycelium_guardrails_rules",
+    "description": "List active guardrail rules. Returns all enabled rules, optionally filtered by trigger event or project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "trigger_event": {
+          "type": "string",
+          "description": "Filter rules by trigger event type (e.g. 'task_complete', 'deploy')"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Filter rules by project ID"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_guardrails_check",
+    "description": "Pre-flight check: test an event against all active guardrail rules without logging violations. Returns which rules would be triggered.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["event_type", "data"],
+      "properties": {
+        "event_type": {
+          "type": "string",
+          "description": "The event type to check (e.g. 'task_complete', 'deploy', 'pr_merge')"
+        },
+        "data": {
+          "type": "object",
+          "description": "Event data payload to evaluate against rule conditions"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_guardrails_violations",
+    "description": "List recent guardrail violations. Shows which rules were triggered, by whom, and enforcement action taken.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "Filter violations by agent ID"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Maximum number of violations to return (default 20)"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_guardrails_stats",
+    "description": "Violation statistics: counts by enforcement type, by rule, last 24 hours, and top violating agents.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

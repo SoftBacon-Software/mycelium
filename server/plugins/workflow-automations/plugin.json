@@ -1,0 +1,16 @@
+{
+  "name": "workflow-automations",
+  "version": "1.0.0",
+  "displayName": "Workflow Automations",
+  "description": "Event-driven automation rules — when X happens, do Y. Create tasks, assign agents, send messages, and more based on platform events.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/automations",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "max_actions_per_minute", "type": "number", "label": "Rate Limit", "description": "Maximum automation actions per minute (0 = no limit)", "default": "30" },
+    { "key": "dry_run", "type": "boolean", "label": "Dry Run", "description": "Log automation triggers without executing actions", "default": "false" }
+  ]
+}
