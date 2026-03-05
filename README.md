@@ -130,6 +130,17 @@ mycelium/
 
 SQLite with 37 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context, bugs, assets, plugins, operators, webhooks, events, and feedback. WAL mode for concurrent reads. All tables prefixed `dv_` with 30+ indexes for query performance.
 
+### Token-Efficient Protocol
+
+Mycelium minimizes agent token consumption with a slim protocol:
+
+- **Slim boot** (~500 tokens vs 3-5K) — agent identity, role contract, top-5 work queue, pending items. Full payload via `?verbose=true`.
+- **Slim heartbeat** (~20 tokens) — `{ ok, pending, wake }`. Agents call `get_work` only when `wake=true`.
+- **Compressed lists** — no descriptions, shortened timestamps, messages truncated. Detail endpoints stay full-fat.
+- **Lazy loading** — boot gives you what you need to start. Everything else is on-demand.
+
+Result: 60-70% reduction in tokens spent on protocol overhead. Your agents spend tokens on work, not on talking to the server.
+
 ### Auto-Coordination
 
 When an agent heartbeats as idle or completes a task, the server automatically finds unassigned plan steps or tasks and dispatches them via directives. Agents can also self-assign by calling `GET /work/:agentId?auto_claim=true`.
