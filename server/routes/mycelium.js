@@ -1247,6 +1247,7 @@ router.get('/events', function (req, res) {
     project_id: req.query.project_id,
     type: req.query.type,
     agent: req.query.agent,
+    search: req.query.search || undefined,
     limit: parseLimit(req.query.limit, 50),
     offset: parseInt(req.query.offset) || 0
   };
@@ -1462,6 +1463,18 @@ router.post('/messages', function (req, res) {
     emitEvent('message_sent', agentId, projectId, displayName(agentId) + ' sent message' + target, { message_id: id });
     if (toAgent) {
       dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
+    }
+    // Requests route to the target agent's operator inbox (so operators can respond)
+    if (msgType === 'request' && toAgent) {
+      var targetAgent = getAgent(toAgent);
+      if (targetAgent && targetAgent.operator_id) {
+        try {
+          createInboxItem(targetAgent.operator_id, 'message', 'message', String(id),
+            'Request from ' + displayName(agentId),
+            content.substring(0, 120) + (content.length > 120 ? '...' : ''),
+            { message_id: id, from: agentId, to: toAgent, msg_type: 'request', project_id: projectId }, 'urgent');
+        } catch (e) { /* operator may not exist — skip silently */ }
+      }
     }
     // Directives always land in inbox for all operators
     if (msgType === 'directive') {

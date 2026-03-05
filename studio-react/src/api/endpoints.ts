@@ -60,10 +60,13 @@ export function fetchOverview(): Promise<Overview> {
 
 // Events
 
-export function fetchEvents(params?: { since?: string; limit?: number }): Promise<Event[]> {
+export function fetchEvents(params?: { since?: string; limit?: number; search?: string; type?: string; agent?: string }): Promise<Event[]> {
   const q = new URLSearchParams()
   if (params?.since) q.set('since', params.since)
   if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.search) q.set('search', params.search)
+  if (params?.type) q.set('type', params.type)
+  if (params?.agent) q.set('agent', params.agent)
   const qs = q.toString()
   return apiGet<Event[]>(`/events${qs ? '?' + qs : ''}`)
 }
