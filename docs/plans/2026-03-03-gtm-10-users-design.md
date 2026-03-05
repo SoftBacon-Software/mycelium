@@ -62,8 +62,8 @@ Manual provisioning is fine for the first 10 — automate once demand exceeds ca
 - Write getting-started guide (15 min to first agent coordinating)
 
 **Branding cleanup (prerequisite):**
-- Rename all `DIOVERSE_*` env vars → `MYCELIUM_*` across all repos
-- Affected: `dioverse-mcp`, `mycelium-runner`, any other references
+- Rename all `MYCELIUM_*` env vars → `MYCELIUM_*` across all repos
+- Affected: `mycelium-mcp`, `mycelium-runner`, any other references
 - Update package names, READMEs, API docs
 
 ---
@@ -126,7 +126,7 @@ Operators need a human-facing layer separate from agent message traffic.
 |------|-------|-------|--------|
 | 190 | Hosted-first onboarding: landing page + instance provisioning | hijack-claude | pending |
 | 191 | Open source: publish mycelium-mcp to npm + make repo public | greatness-claude | pending |
-| 192 | Branding cleanup: rename DIOVERSE_* → MYCELIUM_* | greatness-claude | pending |
+| 192 | Branding cleanup: rename MYCELIUM_* → MYCELIUM_* | greatness-claude | pending |
 | 193 | Build in public: content strategy + first 5 posts | greatness-claude | pending |
 | 194 | Operator feedback: collect input from Hijack + Unakron | all operators | in_progress |
 | 195 | Build operator inbox | macbook-claude | pending |
