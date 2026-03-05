@@ -24,7 +24,7 @@ export var POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 30000; // 30s 
 export var MAX_CLAUDE_CALLS_PER_MIN = parseInt(process.env.MAX_CLAUDE_CALLS_PER_MIN) || 30;
 
 // GitHub repos to watch for PRs
-export var GITHUB_REPOS = (process.env.GITHUB_REPOS || 'grbarajas-soymd/mycelium').split(',').map(function (r) { return r.trim(); });
+export var GITHUB_REPOS = (process.env.GITHUB_REPOS || '').split(',').map(function (r) { return r.trim(); }).filter(Boolean);
 
 // System prompt for admin-claude's judgment calls
 export var SYSTEM_PROMPT = `You are admin-claude, the automated administrator for Mycelium — a distributed development platform.

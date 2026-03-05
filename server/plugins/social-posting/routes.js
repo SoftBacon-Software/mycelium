@@ -226,7 +226,7 @@ export default function (core) {
     var gate = core.checkApprovalGate(req, who, 'social_publish');
     if (gate && !gate.ok) {
       var gateMsg = gate.soft
-        ? 'Social publishing requires approval. Use studio_request_approval with action_type=social_publish first.'
+        ? 'Social publishing requires approval. Use mycelium_request_approval with action_type=social_publish first.'
         : (gate.error || 'Publishing not permitted');
       return apiError(res, 403, gateMsg, { approval_required: true });
     }

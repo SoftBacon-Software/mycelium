@@ -1,6 +1,6 @@
 [
   {
-    "name": "studio_video_create_session",
+    "name": "mycelium_video_create_session",
     "description": "Create a new video processing session from gameplay footage and event logs.",
     "schema": {
       "type": "object",
@@ -15,7 +15,7 @@
     "endpoint": { "method": "POST", "path": "/video/sessions", "bodyMap": { "project_id": "project_id", "title": "title", "footage_url": "footage_url", "event_log_url": "event_log_url" } }
   },
   {
-    "name": "studio_video_list_sessions",
+    "name": "mycelium_video_list_sessions",
     "description": "List video processing sessions, optionally filtered by project or status.",
     "schema": {
       "type": "object",
@@ -27,7 +27,7 @@
     "endpoint": { "method": "GET", "path": "/video/sessions", "queryMap": { "project_id": "project_id", "status": "status" } }
   },
   {
-    "name": "studio_video_get_session",
+    "name": "mycelium_video_get_session",
     "description": "Get full details of a video session including clips and stats.",
     "schema": {
       "type": "object",
@@ -39,7 +39,7 @@
     "endpoint": { "method": "GET", "path": "/video/sessions/{session_id}" }
   },
   {
-    "name": "studio_video_detect",
+    "name": "mycelium_video_detect",
     "description": "Submit a highlight detection drone job for a video session. Parses event logs and optionally uses Claude Vision to find highlights in footage.",
     "schema": {
       "type": "object",
@@ -53,7 +53,7 @@
     "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/detect", "bodyMap": { "use_vision": "use_vision", "priority": "priority" } }
   },
   {
-    "name": "studio_video_assemble",
+    "name": "mycelium_video_assemble",
     "description": "Submit an assembly drone job — cuts clips from footage, mixes Dio narration audio, adds text overlays and subtitles.",
     "schema": {
       "type": "object",
@@ -67,7 +67,7 @@
     "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/assemble", "bodyMap": { "tts_url": "tts_url", "priority": "priority" } }
   },
   {
-    "name": "studio_video_export",
+    "name": "mycelium_video_export",
     "description": "Submit an export drone job — re-encodes assembled clips for specific platforms (TikTok 9:16, Twitter 16:9, YouTube Shorts, etc.).",
     "schema": {
       "type": "object",
@@ -81,7 +81,7 @@
     "endpoint": { "method": "POST", "path": "/video/sessions/{session_id}/export", "bodyMap": { "platforms": "platforms", "priority": "priority" } }
   },
   {
-    "name": "studio_video_session_status",
+    "name": "mycelium_video_session_status",
     "description": "Get the status of a video session including drone job progress for detect/assemble/export stages.",
     "schema": {
       "type": "object",
@@ -93,7 +93,7 @@
     "endpoint": { "method": "GET", "path": "/video/sessions/{session_id}/status" }
   },
   {
-    "name": "studio_video_add_clips",
+    "name": "mycelium_video_add_clips",
     "description": "Bulk add detected clips to a session (typically called by detection drone job on completion).",
     "schema": {
       "type": "object",
