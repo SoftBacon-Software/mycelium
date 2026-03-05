@@ -339,9 +339,9 @@ export default function InboxPage() {
 
           {/* ── Right: Reading pane ── */}
           {selectedItem ? (
-            <div className="flex-1 flex flex-col min-w-0 bg-[var(--color-bg)]">
+            <div className="flex-1 overflow-y-auto min-w-0 bg-[var(--color-bg)]">
               {/* Detail header */}
-              <div className="px-6 py-4 border-b border-border/30 shrink-0">
+              <div className="px-6 py-4 border-b border-border/30">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
@@ -366,24 +366,22 @@ export default function InboxPage() {
                   {/* Back button (mobile) */}
                   <button
                     onClick={() => setSelectedId(null)}
-                    className="lg:hidden shrink-0 px-2 py-1 text-xs text-text-muted hover:text-text rounded transition-colors"
+                    className="lg:hidden shrink-0 px-2 py-1 text-xs text-text-muted active:text-text rounded transition-colors"
                   >
                     &larr; Back
                   </button>
                 </div>
               </div>
 
-              {/* Detail body */}
-              <div className="flex-1 overflow-y-auto px-6 py-5">
-                <div className="prose prose-sm max-w-none">
-                  <p className="text-sm text-text-dim whitespace-pre-wrap leading-relaxed">
-                    {selectedItem.summary}
-                  </p>
-                </div>
+              {/* Detail body + actions together (scrollable) */}
+              <div className="px-6 py-5">
+                <p className="text-sm text-text-dim whitespace-pre-wrap leading-relaxed">
+                  {selectedItem.summary}
+                </p>
 
-                {/* Data payload (if any meaningful keys) */}
+                {/* Data payload */}
                 {selectedItem.data && Object.keys(selectedItem.data).length > 0 && (
-                  <div className="mt-6 p-4 rounded-lg bg-surface border border-border/30">
+                  <div className="mt-4 p-4 rounded-lg bg-surface border border-border/30">
                     <p className="text-xs font-semibold text-text-dim mb-2 uppercase tracking-wider">Details</p>
                     <div className="space-y-1">
                       {Object.entries(selectedItem.data).map(([key, val]) => (
@@ -395,53 +393,53 @@ export default function InboxPage() {
                     </div>
                   </div>
                 )}
-              </div>
 
-              {/* Action bar */}
-              <div className="px-6 py-3 border-t border-border/30 shrink-0 flex items-center gap-2">
-                {selectedItem.type === 'approval' && selectedItem.status !== 'actioned' ? (
-                  <>
+                {/* Action buttons — right after content */}
+                <div className="flex items-center gap-2 mt-5 pt-4 border-t border-border/30">
+                  {selectedItem.type === 'approval' && selectedItem.status !== 'actioned' ? (
+                    <>
+                      <button
+                        onClick={() => handleApprove(selectedItem)}
+                        disabled={actionLoading}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded bg-green/15 text-green text-sm font-medium active:bg-green/25 transition-colors disabled:opacity-50"
+                      >
+                        <Check size={14} /> Approve
+                      </button>
+                      <button
+                        onClick={() => handleReject(selectedItem)}
+                        disabled={actionLoading}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded bg-red/15 text-red text-sm font-medium active:bg-red/25 transition-colors disabled:opacity-50"
+                      >
+                        <X size={14} /> Reject
+                      </button>
+                    </>
+                  ) : selectedItem.status !== 'actioned' ? (
                     <button
-                      onClick={() => handleApprove(selectedItem)}
+                      onClick={() => handleArchive(selectedItem)}
                       disabled={actionLoading}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded bg-green/15 text-green text-sm font-medium hover:bg-green/25 transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 px-4 py-2 rounded bg-accent/15 text-accent text-sm font-medium active:bg-accent/25 transition-colors disabled:opacity-50"
                     >
-                      <Check size={14} /> Approve
+                      <Archive size={14} /> Archive
                     </button>
-                    <button
-                      onClick={() => handleReject(selectedItem)}
-                      disabled={actionLoading}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded bg-red/15 text-red text-sm font-medium hover:bg-red/25 transition-colors disabled:opacity-50"
-                    >
-                      <X size={14} /> Reject
-                    </button>
-                  </>
-                ) : selectedItem.status !== 'actioned' ? (
+                  ) : null}
+
                   <button
-                    onClick={() => handleArchive(selectedItem)}
-                    disabled={actionLoading}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded bg-accent/15 text-accent text-sm font-medium hover:bg-accent/25 transition-colors disabled:opacity-50"
+                    onClick={() => navigate(linkForItem(selectedItem))}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded bg-surface-raised text-text-dim text-sm font-medium active:bg-surface transition-colors"
                   >
-                    <Archive size={14} /> Archive
+                    <ExternalLink size={14} /> View Source
                   </button>
-                ) : null}
 
-                <button
-                  onClick={() => navigate(linkForItem(selectedItem))}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded bg-surface-raised text-text-dim text-sm font-medium hover:bg-surface transition-colors"
-                >
-                  <ExternalLink size={14} /> View Source
-                </button>
+                  <div className="flex-1" />
 
-                <div className="flex-1" />
-
-                <button
-                  onClick={() => handleDismiss(selectedItem)}
-                  disabled={actionLoading}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded text-text-muted text-sm hover:text-red hover:bg-red/10 transition-colors disabled:opacity-50"
-                >
-                  <Trash2 size={14} />
-                </button>
+                  <button
+                    onClick={() => handleDismiss(selectedItem)}
+                    disabled={actionLoading}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded text-text-muted text-sm active:text-red active:bg-red/10 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
