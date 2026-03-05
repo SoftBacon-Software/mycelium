@@ -915,6 +915,89 @@ export function getBootPayload(agentId) {
   };
 }
 
+export function getSlimBootPayload(agentId) {
+  var agent = getAgent(agentId);
+  if (!agent) return null;
+
+  // Auto-heartbeat on boot
+  updateAgentHeartbeat(agentId, 'online', agent.working_on);
+
+  // Counts only — no full records
+  var counts = {
+    directives: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending')"
+    ).get(agentId).c,
+    requests: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('sent', 'pending')"
+    ).get(agentId).c,
+    messages_unread: countPendingForAgent(agentId),
+    tasks_mine: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress')"
+    ).get(agentId).c,
+    bugs_open: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_bugs WHERE status = 'open'"
+    ).get().c,
+    plans_active: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_plans WHERE (project_id = ? OR project_id = '') AND status = 'active'"
+    ).get(agent.project_id).c
+  };
+
+  // Role contract — small, always needed
+  var roleContract = buildRoleContract(agent, agentId);
+
+  // Work queue — top 5, title+type+id only
+  var pendingDirectives = db.prepare(
+    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+  ).all(agentId);
+  var pendingRequests = listPendingRequests(agentId);
+  var myTasks = db.prepare(
+    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+  ).all(agentId);
+  var openBugs = listBugs({ status: 'open', limit: 5 });
+  var myPlans = listPlans({ project_id: agent.project_id, limit: 5 });
+  var fullQueue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
+  var workQueue = fullQueue.slice(0, 5).map(function (item) {
+    return { type: item.type, id: item.id, title: item.title };
+  });
+
+  // Pending directives and requests — blocking, agents need full content
+  var slimDirectives = pendingDirectives.map(function (d) {
+    return { id: d.id, from: d.from_agent, content: d.content };
+  });
+  var slimRequests = pendingRequests.map(function (r) {
+    return { id: r.id, from: r.from_agent, content: r.content };
+  });
+
+  // Other agents — compact
+  var otherAgents = db.prepare(
+    "SELECT id, status, working_on FROM dv_agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
+  ).all(agentId, agent.project_id);
+
+  // Sleep mode + autonomous mode — needed for MCP night directives
+  var sleepMode = getSleepMode();
+  var autonomousMode = isNetworkAutonomous();
+  var operatorsAvailable = getAvailableOperators().length;
+
+  var capabilities = [];
+  try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
+
+  return {
+    agent: { id: agent.id, role: agent.role, project: agent.project_id, capabilities: capabilities },
+    role_contract: roleContract,
+    counts: counts,
+    work_queue: workQueue,
+    pending_directives: slimDirectives,
+    pending_requests: slimRequests,
+    other_agents: otherAgents.map(function (a) {
+      return { id: a.id, status: a.status, working_on: a.working_on || '' };
+    }),
+    sleep_mode: sleepMode,
+    autonomous_mode: autonomousMode,
+    operators_available: operatorsAvailable,
+    server_time: new Date().toISOString()
+  };
+}
+
 // Build a role contract from agent fields + context keys
 function buildRoleContract(agent, agentId) {
   var capabilities = [];
