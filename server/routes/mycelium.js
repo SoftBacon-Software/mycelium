@@ -102,7 +102,7 @@ import {
   createMessage, createRequest, getMessage,
   acknowledgeMessage, resolveMessage, listPendingRequests,
   listMessages, listThreads, bulkDeleteMessages,
-  getBootPayload, getOverview,
+  getBootPayload, getSlimBootPayload, getOverview, getSlimOverview, buildWorkQueue,
   createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
   createPlan, getPlan, listPlans, updatePlan, deletePlan,
   createPlanStep, updatePlanStep, deletePlanStep, reorderPlanSteps,
@@ -156,6 +156,16 @@ import { broadcast, addClient, clientCount } from '../eventBus.js';
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
+
+function formatSavepointSummary(diff) {
+  if (!diff || !diff.summary) return 'No changes since last session.';
+  var parts = [];
+  if (diff.new_messages) parts.push(diff.new_messages + ' new message' + (diff.new_messages > 1 ? 's' : ''));
+  if (diff.task_changes) parts.push(diff.task_changes + ' task change' + (diff.task_changes > 1 ? 's' : ''));
+  if (diff.plan_changes) parts.push(diff.plan_changes + ' plan update' + (diff.plan_changes > 1 ? 's' : ''));
+  if (diff.context_changes) parts.push(diff.context_changes + ' context change' + (diff.context_changes > 1 ? 's' : ''));
+  return parts.length > 0 ? parts.join(', ') : diff.summary || 'No changes since last session.';
+}
 
 // ---- MCP Config Helpers ----
 function getInstanceUrl(req) {
@@ -573,18 +583,27 @@ router.get('/waitlist', function (req, res) {
 router.get('/boot/:agentId', function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
-  // Agent can only boot as themselves
   if (agentId !== req.params.agentId) {
     return res.status(403).json({ error: 'Agent key does not match agent ID' });
   }
-  var payload = getBootPayload(agentId);
+
+  // Verbose mode returns legacy full payload
+  if (req.query.verbose === 'true') {
+    var fullPayload = getBootPayload(agentId);
+    if (!fullPayload) return res.status(404).json({ error: 'Agent not found' });
+    fullPayload.savepoint = computeSavepointDiff(agentId);
+    fullPayload.sleep_mode = getSleepMode();
+    fullPayload.autonomous_mode = isNetworkAutonomous();
+    fullPayload.operators_available = getAvailableOperators().length;
+    emitEvent('agent_boot', agentId, null, agentId + ' booted (verbose)');
+    return res.json(fullPayload);
+  }
+
+  // Default: slim boot
+  var payload = getSlimBootPayload(agentId);
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
-  // Attach savepoint diff
   payload.savepoint = computeSavepointDiff(agentId);
-  // Attach sleep mode / autonomous status
-  payload.sleep_mode = getSleepMode();
-  payload.autonomous_mode = isNetworkAutonomous();
-  payload.operators_available = getAvailableOperators().length;
+  payload.changes_since_last = formatSavepointSummary(computeSavepointDiff(agentId));
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
@@ -595,21 +614,31 @@ router.get('/work/:agentId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = req.params.agentId;
-  // Agents can only access their own work queue
   if (!req._authIsAdmin && who !== agentId) {
     return res.status(403).json({ error: 'Can only access your own work queue' });
   }
-  var payload = getBootPayload(agentId);
-  if (!payload) return res.status(404).json({ error: 'Agent not found' });
-  var queue = payload.work_queue || [];
+  var agent = getAgent(agentId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-  // Auto-claim: grab the top item and assign it
+  // Build work queue directly — no full boot payload needed
+  var db = getDB();
+  var pendingDirectives = db.prepare(
+    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+  ).all(agentId);
+  var pendingRequests = listPendingRequests(agentId);
+  var myTasks = db.prepare(
+    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+  ).all(agentId);
+  var openBugs = listBugs({ status: 'open', limit: 20 });
+  var myPlans = listPlans({ project_id: agent.project_id, limit: 20 });
+  var queue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
+
+  // Auto-claim top item
   if (req.query.auto_claim === 'true' && queue.length > 0) {
     var top = queue[0];
     var claimed = null;
 
     if (top.type === 'directive' || top.type === 'request') {
-      // Directives and requests aren't claimable — just return them
       claimed = top;
     } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
       updatePlanStep(top.id, { assignee: agentId, status: 'in_progress' });
@@ -707,9 +736,11 @@ router.post('/agents/heartbeat', function (req, res) {
     try { updateDroneDiagnostics(agentId, stateSnapshot.system_info); } catch (e) { /* non-critical */ }
   }
 
-  // Include pending counts so agents know if they have unread messages
-  var pending = countPendingForAgent(agentId);
-  var response = { ok: true, agent: agentId, status: status, pending: pending };
+  // Slim heartbeat: pending count + wake flag only
+  var pendingCounts = countPendingForAgent(agentId);
+  var pending = pendingCounts.requests + pendingCounts.directives + pendingCounts.unread;
+  var wake = (pendingCounts.directives + pendingCounts.requests) > 0;
+  var response = { ok: true, pending: pending, wake: wake };
 
   // Auto-dispatch: if agent just came online or is idle with no work, try to assign
   if (!workingOn && (status === 'online' || status === 'idle')) {
@@ -718,14 +749,6 @@ router.post('/agents/heartbeat', function (req, res) {
       if (dispatched.length > 0) response.auto_dispatched = dispatched;
     } catch (e) { /* non-critical */ }
   }
-
-  // Include work queue so agents discover new work on heartbeat
-  try {
-    var payload = getBootPayload(agentId);
-    if (payload && payload.work_queue && payload.work_queue.length > 0) {
-      response.work_queue = payload.work_queue;
-    }
-  } catch (e) { /* non-critical */ }
 
   res.json(response);
 });
@@ -2293,8 +2316,11 @@ router.post('/agents/:id/savepoint', function (req, res) {
 // Full studio overview (for dashboard)
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var who = getAdminDisplayName(req);
-  res.json(getOverview(who));
+  if (req.query.verbose === 'true') {
+    var who = getAdminDisplayName(req);
+    return res.json(getOverview(who));
+  }
+  res.json(getSlimOverview());
 });
 
 // Actionable items needing decisions (admin only)
