@@ -425,6 +425,7 @@ export default function DashboardPage() {
 
   const navigate = useNavigate()
   const [sleepStatus, setSleepStatus] = useState<SleepStatus | null>(null)
+  const [activitySearch, setActivitySearch] = useState('')
 
   const loadSleepStatus = useCallback(async () => {
     try {
@@ -475,6 +476,16 @@ export default function DashboardPage() {
     }
     return merged.slice(0, 30)
   }, [events, liveEvents])
+
+  const filteredEvents = useMemo(() => {
+    if (!activitySearch.trim()) return recentEvents
+    const q = activitySearch.toLowerCase()
+    return recentEvents.filter((e) =>
+      (e.summary || '').toLowerCase().includes(q) ||
+      (e.type || '').toLowerCase().includes(q) ||
+      (e.agent || '').toLowerCase().includes(q)
+    )
+  }, [recentEvents, activitySearch])
 
   const handleSleepActivate = useCallback(async (directive: string, approvalPolicy: string) => {
     try {
@@ -602,17 +613,29 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Recent Activity */}
         <div className="lg:col-span-3 bg-surface rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text-dim mb-3">Recent Activity</h2>
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="text-sm font-semibold text-text-dim">Recent Activity</h2>
+            <div className="flex-1" />
+            <input
+              type="text"
+              value={activitySearch}
+              onChange={(e) => setActivitySearch(e.target.value)}
+              placeholder="Search activity..."
+              className="w-48 px-2.5 py-1 rounded bg-bg border border-border/40 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent/50 transition-colors"
+            />
+          </div>
           <div className="space-y-1 max-h-[480px] overflow-y-auto pr-1">
-            {recentEvents.length === 0 && !loading && (
-              <p className="text-sm text-text-muted py-4 text-center">No recent events</p>
+            {filteredEvents.length === 0 && !loading && (
+              <p className="text-sm text-text-muted py-4 text-center">
+                {activitySearch ? 'No matching events' : 'No recent events'}
+              </p>
             )}
-            {loading && recentEvents.length === 0 && (
+            {loading && filteredEvents.length === 0 && (
               <div className="flex items-center justify-center py-6">
                 <Spinner size="sm" />
               </div>
             )}
-            {recentEvents.map((event) => (
+            {filteredEvents.map((event) => (
               <div
                 key={event.id}
                 className="flex items-start gap-3 py-2 px-2 rounded hover:bg-surface-raised/50 transition-colors group"

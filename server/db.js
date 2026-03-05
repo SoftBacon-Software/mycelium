@@ -597,6 +597,7 @@ export function listEvents(filters) {
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.type) { where.push('type = ?'); params.push(filters.type); }
   if (filters.agent) { where.push('agent = ?'); params.push(filters.agent); }
+  if (filters.search) { where.push('(summary LIKE ? OR type LIKE ? OR agent LIKE ?)'); var s = '%' + filters.search + '%'; params.push(s, s, s); }
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
