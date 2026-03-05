@@ -1356,7 +1356,7 @@ cd D:/mycelium && railway up
 Wait for deployment to complete. Verify health:
 
 ```bash
-curl -s https://mycelium.fyi/api/mycelium/admin/overview -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" | python -c "import sys,json; d=json.load(sys.stdin); print('agents:', len(d['agents']), 'operators:', len(d.get('operators',[])))"
+curl -s https://mycelium.fyi/api/mycelium/admin/overview -H "X-Admin-Key: $ADMIN_KEY" | python -c "import sys,json; d=json.load(sys.stdin); print('agents:', len(d['agents']), 'operators:', len(d.get('operators',[])))"
 ```
 
 Expected: `agents: 3 operators: 3`
@@ -1378,7 +1378,7 @@ cd D:/mycelium && git tag v2.0-command-structure
 **Step 1: Test operators**
 
 ```bash
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/operators | python -m json.tool
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/operators | python -m json.tool
 ```
 
 Expected: 3 operators (greatness, hijack, unakron)
@@ -1386,7 +1386,7 @@ Expected: 3 operators (greatness, hijack, unakron)
 **Step 2: Test instance config**
 
 ```bash
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/admin/config | python -m json.tool
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/admin/config | python -m json.tool
 ```
 
 Expected: instance_mode=developer, admin_agent_id=greatness-claude, etc.
@@ -1395,14 +1395,14 @@ Expected: instance_mode=developer, admin_agent_id=greatness-claude, etc.
 
 ```bash
 # Freeze
-curl -s -X PUT -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: application/json" \
+curl -s -X PUT -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   https://mycelium.fyi/api/mycelium/admin/override -d '{"action":"freeze"}'
 
 # Verify frozen
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/admin/config/admin_status
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/admin/config/admin_status
 
 # Unfreeze
-curl -s -X PUT -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: application/json" \
+curl -s -X PUT -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   https://mycelium.fyi/api/mycelium/admin/override -d '{"action":"unfreeze"}'
 ```
 
@@ -1410,12 +1410,12 @@ curl -s -X PUT -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: appl
 
 ```bash
 # Send directive
-curl -s -X POST -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: application/json" \
+curl -s -X POST -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   https://mycelium.fyi/api/mycelium/messages \
   -d '{"from":"__admin__","to":"greatness-claude","msg_type":"directive","content":"Test directive - respond to confirm"}'
 
 # Boot to see directive
-curl -s -H "X-Agent-Key: dvk_6f53e63855c5beb23f15706cf5e811cde7d83250cb5d237b" \
+curl -s -H "X-Agent-Key: $AGENT_KEY" \
   https://mycelium.fyi/api/mycelium/boot/greatness-claude | python -c "import sys,json; d=json.load(sys.stdin); print('directives:', len(d.get('pending_directives',[])))"
 ```
 
@@ -1423,7 +1423,7 @@ curl -s -H "X-Agent-Key: dvk_6f53e63855c5beb23f15706cf5e811cde7d83250cb5d237b" \
 
 ```bash
 # Create high-tier approval (requires 2 approvals)
-curl -s -X POST -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: application/json" \
+curl -s -X POST -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   https://mycelium.fyi/api/mycelium/approvals \
   -d '{"action_type":"deploy","requested_by":"greatness-claude","title":"E2E test deploy","risk_tier":"high","required_approvals":2}'
 
@@ -1434,7 +1434,7 @@ curl -s -X POST -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: app
 **Step 6: Test agent roles**
 
 ```bash
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/agents | python -c "import sys,json; [print(a['id'],a.get('role','?'),a.get('operator_id','?')) for a in json.load(sys.stdin)]"
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/agents | python -c "import sys,json; [print(a['id'],a.get('role','?'),a.get('operator_id','?')) for a in json.load(sys.stdin)]"
 ```
 
 Expected: greatness-claude admin greatness, hijack-claude agent hijack, unakron-gpu drone greatness
@@ -1451,19 +1451,19 @@ Boot via MCP: call `studio_boot`. Verify all existing fields present.
 
 ```bash
 # Tasks
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/tasks?limit=3 | python -m json.tool
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/tasks?limit=3 | python -m json.tool
 
 # Plans
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/plans?limit=3 | python -m json.tool
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/plans?limit=3 | python -m json.tool
 
 # Messages
-curl -s -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" https://mycelium.fyi/api/mycelium/messages?limit=3 | python -m json.tool
+curl -s -H "X-Admin-Key: $ADMIN_KEY" https://mycelium.fyi/api/mycelium/messages?limit=3 | python -m json.tool
 ```
 
 **Step 3: Broadcast to all agents**
 
 ```bash
-curl -s -X POST -H "X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk" -H "Content-Type: application/json" \
+curl -s -X POST -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   https://mycelium.fyi/api/mycelium/messages \
   -d '{"from":"__admin__","to":"broadcast","msg_type":"info","subject":"Command Structure v2 Live","content":"Mycelium Command Structure v2 is deployed. New capabilities:\n\n1. OPERATORS: People (greatness, hijack, unakron) are now tracked separately from agents. GET /operators to see the team.\n\n2. AGENT ROLES: Agents now have roles (admin, agent, drone) and are linked to their operator.\n\n3. DIRECTIVES: New blocking message type. If you receive a directive, you MUST respond before getting new work.\n\n4. WORK ROUTING: Use studio_request_work to ask Claude Admin for assignments.\n\n5. APPROVAL VOTING: Multi-human quorum system. Risk tiers: low/medium/high/critical.\n\n6. KILL SWITCH: Human operators can freeze Claude Admin via dashboard.\n\n7. INSTANCE CONFIG: Per-deployment settings at /admin/config.\n\nAll existing tools and endpoints work unchanged. New MCP tools: studio_request_work, studio_file_directive, studio_upload_asset, studio_download_asset."}'
 ```
