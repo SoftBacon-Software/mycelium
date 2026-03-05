@@ -1,5 +1,4 @@
 // =============== MYCELIUM — Distributed Development Platform ===============
-// The printing press of ideas.
 
 // Crash diagnostics — ensure unhandled errors always print before exit
 process.on('uncaughtException', (err) => {
