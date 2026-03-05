@@ -1,0 +1,71 @@
+[
+  {
+    "name": "mycelium_digest_preview",
+    "description": "Preview the current period's digest without saving. Shows tasks completed, bugs fixed, plan steps advanced, and agent utilization for the current period.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["daily", "weekly"],
+          "default": "daily",
+          "description": "Digest period type. Defaults to daily."
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_digest_generate",
+    "description": "Generate and deliver a digest now. Creates a report, records metrics, and routes to operator inbox and optional Slack webhook.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["daily", "weekly"],
+          "description": "Digest period type: daily (last 24h) or weekly (last 7 days)"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_digest_trends",
+    "description": "Get trend data for a metric over recent periods. Useful for dashboard charts and velocity tracking.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["metric"],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "enum": ["tasks_completed", "bugs_fixed", "plan_steps_completed", "messages_sent"],
+          "description": "Which metric to get trends for"
+        },
+        "periods": {
+          "type": "integer",
+          "default": 14,
+          "description": "Number of periods to return (default 14)"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_digest_reports",
+    "description": "List past digest reports. Returns stored daily and weekly digests with summaries and delivery status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["daily", "weekly"],
+          "description": "Filter by digest type. Omit to get all."
+        },
+        "limit": {
+          "type": "integer",
+          "default": 10,
+          "description": "Max number of reports to return"
+        }
+      }
+    }
+  }
+]
