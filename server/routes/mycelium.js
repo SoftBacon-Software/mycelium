@@ -102,7 +102,7 @@ import {
   createMessage, createRequest, getMessage,
   acknowledgeMessage, resolveMessage, listPendingRequests,
   listMessages, listThreads, bulkDeleteMessages,
-  getBootPayload, getSlimBootPayload, getOverview,
+  getBootPayload, getSlimBootPayload, getOverview, getSlimOverview, buildWorkQueue,
   createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
   createPlan, getPlan, listPlans, updatePlan, deletePlan,
   createPlanStep, updatePlanStep, deletePlanStep, reorderPlanSteps,
@@ -614,21 +614,31 @@ router.get('/work/:agentId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = req.params.agentId;
-  // Agents can only access their own work queue
   if (!req._authIsAdmin && who !== agentId) {
     return res.status(403).json({ error: 'Can only access your own work queue' });
   }
-  var payload = getBootPayload(agentId);
-  if (!payload) return res.status(404).json({ error: 'Agent not found' });
-  var queue = payload.work_queue || [];
+  var agent = getAgent(agentId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-  // Auto-claim: grab the top item and assign it
+  // Build work queue directly — no full boot payload needed
+  var db = getDB();
+  var pendingDirectives = db.prepare(
+    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+  ).all(agentId);
+  var pendingRequests = listPendingRequests(agentId);
+  var myTasks = db.prepare(
+    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+  ).all(agentId);
+  var openBugs = listBugs({ status: 'open', limit: 20 });
+  var myPlans = listPlans({ project_id: agent.project_id, limit: 20 });
+  var queue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
+
+  // Auto-claim top item
   if (req.query.auto_claim === 'true' && queue.length > 0) {
     var top = queue[0];
     var claimed = null;
 
     if (top.type === 'directive' || top.type === 'request') {
-      // Directives and requests aren't claimable — just return them
       claimed = top;
     } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
       updatePlanStep(top.id, { assignee: agentId, status: 'in_progress' });
@@ -2306,8 +2316,11 @@ router.post('/agents/:id/savepoint', function (req, res) {
 // Full studio overview (for dashboard)
 router.get('/admin/overview', function (req, res) {
   if (!checkAdmin(req, res)) return;
-  var who = getAdminDisplayName(req);
-  res.json(getOverview(who));
+  if (req.query.verbose === 'true') {
+    var who = getAdminDisplayName(req);
+    return res.json(getOverview(who));
+  }
+  res.json(getSlimOverview());
 });
 
 // Actionable items needing decisions (admin only)
