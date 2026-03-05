@@ -102,7 +102,7 @@ import {
   createMessage, createRequest, getMessage,
   acknowledgeMessage, resolveMessage, listPendingRequests,
   listMessages, listThreads, bulkDeleteMessages,
-  getBootPayload, getOverview,
+  getBootPayload, getSlimBootPayload, getOverview,
   createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
   createPlan, getPlan, listPlans, updatePlan, deletePlan,
   createPlanStep, updatePlanStep, deletePlanStep, reorderPlanSteps,
@@ -156,6 +156,16 @@ import { broadcast, addClient, clientCount } from '../eventBus.js';
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
+
+function formatSavepointSummary(diff) {
+  if (!diff || !diff.summary) return 'No changes since last session.';
+  var parts = [];
+  if (diff.new_messages) parts.push(diff.new_messages + ' new message' + (diff.new_messages > 1 ? 's' : ''));
+  if (diff.task_changes) parts.push(diff.task_changes + ' task change' + (diff.task_changes > 1 ? 's' : ''));
+  if (diff.plan_changes) parts.push(diff.plan_changes + ' plan update' + (diff.plan_changes > 1 ? 's' : ''));
+  if (diff.context_changes) parts.push(diff.context_changes + ' context change' + (diff.context_changes > 1 ? 's' : ''));
+  return parts.length > 0 ? parts.join(', ') : diff.summary || 'No changes since last session.';
+}
 
 // ---- MCP Config Helpers ----
 function getInstanceUrl(req) {
@@ -573,18 +583,27 @@ router.get('/waitlist', function (req, res) {
 router.get('/boot/:agentId', function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
-  // Agent can only boot as themselves
   if (agentId !== req.params.agentId) {
     return res.status(403).json({ error: 'Agent key does not match agent ID' });
   }
-  var payload = getBootPayload(agentId);
+
+  // Verbose mode returns legacy full payload
+  if (req.query.verbose === 'true') {
+    var fullPayload = getBootPayload(agentId);
+    if (!fullPayload) return res.status(404).json({ error: 'Agent not found' });
+    fullPayload.savepoint = computeSavepointDiff(agentId);
+    fullPayload.sleep_mode = getSleepMode();
+    fullPayload.autonomous_mode = isNetworkAutonomous();
+    fullPayload.operators_available = getAvailableOperators().length;
+    emitEvent('agent_boot', agentId, null, agentId + ' booted (verbose)');
+    return res.json(fullPayload);
+  }
+
+  // Default: slim boot
+  var payload = getSlimBootPayload(agentId);
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
-  // Attach savepoint diff
   payload.savepoint = computeSavepointDiff(agentId);
-  // Attach sleep mode / autonomous status
-  payload.sleep_mode = getSleepMode();
-  payload.autonomous_mode = isNetworkAutonomous();
-  payload.operators_available = getAvailableOperators().length;
+  payload.changes_since_last = formatSavepointSummary(computeSavepointDiff(agentId));
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
