@@ -1675,6 +1675,10 @@ router.post('/plans/:id/steps', function (req, res) {
   if (req.body.linked_pr_url !== undefined) updates.linked_pr_url = req.body.linked_pr_url;
   if (Object.keys(updates).length > 0) updatePlanStep(stepId, updates);
   emitEvent('plan_step_added', agentId, plan.project_id, agentId + ' added step to plan #' + plan.id + ': ' + title, { plan_id: plan.id, step_id: stepId });
+  // Route operator_input steps to all operators' inboxes
+  if (assignee === 'operator_input') {
+    createInboxItemForAllOperators('approval', 'plan_step', stepId, 'Operator input needed: ' + title, 'Plan #' + plan.id + ' — ' + (plan.title || '') + '. Step requires your review/approval.', { plan_id: plan.id, step_id: stepId, step_title: title }, 'high');
+  }
   res.json({ id: stepId, plan_id: plan.id });
 });
 
@@ -1704,6 +1708,11 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  // Route operator_input assignments to all operators' inboxes
+  if (fields.assignee === 'operator_input') {
+    var stepTitle = planStep ? planStep.title : ('Step #' + stepStepId);
+    createInboxItemForAllOperators('approval', 'plan_step', stepStepId, 'Operator input needed: ' + stepTitle, 'Plan #' + stepPlanId + ' — ' + (plan.title || '') + '. Step requires your review/approval.', { plan_id: stepPlanId, step_id: stepStepId, step_title: stepTitle }, 'high');
+  }
   res.json({ ok: true, step_id: stepStepId });
 });
 
