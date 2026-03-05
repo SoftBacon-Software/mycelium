@@ -1,0 +1,20 @@
+{
+  "name": "error-monitor",
+  "version": "1.0.0",
+  "displayName": "Error Monitor",
+  "description": "Receives error alerts from Sentry, Bugsnag, and Datadog. Auto-files Mycelium bugs with stack traces and deduplication.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/errors",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "provider", "type": "select", "label": "Error Provider", "description": "Which error tracking service to receive webhooks from", "options": ["sentry", "bugsnag", "datadog"], "required": true },
+    { "key": "webhook_secret", "type": "secret", "label": "Webhook Secret", "description": "Secret for verifying webhook signatures" },
+    { "key": "auto_assign", "type": "boolean", "label": "Auto-assign Bugs", "description": "Automatically assign bugs to agents based on recent task history", "default": "false" },
+    { "key": "auto_file_threshold", "type": "number", "label": "Auto-file Threshold", "description": "Minimum error occurrences before auto-filing a bug (0 = file immediately)", "default": "1" },
+    { "key": "default_project", "type": "string", "label": "Default Project", "description": "Mycelium project ID for new bugs" },
+    { "key": "default_severity", "type": "select", "label": "Default Severity", "description": "Default bug severity for new errors", "options": ["low", "normal", "high", "critical"], "default": "normal" }
+  ]
+}

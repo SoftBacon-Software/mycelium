@@ -1,0 +1,85 @@
+[
+  {
+    "name": "mycelium_cost_report",
+    "description": "Get cost summary for current period. Returns today's spend, week's spend, budget status, and top agents.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "mycelium_cost_record",
+    "description": "Record token usage for current session. Calculates cost automatically from configured pricing.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "description": "Number of input tokens used"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "description": "Number of output tokens used"
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "default": 0,
+          "description": "Number of cached input tokens used"
+        },
+        "task_id": {
+          "type": "integer",
+          "description": "Optional task ID to associate cost with"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_cost_by_agent",
+    "description": "Get cost breakdown by agent. Shows total tokens and spend per agent for the given period.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "date_from": {
+          "type": "string",
+          "description": "Start date (YYYY-MM-DD). Defaults to all time."
+        },
+        "date_to": {
+          "type": "string",
+          "description": "End date (YYYY-MM-DD). Defaults to today."
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_cost_by_project",
+    "description": "Get cost breakdown by project. Shows total tokens and spend per project for the given period.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "date_from": {
+          "type": "string",
+          "description": "Start date (YYYY-MM-DD). Defaults to all time."
+        },
+        "date_to": {
+          "type": "string",
+          "description": "End date (YYYY-MM-DD). Defaults to today."
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_cost_trends",
+    "description": "Get daily cost trend data. Returns daily totals for the specified number of days.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "default": 14,
+          "description": "Number of days of trend data to return (default 14)"
+        }
+      }
+    }
+  }
+]

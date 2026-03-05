@@ -1,0 +1,20 @@
+{
+  "name": "cost-tracker",
+  "version": "1.0.0",
+  "displayName": "Cost Tracker",
+  "description": "Tracks AI API token usage and costs per agent, project, and task. Budget alerts and spend dashboards.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/costs",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "budget_daily", "type": "number", "label": "Daily Budget ($)", "description": "Daily spend limit in USD. 0 = no limit.", "default": "0" },
+    { "key": "budget_weekly", "type": "number", "label": "Weekly Budget ($)", "description": "Weekly spend limit in USD. 0 = no limit.", "default": "0" },
+    { "key": "alert_threshold_pct", "type": "number", "label": "Alert Threshold (%)", "description": "Send alert when budget usage exceeds this percentage", "default": "80" },
+    { "key": "price_input_mtok", "type": "number", "label": "Input Price ($/MTok)", "description": "Cost per million input tokens", "default": "15" },
+    { "key": "price_output_mtok", "type": "number", "label": "Output Price ($/MTok)", "description": "Cost per million output tokens", "default": "75" },
+    { "key": "price_cache_read_mtok", "type": "number", "label": "Cache Read Price ($/MTok)", "description": "Cost per million cached input tokens", "default": "1.50" }
+  ]
+}

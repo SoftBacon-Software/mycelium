@@ -1,0 +1,63 @@
+[
+  {
+    "name": "mycelium_errors_recent",
+    "description": "List recent errors from the error monitor. Returns open errors by default, ordered by most recently seen.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["sentry", "bugsnag", "datadog"],
+          "description": "Filter by error provider"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "muted", "resolved"],
+          "default": "open",
+          "description": "Filter by error status"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max errors to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_errors_stats",
+    "description": "Get error statistics including counts by provider, by status, errors in last 24 hours, and top errors by occurrence count.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "mycelium_errors_mute",
+    "description": "Mute a noisy error to stop it from auto-filing bugs. Muted errors still track occurrences but won't create new bugs.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["error_id"],
+      "properties": {
+        "error_id": {
+          "type": "integer",
+          "description": "The error event ID to mute"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_errors_file_bug",
+    "description": "Manually file a Mycelium bug from an error event. Creates a bug in dv_bugs and links it to the error.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["error_id"],
+      "properties": {
+        "error_id": {
+          "type": "integer",
+          "description": "The error event ID to file a bug for"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "name": "daily-digest",
+  "version": "1.0.0",
+  "displayName": "Daily Digest",
+  "description": "Auto-generates daily and weekly summaries of swarm activity — tasks completed, bugs fixed, plans advanced, agent utilization. Routes to operator inbox.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/digest",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "schedule", "type": "select", "label": "Schedule", "description": "How often to generate digests", "options": ["daily", "weekly"], "default": "daily" },
+    { "key": "timezone", "type": "string", "label": "Timezone", "description": "IANA timezone for digest generation (e.g. America/Chicago)", "default": "UTC" },
+    { "key": "digest_hour", "type": "number", "label": "Digest Hour", "description": "Hour of day (0-23) to generate digest", "default": "8" },
+    { "key": "slack_webhook", "type": "secret", "label": "Slack Webhook URL", "description": "Optional: send digests to Slack" },
+    { "key": "include_agent_stats", "type": "boolean", "label": "Include Agent Stats", "description": "Show per-agent breakdown in digest", "default": "true" }
+  ]
+}
