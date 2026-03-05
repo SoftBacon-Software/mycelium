@@ -3945,7 +3945,7 @@ router.get('/inbox', function (req, res) {
   if (!operatorId) {
     if (!user) return apiError(res, 400, 'operator_id is required');
     // Resolve operator from studio_user_id
-    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
     if (!op) return apiError(res, 404, 'No operator linked to this account');
     operatorId = op.id;
   }
@@ -3971,11 +3971,12 @@ router.get('/inbox/count', function (req, res) {
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
   var operatorId = req.query.operator_id;
   if (!operatorId && user) {
-    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.id);
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
     if (op) operatorId = op.id;
   }
   if (operatorId) {
-    res.json({ operator_id: operatorId, unread: countUnreadInbox(operatorId) });
+    var unreadCount = countUnreadInbox(operatorId);
+    res.json({ operator_id: operatorId, unread: unreadCount, count: unreadCount });
   } else {
     res.json(countAllUnreadInbox());
   }
