@@ -3,11 +3,12 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import {
   enablePlugin, disablePlugin,
   fetchPlugin, fetchPluginConfig, savePluginConfig,
+  fetchPluginRegistry, installPlugin, uninstallPlugin,
 } from '../api/endpoints'
 import type { Plugin, PluginConfigField } from '../api/types'
 import { toast } from 'sonner'
 
-// ─── Marketplace registry stub ────────────────────────────────────────────────
+// ─── Marketplace registry types ───────────────────────────────────────────────
 interface MarketplacePlugin {
   name: string
   display_name: string
@@ -18,36 +19,6 @@ interface MarketplacePlugin {
   repo_url: string
 }
 
-// Static stub — will be replaced by registry.json fetch once the repo is live
-const MARKETPLACE_STUBS: MarketplacePlugin[] = [
-  {
-    name: 'slack-notifier',
-    display_name: 'Slack Notifier',
-    description: 'Posts agent events to a Slack channel via webhook. Highly configurable — choose which event types get notified.',
-    author: 'SoftBacon Software',
-    version: '1.0.0',
-    trusted: true,
-    repo_url: 'https://github.com/SoftBacon-Software/mycelium-plugins',
-  },
-  {
-    name: 'webhook-forwarder',
-    display_name: 'Webhook Forwarder',
-    description: 'Forwards all platform events to an external HTTP endpoint with HMAC request signing for security.',
-    author: 'SoftBacon Software',
-    version: '1.0.0',
-    trusted: true,
-    repo_url: 'https://github.com/SoftBacon-Software/mycelium-plugins',
-  },
-  {
-    name: 'github-integration',
-    display_name: 'GitHub Integration',
-    description: 'Bridges Mycelium to GitHub. Creates issues from bugs, closes issues on task completion. Adds MCP tools: create/list/close issues.',
-    author: 'SoftBacon Software',
-    version: '1.0.0',
-    trusted: true,
-    repo_url: 'https://github.com/SoftBacon-Software/mycelium-plugins',
-  },
-]
 
 // ─── Config field renderer ────────────────────────────────────────────────────
 function ConfigField({
@@ -155,15 +126,18 @@ function PluginDetailPanel({
   plugin,
   onClose,
   onToggle,
+  onUninstall,
 }: {
   plugin: Plugin
   onClose: () => void
   onToggle: (name: string, enabled: number) => void
+  onUninstall: (name: string) => void
 }) {
   const [detail, setDetail] = useState<Plugin | null>(null)
   const [localConfig, setLocalConfig] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(true)
+  const [uninstalling, setUninstalling] = useState(false)
 
   // Load enriched plugin detail + current config
   useEffect(() => {
@@ -399,6 +373,33 @@ function PluginDetailPanel({
                   </div>
                 </section>
               )}
+
+              {/* Uninstall — only show for disabled plugins */}
+              {!plugin.enabled && (
+                <section className="mt-4 pt-4 border-t border-border/50">
+                  <button
+                    type="button"
+                    disabled={uninstalling}
+                    onClick={async () => {
+                      if (!confirm(`Uninstall "${plugin.display_name || plugin.name}"? This will remove the plugin and its configuration.`)) return
+                      setUninstalling(true)
+                      try {
+                        await uninstallPlugin(plugin.name)
+                        toast.success(`Uninstalled plugin: ${plugin.display_name || plugin.name}`)
+                        onUninstall(plugin.name)
+                        onClose()
+                      } catch (err: any) {
+                        toast.error(`Failed to uninstall: ${err.message}`)
+                      } finally {
+                        setUninstalling(false)
+                      }
+                    }}
+                    className="text-xs text-red hover:text-red/80 transition-colors disabled:opacity-50"
+                  >
+                    {uninstalling ? 'Uninstalling...' : 'Uninstall plugin'}
+                  </button>
+                </section>
+              )}
             </div>
           )}
         </div>
@@ -408,62 +409,120 @@ function PluginDetailPanel({
 }
 
 // ─── Marketplace tab ──────────────────────────────────────────────────────────
-function MarketplaceTab() {
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Coming-soon banner */}
-      <div className="bg-accent/10 border border-accent/20 rounded-lg p-4 flex flex-col gap-1">
-        <p className="text-sm font-medium text-text">
-          🛒 Marketplace is coming soon
-        </p>
-        <p className="text-xs text-text-muted">
-          Browse, install, and publish community plugins. Anyone + their Claude
-          can build a plugin and publish it back to the registry.
-        </p>
+function MarketplaceTab({ installedNames, onInstalled }: { installedNames: Set<string>; onInstalled: () => void }) {
+  const [registry, setRegistry] = useState<MarketplacePlugin[]>([])
+  const [loadingRegistry, setLoadingRegistry] = useState(true)
+  const [registryError, setRegistryError] = useState<string | null>(null)
+  const [installing, setInstalling] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingRegistry(true)
+    setRegistryError(null)
+
+    fetchPluginRegistry()
+      .then((data) => {
+        if (!cancelled) setRegistry(data)
+      })
+      .catch((err) => {
+        if (!cancelled) setRegistryError(err?.message || 'Failed to load registry')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRegistry(false)
+      })
+
+    return () => { cancelled = true }
+  }, [])
+
+  const handleInstall = useCallback(async (name: string) => {
+    setInstalling(name)
+    try {
+      const result = await installPlugin(name)
+      toast.success(result.message || `Installed plugin: ${name}`)
+      onInstalled()
+    } catch (err: any) {
+      toast.error(`Failed to install: ${err.message}`)
+    } finally {
+      setInstalling(null)
+    }
+  }, [onInstalled])
+
+  if (loadingRegistry) {
+    return (
+      <div className="flex items-center justify-center h-32 text-text-muted text-sm">
+        Loading registry...
+      </div>
+    )
+  }
+
+  if (registryError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-32 gap-2">
+        <p className="text-sm text-text-muted">Registry unavailable</p>
+        <p className="text-xs text-text-dim">{registryError}</p>
         <a
           href="https://github.com/SoftBacon-Software/mycelium-plugins"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-accent hover:underline mt-1 self-start"
+          className="text-xs text-accent hover:underline mt-1"
         >
-          github.com/SoftBacon-Software/mycelium-plugins →
+          github.com/SoftBacon-Software/mycelium-plugins
         </a>
       </div>
+    )
+  }
 
-      {/* Preview cards */}
-      <p className="text-xs text-text-muted font-medium uppercase tracking-wide">
-        Coming to the registry
-      </p>
+  if (registry.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-32 text-text-muted text-sm">
+        No plugins in registry yet
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {MARKETPLACE_STUBS.map((mp) => (
-          <div
-            key={mp.name}
-            className="bg-surface border border-border/60 rounded-lg p-4 flex flex-col gap-2 opacity-75"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-sm font-semibold text-text">{mp.display_name}</h3>
-                  {mp.trusted && (
-                    <span className="text-[10px] bg-green/10 text-green px-1.5 py-0.5 rounded font-medium">
-                      trusted
-                    </span>
-                  )}
+        {registry.map((mp) => {
+          const isInstalled = installedNames.has(mp.name)
+          const isInstalling = installing === mp.name
+
+          return (
+            <div
+              key={mp.name}
+              className="bg-surface border border-border/60 rounded-lg p-4 flex flex-col gap-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-semibold text-text">{mp.display_name}</h3>
+                    {mp.author === 'SoftBacon Software' && (
+                      <span className="text-[10px] bg-green/10 text-green px-1.5 py-0.5 rounded font-medium">
+                        Verified
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] text-text-muted">by {mp.author} · v{mp.version}</span>
                 </div>
-                <span className="text-[11px] text-text-muted">by {mp.author} · v{mp.version}</span>
+                {isInstalled ? (
+                  <span className="shrink-0 text-[10px] bg-accent/10 text-accent px-2.5 py-1 rounded font-medium">
+                    Installed
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleInstall(mp.name)}
+                    disabled={isInstalling}
+                    className="shrink-0 text-xs bg-accent text-white px-3 py-1 rounded hover:bg-accent/90 transition-colors disabled:opacity-50"
+                  >
+                    {isInstalling ? 'Installing...' : 'Install'}
+                  </button>
+                )}
               </div>
-              <button
-                type="button"
-                disabled
-                className="shrink-0 text-xs bg-surface-raised text-text-muted px-3 py-1 rounded cursor-not-allowed"
-                title="Marketplace install coming soon"
-              >
-                Install
-              </button>
+              <p className="text-xs text-text-dim leading-relaxed">{mp.description}</p>
             </div>
-            <p className="text-xs text-text-dim leading-relaxed">{mp.description}</p>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -535,9 +594,6 @@ export default function PluginsPage() {
               }`}
             >
               Marketplace
-              <span className="ml-1.5 text-[10px] bg-accent/20 text-accent px-1 py-0.5 rounded font-medium">
-                soon
-              </span>
             </button>
           </div>
 
@@ -555,7 +611,10 @@ export default function PluginsPage() {
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-y-auto pb-2">
         {activeTab === 'marketplace' ? (
-          <MarketplaceTab />
+          <MarketplaceTab
+            installedNames={new Set(plugins.map((p) => p.name))}
+            onInstalled={refresh}
+          />
         ) : (
           <>
             {plugins.length === 0 && !loading && (
@@ -644,6 +703,10 @@ export default function PluginsPage() {
           plugin={selectedPlugin}
           onClose={() => setSelectedPlugin(null)}
           onToggle={handleToggle}
+          onUninstall={() => {
+            setSelectedPlugin(null)
+            refresh()
+          }}
         />
       )}
     </div>
