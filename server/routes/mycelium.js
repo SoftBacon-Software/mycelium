@@ -146,7 +146,8 @@ import {
   countPendingForAgent, archiveOldMessages, archiveOldEvents,
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
-  dismissInboxItem, countUnreadInbox, countAllUnreadInbox
+  dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
+  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -155,6 +156,29 @@ import { broadcast, addClient, clientCount } from '../eventBus.js';
 var ADMIN_KEY = process.env.ADMIN_KEY;
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
+
+// ---- MCP Config Helpers ----
+function getInstanceUrl(req) {
+  var proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  var host = req.get('host');
+  return proto + '://' + host;
+}
+
+function buildMcpConfig(agentId, apiKey, instanceUrl) {
+  return {
+    mcpServers: {
+      mycelium: {
+        command: 'npx',
+        args: ['-y', '@softbacon/mycelium-mcp@latest'],
+        env: {
+          MYCELIUM_API_KEY: apiKey,
+          MYCELIUM_AGENT_ID: agentId,
+          MYCELIUM_URL: instanceUrl + '/api/mycelium'
+        }
+      }
+    }
+  };
+}
 
 // Wrap async route handlers so rejected promises forward to Express error handler.
 // Express 4 does not catch async rejections automatically.
@@ -2168,7 +2192,9 @@ router.post('/admin/agents', asyncHandler(async function (req, res) {
     addChannelMember(generalChannel.id, id, 'agent', 'member');
   }
   emitEvent('agent_registered', '__admin__', null, 'Admin registered agent: ' + id);
-  res.json({ id: id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
+  var instanceUrl = getInstanceUrl(req);
+  var mcpConfig = buildMcpConfig(id, apiKey, instanceUrl);
+  res.json({ id: id, api_key: apiKey, mcp_config: mcpConfig, message: 'Store this key — it will not be shown again. MCP config included for agent setup.' });
 }));
 
 router.delete('/admin/agents/:id', function (req, res) {
@@ -2206,6 +2232,16 @@ router.post('/agents/rekey', function (req, res) {
   clearAgentKeyCache();
   emitEvent('agent_key_rotated', agentId, null, agentId + ' rotated their API key');
   res.json({ id: agentId, api_key: newKey, message: 'Key rotated — update your config with this new key' });
+});
+
+// Get MCP config for an agent (admin only — key not included, just the structure)
+router.get('/agents/:id/mcp-config', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  var instanceUrl = getInstanceUrl(req);
+  var config = buildMcpConfig(req.params.id, '<YOUR_AGENT_API_KEY>', instanceUrl);
+  res.json({ agent_id: req.params.id, mcp_config: config, note: 'Replace <YOUR_AGENT_API_KEY> with the agent\'s actual API key' });
 });
 
 // Admin heartbeat for any agent
@@ -4011,6 +4047,53 @@ router.post('/github/prs/:owner/:repo', function (req, res) {
       res.json({ number: r.data.number, title: r.data.title, url: r.data.html_url });
     })
     .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
+});
+
+// ======== SUPPORT TICKETS ========
+
+// Create support ticket (public — no auth required for customers)
+router.post('/support/tickets', function (req, res) {
+  var subject = req.body.subject;
+  if (!subject) return res.status(400).json({ error: 'subject is required' });
+  var ticket = createSupportTicket({
+    instance_id: req.body.instance_id || '',
+    subject: subject,
+    description: req.body.description || '',
+    category: req.body.category || 'general',
+    priority: req.body.priority || 'normal',
+    reporter_email: req.body.reporter_email || req.body.email || '',
+    reporter_name: req.body.reporter_name || req.body.name || ''
+  });
+  res.status(201).json(ticket);
+});
+
+// List support tickets (admin only)
+router.get('/support/tickets', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var tickets = listSupportTickets({
+    status: req.query.status,
+    instance_id: req.query.instance_id,
+    priority: req.query.priority,
+    limit: parseInt(req.query.limit) || 100
+  });
+  res.json({ count: tickets.length, tickets: tickets });
+});
+
+// Get single ticket (admin only)
+router.get('/support/tickets/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var ticket = getSupportTicket(parseInt(req.params.id));
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  res.json(ticket);
+});
+
+// Update ticket (admin only)
+router.put('/support/tickets/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var ticket = getSupportTicket(parseInt(req.params.id));
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  var updated = updateSupportTicket(parseInt(req.params.id), req.body);
+  res.json(updated);
 });
 
 export default router;
