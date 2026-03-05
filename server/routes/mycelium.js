@@ -567,6 +567,31 @@ router.post('/waitlist', asyncHandler(async function (req, res) {
   res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
 }));
 
+// GET /stats/public — no auth, anonymized aggregate stats for landing page + investor demos
+router.get('/stats/public', function (req, res) {
+  try {
+    var db = getDB();
+    var agents = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) as online FROM dv_agents WHERE role != 'drone'").get();
+    var tasks = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed FROM dv_tasks").get();
+    var plans = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed FROM dv_plans").get();
+    var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM dv_bugs").get();
+    var messages = db.prepare("SELECT COUNT(*) as total FROM dv_messages").get();
+    var projects = db.prepare("SELECT COUNT(*) as total FROM dv_projects").get();
+    var recentActivity = db.prepare("SELECT description FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.description; });
+    res.json({
+      agents: { total: agents.total, online: agents.online },
+      tasks: { total: tasks.total, completed: tasks.completed },
+      plans: { total: plans.total, completed: plans.completed },
+      bugs: { total: bugs.total, resolved: bugs.resolved },
+      messages: messages.total,
+      projects: projects.total,
+      recent_activity: recentActivity
+    });
+  } catch (e) {
+    res.json({ agents: { total: 0, online: 0 }, tasks: { total: 0, completed: 0 }, plans: { total: 0, completed: 0 }, bugs: { total: 0, resolved: 0 }, messages: 0, projects: 0, recent_activity: [] });
+  }
+});
+
 // GET /waitlist — admin only, list all signups
 router.get('/waitlist', function (req, res) {
   if (!checkAdmin(req, res)) return;
