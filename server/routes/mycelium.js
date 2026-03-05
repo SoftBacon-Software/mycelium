@@ -317,11 +317,13 @@ function clearAgentKeyCache() {
 }
 
 // Check if the authenticated caller has access to a resource's project.
-// Admins and studio users bypass. Agents must match project_id OR be the assignee.
+// Admins and studio users bypass. Agents can READ any project but can only
+// WRITE to their own project (or resources assigned to them).
 function checkProjectScope(req, res, resourceProjectId, assignee) {
   if (req._authIsAdmin) return true;
   if (!req._authAgentId) return true; // studio user or admin — no scope restriction
   if (!resourceProjectId) return true; // resource has no project — allow
+  if (req.method === 'GET') return true; // agents can read across projects (shared swarm context)
   if (req._authProjectId === resourceProjectId) return true;
   if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
