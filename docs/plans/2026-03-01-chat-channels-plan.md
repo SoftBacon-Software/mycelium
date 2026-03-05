@@ -634,7 +634,7 @@ router.put('/channels/:id/read', function (req, res) {
 Start server, then:
 
 ```bash
-ADMIN_KEY="KPeO7ZspKsAQotZsrvnZ2vYk"
+ADMIN_KEY="$ADMIN_KEY"
 BASE="http://localhost:3002/api/mycelium"
 
 # List channels
@@ -883,7 +883,7 @@ cd D:/mycelium && railway up
 **Step 2: Full verification**
 
 ```bash
-ADMIN_KEY="KPeO7ZspKsAQotZsrvnZ2vYk"
+ADMIN_KEY="$ADMIN_KEY"
 BASE="https://mycelium.fyi/api/mycelium"
 
 # Default channels exist
