@@ -2356,6 +2356,83 @@ export function getOverview(userId) {
   };
 }
 
+// =============== SLIM OVERVIEW ===============
+
+function timeSince(dateStr) {
+  var diff = Date.now() - new Date(dateStr).getTime();
+  if (diff < 60000) return Math.round(diff / 1000) + 's ago';
+  if (diff < 3600000) return Math.round(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.round(diff / 3600000) + 'h ago';
+  return Math.round(diff / 86400000) + 'd ago';
+}
+
+export function getSlimOverview() {
+  // Agent statuses — compact
+  var agents = db.prepare(
+    "SELECT id, status, working_on, last_heartbeat FROM dv_agents ORDER BY created_at"
+  ).all().map(function (a) {
+    var hb = a.last_heartbeat ? timeSince(a.last_heartbeat) : 'never';
+    return { id: a.id, status: a.status, working_on: a.working_on || '', heartbeat: hb };
+  });
+
+  // Counts
+  var counts = {
+    tasks_open: db.prepare("SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'open'").get().c,
+    tasks_in_progress: db.prepare("SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'in_progress'").get().c,
+    bugs_open: db.prepare("SELECT COUNT(*) as c FROM dv_bugs WHERE status = 'open'").get().c,
+    plans_active: db.prepare("SELECT COUNT(*) as c FROM dv_plans WHERE status = 'active'").get().c,
+    requests_pending: db.prepare("SELECT COUNT(*) as c FROM dv_messages WHERE msg_type = 'request' AND status IN ('sent', 'pending')").get().c,
+    approvals_pending: db.prepare("SELECT COUNT(*) as c FROM dv_approvals WHERE status = 'pending'").get().c,
+    drones_online: db.prepare("SELECT COUNT(*) as c FROM dv_agents WHERE agent_type = 'drone' AND status = 'online'").get().c,
+    drone_jobs_pending: db.prepare("SELECT COUNT(*) as c FROM dv_drone_jobs WHERE status = 'pending'").get().c
+  };
+
+  // Attention array — server-side triage
+  var attention = [];
+
+  // Stale requests (>1h unresolved)
+  var staleRequests = db.prepare(
+    "SELECT id, from_agent, content, created_at FROM dv_messages WHERE msg_type = 'request' AND status IN ('sent', 'pending') AND created_at < datetime('now', '-1 hour') ORDER BY created_at ASC LIMIT 5"
+  ).all();
+  for (var r of staleRequests) {
+    attention.push({ type: 'stale_request', id: r.id, from: r.from_agent, title: r.content.slice(0, 80), action: 'respond', age: timeSince(r.created_at) });
+  }
+
+  // Pending approvals
+  var pendingApprovals = db.prepare(
+    "SELECT id, title, created_at FROM dv_approvals WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
+  ).all();
+  for (var a of pendingApprovals) {
+    attention.push({ type: 'pending_approval', id: a.id, title: a.title, action: 'approve_or_deny', age: timeSince(a.created_at) });
+  }
+
+  // Stale tasks (in_progress >6h without update)
+  var staleTasks = db.prepare(
+    "SELECT t.id, t.title, t.assignee, t.updated_at FROM dv_tasks t WHERE t.status = 'in_progress' AND t.updated_at < datetime('now', '-6 hours') ORDER BY t.updated_at ASC LIMIT 5"
+  ).all();
+  for (var t of staleTasks) {
+    attention.push({ type: 'stale_task', id: t.id, assignee: t.assignee, title: t.title, action: 'reassign_or_unblock', age: timeSince(t.updated_at) });
+  }
+
+  // Unassigned bugs
+  var unassignedBugs = db.prepare(
+    "SELECT id, title, severity, created_at FROM dv_bugs WHERE status = 'open' AND (assignee IS NULL OR assignee = '') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, created_at ASC LIMIT 5"
+  ).all();
+  for (var b of unassignedBugs) {
+    attention.push({ type: 'unassigned_bug', id: b.id, title: b.title, severity: b.severity, action: 'assign', age: timeSince(b.created_at) });
+  }
+
+  // Recent activity — 5 one-liners
+  var recentEvents = db.prepare(
+    "SELECT summary, created_at FROM dv_events ORDER BY created_at DESC LIMIT 5"
+  ).all();
+  var recent_activity = recentEvents.map(function (e) {
+    return e.summary + ' (' + timeSince(e.created_at) + ')';
+  });
+
+  return { agents: agents, counts: counts, attention: attention, recent_activity: recent_activity };
+}
+
 // =============== PLUGINS ===============
 
 export function getDB() { return db; }
