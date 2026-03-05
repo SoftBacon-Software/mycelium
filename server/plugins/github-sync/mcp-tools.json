@@ -1,0 +1,82 @@
+[
+  {
+    "name": "mycelium_github_events",
+    "description": "List recent GitHub webhook events received by Mycelium. Shows pushes, PRs, issues, CI runs, and other GitHub activity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "type": "string",
+          "description": "Filter by event type (e.g. push, pull_request, issues, check_suite, workflow_run)"
+        },
+        "repo": {
+          "type": "string",
+          "description": "Filter by repository (e.g. SoftBacon-Software/mycelium)"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max number of events to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_github_links",
+    "description": "List entity links between GitHub PRs/issues and Mycelium tasks/bugs. Shows what is synced.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Filter by GitHub repository"
+        },
+        "github_type": {
+          "type": "string",
+          "enum": ["pr", "issue", "check"],
+          "description": "Filter by GitHub entity type"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_github_link",
+    "description": "Manually link a GitHub PR or issue to a Mycelium task or bug. Creates a bidirectional sync link.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["github_repo", "github_number", "github_type", "mycelium_type", "mycelium_id"],
+      "properties": {
+        "github_repo": {
+          "type": "string",
+          "description": "GitHub repository (e.g. SoftBacon-Software/mycelium)"
+        },
+        "github_number": {
+          "type": "integer",
+          "description": "GitHub PR or issue number"
+        },
+        "github_type": {
+          "type": "string",
+          "enum": ["pr", "issue"],
+          "description": "Type of GitHub entity"
+        },
+        "mycelium_type": {
+          "type": "string",
+          "enum": ["task", "bug"],
+          "description": "Type of Mycelium entity"
+        },
+        "mycelium_id": {
+          "type": "integer",
+          "description": "Mycelium task or bug ID"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_github_stats",
+    "description": "Get GitHub sync statistics — event counts by type, link counts, unprocessed events.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+]

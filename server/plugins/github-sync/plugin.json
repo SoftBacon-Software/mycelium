@@ -1,0 +1,18 @@
+{
+  "name": "github-sync",
+  "version": "1.0.0",
+  "displayName": "GitHub Sync",
+  "description": "Deep GitHub integration — webhook receiver for PRs, issues, CI status. Bidirectional sync between GitHub and Mycelium tasks/bugs.",
+  "author": "SoftBacon Software",
+  "enabled": false,
+  "routePrefix": "/github",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json",
+  "configSchema": [
+    { "key": "webhook_secret", "type": "secret", "label": "Webhook Secret", "description": "GitHub webhook secret for signature verification", "required": true },
+    { "key": "default_project", "type": "string", "label": "Default Project", "description": "Mycelium project ID for new items from GitHub", "required": false },
+    { "key": "auto_create_bugs", "type": "boolean", "label": "Auto-create Bugs", "description": "Automatically create Mycelium bugs from GitHub issues", "default": "true" },
+    { "key": "ci_notifications", "type": "boolean", "label": "CI Notifications", "description": "Send CI failure notifications to operator inbox", "default": "true" }
+  ]
+}
