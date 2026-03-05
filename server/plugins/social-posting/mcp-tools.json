@@ -1,7 +1,7 @@
 [
   {
     "name": "mycelium_social_generate_caption",
-    "description": "Generate a Dio-voiced social media caption prompt for a gameplay highlight clip. Returns system prompt + user prompt to send to Claude API.",
+    "description": "Generate a character-voiced social media caption prompt for a gameplay highlight clip. Returns system prompt + user prompt to send to Claude API.",
     "schema": {
       "type": "object",
       "properties": {
@@ -80,7 +80,7 @@
     "schema": {
       "type": "object",
       "properties": {
-        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" }
+        "project_id": { "type": "string", "description": "Project ID" }
       }
     },
     "endpoint": { "method": "GET", "path": "/social/stats", "queryMap": { "project_id": "project_id" } }

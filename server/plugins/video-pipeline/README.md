@@ -6,7 +6,7 @@ Processes raw gameplay footage through a multi-stage pipeline: detect highlights
 
 ## Configuration
 
-No plugin-level config. Session-level config is passed via the `config` field on session creation. Drone jobs use the `wsac-agent` repo for worker scripts. Detection optionally uses Claude Vision (requires GPU drone).
+No plugin-level config. Session-level config is passed via the `config` field on session creation. Drone jobs use a configurable worker repo for scripts. Detection optionally uses Claude Vision (requires GPU drone).
 
 ## API Endpoints
 

@@ -1,14 +1,16 @@
 // YouTube + Hunter.io contact discovery
-// Port of wsac-agent/outreach/discoverer.py
+// Ported from Python worker scripts
 
 import { google } from 'googleapis';
 
+// Creator archetypes for discovery classification.
+// Override via campaign config archetype_keywords for project-specific targeting.
 var ARCHETYPE_KEYWORDS = {
-  roguelike_specialist: ['roguelike', 'rogue-like', 'roguelite', 'run-based', 'permadeath'],
+  genre_specialist: ['indie game', 'indie dev', 'game dev', 'solo dev', 'game development'],
   hidden_gem: ['hidden gem', 'you missed', 'underrated', 'overlooked', 'slept on'],
-  autobattler_strategy: ['autobattler', 'auto chess', 'auto battler', 'tft', 'strategy'],
-  ai_tech_gaming: ['ai game', 'ai generated', 'artificial intelligence', 'machine learning'],
-  lets_play_story: ["let's play", 'playthrough', 'full game', 'story', 'narrative']
+  strategy_fan: ['strategy', 'tactics', 'turn-based', 'deckbuilder', 'simulation'],
+  tech_innovator: ['ai game', 'ai generated', 'procedural', 'machine learning', 'tech'],
+  lets_play: ["let's play", 'playthrough', 'full game', 'story', 'narrative']
 };
 
 function classifyArchetype(title, description) {

@@ -6,7 +6,7 @@ Generates Steam store page assets for a game project. Store copy generation runs
 
 ## Configuration
 
-No plugin-level config. Game facts for store copy can be passed per-request or use built-in defaults (Willing Sacrifice). Drone jobs use the `wsac-agent` repo for worker scripts.
+Game facts must be provided per-request via `game_facts` body parameter, or stored in plugin config under the `game_facts` key (JSON). No built-in defaults. Drone jobs use a configurable worker repo for scripts.
 
 ## API Endpoints
 
@@ -29,7 +29,7 @@ All routes are prefixed with `/api/mycelium/steam`.
 | `mycelium_steam_get_asset` | Get asset details including drone job status |
 | `mycelium_steam_store_copy` | Generate a BBCode store copy prompt for Claude API |
 | `mycelium_steam_screenshots` | Submit drone job to extract curated screenshots from footage |
-| `mycelium_steam_trailer` | Submit drone job to build a segmented trailer with Dio narration |
+| `mycelium_steam_trailer` | Submit drone job to build a segmented trailer with narration |
 
 ## Events
 

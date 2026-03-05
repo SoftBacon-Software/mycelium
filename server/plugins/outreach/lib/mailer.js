@@ -1,5 +1,5 @@
 // Gmail API email sender
-// Port of wsac-agent/outreach/mailer.py
+// Ported from Python worker scripts
 
 import { google } from 'googleapis';
 

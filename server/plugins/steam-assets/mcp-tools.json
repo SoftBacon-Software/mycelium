@@ -30,7 +30,7 @@
     "schema": {
       "type": "object",
       "properties": {
-        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "project_id": { "type": "string", "description": "Project ID" },
         "game_facts": { "type": "object", "description": "Override game facts (title, genre, core_loop, loot, pvp, etc.)" },
         "sections": { "type": "array", "items": { "type": "string" }, "description": "Sections to generate (short_description, about, features, tags)" }
       }
@@ -44,7 +44,7 @@
       "type": "object",
       "properties": {
         "footage_url": { "type": "string", "description": "URL or path to gameplay footage" },
-        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "project_id": { "type": "string", "description": "Project ID" },
         "count": { "type": "integer", "description": "Number of screenshots to select (default: 10)" },
         "categories": { "type": "array", "items": { "type": "string" }, "description": "Screenshot categories for diversity (default: combat, loot, builds, pvp, exploration, ui)" },
         "priority": { "type": "integer" }
@@ -55,12 +55,12 @@
   },
   {
     "name": "mycelium_steam_trailer",
-    "description": "Submit a drone job to build a segmented Steam trailer from gameplay footage. Segments: intro → cross-class → combat/loot → stakes → journey → outro, with Dio narration and title cards.",
+    "description": "Submit a drone job to build a segmented Steam trailer from gameplay footage. Segments: intro, gameplay, combat/loot, stakes, journey, outro — with character narration and title cards.",
     "schema": {
       "type": "object",
       "properties": {
         "footage_url": { "type": "string", "description": "URL or path to gameplay footage" },
-        "project_id": { "type": "string", "description": "Project ID (default: willing-sacrifice)" },
+        "project_id": { "type": "string", "description": "Project ID" },
         "max_duration": { "type": "integer", "description": "Maximum trailer duration in seconds (default: 120)" },
         "video_session_id": { "type": "integer", "description": "Link to a video pipeline session for highlight clips" },
         "priority": { "type": "integer" }

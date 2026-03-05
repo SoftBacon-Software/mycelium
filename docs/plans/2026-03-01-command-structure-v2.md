@@ -393,7 +393,7 @@ After the `initDB` function (after migrations loop, around line 49), add a seed 
       'greatness', 'Greatness', 'owner', 'Platform dev, WS game, asset generation, coordination', 'grbarajas@gmail.com'
     );
     db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities, email) VALUES (?, ?, ?, ?, ?)").run(
-      'hijack', 'Hijack', 'ui_lead', 'UI/UX, King City development, visual design', ''
+      'hijack', 'Hijack', 'ui_lead', 'UI/UX, Project A development, visual design', ''
     );
     db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities) VALUES (?, ?, ?, ?)").run(
       'unakron', 'Unakron', 'member', 'Infrastructure, GPU compute'
@@ -422,8 +422,8 @@ After the `initDB` function (after migrations loop, around line 49), add a seed 
 
   // Update agent roles (idempotent)
   try {
-    db.prepare("UPDATE dv_agents SET role = 'admin', operator_id = 'greatness', project = 'willing-sacrifice' WHERE id = 'greatness-claude'").run();
-    db.prepare("UPDATE dv_agents SET role = 'agent', operator_id = 'hijack', project = 'king-city' WHERE id = 'hijack-claude'").run();
+    db.prepare("UPDATE dv_agents SET role = 'admin', operator_id = 'greatness', project = 'example-project' WHERE id = 'greatness-claude'").run();
+    db.prepare("UPDATE dv_agents SET role = 'agent', operator_id = 'hijack', project = 'project-a' WHERE id = 'hijack-claude'").run();
     db.prepare("UPDATE dv_agents SET role = 'drone', operator_id = 'greatness', project = 'drone' WHERE id = 'unakron-gpu'").run();
   } catch (e) { /* agents may not exist yet */ }
 ```

@@ -4,24 +4,20 @@ import { createDroneJob, getDroneJob } from '../../db.js';
 
 var POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed'];
 
-var WSAC_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
+var WORKER_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
 
-// Dio's system prompt for caption generation
-var DIO_SYSTEM_PROMPT =
-  'You are Dio, the narrator and dungeon master of "Willing Sacrifice," a pixel-art roguelike RPG. ' +
-  'You speak in first person. You are smooth, sarcastic, darkly amused, with a silky delivery dripping ' +
-  'with dark humor. You run the dungeon and comment on heroes\' fates. You never break character. ' +
-  'You have a slight New Zealand accent in phrasing. You are the brand — these social media accounts ARE yours. ' +
-  'Write a short social media caption (2-4 lines) for a gameplay highlight clip. ' +
+// Default system prompt for caption generation — override via plugin config (caption_persona)
+var DEFAULT_CAPTION_PROMPT =
+  'You are the voice of this project on social media. ' +
+  'Write a short social media caption (2-4 lines) for a highlight clip. ' +
   'Be witty, concise, and in-character. Never use generic marketing language. ' +
-  'Do not include hashtags — those will be added separately. ' +
-  'Do not say "link in bio" directly — if referencing the game, say something like "The dungeon is open."';
+  'Do not include hashtags — those will be added separately.';
 
 var HASHTAGS = {
-  tiktok: '\n#indiegame #roguelike #pixelart #indiedev #gaming',
-  instagram: '\n#indiegame #roguelike #pixelart #indiedev #gaming',
+  tiktok: '\n#indiegame #indiedev #gaming',
+  instagram: '\n#indiegame #indiedev #gaming',
   twitter: '',
-  youtube_shorts: '\n#indiegame #roguelike #pixelart #shorts'
+  youtube_shorts: '\n#indiegame #shorts'
 };
 
 var PLATFORM_NOTES = {
@@ -38,6 +34,13 @@ var DEFAULT_WINDOWS = {
   twitter: '10:00',
   youtube_shorts: '17:00'
 };
+
+function getConfigValue(core, key) {
+  try {
+    var row = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'social-posting' AND key = ?").get(key);
+    return row ? row.value : null;
+  } catch (e) { return null; }
+}
 
 export default function (core) {
   var router = Router();
@@ -92,7 +95,7 @@ export default function (core) {
 
   // ── Caption Generation (in-process, returns prompt for Claude API) ──
 
-  // POST /captions/generate — Build a Dio-voiced caption prompt
+  // POST /captions/generate — Build a character-voiced caption prompt
   router.post('/captions/generate', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
@@ -108,7 +111,7 @@ export default function (core) {
 
     res.json({
       ok: true,
-      system_prompt: DIO_SYSTEM_PROMPT,
+      system_prompt: getConfigValue(core, 'caption_persona') || DEFAULT_CAPTION_PROMPT,
       user_prompt: prompt,
       hashtag_suffix: suffix,
       instructions: 'Send system_prompt + user_prompt to Claude API (sonnet, 256 tokens). Append hashtag_suffix to result.'
@@ -261,7 +264,7 @@ export default function (core) {
       ['cpu'],
       who,
       req.body.priority || 3,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 
@@ -277,7 +280,7 @@ export default function (core) {
   router.get('/stats', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var projectId = req.query.project_id || 'willing-sacrifice';
+    var projectId = req.query.project_id || '';
     res.json(db.getPostStats(projectId));
   });
 
@@ -285,7 +288,7 @@ export default function (core) {
   router.get('/history', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var projectId = req.query.project_id || 'willing-sacrifice';
+    var projectId = req.query.project_id || '';
     res.json(db.getPostHistory(projectId, req.query.platform, parseInt(req.query.days) || 7));
   });
 
