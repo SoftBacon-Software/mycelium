@@ -1,0 +1,20 @@
+{
+  "name": "x-posting",
+  "version": "1.0.0",
+  "displayName": "X/Twitter Posting",
+  "description": "Post directly to X/Twitter via API v2. Text tweets, threads, and auto-posting from build-in-public drafts. No Buffer dependency.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/x",
+  "schema": "schema.sql",
+  "gatedActions": ["x_publish"],
+  "mcpTools": "mcp-tools.json",
+  "config_schema": {
+    "api_key": { "type": "secret", "label": "API Key", "description": "Twitter/X API key (consumer key)", "required": true },
+    "api_secret": { "type": "secret", "label": "API Secret", "description": "Twitter/X API secret (consumer secret)", "required": true },
+    "access_token": { "type": "secret", "label": "Access Token", "description": "OAuth 1.0a access token", "required": true },
+    "access_token_secret": { "type": "secret", "label": "Access Token Secret", "description": "OAuth 1.0a access token secret", "required": true },
+    "auto_post_bip": { "type": "boolean", "label": "Auto-post BIP drafts", "description": "Automatically tweet approved build-in-public drafts", "default": false },
+    "default_project": { "type": "string", "label": "Default Project", "description": "Project ID for tracking posts (e.g. mycelium)", "default": "mycelium" }
+  }
+}
