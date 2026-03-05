@@ -190,7 +190,7 @@ Update weekly during fundraise:
 - Agents active: 6 (4 Claude agents + 2 drones)
 - Tasks completed: (pull from API)
 - Plans shipped: (pull from API)
-- Projects active: 4 (Mycelium, Willing Sacrifice, King City, Dioverse Tools)
+- Projects active: 4 (Mycelium, Project A, Project B, Studio Tools)
 - Beta customers: 1 (Flatiron Automation)
 - MRR: $0 (pre-revenue, pricing set at $20-50/mo/instance)
 - Pipeline: (track interested investors)

@@ -3,7 +3,7 @@
     "name": "mycelium_outreach_status",
     "description": "Get outreach pipeline status for a project — contact counts per status, active campaigns.",
     "schema": {
-      "project": { "type": "string", "description": "Project ID (e.g. willing-sacrifice)", "required": true }
+      "project": { "type": "string", "description": "Project ID (e.g. my-game)", "required": true }
     },
     "endpoint": { "method": "GET", "path": "/outreach/status", "queryMap": { "project": "project_id" } }
   },

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Mycelium — distributed development platform.",
   "author": "SoftBacon Software",
-  "license": "UNLICENSED",
+  "license": "AGPL-3.0-only",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
   "homepage": "https://mycelium.fyi",
   "scripts": {

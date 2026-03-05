@@ -5,8 +5,8 @@ import { createDroneJob, getDroneJob } from '../../db.js';
 var SESSION_STATUSES = ['pending', 'detecting', 'assembling', 'exporting', 'completed', 'failed'];
 var CLIP_STATUSES = ['detected', 'assembled', 'exported'];
 
-var WSAC_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
-var WSAC_SETUP = 'pip install anthropic pyyaml requests';
+var WORKER_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
+var WORKER_SETUP = 'pip install anthropic pyyaml requests';
 
 export default function (core) {
   var router = Router();
@@ -129,7 +129,7 @@ export default function (core) {
       useVision ? ['cpu', 'gpu'] : ['cpu'],
       who,
       req.body.priority || 5,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 
@@ -163,7 +163,7 @@ export default function (core) {
       ['cpu'],
       who,
       req.body.priority || 5,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 
@@ -194,7 +194,7 @@ export default function (core) {
       ['cpu'],
       who,
       req.body.priority || 5,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 

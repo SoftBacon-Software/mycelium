@@ -40,11 +40,11 @@ CREATE TABLE IF NOT EXISTS dv_operators (
 ```
 dv_operators:
   greatness | owner    | "Platform dev, WS game, asset generation, coordination"
-  hijack    | ui_lead  | "UI/UX, King City development, visual design"
+  hijack    | ui_lead  | "UI/UX, Project A development, visual design"
 
 dv_agents:
-  greatness-claude | role=admin | operator_id=greatness | game=dioverse
-  hijack-claude    | role=agent | operator_id=hijack    | game=king-city
+  greatness-claude | role=admin | operator_id=greatness | game=example-project
+  hijack-claude    | role=agent | operator_id=hijack    | game=project-a
   unakron-gpu      | role=drone | operator_id=greatness | game=drone
 ```
 

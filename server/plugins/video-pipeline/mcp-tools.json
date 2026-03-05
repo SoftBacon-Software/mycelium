@@ -54,7 +54,7 @@
   },
   {
     "name": "mycelium_video_assemble",
-    "description": "Submit an assembly drone job — cuts clips from footage, mixes Dio narration audio, adds text overlays and subtitles.",
+    "description": "Submit an assembly drone job — cuts clips from footage, mixes narration audio, adds text overlays and subtitles.",
     "schema": {
       "type": "object",
       "properties": {

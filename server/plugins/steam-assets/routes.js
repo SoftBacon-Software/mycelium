@@ -2,23 +2,16 @@ import { Router } from 'express';
 import createSteamDB from './db.js';
 import { createDroneJob, getDroneJob } from '../../db.js';
 
-var WSAC_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
+var WORKER_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
 
-// Default game facts for Willing Sacrifice store copy generation
-var DEFAULT_GAME_FACTS = {
-  title: 'Willing Sacrifice',
-  genre: 'Roguelike arena battler',
-  platform: 'Steam (PC)',
-  narrator: 'Dio — an ancient entity who runs the dungeon as entertainment',
-  core_loop: 'Choose a class, pick 3 skills from 33, fight through 10 floors of escalating arena battles',
-  loot: 'Diablo-style loot system with Normal/Magic/Rare/Mythic rarities',
-  pvp: 'Asynchronous PvP — your prestige build fights other players as an AI ghost',
-  prestige: 'Permanent progression across runs via the prestige system',
-  art_style: 'Painterly hand-illustrated (GPT-Image-1.5 generated)',
-  unique: 'AI-generated assets, AI narrator, fully AI-developed',
-  skills_count: 33,
-  classes: ['Warrior', 'Mage', 'Rogue', 'Cleric']
-};
+// Game facts must be provided per-request or stored in plugin config.
+// No defaults — keeps the plugin project-agnostic.
+function getGameFacts(core) {
+  try {
+    var row = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'steam-assets' AND key = 'game_facts'").get();
+    return row ? JSON.parse(row.value) : null;
+  } catch (e) { return null; }
+}
 
 export default function (core) {
   var router = Router();
@@ -71,8 +64,9 @@ export default function (core) {
   router.post('/store-copy', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var projectId = req.body.project_id || 'willing-sacrifice';
-    var gameFacts = req.body.game_facts || DEFAULT_GAME_FACTS;
+    var projectId = req.body.project_id || '';
+    var gameFacts = req.body.game_facts || getGameFacts(core);
+    if (!gameFacts) return apiError(res, 400, 'game_facts required — provide in request body or set in plugin config');
     var sections = req.body.sections || ['short_description', 'about', 'features', 'tags'];
 
     var prompt = buildStoreCopyPrompt(gameFacts, sections);
@@ -96,7 +90,7 @@ export default function (core) {
   router.post('/screenshots', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var projectId = req.body.project_id || 'willing-sacrifice';
+    var projectId = req.body.project_id || '';
     var footageUrl = req.body.footage_url;
     if (!footageUrl) return apiError(res, 400, 'footage_url required');
 
@@ -121,7 +115,7 @@ export default function (core) {
       ['cpu', 'gpu'],
       who,
       req.body.priority || 5,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 
@@ -137,7 +131,7 @@ export default function (core) {
   router.post('/trailer', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
-    var projectId = req.body.project_id || 'willing-sacrifice';
+    var projectId = req.body.project_id || '';
     var footageUrl = req.body.footage_url;
     if (!footageUrl) return apiError(res, 400, 'footage_url required');
 
@@ -163,7 +157,7 @@ export default function (core) {
       ['cpu', 'gpu'],
       who,
       req.body.priority || 5,
-      WSAC_REPO,
+      WORKER_REPO,
       'master'
     );
 
@@ -193,7 +187,7 @@ function buildStoreCopyPrompt(facts, sections) {
   if (sections.includes('about')) prompt += '2. About This Game — with subsections for Rules, Loot, Stakes, Narrator, Creator. Use [h2], [list], [*] tags.\n';
   if (sections.includes('features')) prompt += '3. Feature list — 6-8 bullet points of key selling points.\n';
   if (sections.includes('tags')) prompt += '4. Recommended Steam tags (comma-separated list of 15-20 tags).\n';
-  prompt += '\nTone: Confident, slightly dark, matches the game\'s tone. The narrator Dio is sarcastic and theatrical.\n';
+  prompt += '\nTone: Confident, slightly dark, matches the game\'s tone. Use the project\'s narrator voice if configured.\n';
   prompt += 'Format: BBCode only (Steam compatible). Use [h2], [b], [i], [list], [*], [url] tags.\n';
   return prompt;
 }
