@@ -922,15 +922,19 @@ export function getSlimBootPayload(agentId) {
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
 
-  // Counts only — no full records
+  // Fetch directives and requests first — used for both counts and content
+  var pendingDirectives = db.prepare(
+    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+  ).all(agentId);
+  var pendingRequests = listPendingRequests(agentId);
+
+  // Counts — derive from fetched data where possible
   var counts = {
-    directives: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending')"
+    directives: pendingDirectives.length,
+    requests: pendingRequests.length,
+    messages_unread: db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent'"
     ).get(agentId).c,
-    requests: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('sent', 'pending')"
-    ).get(agentId).c,
-    messages_unread: countPendingForAgent(agentId),
     tasks_mine: db.prepare(
       "SELECT COUNT(*) as c FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress')"
     ).get(agentId).c,
@@ -944,12 +948,6 @@ export function getSlimBootPayload(agentId) {
 
   // Role contract — small, always needed
   var roleContract = buildRoleContract(agent, agentId);
-
-  // Work queue — top 5, title+type+id only
-  var pendingDirectives = db.prepare(
-    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
-  ).all(agentId);
-  var pendingRequests = listPendingRequests(agentId);
   var myTasks = db.prepare(
     "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
   ).all(agentId);
