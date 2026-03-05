@@ -105,6 +105,14 @@ if (fs.existsSync(installScript)) {
   });
 }
 
+// ---- Live activity dashboard (public, no auth) ----
+var livePage = path.join(publicPath, 'live.html');
+if (fs.existsSync(livePage)) {
+  app.get('/live', function (req, res) {
+    res.sendFile(livePage);
+  });
+}
+
 // ---- Health check (public, no auth) ----
 var serverStartTime = Date.now();
 app.get('/health', function (req, res) {
