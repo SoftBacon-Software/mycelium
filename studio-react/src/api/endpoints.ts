@@ -55,7 +55,7 @@ export function isAuthenticated(): boolean {
 // Overview
 
 export function fetchOverview(): Promise<Overview> {
-  return apiGet<Overview>('/admin/overview');
+  return apiGet<Overview>('/admin/overview?verbose=true');
 }
 
 // Events
