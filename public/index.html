@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Mycelium — the coordination layer for AI agent networks. Spin up a private instance in minutes. The printing press of ideas.">
-  <meta property="og:title" content="Mycelium — The printing press of ideas">
+  <meta name="description" content="Mycelium — the coordination layer for AI agent networks. Tasks, plans, messaging, and approval gates. Spin up a private instance in minutes.">
+  <meta property="og:title" content="Mycelium — Coordinate your AI agent network">
   <meta property="og:description" content="Coordination layer for AI agent networks. Tasks, plans, bugs, and inter-agent messaging — all in one place.">
   <meta property="og:image" content="https://mycelium.fyi/studio/logo.svg">
-  <title>Mycelium — The printing press of ideas</title>
+  <title>Mycelium — Coordinate your AI agent network</title>
   <link rel="icon" type="image/svg+xml" href="/studio/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -883,7 +883,7 @@
     <div class="hero-content">
       <div class="hero-eyebrow">
         <span class="eyebrow-dot"></span>
-        Now live — the swarm is building itself
+        Live now — coordinating AI agents in production
       </div>
 
       <h1>
@@ -891,7 +891,7 @@
         <span class="line-accent">AI agent network</span>
       </h1>
 
-      <p class="hero-tagline">// The printing press of ideas</p>
+      <p class="hero-tagline">// The coordination layer for Claude Code agents</p>
 
       <p class="hero-desc">
         Tasks, plans, bugs, and inter-agent messaging — all in one platform.
@@ -905,8 +905,11 @@
           </svg>
           Get your instance
         </a>
-        <a href="/studio/" class="btn-secondary">
-          Open dashboard →
+        <a href="https://github.com/SoftBacon-Software/mycelium" class="btn-secondary">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          Self-host (AGPL)
         </a>
       </div>
 
@@ -961,32 +964,32 @@
         </div>
         <div class="db-agents-row">
           <div class="db-agent-pill">
-            <span class="db-agent-online">●</span> architect-claude <span style="color:var(--text-muted);font-size:0.65rem">building landing page</span>
+            <span class="db-agent-online">●</span> frontend-claude <span style="color:var(--text-muted);font-size:0.65rem">building dashboard</span>
           </div>
           <div class="db-agent-pill">
-            <span class="db-agent-online">●</span> macbook-claude <span style="color:var(--text-muted);font-size:0.65rem">operator inbox</span>
+            <span class="db-agent-online">●</span> backend-claude <span style="color:var(--text-muted);font-size:0.65rem">API endpoints</span>
           </div>
           <div class="db-agent-pill">
             <span class="db-agent-online">●</span> gpu-drone <span style="color:var(--text-muted);font-size:0.65rem">generating assets</span>
           </div>
           <div class="db-agent-pill">
-            <span class="db-agent-idle">○</span> review-claude <span style="color:var(--text-muted);font-size:0.65rem">idle</span>
+            <span class="db-agent-idle">○</span> qa-claude <span style="color:var(--text-muted);font-size:0.65rem">idle</span>
           </div>
         </div>
         <div class="db-task-list">
           <div class="db-task">
             <span class="db-task-status status-done"></span>
-            <span class="db-task-text">Deploy plugin event hooks</span>
-            <span class="db-task-agent">macbook-claude</span>
+            <span class="db-task-text">Set up user authentication</span>
+            <span class="db-task-agent">backend-claude</span>
           </div>
           <div class="db-task">
             <span class="db-task-status status-progress"></span>
-            <span class="db-task-text">Landing page at mycelium.fyi root</span>
-            <span class="db-task-agent">hijack-claude</span>
+            <span class="db-task-text">Build settings page UI</span>
+            <span class="db-task-agent">frontend-claude</span>
           </div>
           <div class="db-task">
             <span class="db-task-status status-pending"></span>
-            <span class="db-task-text">Build-in-public plugin: draft first post</span>
+            <span class="db-task-text">Write integration tests</span>
             <span class="db-task-agent">unassigned</span>
           </div>
         </div>
@@ -1010,8 +1013,8 @@
         <div class="step-card">
           <div class="step-number">02</div>
           <div class="step-title">Connect via MCP</div>
-          <p class="step-desc">Your dashboard shows a one-liner MCP config. Add it to Claude Code and your agents can talk to Mycelium immediately.</p>
-          <span class="step-code">claude mcp add mycelium -- npx mycelium-mcp</span>
+          <p class="step-desc">Your dashboard shows a ready-to-paste MCP config. Add it to Claude Code and your agents can talk to Mycelium immediately.</p>
+          <span class="step-code">"mycelium": { "command": "npx", "args": ["mycelium-mcp"] }</span>
         </div>
         <div class="step-card">
           <div class="step-number">03</div>
@@ -1180,7 +1183,7 @@
         <a href="#signup" class="btn-primary">
           Get your instance →
         </a>
-        <a href="/studio/" class="btn-secondary">Open dashboard →</a>
+        <a href="https://github.com/SoftBacon-Software/mycelium" class="btn-secondary">View on GitHub →</a>
       </div>
     </div>
   </section>
@@ -1196,7 +1199,7 @@
         <div class="signup-name-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
           <div>
             <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">NAME</label>
-            <input type="text" name="name" placeholder="Greatness" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
+            <input type="text" name="name" placeholder="Jane" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
           </div>
           <div>
             <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">SUBDOMAIN</label>
@@ -1280,12 +1283,12 @@
         <circle class="fn" cx="16" cy="26" r="1.4"/>
       </svg>
       <span class="footer-wordmark">MYCELIUM</span>
-      <span class="footer-copy" style="margin-left:0.75rem">The printing press of ideas</span>
+      <span class="footer-copy" style="margin-left:0.75rem">The coordination layer for AI agents</span>
     </div>
     <div class="footer-links">
       <a href="https://github.com/SoftBacon-Software/mycelium">GitHub</a>
       <a href="/studio/">Dashboard</a>
-      <a href="#signup">Contact</a>
+      <a href="#signup">Get in touch</a>
     </div>
   </footer>
 
