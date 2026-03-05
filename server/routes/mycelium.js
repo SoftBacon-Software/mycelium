@@ -379,7 +379,7 @@ function checkApprovalGate(req, who, actionType) {
   if (who === '__admin__' || who === '__system__' || !who || who.indexOf('-claude') === -1) return { ok: true };
   var approvalId = req.body.approval_id || req.query.approval_id;
   if (!approvalId) {
-    return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call studio_request_approval first.' };
+    return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call mycelium_request_approval first.' };
   }
   var approval = getApproval(parseIntParam(approvalId));
   if (!approval) return { ok: false, error: 'Approval #' + approvalId + ' not found' };
@@ -471,16 +471,15 @@ router.post('/waitlist', asyncHandler(async function (req, res) {
     'INSERT INTO dv_waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
   ).run(name || '', email, subdomain || '', use_case || '');
   var waitlistId = result.lastInsertRowid;
-  // Create inbox item for greatness operator
+  // Create inbox item for all operators
   try {
-    createInboxItem(
-      'greatness',
+    createInboxItemForAllOperators(
       'message',
       'waitlist',
       String(waitlistId),
       'New instance request: ' + (name || email),
-      (name ? name + ' (' + email + ')' : email) + (subdomain ? ' wants ' + subdomain + '.mycelium.fyi' : '') + (use_case ? ' — ' + use_case : ''),
-      JSON.stringify({ waitlist_id: waitlistId, name, email, subdomain, use_case }),
+      (name ? name + ' (' + email + ')' : email) + (subdomain ? ' wants subdomain: ' + subdomain : '') + (use_case ? ' — ' + use_case : ''),
+      { waitlist_id: waitlistId, name, email, subdomain, use_case },
       'urgent'
     );
   } catch (e) { /* non-fatal — still confirm signup */ }
@@ -1659,7 +1658,7 @@ router.post('/studio/users', asyncHandler(async function (req, res) {
   }
   var hash = await bcrypt.hash(password, BCRYPT_ROUNDS_PASSWORD);
   var id = createStudioUser(username, displayName, hash, role);
-  emitEvent('studio_user_created', getAdminDisplayName(req), null, 'Studio user created: ' + displayName + ' (' + username + ')');
+  emitEvent('user_created', getAdminDisplayName(req), null, 'Studio user created: ' + displayName + ' (' + username + ')');
   res.json({ id: id, username: username, display_name: displayName, role: role });
 }));
 

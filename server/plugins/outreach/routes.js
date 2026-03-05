@@ -231,7 +231,7 @@ export default function (core) {
       if (!dryRun) {
         var gate = core.checkApprovalGate(req, who, 'outreach_send');
         if (!gate.ok && !gate.soft) return apiError(res, 403, gate.error, { approval_required: true });
-        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', { approval_required: true });
+        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use mycelium_request_approval with action_type=outreach_send first.', { approval_required: true });
       }
 
       if (dryRun) {
@@ -286,7 +286,7 @@ export default function (core) {
       if (!dryRun) {
         var gate = core.checkApprovalGate(req, who, 'outreach_send');
         if (!gate.ok && !gate.soft) return apiError(res, 403, gate.error, { approval_required: true });
-        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use studio_request_approval with action_type=outreach_send first.', { approval_required: true });
+        if (!gate.ok && gate.soft) return apiError(res, 403, 'Real email sending requires approval. Use mycelium_request_approval with action_type=outreach_send first.', { approval_required: true });
       }
 
       if (!dryRun && contact.email) {

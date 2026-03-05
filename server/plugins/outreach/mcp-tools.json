@@ -1,6 +1,6 @@
 [
   {
-    "name": "studio_outreach_status",
+    "name": "mycelium_outreach_status",
     "description": "Get outreach pipeline status for a project — contact counts per status, active campaigns.",
     "schema": {
       "project": { "type": "string", "description": "Project ID (e.g. willing-sacrifice)", "required": true }
@@ -8,7 +8,7 @@
     "endpoint": { "method": "GET", "path": "/outreach/status", "queryMap": { "project": "project_id" } }
   },
   {
-    "name": "studio_outreach_contacts",
+    "name": "mycelium_outreach_contacts",
     "description": "List outreach contacts. Filter by project, status, type.",
     "schema": {
       "project": { "type": "string", "description": "Filter by project" },
@@ -19,7 +19,7 @@
     "endpoint": { "method": "GET", "path": "/outreach/contacts", "queryMap": { "project": "project_id", "status": "status", "type": "type", "limit": "limit" } }
   },
   {
-    "name": "studio_outreach_campaign",
+    "name": "mycelium_outreach_campaign",
     "description": "Create or update an outreach campaign for a project.",
     "schema": {
       "action": { "type": "string", "enum": ["create", "update"], "description": "create or update", "required": true },
@@ -34,7 +34,7 @@
     "endpoint": { "method": "POST", "path": "/outreach/campaigns" }
   },
   {
-    "name": "studio_outreach_discover",
+    "name": "mycelium_outreach_discover",
     "description": "Run contact discovery for a campaign — searches YouTube for creators and Hunter.io for press contacts.",
     "schema": {
       "campaign_id": { "type": "number", "description": "Campaign ID to run discovery for", "required": true }
@@ -42,7 +42,7 @@
     "endpoint": { "method": "POST", "path": "/outreach/discover" }
   },
   {
-    "name": "studio_outreach_research",
+    "name": "mycelium_outreach_research",
     "description": "Research a contact — fetch their latest YouTube video or press article.",
     "schema": {
       "contact_id": { "type": "number", "description": "Contact ID to research", "required": true }
@@ -50,7 +50,7 @@
     "endpoint": { "method": "POST", "path": "/outreach/research/:contact_id" }
   },
   {
-    "name": "studio_outreach_personalize",
+    "name": "mycelium_outreach_personalize",
     "description": "Generate a Claude-personalized pitch for a contact using their campaign persona and templates.",
     "schema": {
       "contact_id": { "type": "number", "description": "Contact ID to personalize pitch for", "required": true }
@@ -58,7 +58,7 @@
     "endpoint": { "method": "POST", "path": "/outreach/personalize/:contact_id" }
   },
   {
-    "name": "studio_outreach_approve",
+    "name": "mycelium_outreach_approve",
     "description": "Approve a draft pitch for sending. Optionally edit subject/body.",
     "schema": {
       "contact_id": { "type": "number", "description": "Contact ID to approve", "required": true },
@@ -68,7 +68,7 @@
     "endpoint": { "method": "PUT", "path": "/outreach/approve/:contact_id" }
   },
   {
-    "name": "studio_outreach_send",
+    "name": "mycelium_outreach_send",
     "description": "Send an approved pitch to a contact via Gmail. Set dry_run=false to actually send.",
     "schema": {
       "contact_id": { "type": "number", "description": "Contact ID to send pitch to", "required": true },
@@ -77,7 +77,7 @@
     "endpoint": { "method": "POST", "path": "/outreach/send/:contact_id" }
   },
   {
-    "name": "studio_outreach_followup",
+    "name": "mycelium_outreach_followup",
     "description": "Send a follow-up email to a contact whose pitch was sent but not replied to.",
     "schema": {
       "contact_id": { "type": "number", "description": "Contact ID to follow up with", "required": true },

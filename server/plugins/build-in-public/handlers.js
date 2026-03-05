@@ -12,17 +12,18 @@ var TRIGGER_EVENTS = [
 ];
 
 // Templates for draft content by event type
-function draftContent(eventType, eventData) {
+function draftContent(eventType, eventData, instanceUrl) {
   var agent = eventData.agent || 'an agent';
   var summary = eventData.summary || '';
   var data = eventData.data || {};
+  var url = instanceUrl || '';
 
   switch (eventType) {
     case 'task_completed': {
       var taskTitle = data.title || summary.replace(/completed task/i, '').trim();
       return {
         title: agent + ' shipped: ' + taskTitle,
-        content: agent + ' just shipped: ' + taskTitle + '.\n\nThe swarm is building itself. Watch it happen live at mycelium.fyi'
+        content: agent + ' just shipped: ' + taskTitle + '.' + (url ? '\n\nThe swarm is building itself. Watch it happen live at ' + url : '')
       };
     }
     case 'plan_step_completed': {
@@ -31,27 +32,27 @@ function draftContent(eventType, eventData) {
       return {
         title: 'Plan milestone: ' + stepTitle,
         content: (planTitle ? 'Plan: ' + planTitle + '\n' : '') +
-          'Step complete: ' + stepTitle + '\n\nAI agents coordinating in real time. Built on Mycelium. mycelium.fyi'
+          'Step complete: ' + stepTitle + (url ? '\n\nAI agents coordinating in real time. Built on Mycelium. ' + url : '')
       };
     }
     case 'bug_fixed': {
       var bugTitle = data.title || summary;
       return {
         title: agent + ' fixed: ' + bugTitle,
-        content: 'Bug squashed: ' + bugTitle + '\n\n' + agent + ' found it, filed it, fixed it — autonomously. This is what Mycelium does. mycelium.fyi'
+        content: 'Bug squashed: ' + bugTitle + '\n\n' + agent + ' found it, filed it, fixed it — autonomously.' + (url ? ' This is what Mycelium does. ' + url : '')
       };
     }
     case 'drone_job_completed': {
       var jobTitle = data.title || summary;
       return {
         title: 'Compute job done: ' + jobTitle,
-        content: 'Drone job completed: ' + jobTitle + '\n\nDistributed AI compute, coordinated by Mycelium. mycelium.fyi'
+        content: 'Drone job completed: ' + jobTitle + (url ? '\n\nDistributed AI compute, coordinated by Mycelium. ' + url : '')
       };
     }
     default:
       return {
         title: summary || eventType,
-        content: summary + '\n\nmycelium.fyi'
+        content: summary + (url ? '\n\n' + url : '')
       };
   }
 }
@@ -63,7 +64,9 @@ export function registerHooks(core) {
     (function (eventType) {
       core.onEvent(eventType, function (eventData) {
         try {
-          var draft = draftContent(eventType, eventData);
+          var instanceUrl = '';
+          try { instanceUrl = core.db.prepare("SELECT value FROM dv_instance_config WHERE key = 'instance_url'").get()?.value || ''; } catch (e) { /* */ }
+          var draft = draftContent(eventType, eventData, instanceUrl);
 
           // Create the draft
           var draftId = db.createDraft(

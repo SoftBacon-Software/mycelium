@@ -18,11 +18,11 @@ Write-Host ""
 # ---- Configuration ----
 $INSTALL_DIR = "$env:USERPROFILE\admin-claude"
 $OLLAMA_MODEL = "qwen2.5:14b"
-$MYCELIUM_API_URL = "https://mycelium.fyi/api/mycelium"
-$MYCELIUM_ADMIN_KEY = "KPeO7ZspKsAQotZsrvnZ2vYk"
-$GITHUB_TOKEN = ""  # Optional: paste your GitHub token here for PR reviews
-$GITHUB_REPOS = "grbarajas-soymd/mycelium"
-$REPO_URL = "https://github.com/grbarajas-soymd/mycelium.git"
+$MYCELIUM_API_URL = if ($env:MYCELIUM_API_URL) { $env:MYCELIUM_API_URL } else { Read-Host "Mycelium API URL (e.g. https://yourinstance.example.com/api/mycelium)" }
+$MYCELIUM_ADMIN_KEY = if ($env:MYCELIUM_ADMIN_KEY) { $env:MYCELIUM_ADMIN_KEY } else { Read-Host "Admin API Key" }
+$GITHUB_TOKEN = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { "" }
+$GITHUB_REPOS = if ($env:GITHUB_REPOS) { $env:GITHUB_REPOS } else { Read-Host "GitHub repos to watch (e.g. org/repo)" }
+$REPO_URL = "https://github.com/SoftBacon-Software/mycelium.git"
 
 # ---- Step 1: Check/Install Node.js ----
 Write-Host "[1/6] Checking Node.js..." -ForegroundColor Yellow
