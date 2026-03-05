@@ -726,9 +726,11 @@ router.post('/agents/heartbeat', function (req, res) {
     try { updateDroneDiagnostics(agentId, stateSnapshot.system_info); } catch (e) { /* non-critical */ }
   }
 
-  // Include pending counts so agents know if they have unread messages
-  var pending = countPendingForAgent(agentId);
-  var response = { ok: true, agent: agentId, status: status, pending: pending };
+  // Slim heartbeat: pending count + wake flag only
+  var pendingCounts = countPendingForAgent(agentId);
+  var pending = pendingCounts.requests + pendingCounts.directives + pendingCounts.unread;
+  var wake = (pendingCounts.directives + pendingCounts.requests) > 0;
+  var response = { ok: true, pending: pending, wake: wake };
 
   // Auto-dispatch: if agent just came online or is idle with no work, try to assign
   if (!workingOn && (status === 'online' || status === 'idle')) {
@@ -737,14 +739,6 @@ router.post('/agents/heartbeat', function (req, res) {
       if (dispatched.length > 0) response.auto_dispatched = dispatched;
     } catch (e) { /* non-critical */ }
   }
-
-  // Include work queue so agents discover new work on heartbeat
-  try {
-    var payload = getBootPayload(agentId);
-    if (payload && payload.work_queue && payload.work_queue.length > 0) {
-      response.work_queue = payload.work_queue;
-    }
-  } catch (e) { /* non-critical */ }
 
   res.json(response);
 });
