@@ -330,6 +330,13 @@ export interface AdminOps {
 }
 
 
+export interface PluginPage {
+  path: string
+  title: string
+  icon?: string
+  nav_section?: string  // 'pinned' | 'work' | 'communicate' | 'observe' | 'manage' | 'advanced'
+}
+
 export interface PluginMcpTool {
   name: string
   description: string
@@ -352,6 +359,7 @@ export interface Plugin {
   mcp_tools?: PluginMcpTool[]
   hooks?: string[]
   gated_actions?: string[]
+  pages?: PluginPage[]
 }
 
 export interface PluginConfigField {

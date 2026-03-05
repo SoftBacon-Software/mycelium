@@ -27,6 +27,7 @@ import type {
   ThreadSummary,
   WebhookDelivery,
   Plugin,
+  PluginPage,
   Feedback,
   FeedbackSummary,
   InboxItem,
@@ -517,6 +518,17 @@ export function uninstallPlugin(name: string): Promise<{ ok: boolean; message: s
 
 export function fetchAllWidgets(): Promise<any[]> {
   return apiGet<any[]>('/plugins/all-widgets');
+}
+
+export interface PluginNavEntry {
+  name: string
+  display_name: string
+  route_prefix: string
+  pages: PluginPage[]
+}
+
+export function fetchPluginNav(): Promise<PluginNavEntry[]> {
+  return apiGet<PluginNavEntry[]>('/plugins/nav');
 }
 
 // Inbox
