@@ -1,9 +1,12 @@
+import { Link } from 'react-router-dom'
+
 interface SummaryCardProps {
   title: string
   value: number | string
   subtitle?: string
   color?: 'accent' | 'green' | 'red' | 'blue' | 'purple' | 'muted'
   icon?: string
+  to?: string
 }
 
 const colorClasses: Record<string, { text: string; glow: string; ring: string }> = {
@@ -27,13 +30,11 @@ const iconMap: Record<string, string> = {
   context: '\u{1F511}',
 }
 
-export default function SummaryCard({ title, value, subtitle, color = 'accent', icon }: SummaryCardProps) {
+export default function SummaryCard({ title, value, subtitle, color = 'accent', icon, to }: SummaryCardProps) {
   const c = colorClasses[color] || colorClasses.accent
 
-  return (
-    <div
-      className={`bg-surface-raised rounded-lg p-4 flex items-center gap-4 ring-1 ${c.ring} transition-all hover:scale-[1.02] hover:ring-2`}
-    >
+  const inner = (
+    <>
       <div className={`w-11 h-11 rounded-lg ${c.glow} flex items-center justify-center text-lg shrink-0`}>
         {icon ? iconMap[icon] || icon : title.charAt(0)}
       </div>
@@ -44,6 +45,14 @@ export default function SummaryCard({ title, value, subtitle, color = 'accent', 
           <p className="text-xs text-text-muted mt-0.5 truncate">{subtitle}</p>
         )}
       </div>
-    </div>
+    </>
   )
+
+  const className = `bg-surface-raised rounded-lg p-4 flex items-center gap-4 ring-1 ${c.ring} transition-colors cursor-pointer active:bg-surface`
+
+  if (to) {
+    return <Link to={to} className={className}>{inner}</Link>
+  }
+
+  return <div className={className}>{inner}</div>
 }
