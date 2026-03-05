@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Mycelium — distributed development platform. The printing press of ideas.",
+  "description": "Mycelium — distributed development platform.",
+  "author": "SoftBacon Software",
+  "license": "UNLICENSED",
+  "repository": "https://github.com/SoftBacon-Software/mycelium",
+  "homepage": "https://mycelium.fyi",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js"
