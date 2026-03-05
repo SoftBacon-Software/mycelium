@@ -13,6 +13,52 @@ import multer from 'multer';
 import fs from 'fs';
 import nodePath from 'path';
 
+// ---- Simple in-memory rate limiter (no dependency) ----
+var _rateLimitStore = {};
+function rateLimit(keyFn, maxAttempts, windowMs) {
+  // Prune expired entries every 5 minutes
+  setInterval(function () {
+    var now = Date.now();
+    for (var k in _rateLimitStore) {
+      if (_rateLimitStore[k].resetAt < now) delete _rateLimitStore[k];
+    }
+  }, 5 * 60 * 1000).unref();
+
+  return function (req, res, next) {
+    var key = keyFn(req);
+    var now = Date.now();
+    var entry = _rateLimitStore[key];
+    if (!entry || entry.resetAt < now) {
+      _rateLimitStore[key] = { count: 1, resetAt: now + windowMs };
+      return next();
+    }
+    entry.count++;
+    if (entry.count > maxAttempts) {
+      var retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      res.set('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Too many attempts. Try again in ' + retryAfter + ' seconds.' });
+    }
+    next();
+  };
+}
+
+// ---- Input validation helpers ----
+var MAX_TITLE = 500;
+var MAX_DESCRIPTION = 50000;
+var MAX_CONTENT = 100000;
+function validateStringLength(res, value, maxLen, fieldName) {
+  if (typeof value === 'string' && value.length > maxLen) {
+    res.status(400).json({ error: fieldName + ' exceeds max length (' + maxLen + ' chars)' });
+    return false;
+  }
+  return true;
+}
+
+// Login: 10 attempts per 15 minutes per IP
+var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.connection.remoteAddress); }, 10, 15 * 60 * 1000);
+// Agent key validation: 30 attempts per minute per IP
+var agentAuthLimiter = rateLimit(function (req) { return 'agent:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
+
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
 if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
@@ -75,7 +121,7 @@ import {
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
   assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
-  addTaskComment, getTaskComments, deleteTaskComment,
+  addTaskComment, getTaskComments, getTaskComment, deleteTaskComment,
   addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
@@ -525,6 +571,10 @@ router.get('/work/:agentId', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = req.params.agentId;
+  // Agents can only access their own work queue
+  if (!req._authIsAdmin && who !== agentId) {
+    return res.status(403).json({ error: 'Can only access your own work queue' });
+  }
   var payload = getBootPayload(agentId);
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
   var queue = payload.work_queue || [];
@@ -661,6 +711,10 @@ router.post('/agents/heartbeat', function (req, res) {
 router.get('/agents/:id/savepoint', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  // Agents can only access their own savepoints
+  if (!req._authIsAdmin && who !== req.params.id) {
+    return res.status(403).json({ error: 'Can only access your own savepoints' });
+  }
   var savepoint = getLatestSavepoint(req.params.id);
   if (!savepoint) return res.json({ has_savepoint: false });
   res.json(savepoint);
@@ -669,6 +723,9 @@ router.get('/agents/:id/savepoint', function (req, res) {
 router.get('/agents/:id/savepoints', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!req._authIsAdmin && who !== req.params.id) {
+    return res.status(403).json({ error: 'Can only access your own savepoints' });
+  }
   var limit = parseLimit(req.query.limit, 10);
   res.json(getSavepointHistory(req.params.id, limit));
 });
@@ -676,6 +733,9 @@ router.get('/agents/:id/savepoints', function (req, res) {
 router.get('/agents/:id/savepoint/diff', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!req._authIsAdmin && who !== req.params.id) {
+    return res.status(403).json({ error: 'Can only access your own savepoints' });
+  }
   res.json(computeSavepointDiff(req.params.id));
 });
 
@@ -758,6 +818,8 @@ router.post('/tasks', function (req, res) {
   if (!agentId) return;
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
+  if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
+  if (!validateStringLength(res, req.body.description, MAX_DESCRIPTION, 'description')) return;
   var description = escapeHtml(req.body.description || '');
   var projectId = escapeHtml(req.body.project_id || '');
   var priority = req.body.priority || 'normal';
@@ -916,9 +978,14 @@ router.delete('/tasks/:id/comments/:commentId', function (req, res) {
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id)) return;
-  var deleted = deleteTaskComment(parseIntParam(req.params.commentId));
-  if (!deleted) return res.status(404).json({ error: 'Comment not found' });
-  res.json({ ok: true, deleted: parseIntParam(req.params.commentId) });
+  var comment = getTaskComment(parseIntParam(req.params.commentId));
+  if (!comment) return res.status(404).json({ error: 'Comment not found' });
+  // Only the comment author or admins can delete
+  if (!req._authIsAdmin && comment.author !== who) {
+    return res.status(403).json({ error: 'Can only delete your own comments' });
+  }
+  deleteTaskComment(comment.id);
+  res.json({ ok: true, deleted: comment.id });
 });
 
 // ======== CONTEXT ========
@@ -1314,6 +1381,7 @@ router.post('/messages', function (req, res) {
   if (!agentId) return;
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
+  if (!validateStringLength(res, content, MAX_CONTENT, 'content')) return;
 
   // Only admin and operators can send directives
   var msgType = req.body.msg_type || 'message';
@@ -1440,6 +1508,8 @@ router.post('/plans', function (req, res) {
   var gate = checkApprovalGate(req, agentId, 'plan_create');
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
+  if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
+  if (!validateStringLength(res, req.body.description, MAX_DESCRIPTION, 'description')) return;
   var description = escapeHtml(req.body.description || '');
   var projectId = escapeHtml(req.body.project_id || '');
   var owner = escapeHtml(req.body.owner || '');
@@ -1606,7 +1676,7 @@ router.put('/plans/:id/reorder', function (req, res) {
 // ======== STUDIO AUTH ========
 
 // Login — returns JWT
-router.post('/studio/login', asyncHandler(async function (req, res) {
+router.post('/studio/login', loginLimiter, asyncHandler(async function (req, res) {
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
@@ -2299,7 +2369,8 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
 
     res.json({ cached: false, data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[mycelium] API limits error:', err.message);
+    res.status(500).json({ error: 'Failed to check API limits' });
   }
 }));
 
@@ -2567,6 +2638,8 @@ router.post('/bugs', function (req, res) {
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
   var projectId = project_id;
   if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
+  if (!validateStringLength(res, title, MAX_TITLE, 'title')) return;
+  if (!validateStringLength(res, description, MAX_DESCRIPTION, 'description')) return;
   if (!validateEnum(res, category, getBugCategories(projectId), 'category')) return;
   if (!validateEnum(res, severity, BUG_SEVERITIES, 'severity')) return;
   var diagStr = null;
@@ -3894,7 +3967,8 @@ function githubApi(method, path, body) {
 
 // List PRs
 router.get('/github/prs/:owner/:repo', function (req, res) {
-  if (!checkAgent(req, res) && !checkAdmin(req, res)) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
   if (!GITHUB_TOKEN) return res.status(503).json({ error: 'GITHUB_TOKEN not configured on server' });
   var state = req.query.state || 'open';
   githubApi('GET', '/repos/' + req.params.owner + '/' + req.params.repo + '/pulls?state=' + state + '&per_page=30')
@@ -3906,7 +3980,7 @@ router.get('/github/prs/:owner/:repo', function (req, res) {
       });
       res.json({ count: prs.length, prs: prs });
     })
-    .catch(function (e) { res.status(500).json({ error: 'GitHub request failed: ' + e.message }); });
+    .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
 });
 
 // Merge PR
@@ -3922,7 +3996,7 @@ router.post('/github/prs/:owner/:repo/:number/merge', function (req, res) {
       if (r.status !== 200) return res.status(r.status).json({ error: r.data.message || 'Merge failed' });
       res.json({ number: parseInt(req.params.number), sha: r.data.sha, merged: true });
     })
-    .catch(function (e) { res.status(500).json({ error: 'GitHub request failed: ' + e.message }); });
+    .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
 });
 
 // Create PR
@@ -3936,7 +4010,7 @@ router.post('/github/prs/:owner/:repo', function (req, res) {
       if (r.status !== 201) return res.status(r.status).json({ error: r.data.message || 'Create PR failed' });
       res.json({ number: r.data.number, title: r.data.title, url: r.data.html_url });
     })
-    .catch(function (e) { res.status(500).json({ error: 'GitHub request failed: ' + e.message }); });
+    .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
 });
 
 export default router;
