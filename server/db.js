@@ -1043,7 +1043,7 @@ function buildRoleContract(agent, agentId) {
 }
 
 // Build a prioritized work queue: what should this agent do next?
-function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
+export function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
   var queue = [];
 
   // Priority 1: Blocking directives (MUST respond first)
