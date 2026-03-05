@@ -1,0 +1,35 @@
+{
+  "mycelium": {
+    "apiUrl": "https://mycelium.fyi/api/mycelium",
+    "adminKey": "env:MYCELIUM_ADMIN_KEY"
+  },
+  "defaults": {
+    "maxTurns": 30,
+    "pollIntervalMs": 180000,
+    "cooldownMs": 30000,
+    "tools": ["Bash"]
+  },
+  "agents": [
+    {
+      "id": "admin-bot",
+      "cwd": "/app/admin-workspace",
+      "model": "claude-haiku-4-5-20251001",
+      "maxTurns": 15,
+      "pollIntervalMs": 180000,
+      "cooldownMs": 30000,
+      "tools": ["Bash"],
+      "mcpServers": {
+        "mycelium": {
+          "command": "node",
+          "args": ["/mcp/index.js"],
+          "env": {
+            "MYCELIUM_API_URL": "https://mycelium.fyi/api/mycelium",
+            "MYCELIUM_ROLE": "agent",
+            "MYCELIUM_API_KEY": "env:ADMIN_BOT_KEY",
+            "MYCELIUM_AGENT_ID": "admin-bot"
+          }
+        }
+      }
+    }
+  ]
+}

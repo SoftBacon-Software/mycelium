@@ -1,0 +1,6 @@
+.git
+.gitignore
+.claude/
+CLAUDE.md
+docs/plans/
+node_modules/
