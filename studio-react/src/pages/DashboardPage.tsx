@@ -146,22 +146,6 @@ function getEventBadgeVariant(type: string): 'accent' | 'blue' | 'green' | 'mute
   return 'muted'
 }
 
-// -- Quick link data --
-const quickLinks = [
-  { to: '/tasks', label: 'Tasks', desc: 'Kanban board', color: 'text-accent' },
-  { to: '/messages', label: 'Messages', desc: 'Agent comms', color: 'text-blue' },
-  { to: '/plans', label: 'Plans', desc: 'Execution plans', color: 'text-purple' },
-  { to: '/bugs', label: 'Bugs', desc: 'Bug tracker', color: 'text-red' },
-  { to: '/assets', label: 'Assets', desc: 'Art pipeline', color: 'text-accent' },
-  { to: '/drones', label: 'Drones', desc: 'GPU compute', color: 'text-blue' },
-  { to: '/approvals', label: 'Approvals', desc: 'Review queue', color: 'text-green' },
-  { to: '/concepts', label: 'Concepts', desc: 'Shared concepts', color: 'text-purple' },
-  { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
-  { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
-  { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
-  { to: '/health', label: 'Network Health', desc: 'Mission control', color: 'text-green' },
-  { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-accent' },
-]
 
 // -- Onboarding Checklist --
 
@@ -543,6 +527,7 @@ export default function DashboardPage() {
           subtitle={`${onlineAgents} online`}
           color="green"
           icon="agents"
+          to="/agents"
         />
         <SummaryCard
           title="Tasks"
@@ -550,6 +535,7 @@ export default function DashboardPage() {
           subtitle={`${tasks.open.length} open, ${tasks.in_progress.length} active`}
           color="accent"
           icon="tasks"
+          to="/tasks"
         />
         <SummaryCard
           title="Messages"
@@ -557,6 +543,7 @@ export default function DashboardPage() {
           subtitle={pendingRequests.length === 1 ? '1 pending request' : pendingRequests.length > 0 ? `${pendingRequests.length} pending · ${messages.length} total` : `${messages.length} total`}
           color={pendingRequests.length > 0 ? 'accent' : 'blue'}
           icon="messages"
+          to="/messages"
         />
         <SummaryCard
           title="Bugs"
@@ -564,6 +551,7 @@ export default function DashboardPage() {
           subtitle={`${bugs.length} total`}
           color="red"
           icon="bugs"
+          to="/bugs"
         />
         <SummaryCard
           title="Plans"
@@ -571,6 +559,7 @@ export default function DashboardPage() {
           subtitle={`${plans.length} total`}
           color="purple"
           icon="plans"
+          to="/plans"
         />
         <SummaryCard
           title="Assets"
@@ -578,6 +567,7 @@ export default function DashboardPage() {
           subtitle="total assets"
           color="accent"
           icon="assets"
+          to="/assets"
         />
         <SummaryCard
           title="Drones"
@@ -585,6 +575,7 @@ export default function DashboardPage() {
           subtitle={`${droneJobs.length} total jobs`}
           color="blue"
           icon="drones"
+          to="/drones"
         />
         <SummaryCard
           title="Concepts"
@@ -592,6 +583,7 @@ export default function DashboardPage() {
           subtitle={`${characterCount} characters`}
           color="purple"
           icon="concepts"
+          to="/concepts"
         />
         <SummaryCard
           title="Context"
@@ -599,6 +591,7 @@ export default function DashboardPage() {
           subtitle={`${contextNamespaces} namespaces`}
           color="muted"
           icon="context"
+          to="/context"
         />
       </div>
 
@@ -718,24 +711,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Quick links */}
-      <div>
-        <h2 className="text-sm font-semibold text-text-dim mb-3">Quick Links</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          {quickLinks.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              className="bg-surface-raised rounded p-3 hover:ring-1 ring-border transition-all group text-center"
-            >
-              <p className={`text-sm font-medium ${link.color} group-hover:brightness-110`}>
-                {link.label}
-              </p>
-              <p className="text-xs text-text-muted mt-0.5">{link.desc}</p>
-            </Link>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }
