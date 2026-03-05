@@ -229,7 +229,7 @@ export async function createRemoteStudioUser(opts) {
   if (!opts.username) throw new Error('username is required');
   if (!opts.password) throw new Error('password is required');
 
-  var url = opts.instanceUrl.replace(/\/+$/, '') + '/api/mycelium/admin/users';
+  var url = opts.instanceUrl.replace(/\/+$/, '') + '/api/mycelium/studio/users';
   var res = await fetch(url, {
     method: 'POST',
     headers: {
