@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchInbox, markInboxItemRead, markInboxItemActioned, dismissInboxItem, castVote } from '../api/endpoints'
+import { fetchInbox, markInboxItemRead, markInboxItemActioned, dismissInboxItem, bulkDismissInbox, castVote } from '../api/endpoints'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { timeAgo } from '../utils/time'
@@ -186,6 +186,26 @@ export default function InboxPage() {
     refresh()
   }
 
+  async function handleDeleteAll() {
+    try {
+      await bulkDismissInbox(undefined, true)
+      setSelectedId(null)
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
+
+  async function handleDeleteFiltered() {
+    const ids = filtered.map((i) => i.id)
+    if (!ids.length) return
+    try {
+      await bulkDismissInbox(ids)
+      setSelectedId(null)
+      await load()
+      refresh()
+    } catch { /* silent */ }
+  }
+
   // Keyboard nav
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -232,14 +252,32 @@ export default function InboxPage() {
             </span>
           )}
         </div>
-        {counts.all > 0 && (
-          <button
-            onClick={handleMarkAllRead}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-text-muted hover:text-text hover:bg-surface-raised transition-colors"
-          >
-            <CheckCheck size={14} /> Mark all read
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {counts.all > 0 && (
+            <button
+              onClick={handleMarkAllRead}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-text-muted active:text-text active:bg-surface-raised transition-colors"
+            >
+              <CheckCheck size={14} /> Mark all read
+            </button>
+          )}
+          {filtered.length > 0 && activeFilter !== 'all' && (
+            <button
+              onClick={handleDeleteFiltered}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-text-muted active:text-red active:bg-red/10 transition-colors"
+            >
+              <Trash2 size={14} /> Delete {filters.find(f => f.key === activeFilter)?.label}
+            </button>
+          )}
+          {items.length > 0 && (
+            <button
+              onClick={handleDeleteAll}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-red/70 active:text-red active:bg-red/10 transition-colors"
+            >
+              <Trash2 size={14} /> Delete all
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filter tabs */}

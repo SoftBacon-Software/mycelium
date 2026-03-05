@@ -526,6 +526,10 @@ export function dismissInboxItem(id: number): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/inbox/${id}`);
 }
 
+export function bulkDismissInbox(ids?: number[], all?: boolean): Promise<{ ok: boolean; dismissed: number }> {
+  return apiPost<{ ok: boolean; dismissed: number }>('/inbox/bulk-dismiss', { ids, all });
+}
+
 export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string, unknown> }> {
   return apiGet('/admin/api-limits');
 }

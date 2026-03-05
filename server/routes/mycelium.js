@@ -4042,6 +4042,34 @@ router.delete('/inbox/:id', function (req, res) {
   res.json({ ok: true });
 });
 
+// POST /inbox/bulk-dismiss — dismiss multiple items at once
+router.post('/inbox/bulk-dismiss', function (req, res) {
+  var user = getStudioUser(req);
+  var adminKey = req.headers['x-admin-key'];
+  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  var ids = req.body.ids;
+  var all = req.body.all;
+  var operatorId = req.body.operator_id;
+  if (!operatorId && user) {
+    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
+    if (op) operatorId = op.id;
+  }
+  var dismissed = 0;
+  if (all && operatorId) {
+    // Dismiss all non-dismissed items for this operator
+    var result = getDB().prepare("UPDATE dv_operator_inbox SET status = 'dismissed' WHERE operator_id = ? AND status != 'dismissed'").run(operatorId);
+    dismissed = result.changes;
+  } else if (Array.isArray(ids) && ids.length > 0) {
+    for (var i = 0; i < ids.length; i++) {
+      dismissInboxItem(ids[i]);
+      dismissed++;
+    }
+  } else {
+    return apiError(res, 400, 'ids array or all=true required');
+  }
+  res.json({ ok: true, dismissed: dismissed });
+});
+
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
 export async function initPlugins() {
