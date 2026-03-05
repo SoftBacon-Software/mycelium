@@ -134,6 +134,25 @@ function getAgentInitials(name: string): string {
   return name.slice(0, 2).toUpperCase()
 }
 
+function getEventRoute(type: string): string | null {
+  if (type.startsWith('task')) return '/tasks'
+  if (type.startsWith('message') || type.startsWith('request')) return '/messages'
+  if (type.startsWith('agent') || type === 'heartbeat') return '/health'
+  if (type.startsWith('bug')) return '/bugs'
+  if (type.startsWith('plan')) return '/plans'
+  if (type.startsWith('drone')) return '/drones'
+  if (type.startsWith('approval')) return '/approvals'
+  if (type.startsWith('asset') || type === 'file_uploaded' || type === 'artifact_uploaded') return '/assets'
+  if (type.startsWith('concept')) return '/concepts'
+  if (type.startsWith('context')) return '/context'
+  if (type.startsWith('channel')) return '/channels'
+  if (type.startsWith('plugin')) return '/plugins'
+  if (type.startsWith('operator')) return '/operators'
+  if (type === 'feedback_submitted') return '/feedback'
+  if (type === 'auto_dispatch' || type === 'work_claimed' || type === 'work_request') return '/tasks'
+  return null
+}
+
 function getEventBadgeVariant(type: string): 'accent' | 'blue' | 'green' | 'muted' | 'purple' | 'red' {
   if (eventBadgeVariant[type]) return eventBadgeVariant[type]
   // Fallback: match prefix
@@ -543,6 +562,7 @@ export default function DashboardPage() {
           subtitle={`${onlineAgents} online`}
           color="green"
           icon="agents"
+          to="/health"
         />
         <SummaryCard
           title="Tasks"
@@ -550,6 +570,7 @@ export default function DashboardPage() {
           subtitle={`${tasks.open.length} open, ${tasks.in_progress.length} active`}
           color="accent"
           icon="tasks"
+          to="/tasks"
         />
         <SummaryCard
           title="Messages"
@@ -557,6 +578,7 @@ export default function DashboardPage() {
           subtitle={pendingRequests.length === 1 ? '1 pending request' : pendingRequests.length > 0 ? `${pendingRequests.length} pending · ${messages.length} total` : `${messages.length} total`}
           color={pendingRequests.length > 0 ? 'accent' : 'blue'}
           icon="messages"
+          to="/messages"
         />
         <SummaryCard
           title="Bugs"
@@ -564,6 +586,7 @@ export default function DashboardPage() {
           subtitle={`${bugs.length} total`}
           color="red"
           icon="bugs"
+          to="/bugs"
         />
         <SummaryCard
           title="Plans"
@@ -571,6 +594,7 @@ export default function DashboardPage() {
           subtitle={`${plans.length} total`}
           color="purple"
           icon="plans"
+          to="/plans"
         />
         <SummaryCard
           title="Assets"
@@ -578,6 +602,7 @@ export default function DashboardPage() {
           subtitle="total assets"
           color="accent"
           icon="assets"
+          to="/assets"
         />
         <SummaryCard
           title="Drones"
@@ -585,6 +610,7 @@ export default function DashboardPage() {
           subtitle={`${droneJobs.length} total jobs`}
           color="blue"
           icon="drones"
+          to="/drones"
         />
         <SummaryCard
           title="Concepts"
@@ -592,6 +618,7 @@ export default function DashboardPage() {
           subtitle={`${characterCount} characters`}
           color="purple"
           icon="concepts"
+          to="/concepts"
         />
         <SummaryCard
           title="Context"
@@ -599,6 +626,7 @@ export default function DashboardPage() {
           subtitle={`${contextNamespaces} namespaces`}
           color="muted"
           icon="context"
+          to="/context"
         />
       </div>
 
@@ -635,25 +663,29 @@ export default function DashboardPage() {
                 <Spinner size="sm" />
               </div>
             )}
-            {filteredEvents.map((event) => (
-              <div
-                key={event.id}
-                className="flex items-start gap-3 py-2 px-2 rounded hover:bg-surface-raised/50 transition-colors group"
-              >
-                <span className="text-xs text-text-muted font-mono w-14 shrink-0 pt-0.5 tabular-nums">
-                  {formatTimestamp(event.created_at)}
-                </span>
-                <Badge variant={getEventBadgeVariant(event.type)} className="shrink-0 mt-0.5">
-                  {event.type.replace(/_/g, ' ')}
-                </Badge>
-                <span className="text-sm text-text-dim leading-snug flex-1 min-w-0 group-hover:text-text transition-colors">
-                  {event.agent && (
-                    <span className="font-mono text-xs text-accent mr-1.5">{getSenderDisplay(event.agent)}</span>
-                  )}
-                  <span className="break-words">{event.summary}</span>
-                </span>
-              </div>
-            ))}
+            {filteredEvents.map((event) => {
+              const eventRoute = getEventRoute(event.type)
+              return (
+                <div
+                  key={event.id}
+                  onClick={() => eventRoute && navigate(eventRoute)}
+                  className={`flex items-start gap-3 py-2 px-2 rounded transition-colors ${eventRoute ? 'cursor-pointer active:bg-surface-raised/80' : ''}`}
+                >
+                  <span className="text-xs text-text-muted font-mono w-14 shrink-0 pt-0.5 tabular-nums">
+                    {formatTimestamp(event.created_at)}
+                  </span>
+                  <Badge variant={getEventBadgeVariant(event.type)} className="shrink-0 mt-0.5">
+                    {event.type.replace(/_/g, ' ')}
+                  </Badge>
+                  <span className="text-sm text-text-dim leading-snug flex-1 min-w-0">
+                    {event.agent && (
+                      <span className="font-mono text-xs text-accent mr-1.5">{getSenderDisplay(event.agent)}</span>
+                    )}
+                    <span className="break-words">{event.summary}</span>
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </div>
 
@@ -674,7 +706,11 @@ export default function DashboardPage() {
               const justHeartbeated = (Date.now() - (recentHeartbeats[agent.id] || 0)) < 10000
 
               return (
-                <div key={agent.id} className={`bg-surface-raised rounded p-3 transition-all hover:ring-1 ring-border ${justHeartbeated ? 'ring-1 ring-green/40' : ''}`}>
+                <div
+                  key={agent.id}
+                  onClick={() => navigate('/health')}
+                  className={`bg-surface-raised rounded p-3 transition-colors cursor-pointer active:bg-surface ring-1 ${justHeartbeated ? 'ring-green/40' : 'ring-transparent'}`}
+                >
                   <div className="flex items-center gap-3 mb-1.5">
                     <div className={`w-9 h-9 rounded-lg ${avatarColor} flex items-center justify-center text-xs font-bold shrink-0`}>
                       {getAgentInitials(agent.name || agent.id)}
@@ -726,9 +762,9 @@ export default function DashboardPage() {
             <Link
               key={link.to}
               to={link.to}
-              className="bg-surface-raised rounded p-3 hover:ring-1 ring-border transition-all group text-center"
+              className="bg-surface-raised rounded p-3 ring-1 ring-border/30 transition-colors cursor-pointer active:bg-surface text-center"
             >
-              <p className={`text-sm font-medium ${link.color} group-hover:brightness-110`}>
+              <p className={`text-sm font-medium ${link.color}`}>
                 {link.label}
               </p>
               <p className="text-xs text-text-muted mt-0.5">{link.desc}</p>
