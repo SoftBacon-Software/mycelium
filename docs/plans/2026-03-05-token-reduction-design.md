@@ -41,10 +41,20 @@ Current boot returns ~30 fields. New boot returns:
     { "type": "directive", "id": 42, "title": "Review PR #65" },
     { "type": "task", "id": 52, "title": "Write provisioning module" }
   ],
+  "pending_directives": [
+    { "id": 100, "from": "admin-bot", "content": "Review PR #65" }
+  ],
+  "pending_requests": [
+    { "id": 5367, "from": "macbook-claude", "content": "PR #65 review..." }
+  ],
   "other_agents": [
     { "id": "greatness-claude", "status": "online", "working_on": "Task #53" }
   ],
+  "savepoint": { "was_working_on": "Task #52", "notes": "Completed provisioning module" },
   "changes_since_last": "2 new messages, 1 task assigned, plan #31 step completed",
+  "sleep_mode": false,
+  "autonomous_mode": false,
+  "operators_available": 1,
   "server_time": "2026-03-05T15:24:12Z"
 }
 ```
@@ -61,12 +71,15 @@ Current boot returns ~30 fields. New boot returns:
 - Approval queue → `list_approvals`
 - Full message bodies → `read_messages`
 
-### What stays:
+### What stays (per network review):
 - Agent record with role contract (agents MUST know scope from token zero)
 - Counts (cheap, immediately actionable)
 - Top 5 work queue (title+type+id only — immediate actionability)
+- `pending_directives[]` and `pending_requests[]` (blocking — agents can't proceed without these)
 - Other agents summary (coordination context)
-- Savepoint diff one-liner (recovery awareness)
+- Savepoint summary (recovery awareness — compaction flow depends on this)
+- `sleep_mode` + `autonomous_mode` + `operators_available` (MCP agents need this for night directives)
+- `changes_since_last` one-liner
 
 ### Debug mode:
 `GET /boot/:agentId?verbose=true` returns the full legacy payload for debugging and new customer onboarding.
@@ -205,9 +218,23 @@ Platform conventions (message types, work priority order, channel types) baked i
 | MCP server | `mcp/src/tools.js` | Compressed tool response formatting, truncation |
 | Runner | `runner/src/session.js`, `runner/src/orchestrator.js` | Compressed prompts, CLAUDE.md split, heartbeat handling |
 
+## Breakage Risks (from greatness-claude audit)
+
+1. **Heartbeat `work_queue` removal**: MCP state.js and tools.js read `result.work_queue[]` from heartbeat. Fix: MCP calls `get_work` when `wake=true` or `pending > 0`.
+2. **Heartbeat `auto_dispatched` removal**: Agents won't discover dispatched work. Fix: same as #1 — `wake=true` triggers `get_work`.
+3. **Boot must keep `sleep_mode` + `autonomous_mode` + `operators_available`**: MCP agents get night directives from boot. ~50 tokens, kept.
+4. **Boot must keep `savepoint` summary**: Compaction recovery depends on it. Kept.
+
+## Deployment Order
+
+1. Merge compaction snapshots PR #2 first (MCP state tracking must be stable)
+2. Ship server changes + MCP updates together (don't break mid-deploy)
+3. Both MCP repos (dioverse-mcp + mycelium-runner/mcp) must update simultaneously
+
 ## Migration
 
 - New endpoints are backwards-compatible via `?verbose=true`
 - MCP server tools update to use compressed formatting
 - Runner prompt changes are internal (no API change)
 - No database schema changes required
+- Network plan: #34
