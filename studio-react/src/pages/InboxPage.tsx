@@ -430,8 +430,6 @@ export default function InboxPage() {
                     <ExternalLink size={14} /> View Source
                   </button>
 
-                  <div className="flex-1" />
-
                   <button
                     onClick={() => handleDismiss(selectedItem)}
                     disabled={actionLoading}
