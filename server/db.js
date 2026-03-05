@@ -494,6 +494,10 @@ export function getTaskComments(taskId) {
   ).all(taskId);
 }
 
+export function getTaskComment(commentId) {
+  return db.prepare("SELECT * FROM dv_task_comments WHERE id = ?").get(commentId);
+}
+
 export function deleteTaskComment(commentId) {
   var result = db.prepare("DELETE FROM dv_task_comments WHERE id = ?").run(commentId);
   return result.changes > 0;
