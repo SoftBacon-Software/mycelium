@@ -503,6 +503,22 @@ export function disablePlugin(name: string): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>(`/plugins/${encodeURIComponent(name)}/disable`, {});
 }
 
+export function fetchPluginRegistry(): Promise<any[]> {
+  return apiGet<any[]>('/plugins/registry');
+}
+
+export function installPlugin(name: string): Promise<{ ok: boolean; message: string }> {
+  return apiPost<{ ok: boolean; message: string }>('/plugins/install', { name });
+}
+
+export function uninstallPlugin(name: string): Promise<{ ok: boolean; message: string }> {
+  return apiDelete<{ ok: boolean; message: string }>(`/plugins/${encodeURIComponent(name)}/uninstall`);
+}
+
+export function fetchAllWidgets(): Promise<any[]> {
+  return apiGet<any[]>('/plugins/all-widgets');
+}
+
 // Inbox
 
 export function fetchInbox(status?: string): Promise<InboxItem[]> {

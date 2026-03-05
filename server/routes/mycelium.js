@@ -3774,6 +3774,53 @@ router.get('/plugins/workers', function (req, res) {
   res.json(getWorkerStatus());
 });
 
+// ---- Marketplace ----
+
+var registryCache = { data: null, fetched: 0 };
+var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/main/registry.json';
+var REGISTRY_TTL = 3600000; // 1 hour
+
+router.get('/plugins/registry', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var now = Date.now();
+  if (registryCache.data && (now - registryCache.fetched) < REGISTRY_TTL) {
+    return res.json(registryCache.data);
+  }
+  fetch(REGISTRY_URL)
+    .then(function (r) {
+      if (!r.ok) throw new Error('Registry fetch failed: ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      registryCache.data = data;
+      registryCache.fetched = now;
+      res.json(data);
+    })
+    .catch(function (err) {
+      if (registryCache.data) return res.json(registryCache.data);
+      res.status(502).json({ error: 'Failed to fetch plugin registry: ' + err.message });
+    });
+});
+
+router.get('/plugins/all-widgets', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var result = [];
+  var plugins = getLoadedPlugins();
+  for (var i = 0; i < plugins.length; i++) {
+    var p = plugins[i];
+    var widgets = p.dashboard_widgets || p.dashboardWidgets || [];
+    for (var j = 0; j < widgets.length; j++) {
+      result.push({
+        plugin: p.name,
+        plugin_display_name: p.displayName || p.name,
+        route_prefix: p.routePrefix || ('/' + p.name),
+        widget: widgets[j]
+      });
+    }
+  }
+  res.json(result);
+});
+
 router.get('/plugins/:name', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
@@ -3839,6 +3886,52 @@ router.put('/plugins/:name/disable', function (req, res) {
   updatePluginEnabled(req.params.name, 0);
   emitEvent('plugin_disabled', getAdminDisplayName(req), null, 'Disabled plugin: ' + req.params.name);
   res.json({ ok: true, name: req.params.name, enabled: 0 });
+});
+
+router.post('/plugins/install', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var name = req.body.name;
+  if (!name) return res.status(400).json({ error: 'Plugin name required' });
+
+  var record = getPluginRecord(name);
+  if (!record) return res.status(404).json({ error: 'Plugin not found in server/plugins/' });
+
+  if (record.enabled) return res.json({ ok: true, message: 'Plugin already enabled', name: name });
+
+  // Enable the plugin — server restart will load routes/handlers
+  updatePluginEnabled(name, 1);
+  emitEvent('plugin_installed', getAdminDisplayName(req), null, 'Installed plugin: ' + name, { plugin: name });
+  res.json({ ok: true, name: name, message: 'Plugin enabled. Server restart required to fully load.' });
+});
+
+router.delete('/plugins/:name/uninstall', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var record = getPluginRecord(req.params.name);
+  if (!record) return res.status(404).json({ error: 'Plugin not found' });
+
+  // Disable first
+  updatePluginEnabled(req.params.name, 0);
+
+  // Clean up config
+  var configRows = getPluginConfig(req.params.name);
+  for (var row of configRows) {
+    deletePluginConfig(req.params.name, row.key);
+  }
+
+  emitEvent('plugin_uninstalled', getAdminDisplayName(req), null, 'Uninstalled plugin: ' + req.params.name, { plugin: req.params.name });
+  res.json({ ok: true, name: req.params.name, message: 'Plugin disabled and config cleared. Server restart required. Plugin files remain in server/plugins/ for reinstall.' });
+});
+
+router.get('/plugins/:name/widgets', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var record = getPluginRecord(req.params.name);
+  if (!record) return res.status(404).json({ error: 'Plugin not found' });
+
+  var loaded = getLoadedPlugins().find(function (p) { return p.name === req.params.name; });
+  if (!loaded) return res.json({ widgets: [] });
+
+  var widgets = loaded.dashboard_widgets || loaded.dashboardWidgets || [];
+  res.json({ widgets: widgets, route_prefix: loaded.routePrefix || ('/' + loaded.name) });
 });
 
 // ======== BACKUPS ========
