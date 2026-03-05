@@ -27,7 +27,7 @@ fail()  { echo -e "${RED}[mycelium]${NC} $1"; exit 1; }
 echo ""
 echo -e "${AMBER}${BOLD}  ╔══════════════════════════════════════╗${NC}"
 echo -e "${AMBER}${BOLD}  ║         🍄 MYCELIUM                  ║${NC}"
-echo -e "${AMBER}${BOLD}  ║   The printing press of ideas.       ║${NC}"
+echo -e "${AMBER}${BOLD}  ║   AI Agent Coordination Platform     ║${NC}"
 echo -e "${AMBER}${BOLD}  ╚══════════════════════════════════════╝${NC}"
 echo ""
 

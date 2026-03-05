@@ -1,5 +1,5 @@
 -- =============== MYCELIUM -- Platform Schema ===============
--- Distributed development platform. The printing press of ideas.
+-- Distributed development platform.
 
 -- Registered agents (AI instances, bots, etc.)
 CREATE TABLE IF NOT EXISTS dv_agents (
