@@ -3821,6 +3821,24 @@ router.get('/plugins/all-widgets', function (req, res) {
   res.json(result);
 });
 
+// GET /plugins/nav — lightweight page declarations for all loaded plugins
+router.get('/plugins/nav', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var plugins = getLoadedPlugins();
+  var nav = [];
+  for (var i = 0; i < plugins.length; i++) {
+    var p = plugins[i];
+    if (!p.pages || p.pages.length === 0) continue;
+    nav.push({
+      name: p.name,
+      display_name: p.displayName || p.name,
+      route_prefix: p.routePrefix || ('/' + p.name),
+      pages: p.pages
+    });
+  }
+  res.json(nav);
+});
+
 router.get('/plugins/:name', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
@@ -3835,6 +3853,7 @@ router.get('/plugins/:name', function (req, res) {
     mcp_tools: mcpTools.map(function (t) { return { name: t.name, description: t.description || '' }; }),
     hooks: loaded ? (loaded.hooks || []) : [],
     gated_actions: loaded ? (loaded.gatedActions || []) : [],
+    pages: loaded ? (loaded.pages || []) : [],
   });
 });
 
