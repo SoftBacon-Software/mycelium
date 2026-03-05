@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchInbox, markInboxItemRead, markInboxItemActioned, dismissInboxItem, bulkDismissInbox, castVote } from '../api/endpoints'
+import { fetchInbox, markInboxItemRead, markInboxItemActioned, dismissInboxItem, bulkDismissInbox, castVote, updatePlanStep } from '../api/endpoints'
 import { useAuthStore } from '../stores/authStore'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { timeAgo } from '../utils/time'
@@ -124,7 +124,14 @@ export default function InboxPage() {
     if (!user || actionLoading) return
     setActionLoading(true)
     try {
-      await castVote(item.entity_id, 'approve', null, user.username, 'operator')
+      if (item.entity_type === 'plan_step') {
+        // Plan step approval — mark the step as completed
+        const data = item.data || {}
+        await updatePlanStep(String(data.plan_id), String(data.step_id || item.entity_id), { status: 'completed' })
+      } else {
+        // Actual approval record — cast a vote
+        await castVote(item.entity_id, 'approve', null, user.username, 'operator')
+      }
       await markInboxItemActioned(item.id)
       await load()
       refresh()
@@ -136,7 +143,14 @@ export default function InboxPage() {
     if (!user || actionLoading) return
     setActionLoading(true)
     try {
-      await castVote(item.entity_id, 'deny', null, user.username, 'operator')
+      if (item.entity_type === 'plan_step') {
+        // Plan step rejection — mark the step as blocked
+        const data = item.data || {}
+        await updatePlanStep(String(data.plan_id), String(data.step_id || item.entity_id), { status: 'blocked' })
+      } else {
+        // Actual approval record — cast deny vote
+        await castVote(item.entity_id, 'deny', null, user.username, 'operator')
+      }
       await markInboxItemActioned(item.id)
       await load()
       refresh()
