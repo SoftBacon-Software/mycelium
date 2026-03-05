@@ -52,6 +52,10 @@ process.stdout.write('[boot] plugins loaded\n');
 
 var app = express();
 
+// Railway runs behind a reverse proxy — trust X-Forwarded-For for real client IPs.
+// Required for rate limiting to work correctly (otherwise req.ip = proxy IP).
+app.set('trust proxy', true);
+
 app.use(compression());
 
 // CORS — permissive for API usage

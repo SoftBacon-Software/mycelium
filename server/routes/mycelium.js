@@ -245,7 +245,7 @@ var DEFAULT_BUG_CATEGORIES = ['bug', 'feature', 'ui', 'crash', 'api', 'infrastru
 
 function getBugCategories(projectId) {
   if (projectId) {
-    var project = db.getProject(projectId);
+    var project = getProject(projectId);
     if (project && project.bug_categories) {
       try {
         var cats = JSON.parse(project.bug_categories);
@@ -1032,6 +1032,20 @@ router.put('/tasks/:id', function (req, res) {
 
   var result = { ok: true, id: task.id };
 
+  // Handle blocked_by via the dependency system (not the general update handler)
+  if (req.body.blocked_by !== undefined) {
+    var blockers = Array.isArray(req.body.blocked_by) ? req.body.blocked_by : [req.body.blocked_by];
+    var addedDeps = [];
+    for (var bid of blockers) {
+      var depId = parseInt(bid);
+      if (depId && depId !== task.id) {
+        var ok = setTaskDependency(task.id, depId);
+        if (ok) addedDeps.push(depId);
+      }
+    }
+    if (addedDeps.length > 0) result.blocked_by = addedDeps;
+  }
+
   // When task completes: resolve dependencies and update linked asset
   if (fields.status === 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
@@ -1085,6 +1099,18 @@ router.put('/tasks/:id', function (req, res) {
     dispatchWebhook('task_assigned', targetAgent, { task_id: task.id, title: task.title, status: fields.status || task.status });
   }
   res.json(result);
+});
+
+// POST /tasks/:id/claim — claim a task (convenience route)
+router.post('/tasks/:id/claim', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var agentId = req.body.agent_id || who;
+  updateTask(task.id, { assignee: agentId, status: 'in_progress' });
+  emitEvent('task_claimed', who, task.project_id, who + ' claimed task #' + task.id, { task_id: task.id, agent: agentId });
+  res.json({ ok: true, id: task.id, assignee: agentId, status: 'in_progress' });
 });
 
 // Task dependencies
@@ -1795,7 +1821,7 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   var stepPlanId = parseIntParam(req.params.id);
   var stepStepId = parseIntParam(req.params.stepId);
   updatePlanStep(stepStepId, fields);
-  if (fields.status === 'done' && getSleepMode().active) {
+  if (fields.status === 'completed' && getSleepMode().active) {
     appendSleepLog('steps_completed', { id: stepStepId, plan_id: stepPlanId, agent: agentId, time: new Date().toISOString() });
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
@@ -1804,6 +1830,17 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (fields.assignee === 'operator_input') {
     var stepTitle = planStep ? planStep.title : ('Step #' + stepStepId);
     createInboxItemForAllOperators('approval', 'plan_step', stepStepId, 'Operator input needed: ' + stepTitle, 'Plan #' + stepPlanId + ' — ' + (plan.title || '') + '. Step requires your review/approval.', { plan_id: stepPlanId, step_id: stepStepId, step_title: stepTitle }, 'high');
+  }
+  // Auto-complete plan when all steps are done
+  if (fields.status === 'completed') {
+    var updatedPlan = getPlan(stepPlanId);
+    if (updatedPlan && updatedPlan.steps) {
+      var allDone = updatedPlan.steps.every(function (s) { return s.status === 'completed' || s.status === 'skipped'; });
+      if (allDone && updatedPlan.status !== 'completed') {
+        updatePlan(stepPlanId, { status: 'completed' });
+        emitEvent('plan_completed', agentId, updatedPlan.project_id, 'Plan #' + stepPlanId + ' auto-completed (all steps done)', { plan_id: stepPlanId });
+      }
+    }
   }
   res.json({ ok: true, step_id: stepStepId });
 });
@@ -2878,6 +2915,18 @@ router.get('/bugs/:id', function (req, res) {
   var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   res.json(bug);
+});
+
+// POST /bugs/:id/claim — claim a bug (convenience route)
+router.post('/bugs/:id/claim', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var bug = getBug(parseIntParam(req.params.id));
+  if (!bug) return res.status(404).json({ error: 'Bug not found' });
+  var agentId = req.body.agent_id || who;
+  updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
+  emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
+  res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });
 });
 
 // PUT /bugs/:id — update bug (status, assignee, admin_notes, severity)
