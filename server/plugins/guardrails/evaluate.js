@@ -61,7 +61,7 @@ function buildContext(data, eventData) {
 // conditions.checks: array of { field, op, value } comparisons
 // conditions.logic: 'and' (default) or 'or'
 // Returns true if the rule is violated (expression matched).
-export function evaluateSafeExpression(conditions, data, eventData) {
+function evaluateSafeExpression(conditions, data, eventData) {
   var checks = conditions.checks || conditions.comparisons || [];
   if (!Array.isArray(checks) || checks.length === 0) return false;
 
@@ -82,7 +82,7 @@ export function evaluateSafeExpression(conditions, data, eventData) {
   return true;
 }
 
-export function evaluateCondition(conditions, eventData) {
+function evaluateCondition(conditions, eventData) {
   var data = eventData.data || {};
   switch (conditions.type) {
     case 'require_field':
@@ -110,3 +110,4 @@ export function evaluateCondition(conditions, eventData) {
       return { violated: false };
   }
 }
+module.exports = { evaluateSafeExpression, evaluateCondition };
