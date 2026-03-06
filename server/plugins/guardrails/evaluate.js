@@ -110,4 +110,4 @@ function evaluateCondition(conditions, eventData) {
       return { violated: false };
   }
 }
-module.exports = { evaluateSafeExpression, evaluateCondition };
+export { evaluateSafeExpression, evaluateCondition };
