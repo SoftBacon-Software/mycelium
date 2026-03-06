@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS dv_context_keys (
   namespace   TEXT NOT NULL,
   key         TEXT NOT NULL,
   data        TEXT NOT NULL DEFAULT '{}',
+  category    TEXT NOT NULL DEFAULT 'durable',
+  expires_at  TEXT,
   updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by  TEXT NOT NULL DEFAULT '',
   UNIQUE(namespace, key)

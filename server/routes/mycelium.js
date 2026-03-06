@@ -147,7 +147,8 @@ import {
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
-  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket
+  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket,
+  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -715,6 +716,9 @@ router.get('/boot/:agentId', function (req, res) {
     return res.status(403).json({ error: 'Agent key does not match agent ID' });
   }
 
+  // Clean up expired ephemeral context keys for this agent
+  cleanupAgentSessionKeys(agentId);
+
   // Verbose mode returns legacy full payload
   if (req.query.verbose === 'true') {
     var fullPayload = getBootPayload(agentId);
@@ -1219,7 +1223,11 @@ router.put('/context/keys/:namespace/:key', function (req, res) {
   var data = req.body.data;
   if (data === undefined) return res.status(400).json({ error: 'data field is required' });
   var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-  upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId);
+  var opts = {};
+  if (req.body.category) opts.category = req.body.category;
+  if (req.body.ttl) opts.ttl = parseInt(req.body.ttl, 10);
+  if (req.body.expires_at) opts.expires_at = req.body.expires_at;
+  upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
   emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
   res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
 });
@@ -1228,6 +1236,11 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
+});
+
+router.get('/context/stats', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  res.json(contextKeyStats());
 });
 
 // Legacy per-project context

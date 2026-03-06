@@ -19,7 +19,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries } from './db.js';
+import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +43,27 @@ if (!process.env.TURN_SECRET) {
 // Initialize database
 process.stdout.write('[boot] initializing DB...\n');
 initDB();
+
+// Migrate: add category + expires_at columns to dv_context_keys if missing
+try {
+  var _db = getDB();
+  var cols = _db.pragma('table_info(dv_context_keys)').map(function(c) { return c.name; });
+  if (!cols.includes('category')) {
+    _db.prepare("ALTER TABLE dv_context_keys ADD COLUMN category TEXT NOT NULL DEFAULT 'durable'").run();
+    process.stdout.write('[boot] migrated dv_context_keys: added category column\n');
+  }
+  if (!cols.includes('expires_at')) {
+    _db.prepare("ALTER TABLE dv_context_keys ADD COLUMN expires_at TEXT").run();
+    process.stdout.write('[boot] migrated dv_context_keys: added expires_at column\n');
+  }
+} catch (e) {
+  process.stdout.write('[boot] context_keys migration note: ' + e.message + '\n');
+}
+
+// Purge expired context keys on boot
+var purged = purgeExpiredContextKeys();
+if (purged > 0) process.stdout.write('[boot] purged ' + purged + ' expired context keys\n');
+
 process.stdout.write('[boot] DB ready\n');
 
 // Load plugins (after DB init, before routes are used)
@@ -266,6 +287,8 @@ setInterval(function () {
     if (staleResolved > 0) console.log('[daily] Resolved ' + staleResolved + ' stale requests');
     var pruned = pruneWebhookDeliveries(7);
     if (pruned > 0) console.log('[daily] Pruned ' + pruned + ' old webhook delivery logs');
+    var ctxPurged = purgeExpiredContextKeys();
+    if (ctxPurged > 0) console.log('[daily] Purged ' + ctxPurged + ' expired context keys');
   } catch (e) {
     console.error('[daily] Maintenance error:', e.message);
   }
