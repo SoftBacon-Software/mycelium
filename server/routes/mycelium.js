@@ -633,7 +633,7 @@ router.get('/public/activity', function (req, res) {
     // Filter to safe event types only
     var safeEventTypes = [
       'task_completed', 'task_created', 'bug_filed', 'bug_fixed',
-      'plan_step_completed', 'plan_created', 'agent_heartbeat',
+      'plan_step_completed', 'plan_created',
       'drone_job_completed', 'pr_merged', 'bip_draft_created'
     ];
     var placeholders = safeEventTypes.map(function () { return '?'; }).join(',');
