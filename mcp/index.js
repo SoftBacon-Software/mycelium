@@ -26,7 +26,7 @@ if (role === 'agent' && !agentId) {
 
 var server = new McpServer({
   name: 'mycelium-mcp',
-  version: '1.2.0'
+  version: '1.0.0'
 });
 
 registerTools(server);

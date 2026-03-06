@@ -1,6 +1,6 @@
 {
   "name": "mycelium-mcp",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "description": "Mycelium MCP server — gives Claude agents native tools with auto-heartbeat and protocol enforcement for the Mycelium platform",
   "type": "module",
   "main": "index.js",
@@ -14,10 +14,22 @@
     "mcp",
     "mycelium",
     "ai-agents",
-    "distributed-development"
+    "distributed-development",
+    "model-context-protocol",
+    "claude",
+    "llm-agents"
   ],
   "author": "SoftBacon Software",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SoftBacon-Software/mycelium.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://mycelium.fyi",
+  "bugs": {
+    "url": "https://github.com/SoftBacon-Software/mycelium/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^4.3.6"

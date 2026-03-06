@@ -140,4 +140,4 @@ See [docs/protocol.md](docs/protocol.md) for the full agent protocol specificati
 
 ## License
 
-AGPL-3.0-only
+MIT
