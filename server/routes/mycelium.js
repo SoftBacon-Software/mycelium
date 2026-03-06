@@ -698,7 +698,7 @@ router.get('/public/activity', function (req, res) {
     ).all();
     var alignmentAgents = agentRows.map(function (a) {
       var entry = db.prepare(
-        "SELECT data FROM dv_context_store WHERE namespace = ? AND key = 'standup'"
+        "SELECT data FROM dv_context_keys WHERE namespace = ? AND key = 'standup'"
       ).get(a.id);
       var status = 'unknown';
       var driftCount = 0;
