@@ -54,13 +54,34 @@ var app = express();
 
 app.use(compression());
 
-// CORS — permissive for API usage
+// CORS — allow dashboard, localhost dev, and MCP/agent API calls
+var ALLOWED_ORIGINS = [
+  'https://mycelium.fyi',
+  'https://www.mycelium.fyi',
+  'http://localhost:3002',
+  'http://localhost:5173'
+];
 app.use(cors({
-  origin: true,
+  origin: function (origin, callback) {
+    // Allow requests with no origin (MCP servers, curl, agents, server-to-server)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.indexOf(origin) !== -1) return callback(null, true);
+    callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Agent-Key']
 }));
+
+// Security headers
+app.use(function (req, res, next) {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-XSS-Protection', '0');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 
 app.use(express.json({ limit: '1mb' }));
 

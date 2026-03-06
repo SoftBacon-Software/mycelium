@@ -3,35 +3,7 @@
 
 import { Router } from 'express';
 import createGuardrailsDB from './db.js';
-
-function evaluateCondition(conditions, eventData) {
-  var data = eventData.data || {};
-  switch (conditions.type) {
-    case 'require_field':
-      if (!data[conditions.field]) return { violated: true, detail: conditions.message || 'Missing required field: ' + conditions.field };
-      return { violated: false };
-    case 'max_value':
-      var val = parseInt(data[conditions.field]) || 0;
-      if (val > (conditions.max || 0)) return { violated: true, detail: conditions.message || conditions.field + ' exceeds max (' + val + ' > ' + conditions.max + ')' };
-      return { violated: false };
-    case 'require_approval':
-      if (!data.approval_id) return { violated: true, detail: conditions.message || 'Approval required for ' + conditions.action_type };
-      return { violated: false };
-    case 'block_agent':
-      if ((eventData.agent || '') === conditions.agent_id) return { violated: true, detail: conditions.message || 'Agent ' + conditions.agent_id + ' is restricted' };
-      return { violated: false };
-    case 'custom':
-      try {
-        var fn = new Function('data', 'event', 'return (' + conditions.expression + ')');
-        if (fn(data, eventData)) return { violated: true, detail: conditions.message || 'Custom rule violated' };
-        return { violated: false };
-      } catch (e) {
-        return { violated: false };
-      }
-    default:
-      return { violated: false };
-  }
-}
+import { evaluateCondition } from './evaluate.js';
 
 export default function (core) {
   var router = Router();
