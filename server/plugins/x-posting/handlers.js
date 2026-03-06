@@ -1,12 +1,13 @@
 // X/Twitter Posting event handlers
-// Listens for BIP draft approvals and auto-tweets if configured.
+// Creates approval records for tweet drafts and auto-publishes on approval.
 
 import createXDB from './db.js';
+import { sendTweet, getCredentials } from './twitter.js';
 
 export function registerHooks(core) {
   var db = createXDB(core.db);
 
-  // When any X draft is created, send to operator inbox for review + publish approval
+  // When any X draft is created, create an approval record and route to operator inbox
   core.onEvent('x_draft_created', function (eventData) {
     try {
       var data = eventData.data || {};
@@ -14,19 +15,107 @@ export function registerHooks(core) {
       var text = data.text || '';
       if (!postId) return;
 
+      // Create a real approval record so it appears in the Approvals page
+      var result = core.db.prepare(
+        "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+      ).get(
+        'x_publish',
+        data.posted_by || '__system__',
+        'Publish tweet: ' + (text.length > 60 ? text.substring(0, 57) + '...' : text),
+        JSON.stringify({ post_id: postId, full_text: text }),
+        eventData.project || 'mycelium',
+        'low',
+        1
+      );
+      var approvalId = result.id;
+
       var preview = text.length > 100 ? text.substring(0, 97) + '...' : text;
 
       core.inbox.createInboxItemForAllOperators(
         'approval',
-        'x_draft',
-        String(postId),
+        'approval',
+        String(approvalId),
         'Tweet draft #' + postId + ' ready for review',
         preview,
-        { post_id: postId, full_text: text, action_url: '/x/posts/' + postId + '/publish' },
+        { post_id: postId, approval_id: approvalId, full_text: text },
         'normal'
       );
     } catch (e) {
       console.error('[x-posting] Error routing draft to inbox:', e.message);
+    }
+  });
+
+  // When an approval is approved, check if it's an x_publish and auto-publish the tweet
+  core.onEvent('approval_approved', function (eventData) {
+    try {
+      // Parse event data to get approval_id
+      var raw = eventData.data;
+      var parsed = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+      var approvalId = parsed.approval_id;
+      if (!approvalId) return;
+
+      var approval = core.db.prepare('SELECT * FROM dv_approvals WHERE id = ?').get(approvalId);
+      if (!approval || approval.action_type !== 'x_publish') return;
+
+      var payload = JSON.parse(approval.payload || '{}');
+      var postId = payload.post_id;
+      if (!postId) return;
+
+      var post = db.getPost(postId);
+      if (!post || !post.tweet_text) return;
+      if (post.status === 'published') return;
+
+      var creds = getCredentials(core.db);
+      if (!creds.api_key || !creds.api_secret || !creds.access_token || !creds.access_token_secret) {
+        console.error('[x-posting] Cannot auto-publish: X API credentials not configured');
+        return;
+      }
+
+      // If this is part of a thread, find the previous tweet ID to reply to
+      var replyTo = null;
+      if (post.thread_id && post.thread_position > 0) {
+        var prev = core.db.prepare(
+          "SELECT tweet_id FROM dv_x_posts WHERE thread_id = ? AND thread_position = ? AND status = 'published'"
+        ).get(post.thread_id, post.thread_position - 1);
+        if (prev) replyTo = prev.tweet_id;
+      }
+
+      db.updatePost(post.id, { status: 'publishing' });
+
+      console.log('[x-posting] Approval #' + approvalId + ' approved, publishing tweet #' + postId);
+
+      sendTweet(post.tweet_text, replyTo, creds).then(function (result) {
+        if (result.status === 201 && result.data && result.data.data) {
+          var tweetId = result.data.data.id;
+          var tweetUrl = 'https://x.com/i/status/' + tweetId;
+          db.updatePost(post.id, {
+            status: 'published',
+            tweet_id: tweetId,
+            tweet_url: tweetUrl,
+            posted_at: new Date().toISOString()
+          });
+
+          // Mark approval as executed
+          core.db.prepare(
+            "UPDATE dv_approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+          ).run(approvalId);
+
+          core.emitEvent('x_tweet_published', '__system__', post.project_id,
+            'Tweet published via approval', { post_id: post.id, tweet_id: tweetId, tweet_url: tweetUrl, approval_id: approvalId });
+
+          console.log('[x-posting] Tweet #' + postId + ' published: ' + tweetUrl);
+        } else {
+          var errMsg = (result.data && result.data.detail) || (result.data && result.data.title) || JSON.stringify(result.data);
+          db.updatePost(post.id, { status: 'failed', error: errMsg });
+          console.error('[x-posting] Tweet #' + postId + ' failed: ' + errMsg);
+        }
+      }).catch(function (err) {
+        db.updatePost(post.id, { status: 'failed', error: err.message });
+        console.error('[x-posting] Tweet #' + postId + ' error: ' + err.message);
+      });
+
+    } catch (e) {
+      console.error('[x-posting] Error handling approval_approved:', e.message);
     }
   });
 
@@ -60,7 +149,7 @@ export function registerHooks(core) {
       var projectId = (projectConfig && projectConfig.value) || 'mycelium';
 
       // Create the X post
-      var postId = db.createPost({
+      var newPostId = db.createPost({
         project_id: projectId,
         tweet_text: tweetText,
         source: 'bip',
@@ -69,23 +158,11 @@ export function registerHooks(core) {
         posted_by: '__system__'
       });
 
-      console.log('[x-posting] Auto-created X post #' + postId + ' from BIP draft #' + draftId);
+      console.log('[x-posting] Auto-created X post #' + newPostId + ' from BIP draft #' + draftId);
 
-      // Notify operators via inbox
-      try {
-        core.inbox.createInboxItemForAllOperators(
-          'message',
-          'x_post_ready',
-          String(postId),
-          'Tweet ready: ' + tweetText.substring(0, 60) + (tweetText.length > 60 ? '...' : ''),
-          'Auto-created from approved BIP draft #' + draftId + '. Publish via POST /x/posts/' + postId + '/publish',
-          { post_id: postId, draft_id: draftId },
-          'normal'
-        );
-      } catch (e) { /* non-fatal */ }
-
-      core.emitEvent('x_post_created', '__system__', projectId,
-        'X post created from BIP draft', { post_id: postId, draft_id: draftId });
+      // Emit x_draft_created to trigger approval flow
+      core.emitEvent('x_draft_created', '__system__', projectId,
+        'Tweet draft created from BIP', { post_id: newPostId, text: tweetText, posted_by: '__system__' });
 
     } catch (e) {
       console.error('[x-posting] Error handling bip_draft_approved:', e.message);
