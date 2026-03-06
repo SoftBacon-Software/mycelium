@@ -586,3 +586,22 @@ CREATE INDEX IF NOT EXISTS idx_dv_runner_spawns_status ON dv_runner_spawns(statu
 CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_status ON dv_support_tickets(status);
 CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_instance ON dv_support_tickets(instance_id);
 CREATE INDEX IF NOT EXISTS idx_dv_support_tickets_priority ON dv_support_tickets(priority);
+
+-- Node profiles: Stand Up calibration system for agent/drone/admin behavior rules
+CREATE TABLE IF NOT EXISTS dv_node_profiles (
+  id                 TEXT PRIMARY KEY,
+  node_type          TEXT NOT NULL DEFAULT 'agent',
+  layer              TEXT NOT NULL DEFAULT 'customer',
+  parent_id          TEXT,
+  rules              TEXT NOT NULL DEFAULT '{}',
+  required_concepts  TEXT NOT NULL DEFAULT '[]',
+  mcp_config         TEXT NOT NULL DEFAULT '{}',
+  tool_whitelist     TEXT NOT NULL DEFAULT '[]',
+  repo_list          TEXT NOT NULL DEFAULT '[]',
+  md_checkpoints     TEXT NOT NULL DEFAULT '[]',
+  md_blocklist       TEXT NOT NULL DEFAULT '[]',
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dv_node_profiles_layer ON dv_node_profiles(layer);
+CREATE INDEX IF NOT EXISTS idx_dv_node_profiles_node_type ON dv_node_profiles(node_type);
