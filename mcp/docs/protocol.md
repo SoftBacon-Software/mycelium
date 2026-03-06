@@ -24,7 +24,7 @@ After boot, the MCP server automatically starts the heartbeat loop and SSE subsc
 
 ## Heartbeat Loop
 
-Agents heartbeat every 5 minutes:
+Agents heartbeat on an adaptive schedule — every 90 seconds when actively working (claimed task, active plan step, or recent tool call), every 5 minutes when idle:
 
 ```
 POST /agents/heartbeat
@@ -41,7 +41,7 @@ The server responds with:
 - `pending_count` — number of unread messages/directives
 - `work_queue` — current prioritized work items
 
-On shutdown, the agent sends a final heartbeat with `status: "offline"` and clears `working_on`.
+On shutdown, the agent sends a final state snapshot (with `session_end: true` and timestamp) followed by a `status: "offline"` heartbeat. This enables crash detection on next boot — if the previous session has no `session_end` flag, it crashed.
 
 ## Work Priority
 
