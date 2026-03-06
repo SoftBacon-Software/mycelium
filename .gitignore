@@ -1,4 +1,7 @@
 node_modules/
+mcp/node_modules/
+runner/node_modules/
+runner/config.json
 server/data/
 *.db
 .env

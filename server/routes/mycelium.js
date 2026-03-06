@@ -57,6 +57,8 @@ function validateStringLength(res, value, maxLen, fieldName) {
 // Login: 10 attempts per 15 minutes per IP
 var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.connection.remoteAddress); }, 10, 15 * 60 * 1000);
 // Agent key validation: 30 failed attempts per minute per IP (enforced inline in checkAgent)
+// Admin write operations: 30 per minute per IP
+var adminWriteLimiter = rateLimit(function (req) { return 'admin_write:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
 
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
@@ -2120,7 +2122,7 @@ router.get('/admin/config/:key', function (req, res) {
   res.json({ key: req.params.key, value: val });
 });
 
-router.put('/admin/config/:key', function (req, res) {
+router.put('/admin/config/:key', adminWriteLimiter, function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var { value } = req.body;
@@ -2153,7 +2155,7 @@ router.post('/admin/cleanup', function (req, res) {
 
 // ======== KILL SWITCH ========
 
-router.put('/admin/override', function (req, res) {
+router.put('/admin/override', adminWriteLimiter, function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var action = req.body.action || 'freeze';
@@ -2440,7 +2442,7 @@ router.put('/operators/:id/availability', function (req, res) {
 // ======== ADMIN ========
 
 // Register new agent (returns plaintext API key — store it, shown only once)
-router.post('/admin/agents', asyncHandler(async function (req, res) {
+router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   var name = req.body.name;
@@ -2472,7 +2474,7 @@ router.post('/admin/agents', asyncHandler(async function (req, res) {
   res.json({ id: id, api_key: apiKey, mcp_config: mcpConfig, message: 'Store this key — it will not be shown again. MCP config included for agent setup.' });
 }));
 
-router.delete('/admin/agents/:id', function (req, res) {
+router.delete('/admin/agents/:id', adminWriteLimiter, function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -2483,7 +2485,7 @@ router.delete('/admin/agents/:id', function (req, res) {
 });
 
 // Regenerate agent API key (admin only)
-router.put('/admin/agents/:id/key', function (req, res) {
+router.put('/admin/agents/:id/key', adminWriteLimiter, function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });

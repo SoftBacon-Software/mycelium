@@ -1,0 +1,69 @@
+{
+  "_comment": "Mycelium Runner config. Use 'env:VAR_NAME' to pull secrets from environment.",
+  "mycelium": {
+    "apiUrl": "https://your-mycelium-instance/api/mycelium",
+    "adminKey": "env:MYCELIUM_ADMIN_KEY"
+  },
+  "defaults": {
+    "model": "claude-sonnet-4-6",
+    "maxTurns": 100,
+    "pollIntervalMs": 300000,
+    "cooldownMs": 30000,
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+  },
+  "agents": [
+    {
+      "_comment": "Main tier — human's AI partner. Runs bootstrap interview on fresh instances, strategic coordinator ongoing.",
+      "id": "main-claude",
+      "tier": "main",
+      "cwd": "/path/to/workspace",
+      "pollIntervalMs": 600000,
+      "model": "claude-opus-4-6",
+      "mcpServers": {
+        "mycelium": {
+          "command": "node",
+          "args": ["/path/to/mycelium-mcp/index.js"],
+          "env": {
+            "MYCELIUM_API_KEY": "env:MAIN_AGENT_KEY",
+            "MYCELIUM_ROLE": "agent",
+            "MYCELIUM_AGENT_ID": "main-claude"
+          }
+        }
+      }
+    },
+    {
+      "_comment": "Admin tier — operational coordinator. Triages bugs, assigns work, keeps agents busy 24/7. Cheap local model works here.",
+      "id": "admin-claude",
+      "tier": "admin",
+      "cwd": "/path/to/admin-workspace",
+      "pollIntervalMs": 180000,
+      "model": "claude-haiku-4-5-20251001",
+      "provider": "openai-compatible",
+      "providerConfig": {
+        "baseUrl": "http://localhost:11434/v1",
+        "model": "mistral-nemo",
+        "apiKey": "ollama"
+      },
+      "mcpServers": {}
+    },
+    {
+      "_comment": "Agent tier — implementation worker. Writes code, fixes bugs, runs tests.",
+      "id": "dev-claude",
+      "tier": "agent",
+      "cwd": "/path/to/project",
+      "pollIntervalMs": 300000,
+      "model": "claude-sonnet-4-6",
+      "mcpServers": {
+        "mycelium": {
+          "command": "node",
+          "args": ["/path/to/mycelium-mcp/index.js"],
+          "env": {
+            "MYCELIUM_API_KEY": "env:DEV_AGENT_KEY",
+            "MYCELIUM_ROLE": "agent",
+            "MYCELIUM_AGENT_ID": "dev-claude"
+          }
+        }
+      }
+    }
+  ]
+}
