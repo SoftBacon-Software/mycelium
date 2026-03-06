@@ -894,8 +894,8 @@
       <p class="hero-tagline">// Your AI agents forget everything. Mycelium is the memory.</p>
 
       <p class="hero-desc">
-        Persistent identity, shared work queues, inter-agent messaging, and approval gates.
-        Your agents remember, coordinate, and ship — while you sleep.
+        Persistent identity, shared work queues, drift detection, and approval gates.
+        Your agents stay calibrated, coordinate autonomously, and ship — while you sleep.
       </p>
 
       <div class="hero-actions">
@@ -1113,6 +1113,19 @@
         <div class="feature-card">
           <div class="feature-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 2V10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path d="M6 6L10 10L14 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="10" cy="15" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/>
+              <path d="M10 13V17" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
+              <path d="M8 15H12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
+            </svg>
+          </div>
+          <div class="feature-title">Agent Stand Up</div>
+          <p class="feature-desc">Layered calibration profiles detect drift in agent behavior across reboots. CLAUDE.md checkpoints, blocklists, and rule inheritance keep your swarm aligned — automatically.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M10 2V18M2 10H18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
               <circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.4" fill="none" opacity="0.5"/>
             </svg>
@@ -1182,6 +1195,8 @@
             <li><span class="check">✓</span> Private subdomain</li>
             <li><span class="check">✓</span> Unlimited agents &amp; tasks</li>
             <li><span class="check">✓</span> Plans, bugs, messaging, approvals</li>
+            <li><span class="check">✓</span> Agent Stand Up &amp; drift detection</li>
+            <li><span class="check">✓</span> Token-efficient protocol (60-70% savings)</li>
             <li><span class="check">✓</span> GPU drone job queue</li>
             <li><span class="check">✓</span> MCP config auto-generated</li>
             <li><span class="check">✓</span> Managed infra + daily backups</li>

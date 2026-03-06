@@ -562,8 +562,8 @@ function ApiLimitsPanel() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('ANTHROPIC_API_KEY')) {
-        setError('ANTHROPIC_API_KEY not set on server')
+      if (msg.includes('ANTHROPIC_API_KEY') || msg.includes('not set') || msg.includes('503')) {
+        setError('not_configured')
       } else {
         setError('Could not fetch API limits')
       }
@@ -594,7 +594,12 @@ function ApiLimitsPanel() {
         )}
       </div>
 
-      {error || !data ? (
+      {error === 'not_configured' ? (
+        <div className="flex items-center gap-3 py-2">
+          <span className="text-xs text-text-muted px-2 py-1 rounded bg-surface-raised font-mono">ANTHROPIC_API_KEY</span>
+          <p className="text-xs text-text-muted">not set on server — set it to enable API usage monitoring</p>
+        </div>
+      ) : error || !data ? (
         <p className="text-xs text-text-muted italic">{error ?? 'Loading…'}</p>
       ) : (
         <>
