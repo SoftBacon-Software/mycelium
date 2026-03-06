@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from 'react-router-dom'
+import { Outlet, useLocation, useSearchParams } from 'react-router-dom'
 import { useState, useMemo } from 'react'
 import { Menu } from 'lucide-react'
 import SideNav from './SideNav'
@@ -47,6 +47,7 @@ function formatTime(date: Date | null): string {
 export default function AppLayout() {
   useLiveEvents()
   const location = useLocation()
+  const [searchParams] = useSearchParams()
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const { loading, refresh, instanceConfig, activeOperators } = useDashboardStore()
@@ -56,11 +57,35 @@ export default function AppLayout() {
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
   const isChannels = location.pathname === '/channels'
+  const rec = searchParams.has('rec')
 
   const isFrozen = useMemo(() => {
     const adminStatus = instanceConfig.find((c) => c.key === 'admin_status')
     return adminStatus?.value === 'frozen'
   }, [instanceConfig])
+
+  // Recording mode: full-screen content, minimal chrome
+  if (rec) {
+    return (
+      <div className="flex flex-col h-screen bg-bg overflow-hidden">
+        {/* Minimal header — just page title + live dot */}
+        <header className="flex items-center justify-between h-10 px-6 border-b border-border/50 bg-surface shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
+            <h1 className="text-sm font-semibold text-text">{pageTitle}</h1>
+          </div>
+          <span className="text-[10px] text-text-muted/50 font-mono">mycelium.fyi</span>
+        </header>
+        <main className={
+          isChannels
+            ? 'flex-1 overflow-hidden flex flex-col min-h-0'
+            : 'flex-1 overflow-y-auto p-4 md:p-6 pb-8'
+        }>
+          <Outlet />
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
