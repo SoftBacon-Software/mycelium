@@ -725,7 +725,21 @@ export function bulkDeleteMessages(filters) {
 
 // -- Namespaced context --
 
-export function upsertContextKey(namespace, key, data, agentId) {
+// Context key categories:
+//   'durable'   - persistent config, guidelines, gen profiles (no auto-expiry)
+//   'ephemeral' - session state, recovery instructions (auto-expire via TTL)
+var CONTEXT_MAX_KEYS_PER_NAMESPACE = 50;
+
+export function upsertContextKey(namespace, key, data, agentId, opts) {
+  var category = (opts && opts.category) || 'durable';
+  var ttl = (opts && opts.ttl) || null; // seconds
+  var expiresAt = null;
+  if (ttl) {
+    expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+  } else if (opts && opts.expires_at) {
+    expiresAt = opts.expires_at;
+  }
+
   var existing = db.prepare("SELECT data FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
@@ -740,23 +754,61 @@ export function upsertContextKey(namespace, key, data, agentId) {
     merged = typeof data === 'string' ? data : JSON.stringify(data);
   }
   db.prepare(
-    "INSERT INTO dv_context_keys (namespace, key, data, updated_by, updated_at) VALUES (?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
-  ).run(namespace, key, merged, agentId);
+    "INSERT INTO dv_context_keys (namespace, key, data, category, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
+  ).run(namespace, key, merged, category, expiresAt, agentId);
+
+  // Enforce size cap per namespace
+  enforceNamespaceCap(namespace);
+}
+
+function enforceNamespaceCap(namespace) {
+  var count = db.prepare("SELECT COUNT(*) as c FROM dv_context_keys WHERE namespace = ?").get(namespace);
+  if (count.c > CONTEXT_MAX_KEYS_PER_NAMESPACE) {
+    // Delete oldest ephemeral keys first, then oldest durable
+    var excess = count.c - CONTEXT_MAX_KEYS_PER_NAMESPACE;
+    db.prepare(
+      "DELETE FROM dv_context_keys WHERE id IN (SELECT id FROM dv_context_keys WHERE namespace = ? ORDER BY CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)"
+    ).run(namespace, excess);
+  }
 }
 
 export function getContextKey(namespace, key) {
-  return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
+  var row = db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
+  if (row && row.expires_at && new Date(row.expires_at) < new Date()) {
+    db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
+    return null;
+  }
+  return row;
 }
 
 export function listContextKeys(namespace) {
+  // Filter out expired keys on read
+  var now = new Date().toISOString();
   if (namespace) {
-    return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? ORDER BY key").all(namespace);
+    return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key").all(namespace, now);
   }
-  return db.prepare("SELECT * FROM dv_context_keys ORDER BY namespace, key").all();
+  return db.prepare("SELECT * FROM dv_context_keys WHERE expires_at IS NULL OR expires_at > ? ORDER BY namespace, key").all(now);
 }
 
 export function deleteContextKey(namespace, key) {
   db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
+}
+
+// Purge all expired context keys (called on server boot and periodically)
+export function purgeExpiredContextKeys() {
+  var result = db.prepare("DELETE FROM dv_context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
+  return result.changes;
+}
+
+// Clean up stale session keys for an agent (called on agent boot)
+export function cleanupAgentSessionKeys(agentId) {
+  var result = db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND category = 'ephemeral' AND expires_at IS NOT NULL AND expires_at <= datetime('now')").run(agentId);
+  return result.changes;
+}
+
+// Get context stats per namespace
+export function contextKeyStats() {
+  return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM dv_context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
 // -- Bugs --
