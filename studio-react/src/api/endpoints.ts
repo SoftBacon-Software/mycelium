@@ -574,18 +574,17 @@ export function fetchResolvedProfile(agentId: string): Promise<import('./types')
   return apiGet<import('./types').ResolvedProfile>(`/profiles/resolve/${encodeURIComponent(agentId)}`);
 }
 
-export function fetchCalibration(agentId: string): Promise<import('./types').CalibrationData> {
+export function fetchCalibration(agentId: string): Promise<import('./types').CalibrationData | null> {
   return fetchContextKey(agentId, 'standup').then((entry) => {
     try {
       const data = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data;
       const cal = (data || {}) as import('./types').CalibrationData;
-      // Ensure required array fields exist
       if (!Array.isArray(cal.drift)) cal.drift = [];
       if (!Array.isArray(cal.md_checkpoints)) cal.md_checkpoints = [];
       if (!Array.isArray(cal.md_blocklist)) cal.md_blocklist = [];
       return cal;
     } catch {
-      return { status: 'aligned', profile_chain: [], rules: {}, drift: [], md_checkpoints: [], md_blocklist: [], last_standup: '' } as import('./types').CalibrationData;
+      return null;
     }
-  });
+  }).catch(() => null);
 }

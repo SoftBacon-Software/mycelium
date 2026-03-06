@@ -1680,7 +1680,7 @@ function NetworkHealthPageInner() {
           agentIds.map((id) => fetchCalibration(id).then((cal) => ({ id, cal }))),
         )
         for (const result of results) {
-          if (result.status === 'fulfilled') {
+          if (result.status === 'fulfilled' && result.value.cal) {
             calMap.set(result.value.id, result.value.cal)
           }
         }
