@@ -561,3 +561,20 @@ export function bulkDismissInbox(ids?: number[], all?: boolean): Promise<{ ok: b
 export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string, unknown> }> {
   return apiGet('/admin/api-limits');
 }
+
+// Profiles & Calibration
+
+export function fetchProfiles(): Promise<import('./types').NodeProfile[]> {
+  return apiGet<import('./types').NodeProfile[]>('/profiles');
+}
+
+export function fetchResolvedProfile(agentId: string): Promise<import('./types').ResolvedProfile> {
+  return apiGet<import('./types').ResolvedProfile>(`/profiles/resolve/${encodeURIComponent(agentId)}`);
+}
+
+export function fetchCalibration(agentId: string): Promise<import('./types').CalibrationData> {
+  return fetchContextKey(agentId, 'standup').then((entry) => {
+    const data = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data;
+    return data as import('./types').CalibrationData;
+  });
+}
