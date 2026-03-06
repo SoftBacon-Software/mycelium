@@ -565,7 +565,9 @@ export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string
 // Profiles & Calibration
 
 export function fetchProfiles(): Promise<import('./types').NodeProfile[]> {
-  return apiGet<import('./types').NodeProfile[]>('/profiles');
+  return apiGet<{ profiles: import('./types').NodeProfile[] } | import('./types').NodeProfile[]>('/profiles').then((data) =>
+    Array.isArray(data) ? data : (data as { profiles: import('./types').NodeProfile[] }).profiles || [],
+  );
 }
 
 export function fetchResolvedProfile(agentId: string): Promise<import('./types').ResolvedProfile> {
