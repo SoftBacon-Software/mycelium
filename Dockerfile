@@ -13,5 +13,6 @@ RUN npm ci --production
 COPY server/ server/
 COPY tools/ tools/
 COPY --from=builder /app/public/ public/
+USER node
 EXPOSE 3002
 CMD ["node", "server/index.js"]
