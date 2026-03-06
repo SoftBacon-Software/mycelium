@@ -3854,7 +3854,8 @@ router.put('/approvals/:id/vote', function (req, res) {
   if (vote === 'deny') {
     castApprovalVote(approval.id, who, 'deny', notes);
     decideApproval(approval.id, 'denied', who, notes || 'Denied by ' + who);
-    emitEvent('approval_denied', who, null, who + ' denied approval #' + approval.id + ': ' + approval.title);
+    emitEvent('approval_denied', who, approval.project_id, who + ' denied approval #' + approval.id + ': ' + approval.title,
+      JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
     return res.json({ ok: true, status: 'denied', message: 'Approval denied.' });
   }
 
@@ -3865,7 +3866,8 @@ router.put('/approvals/:id/vote', function (req, res) {
   // Check if quorum reached
   if (counts.approves >= approval.required_approvals) {
     decideApproval(approval.id, 'approved', who, 'Quorum reached (' + counts.approves + '/' + approval.required_approvals + ')');
-    emitEvent('approval_approved', who, null, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)');
+    emitEvent('approval_approved', who, approval.project_id, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)',
+      JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
     return res.json({ ok: true, status: 'approved', votes: counts, message: 'Quorum reached. Approval granted.' });
   }
 
