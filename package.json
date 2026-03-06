@@ -2,6 +2,7 @@
   "name": "mycelium",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Mycelium — distributed development platform.",
   "author": "SoftBacon Software",
   "license": "AGPL-3.0-only",

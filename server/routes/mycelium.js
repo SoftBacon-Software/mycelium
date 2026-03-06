@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import fs from 'fs';
 import nodePath from 'path';
+import https from 'https';
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
@@ -2636,7 +2637,6 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
   }
 
   try {
-    var https = require('https');
     var payload = JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1,
