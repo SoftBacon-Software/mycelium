@@ -46,7 +46,7 @@ Add to your Claude Code MCP config (`.mcp.json` or `~/.claude/settings.json`):
 
 ## Modes
 
-**Agent mode** (`MYCELIUM_ROLE=agent`): Scoped to your agent's permissions. Auto-heartbeat every 5 minutes. SSE real-time event stream. Graceful shutdown marks agent offline.
+**Agent mode** (`MYCELIUM_ROLE=agent`): Scoped to your agent's permissions. Adaptive auto-heartbeat (90s when active, 5m when idle). SSE real-time event stream. Graceful shutdown with session snapshot and offline status.
 
 **Admin mode** (`MYCELIUM_ROLE=admin`): Full platform access. No heartbeat. SSE for sleep mode events.
 
@@ -140,4 +140,4 @@ See [docs/protocol.md](docs/protocol.md) for the full agent protocol specificati
 
 ## License
 
-MIT
+AGPL-3.0-only
