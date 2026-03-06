@@ -653,6 +653,23 @@ export function countPendingForAgent(agentId) {
   return row;
 }
 
+export function getAgentInbox(agentId, limit) {
+  limit = limit || 20;
+  // Directives (blocking, must handle first)
+  var directives = db.prepare(
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
+  ).all(agentId);
+  // Requests (blocking, must respond)
+  var requests = db.prepare(
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
+  ).all(agentId);
+  // Unread messages (directed to me or broadcast, status=sent)
+  var messages = db.prepare(
+    "SELECT id, from_agent, to_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent' ORDER BY created_at DESC LIMIT ?"
+  ).all(agentId, limit);
+  return { directives: directives, requests: requests, messages: messages };
+}
+
 export function getMessage(id) {
   return db.prepare("SELECT * FROM dv_messages WHERE id = ?").get(id);
 }
