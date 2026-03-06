@@ -758,7 +758,7 @@ cd D:/dioverse-server && git add CLAUDE.md && git commit -m "fix: update MCP pat
 
 ---
 
-### Task 9: Create Dioverse Instance Profiles
+### Task 9: Create SoftBacon Instance Profiles
 
 **Files:**
 - No files — API calls to create customer + agent profiles

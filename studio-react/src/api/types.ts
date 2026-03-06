@@ -479,3 +479,53 @@ export interface BipDraft {
   created_at: string;
   updated_at: string;
 }
+
+// ── Node Profiles & Calibration ──
+
+export interface NodeProfile {
+  id: string;
+  layer: 'platform' | 'customer' | 'agent';
+  node_type: string;
+  rules: Record<string, unknown>;
+  required_concepts: string[];
+  mcp_config: Record<string, unknown>;
+  tool_whitelist: string[];
+  repo_list: string[];
+  md_checkpoints: string[];
+  md_blocklist: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProfileLayer {
+  id: string;
+  layer: string;
+  node_type: string;
+}
+
+export interface ResolvedProfile {
+  rules: Record<string, unknown>;
+  required_concepts: string[];
+  mcp_config: Record<string, unknown>;
+  tool_whitelist: string[];
+  repo_list: string[];
+  md_checkpoints: string[];
+  md_blocklist: string[];
+  layers_applied: ProfileLayer[];
+}
+
+export interface DriftItem {
+  level: 'info' | 'warning' | 'critical';
+  rule: string;
+  detail: string;
+}
+
+export interface CalibrationData {
+  status: 'aligned' | 'drifted' | 'critical';
+  profile_chain: ProfileLayer[];
+  rules: Record<string, unknown>;
+  drift: DriftItem[];
+  md_checkpoints: string[];
+  md_blocklist: string[];
+  last_standup: string;
+}

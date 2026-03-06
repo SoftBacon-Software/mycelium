@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
-import { fetchApiLimits } from '../api/endpoints'
+import { fetchApiLimits, fetchProfiles, fetchCalibration } from '../api/endpoints'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
 import { timeAgo, formatTime } from '../utils/time'
 import { getSenderDisplay } from '../utils/sender'
-import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry } from '../api/types'
+import type { Agent, Plan, DroneJob, Event, Bug, ConfigEntry, NodeProfile, CalibrationData, DriftItem } from '../api/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1107,6 +1107,467 @@ function RecentActivityFeed({ events }: { events: Event[] }) {
   )
 }
 
+// ─── Calibration Status Colors ────────────────────────────────────────────────
+
+const calibrationColors: Record<string, { bg: string; text: string; dot: string }> = {
+  aligned: { bg: 'bg-green/10', text: 'text-green', dot: 'bg-green' },
+  drifted: { bg: 'bg-accent/10', text: 'text-accent', dot: 'bg-accent' },
+  critical: { bg: 'bg-red/10', text: 'text-red', dot: 'bg-red' },
+  unknown: { bg: 'bg-blue/10', text: 'text-blue', dot: 'bg-blue' },
+}
+
+// ─── Calibration Summary Cards ────────────────────────────────────────────────
+
+function CalibrationSummary({
+  calibrations,
+  totalAgents,
+}: {
+  calibrations: Map<string, CalibrationData>
+  totalAgents: number
+}) {
+  const counts = useMemo(() => {
+    let aligned = 0
+    let drifted = 0
+    let critical = 0
+    for (const [, cal] of calibrations) {
+      if (cal.status === 'aligned') aligned++
+      else if (cal.status === 'drifted') drifted++
+      else if (cal.status === 'critical') critical++
+    }
+    const unknown = totalAgents - aligned - drifted - critical
+    return { aligned, drifted, critical, unknown }
+  }, [calibrations, totalAgents])
+
+  const cards = [
+    { label: 'Total', value: totalAgents, color: 'text-text-dim', bg: 'bg-surface-raised' },
+    { label: 'Aligned', value: counts.aligned, color: 'text-green', bg: 'bg-green/10' },
+    { label: 'Drifted', value: counts.drifted, color: 'text-accent', bg: 'bg-accent/10' },
+    { label: 'Critical', value: counts.critical, color: 'text-red', bg: 'bg-red/10' },
+  ]
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {cards.map((card) => (
+        <div key={card.label} className={`${card.bg} rounded-lg p-4 text-center`}>
+          <div className={`text-2xl font-bold tabular-nums ${card.color}`}>
+            {card.value}
+          </div>
+          <div className="text-xs text-text-muted mt-1">{card.label}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Agent Calibration Table ──────────────────────────────────────────────────
+
+function CalibrationTable({
+  agents,
+  calibrations,
+}: {
+  agents: Agent[]
+  calibrations: Map<string, CalibrationData>
+}) {
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
+
+  // Sort: critical first, then drifted, then aligned, then unknown
+  const statusRank = (id: string) => {
+    const cal = calibrations.get(id)
+    if (!cal) return 3
+    if (cal.status === 'critical') return 0
+    if (cal.status === 'drifted') return 1
+    return 2
+  }
+  const sorted = [...agents].sort((a, b) => statusRank(a.id) - statusRank(b.id))
+
+  if (agents.length === 0) {
+    return (
+      <div className="bg-surface rounded-lg p-8 text-center">
+        <p className="text-sm text-text-muted">No agents to calibrate</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-surface rounded-lg border border-border overflow-hidden">
+      {/* Header */}
+      <div className="grid grid-cols-[1fr_80px_90px_80px_100px] gap-2 px-4 py-2 border-b border-border text-[10px] uppercase tracking-wider font-semibold text-text-muted">
+        <span>Agent</span>
+        <span>Type</span>
+        <span>Status</span>
+        <span>Drift</span>
+        <span>Last Boot</span>
+      </div>
+
+      {/* Rows */}
+      {sorted.map((agent) => {
+        const cal = calibrations.get(agent.id)
+        const status = cal?.status || 'unknown'
+        const colors = calibrationColors[status] || calibrationColors.unknown
+        const driftCount = cal?.drift?.length || 0
+        const isExpanded = expandedAgent === agent.id
+
+        return (
+          <div key={agent.id}>
+            <div
+              className="grid grid-cols-[1fr_80px_90px_80px_100px] gap-2 px-4 py-2.5 hover:bg-surface-raised/50 transition-colors cursor-pointer border-b border-border/50"
+              onClick={() => setExpandedAgent(isExpanded ? null : agent.id)}
+            >
+              {/* Agent name */}
+              <div className="flex items-center gap-2 min-w-0">
+                <StatusDot status={agent.status} />
+                <span className="text-sm font-medium text-text truncate">
+                  {agent.name || agent.id}
+                </span>
+              </div>
+
+              {/* Type */}
+              <div>
+                <Badge variant={getRoleBadgeVariant(agent.agent_type)}>
+                  {agent.agent_type || 'agent'}
+                </Badge>
+              </div>
+
+              {/* Calibration Status */}
+              <div className="flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${colors.dot} shrink-0`} />
+                <span className={`text-xs font-semibold ${colors.text}`}>
+                  {status}
+                </span>
+              </div>
+
+              {/* Drift count */}
+              <span className={`text-xs tabular-nums ${driftCount > 0 ? 'text-accent font-semibold' : 'text-text-muted'}`}>
+                {driftCount}
+              </span>
+
+              {/* Last boot */}
+              <span className="text-xs text-text-muted font-mono tabular-nums">
+                {timeAgo(agent.last_heartbeat)}
+              </span>
+            </div>
+
+            {/* Expanded drift details */}
+            {isExpanded && cal && cal.drift.length > 0 && (
+              <div className="px-6 py-3 bg-bg border-b border-border/50">
+                <div className="space-y-2">
+                  {cal.drift.map((d, idx) => (
+                    <DriftItemRow key={idx} item={d} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {isExpanded && (!cal || cal.drift.length === 0) && (
+              <div className="px-6 py-3 bg-bg border-b border-border/50">
+                <p className="text-xs text-text-muted italic">
+                  {cal ? 'No drift detected -- agent is fully aligned' : 'No calibration data available. Agent needs to send md_report in heartbeat.'}
+                </p>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DriftItemRow({ item }: { item: DriftItem }) {
+  const suggestion = useMemo(() => {
+    if (item.rule === 'md_checkpoint_missing') {
+      const anchor = item.detail.replace('Expected anchor not found in CLAUDE.md: ', '')
+      return `Add "${anchor}" to the agent's CLAUDE.md file`
+    }
+    if (item.rule === 'md_blocklist_found') {
+      const term = item.detail.replace('Blocked term found in CLAUDE.md: ', '')
+      return `Remove "${term}" from the agent's CLAUDE.md file`
+    }
+    if (item.rule === 'md_report_missing') {
+      return 'Agent should include md_report in heartbeat state_snapshot'
+    }
+    return null
+  }, [item])
+
+  return (
+    <div className="flex items-start gap-3 py-1">
+      <Badge variant={item.level === 'critical' ? 'red' : item.level === 'warning' ? 'accent' : 'blue'} className="shrink-0 mt-0.5">
+        {item.level}
+      </Badge>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-text-dim">{item.detail}</p>
+        {suggestion && (
+          <p className="text-[10px] text-text-muted mt-0.5 italic">Fix: {suggestion}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Profile List ─────────────────────────────────────────────────────────────
+
+function ProfileList({ profiles }: { profiles: NodeProfile[] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const byLayer = useMemo(() => {
+    const groups: Record<string, NodeProfile[]> = { platform: [], customer: [], agent: [] }
+    for (const p of profiles) {
+      const layer = p.layer || 'agent'
+      if (!groups[layer]) groups[layer] = []
+      groups[layer].push(p)
+    }
+    return groups
+  }, [profiles])
+
+  const layerLabels: Record<string, { label: string; desc: string; color: string }> = {
+    platform: { label: 'Platform', desc: 'Read-only base rules', color: 'text-purple' },
+    customer: { label: 'Customer', desc: 'Instance-level overrides', color: 'text-accent' },
+    agent: { label: 'Agent', desc: 'Per-agent overrides', color: 'text-green' },
+  }
+
+  if (profiles.length === 0) {
+    return (
+      <div className="bg-surface rounded-lg p-6 text-center">
+        <p className="text-sm text-text-muted">No profiles configured</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-surface rounded-lg border border-border">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-dim">Profile Chain</h3>
+          <span className="text-xs text-text-muted">({profiles.length} profiles)</span>
+        </div>
+        <span className={`text-text-muted text-xs transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          ▶
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border">
+          {['platform', 'customer', 'agent'].map((layer) => {
+            const items = byLayer[layer] || []
+            if (items.length === 0) return null
+            const info = layerLabels[layer]
+
+            return (
+              <div key={layer} className="border-b border-border/50 last:border-b-0">
+                <div className="px-4 py-2 bg-bg">
+                  <span className={`text-xs font-semibold uppercase tracking-wider ${info.color}`}>
+                    {info.label}
+                  </span>
+                  <span className="text-[10px] text-text-muted ml-2">{info.desc}</span>
+                </div>
+                {items.map((profile) => (
+                  <ProfileRow key={profile.id} profile={profile} />
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProfileRow({ profile }: { profile: NodeProfile }) {
+  const [showDetail, setShowDetail] = useState(false)
+  const ruleCount = Object.keys(profile.rules || {}).length
+  const checkpointCount = (profile.md_checkpoints || []).length
+  const blocklistCount = (profile.md_blocklist || []).length
+
+  return (
+    <div>
+      <div
+        className="px-6 py-2 flex items-center justify-between hover:bg-surface-raised/30 cursor-pointer transition-colors"
+        onClick={() => setShowDetail(!showDetail)}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-sm font-mono text-text-dim truncate">{profile.id}</span>
+          <span className="text-[10px] text-text-muted px-1.5 py-0.5 rounded bg-surface-raised">
+            {profile.node_type}
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-xs text-text-muted shrink-0">
+          {ruleCount > 0 && <span>{ruleCount} rules</span>}
+          {checkpointCount > 0 && <span>{checkpointCount} checkpoints</span>}
+          {blocklistCount > 0 && <span className="text-red">{blocklistCount} blocked</span>}
+        </div>
+      </div>
+
+      {showDetail && (
+        <div className="px-8 py-3 bg-bg border-t border-border/30 space-y-2">
+          {ruleCount > 0 && (
+            <div>
+              <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Rules</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {Object.entries(profile.rules || {}).map(([key, val]) => {
+                  const severity = typeof val === 'object' && val !== null && 'severity' in val
+                    ? (val as { severity: string }).severity
+                    : typeof val === 'string' ? val : 'info'
+                  const variant = severity === 'critical' ? 'red' : severity === 'warning' ? 'accent' : 'muted'
+                  return (
+                    <Badge key={key} variant={variant}>{key}</Badge>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {checkpointCount > 0 && (
+            <div>
+              <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Checkpoints</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(profile.md_checkpoints || []).map((cp) => (
+                  <Badge key={cp} variant="green">{cp}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          {blocklistCount > 0 && (
+            <div>
+              <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Blocklist</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(profile.md_blocklist || []).map((bl) => (
+                  <Badge key={bl} variant="red">{bl}</Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── CLAUDE.md Drift Matrix ──────────────────────────────────────────────────
+
+function DriftMatrix({
+  agents,
+  calibrations,
+}: {
+  agents: Agent[]
+  calibrations: Map<string, CalibrationData>
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Collect all unique checkpoints across all calibrations
+  const allCheckpoints = useMemo(() => {
+    const set = new Set<string>()
+    for (const [, cal] of calibrations) {
+      for (const cp of cal.md_checkpoints || []) {
+        set.add(cp)
+      }
+    }
+    return Array.from(set).sort()
+  }, [calibrations])
+
+  if (allCheckpoints.length === 0 || agents.length === 0) {
+    return (
+      <div className="bg-surface rounded-lg border border-border p-4">
+        <h3 className="text-sm font-semibold text-text-dim">CLAUDE.md Checkpoint Matrix</h3>
+        <p className="text-xs text-text-muted mt-2 italic">
+          No checkpoint data available. Agents need md_checkpoints in profiles and md_report in heartbeats.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-surface rounded-lg border border-border">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-dim">CLAUDE.md Checkpoint Matrix</h3>
+          <span className="text-xs text-text-muted">
+            ({agents.length} agents x {allCheckpoints.length} checkpoints)
+          </span>
+        </div>
+        <span className={`text-text-muted text-xs transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          ▶
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left px-4 py-2 text-text-muted font-semibold sticky left-0 bg-surface z-10">
+                  Agent
+                </th>
+                {allCheckpoints.map((cp) => (
+                  <th key={cp} className="px-3 py-2 text-center text-text-muted font-mono whitespace-nowrap">
+                    {cp}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map((agent) => {
+                const cal = calibrations.get(agent.id)
+                // Get present checkpoints from drift items (if a checkpoint is missing, it's in drift)
+                const missingCheckpoints = new Set<string>()
+                if (cal) {
+                  for (const d of cal.drift) {
+                    if (d.rule === 'md_checkpoint_missing') {
+                      const anchor = d.detail.replace('Expected anchor not found in CLAUDE.md: ', '')
+                      missingCheckpoints.add(anchor)
+                    }
+                  }
+                }
+
+                return (
+                  <tr key={agent.id} className="border-b border-border/30 hover:bg-surface-raised/30">
+                    <td className="px-4 py-2 text-text-dim font-medium sticky left-0 bg-surface whitespace-nowrap">
+                      {getSenderDisplay(agent.id)}
+                    </td>
+                    {allCheckpoints.map((cp) => {
+                      if (!cal) {
+                        return (
+                          <td key={cp} className="px-3 py-2 text-center text-text-muted">
+                            --
+                          </td>
+                        )
+                      }
+                      // If this checkpoint is in the agent's required list
+                      const isRequired = (cal.md_checkpoints || []).includes(cp)
+                      if (!isRequired) {
+                        return (
+                          <td key={cp} className="px-3 py-2 text-center text-text-muted">
+                            --
+                          </td>
+                        )
+                      }
+                      const isMissing = missingCheckpoints.has(cp)
+                      return (
+                        <td
+                          key={cp}
+                          className={`px-3 py-2 text-center ${
+                            isMissing
+                              ? 'bg-red/10 text-red font-bold'
+                              : 'bg-green/10 text-green font-bold'
+                          }`}
+                        >
+                          {isMissing ? '\u2717' : '\u2713'}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function NetworkHealthPage() {
@@ -1123,6 +1584,11 @@ export default function NetworkHealthPage() {
   } = useDashboardStore()
 
   const liveEvents = useLiveStore((s) => s.events)
+
+  // ─── Calibration state ─────────────────────────────────────────────────────
+  const [profiles, setProfiles] = useState<NodeProfile[]>([])
+  const [calibrations, setCalibrations] = useState<Map<string, CalibrationData>>(new Map())
+  const [calibrationLoading, setCalibrationLoading] = useState(false)
 
   useEffect(() => {
     refresh()
@@ -1154,6 +1620,43 @@ export default function NetworkHealthPage() {
     () => agents.filter((a) => a.agent_type !== 'drone'),
     [agents],
   )
+
+  // ─── Fetch profiles + calibration data ───────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCalibrationData() {
+      setCalibrationLoading(true)
+      try {
+        // Fetch profiles
+        const profileData = await fetchProfiles().catch(() => [] as NodeProfile[])
+        if (!cancelled) setProfiles(profileData)
+
+        // Fetch calibration for each non-drone agent
+        const calMap = new Map<string, CalibrationData>()
+        const agentIds = nonDroneAgents.map((a) => a.id)
+        const results = await Promise.allSettled(
+          agentIds.map((id) => fetchCalibration(id).then((cal) => ({ id, cal }))),
+        )
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            calMap.set(result.value.id, result.value.cal)
+          }
+        }
+        if (!cancelled) setCalibrations(calMap)
+      } catch {
+        // Silently fail — calibration is supplementary data
+      } finally {
+        if (!cancelled) setCalibrationLoading(false)
+      }
+    }
+
+    if (nonDroneAgents.length > 0) {
+      loadCalibrationData()
+    }
+
+    return () => { cancelled = true }
+  }, [nonDroneAgents])
 
   return (
     <div className="space-y-6">
@@ -1195,7 +1698,37 @@ export default function NetworkHealthPage() {
       {/* 3. API Limits */}
       <ApiLimitsPanel />
 
-      {/* 4. Agents Grid */}
+      {/* 4. Calibration Summary */}
+      <section>
+        <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
+          Calibration Status
+          {calibrationLoading && <Spinner size="sm" className="inline-block" />}
+        </h2>
+        <CalibrationSummary calibrations={calibrations} totalAgents={nonDroneAgents.length} />
+      </section>
+
+      {/* 5. Agent Calibration Table */}
+      <section>
+        <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
+          Agent Calibration
+          <span className="text-text-muted font-normal">
+            (click row to expand drift details)
+          </span>
+        </h2>
+        <CalibrationTable agents={nonDroneAgents} calibrations={calibrations} />
+      </section>
+
+      {/* 6. Profile Chain */}
+      <section>
+        <ProfileList profiles={profiles} />
+      </section>
+
+      {/* 7. CLAUDE.md Checkpoint Matrix */}
+      <section>
+        <DriftMatrix agents={nonDroneAgents} calibrations={calibrations} />
+      </section>
+
+      {/* 8. Agents Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Agents
@@ -1206,7 +1739,7 @@ export default function NetworkHealthPage() {
         <AgentsGrid agents={nonDroneAgents} />
       </section>
 
-      {/* 5. Drones Grid */}
+      {/* 9. Drones Grid */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Drones
@@ -1217,7 +1750,7 @@ export default function NetworkHealthPage() {
         <DronesGrid drones={drones} droneJobs={droneJobs} />
       </section>
 
-      {/* 6. Active Plans Progress */}
+      {/* 10. Active Plans Progress */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Active Plans
@@ -1228,7 +1761,7 @@ export default function NetworkHealthPage() {
         <ActivePlansProgress plans={plans} />
       </section>
 
-      {/* 7. Recent Activity Feed */}
+      {/* 11. Recent Activity Feed */}
       <section>
         <h2 className="text-sm font-semibold text-text-dim mb-3">Recent Activity</h2>
         <RecentActivityFeed events={events} />
