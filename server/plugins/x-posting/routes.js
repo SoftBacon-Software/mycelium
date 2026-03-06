@@ -4,70 +4,8 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import createXDB from './db.js';
-
-// ── Twitter API v2 OAuth 1.0a ──
-
-function oauthHeader(method, url, creds) {
-  var oauthParams = {
-    oauth_consumer_key: creds.api_key,
-    oauth_nonce: crypto.randomBytes(16).toString('hex'),
-    oauth_signature_method: 'HMAC-SHA1',
-    oauth_timestamp: String(Math.floor(Date.now() / 1000)),
-    oauth_token: creds.access_token,
-    oauth_version: '1.0'
-  };
-
-  var sortedKeys = Object.keys(oauthParams).sort();
-  var paramStr = sortedKeys.map(function (k) {
-    return encodeURIComponent(k) + '=' + encodeURIComponent(oauthParams[k]);
-  }).join('&');
-
-  var baseStr = method.toUpperCase() + '&' + encodeURIComponent(url) + '&' + encodeURIComponent(paramStr);
-  var signingKey = encodeURIComponent(creds.api_secret) + '&' + encodeURIComponent(creds.access_token_secret);
-  var signature = crypto.createHmac('sha1', signingKey).update(baseStr).digest('base64');
-
-  oauthParams.oauth_signature = signature;
-
-  var parts = Object.keys(oauthParams).sort().map(function (k) {
-    return encodeURIComponent(k) + '="' + encodeURIComponent(oauthParams[k]) + '"';
-  });
-
-  return 'OAuth ' + parts.join(', ');
-}
-
-function sendTweet(text, replyToId, creds) {
-  var url = 'https://api.twitter.com/2/tweets';
-  var body = { text: text };
-  if (replyToId) {
-    body.reply = { in_reply_to_tweet_id: replyToId };
-  }
-
-  return fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': oauthHeader('POST', url, creds),
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  }).then(function (r) {
-    return r.json().then(function (data) {
-      return { status: r.status, data: data };
-    });
-  });
-}
-
-function getCredentials(core) {
-  try {
-    var rows = core.db.prepare("SELECT key, value FROM dv_plugin_config WHERE plugin_name = 'x-posting'").all();
-    var config = {};
-    for (var i = 0; i < rows.length; i++) {
-      config[rows[i].key] = rows[i].value;
-    }
-    return config;
-  } catch (e) {
-    return {};
-  }
-}
+import { sendTweet, getCredentials } from './twitter.js';
+// Note: crypto still needed for thread UUID generation
 
 export default function (core) {
   var router = Router();
@@ -94,6 +32,10 @@ export default function (core) {
       status: 'draft',
       posted_by: who
     });
+
+    // Emit event so handlers can route to operator inbox
+    core.emitEvent('x_draft_created', who, req.body.project_id || '',
+      'Tweet draft created', { post_id: id, text: text, posted_by: who });
 
     res.json({ ok: true, id: id });
   });
@@ -164,7 +106,7 @@ export default function (core) {
         : (gate.error || 'Publishing not permitted'), { approval_required: true });
     }
 
-    var creds = getCredentials(core);
+    var creds = getCredentials(core.db);
     if (!creds.api_key || !creds.api_secret || !creds.access_token || !creds.access_token_secret) {
       return apiError(res, 400, 'X/Twitter API credentials not configured. Set api_key, api_secret, access_token, access_token_secret in plugin config.');
     }
@@ -251,7 +193,7 @@ export default function (core) {
         : (gate.error || 'Publishing not permitted'), { approval_required: true });
     }
 
-    var creds = getCredentials(core);
+    var creds = getCredentials(core.db);
     if (!creds.api_key || !creds.api_secret || !creds.access_token || !creds.access_token_secret) {
       return apiError(res, 400, 'X/Twitter API credentials not configured.');
     }

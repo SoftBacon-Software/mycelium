@@ -83,12 +83,29 @@ function executeAction(action, eventData, core) {
       return { type: 'assign_agent', skipped: true };
     }
     case 'send_webhook': {
-      fetch(action.url, {
+      // SSRF protection: block internal/private URLs
+      var webhookUrl = action.url || '';
+      try {
+        var parsed = new URL(webhookUrl);
+        var host = parsed.hostname.toLowerCase();
+        var blocked = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+          host === '::1' || host === '[::1]' || host === '169.254.169.254' ||
+          host.endsWith('.internal') || host.endsWith('.local') ||
+          host.startsWith('10.') || host.startsWith('192.168.') ||
+          /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+        if (blocked || parsed.protocol === 'file:') {
+          console.warn('[workflow-automations] Blocked SSRF attempt to:', webhookUrl);
+          return { type: 'send_webhook', blocked: true, reason: 'Internal/private URL not allowed' };
+        }
+      } catch (e) {
+        return { type: 'send_webhook', blocked: true, reason: 'Invalid URL' };
+      }
+      fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: eventData.type, agent: agent, data: data, summary: eventData.summary })
       }).catch(function (e) { console.error('[workflow-automations] Webhook failed:', e.message); });
-      return { type: 'send_webhook', url: action.url };
+      return { type: 'send_webhook', url: webhookUrl };
     }
     case 'inbox_notify': {
       core.inbox.createInboxItemForAllOperators(

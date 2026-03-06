@@ -56,8 +56,7 @@ function validateStringLength(res, value, maxLen, fieldName) {
 
 // Login: 10 attempts per 15 minutes per IP
 var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.connection.remoteAddress); }, 10, 15 * 60 * 1000);
-// Agent key validation: 30 attempts per minute per IP
-var agentAuthLimiter = rateLimit(function (req) { return 'agent:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
+// Agent key validation: 30 failed attempts per minute per IP (enforced inline in checkAgent)
 // Admin write operations: 30 per minute per IP
 var adminWriteLimiter = rateLimit(function (req) { return 'admin_write:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
 
@@ -149,7 +148,8 @@ import {
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
-  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket
+  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket,
+  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -247,7 +247,7 @@ var DEFAULT_BUG_CATEGORIES = ['bug', 'feature', 'ui', 'crash', 'api', 'infrastru
 
 function getBugCategories(projectId) {
   if (projectId) {
-    var project = db.getProject(projectId);
+    var project = getProject(projectId);
     if (project && project.bug_categories) {
       try {
         var cats = JSON.parse(project.bug_categories);
@@ -342,6 +342,16 @@ function checkAgent(req, res) {
     res.status(401).json({ error: 'Missing X-Agent-Key header' });
     return null;
   }
+  // Rate limit agent key attempts
+  var rlKey = 'agent:' + (req.ip || req.connection.remoteAddress);
+  var now = Date.now();
+  var rlEntry = _rateLimitStore[rlKey];
+  if (rlEntry && rlEntry.resetAt >= now && rlEntry.count > 30) {
+    var retryAfter = Math.ceil((rlEntry.resetAt - now) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({ error: 'Too many attempts. Try again in ' + retryAfter + ' seconds.' });
+    return null;
+  }
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
   // In-memory cache: avoids DB lookup on every request
   if (agentKeyCache.has(keyHash)) {
@@ -373,6 +383,12 @@ function checkAgent(req, res) {
       return a.id;
     }
   }
+  // Track failed attempt for rate limiting
+  if (!rlEntry || rlEntry.resetAt < now) {
+    _rateLimitStore[rlKey] = { count: 1, resetAt: now + 60 * 1000 };
+  } else {
+    rlEntry.count++;
+  }
   res.status(403).json({ error: 'Invalid agent key' });
   return null;
 }
@@ -384,6 +400,10 @@ function checkAdmin(req, res) {
   if (user) { req._authIsAdmin = true; return true; }
   // Try admin key
   var key = req.headers['x-admin-key'];
+  if (!key && !req.headers['authorization']) {
+    res.status(401).json({ error: 'Authentication required' });
+    return false;
+  }
   if (key === ADMIN_KEY) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
   return false;
@@ -581,7 +601,7 @@ router.get('/stats/public', function (req, res) {
     var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM dv_bugs").get();
     var messages = db.prepare("SELECT COUNT(*) as total FROM dv_messages").get();
     var projects = db.prepare("SELECT COUNT(*) as total FROM dv_projects").get();
-    var recentActivity = db.prepare("SELECT description FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.description; });
+    var recentActivity = db.prepare("SELECT type, agent FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.type.replace(/_/g, ' '); });
     res.json({
       agents: { total: agents.total, online: agents.online },
       tasks: { total: tasks.total, completed: tasks.completed },
@@ -611,6 +631,13 @@ router.get('/public/activity', function (req, res) {
       return { name: a.name, online: a.status === 'online' };
     });
 
+    // Drones — separate from agents
+    var drones = db.prepare(
+      "SELECT name, status FROM dv_agents WHERE role = 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
+    ).all().map(function (d) {
+      return { name: d.name, online: d.status === 'online' };
+    });
+
     // Aggregate stats — counts only, no details
     var tasksToday = db.prepare(
       "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done' AND updated_at >= ?"
@@ -635,38 +662,42 @@ router.get('/public/activity', function (req, res) {
     // Filter to safe event types only
     var safeEventTypes = [
       'task_completed', 'task_created', 'bug_filed', 'bug_fixed',
-      'plan_step_completed', 'plan_created', 'agent_heartbeat',
+      'plan_step_completed', 'plan_created',
       'drone_job_completed', 'pr_merged', 'bip_draft_created'
     ];
     var placeholders = safeEventTypes.map(function () { return '?'; }).join(',');
     var evtStmt = db.prepare(
-      'SELECT event_type, agent_id, created_at FROM dv_events WHERE event_type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
+      'SELECT type, agent, created_at FROM dv_events WHERE type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
     );
     var events = evtStmt.all.apply(evtStmt, safeEventTypes).map(function (e) {
       return {
-        type: e.event_type,
-        agent: e.agent_id || 'system',
+        type: e.type,
+        agent: e.agent || 'system',
         time: e.created_at
       };
     });
 
-    // Mycelium project plans only — title + progress, no other project plans
+    // Active plans — progress only, titles genericized for public view
+    var genericLabels = ['Initiative A', 'Initiative B', 'Initiative C', 'Initiative D', 'Initiative E'];
     var plans = db.prepare(
-      "SELECT id, title FROM dv_plans WHERE status = 'active' AND (project_id = 'mycelium' OR project_id = '' OR project_id IS NULL) ORDER BY updated_at DESC LIMIT 5"
-    ).all().map(function (p) {
+      "SELECT id FROM dv_plans WHERE status = 'active' ORDER BY updated_at DESC LIMIT 5"
+    ).all().map(function (p, i) {
       var steps = db.prepare(
         'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM dv_plan_steps WHERE plan_id = ?'
       ).get(p.id);
       return {
-        title: p.title,
+        title: genericLabels[i] || 'Initiative ' + (i + 1),
         progress: steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
       };
     });
 
     res.json({
       agents: agents,
+      drones: drones,
       stats: {
         agents_online: agentsOnline,
+        drones_total: drones.length,
+        drones_online: drones.filter(function (d) { return d.online; }).length,
         tasks_completed_today: tasksToday,
         bugs_fixed_today: bugsToday,
         plans_active: plansActive,
@@ -680,7 +711,7 @@ router.get('/public/activity', function (req, res) {
   } catch (e) {
     console.error('[public/activity] Error:', e.message);
     res.json({
-      agents: [], stats: { agents_online: 0, tasks_completed_today: 0, bugs_fixed_today: 0, plans_active: 0, total_tasks_done: 0, total_bugs_fixed: 0 },
+      agents: [], drones: [], stats: { agents_online: 0, drones_total: 0, drones_online: 0, tasks_completed_today: 0, bugs_fixed_today: 0, plans_active: 0, total_tasks_done: 0, total_bugs_fixed: 0 },
       events: [], plans: [], updated_at: new Date().toISOString()
     });
   }
@@ -705,6 +736,9 @@ router.get('/boot/:agentId', function (req, res) {
   if (agentId !== req.params.agentId) {
     return res.status(403).json({ error: 'Agent key does not match agent ID' });
   }
+
+  // Clean up expired ephemeral context keys for this agent
+  cleanupAgentSessionKeys(agentId);
 
   // Verbose mode returns legacy full payload
   if (req.query.verbose === 'true') {
@@ -1034,6 +1068,20 @@ router.put('/tasks/:id', function (req, res) {
 
   var result = { ok: true, id: task.id };
 
+  // Handle blocked_by via the dependency system (not the general update handler)
+  if (req.body.blocked_by !== undefined) {
+    var blockers = Array.isArray(req.body.blocked_by) ? req.body.blocked_by : [req.body.blocked_by];
+    var addedDeps = [];
+    for (var bid of blockers) {
+      var depId = parseInt(bid);
+      if (depId && depId !== task.id) {
+        var ok = setTaskDependency(task.id, depId);
+        if (ok) addedDeps.push(depId);
+      }
+    }
+    if (addedDeps.length > 0) result.blocked_by = addedDeps;
+  }
+
   // When task completes: resolve dependencies and update linked asset
   if (fields.status === 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
@@ -1087,6 +1135,18 @@ router.put('/tasks/:id', function (req, res) {
     dispatchWebhook('task_assigned', targetAgent, { task_id: task.id, title: task.title, status: fields.status || task.status });
   }
   res.json(result);
+});
+
+// POST /tasks/:id/claim — claim a task (convenience route)
+router.post('/tasks/:id/claim', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var agentId = req.body.agent_id || who;
+  updateTask(task.id, { assignee: agentId, status: 'in_progress' });
+  emitEvent('task_claimed', who, task.project_id, who + ' claimed task #' + task.id, { task_id: task.id, agent: agentId });
+  res.json({ ok: true, id: task.id, assignee: agentId, status: 'in_progress' });
 });
 
 // Task dependencies
@@ -1184,7 +1244,11 @@ router.put('/context/keys/:namespace/:key', function (req, res) {
   var data = req.body.data;
   if (data === undefined) return res.status(400).json({ error: 'data field is required' });
   var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
-  upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId);
+  var opts = {};
+  if (req.body.category) opts.category = req.body.category;
+  if (req.body.ttl) opts.ttl = parseInt(req.body.ttl, 10);
+  if (req.body.expires_at) opts.expires_at = req.body.expires_at;
+  upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
   emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
   res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
 });
@@ -1193,6 +1257,11 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
+});
+
+router.get('/context/stats', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  res.json(contextKeyStats());
 });
 
 // Legacy per-project context
@@ -1797,7 +1866,7 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   var stepPlanId = parseIntParam(req.params.id);
   var stepStepId = parseIntParam(req.params.stepId);
   updatePlanStep(stepStepId, fields);
-  if (fields.status === 'done' && getSleepMode().active) {
+  if (fields.status === 'completed' && getSleepMode().active) {
     appendSleepLog('steps_completed', { id: stepStepId, plan_id: stepPlanId, agent: agentId, time: new Date().toISOString() });
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
@@ -1806,6 +1875,17 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
   if (fields.assignee === 'operator_input') {
     var stepTitle = planStep ? planStep.title : ('Step #' + stepStepId);
     createInboxItemForAllOperators('approval', 'plan_step', stepStepId, 'Operator input needed: ' + stepTitle, 'Plan #' + stepPlanId + ' — ' + (plan.title || '') + '. Step requires your review/approval.', { plan_id: stepPlanId, step_id: stepStepId, step_title: stepTitle }, 'high');
+  }
+  // Auto-complete plan when all steps are done
+  if (fields.status === 'completed') {
+    var updatedPlan = getPlan(stepPlanId);
+    if (updatedPlan && updatedPlan.steps) {
+      var allDone = updatedPlan.steps.every(function (s) { return s.status === 'completed' || s.status === 'skipped'; });
+      if (allDone && updatedPlan.status !== 'completed') {
+        updatePlan(stepPlanId, { status: 'completed' });
+        emitEvent('plan_completed', agentId, updatedPlan.project_id, 'Plan #' + stepPlanId + ' auto-completed (all steps done)', { plan_id: stepPlanId });
+      }
+    }
   }
   res.json({ ok: true, step_id: stepStepId });
 });
@@ -2882,6 +2962,18 @@ router.get('/bugs/:id', function (req, res) {
   res.json(bug);
 });
 
+// POST /bugs/:id/claim — claim a bug (convenience route)
+router.post('/bugs/:id/claim', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var bug = getBug(parseIntParam(req.params.id));
+  if (!bug) return res.status(404).json({ error: 'Bug not found' });
+  var agentId = req.body.agent_id || who;
+  updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
+  emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
+  res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });
+});
+
 // PUT /bugs/:id — update bug (status, assignee, admin_notes, severity)
 router.put('/bugs/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
@@ -3796,7 +3888,8 @@ router.put('/approvals/:id/vote', function (req, res) {
   if (vote === 'deny') {
     castApprovalVote(approval.id, who, 'deny', notes);
     decideApproval(approval.id, 'denied', who, notes || 'Denied by ' + who);
-    emitEvent('approval_denied', who, null, who + ' denied approval #' + approval.id + ': ' + approval.title);
+    emitEvent('approval_denied', who, approval.project_id, who + ' denied approval #' + approval.id + ': ' + approval.title,
+      JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
     return res.json({ ok: true, status: 'denied', message: 'Approval denied.' });
   }
 
@@ -3807,7 +3900,8 @@ router.put('/approvals/:id/vote', function (req, res) {
   // Check if quorum reached
   if (counts.approves >= approval.required_approvals) {
     decideApproval(approval.id, 'approved', who, 'Quorum reached (' + counts.approves + '/' + approval.required_approvals + ')');
-    emitEvent('approval_approved', who, null, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)');
+    emitEvent('approval_approved', who, approval.project_id, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)',
+      JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
     return res.json({ ok: true, status: 'approved', votes: counts, message: 'Quorum reached. Approval granted.' });
   }
 

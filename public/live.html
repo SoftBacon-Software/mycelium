@@ -145,6 +145,47 @@ body {
 .agent-dot.online { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
 .agent-dot.offline { background: #374151; }
 
+/* Drone cards */
+.drone-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drone-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.drone-dot.online { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
+.drone-dot.offline { background: #374151; }
+
+.drone-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.section-title .section-count {
+  font-weight: 400;
+  color: #374151;
+  font-size: 11px;
+  margin-left: 6px;
+}
+
 .agent-name {
   font-size: 13px;
   font-weight: 500;
@@ -294,8 +335,13 @@ body {
   <div id="stats-bar" class="stats-bar"></div>
 
   <div class="section">
-    <div class="section-title">Agents</div>
+    <div class="section-title">Agents <span class="section-count" id="agents-count"></span></div>
     <div id="agents" class="agents-grid"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section" id="drones-section" style="display:none">
+    <div class="section-title">Drones <span class="section-count" id="drones-count"></span></div>
+    <div id="drones" class="agents-grid"></div>
   </div>
 
   <div class="section">
@@ -352,27 +398,90 @@ function timeAgo(ts) {
 
 function renderStats(stats) {
   var el = document.getElementById('stats-bar');
-  el.innerHTML =
-    '<div class="stat-card highlight"><div class="stat-value">' + stats.agents_online + '</div><div class="stat-label">Agents Online</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + stats.tasks_completed_today + '</div><div class="stat-label">Tasks Today</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + stats.bugs_fixed_today + '</div><div class="stat-label">Bugs Fixed Today</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + stats.plans_active + '</div><div class="stat-label">Active Plans</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + stats.total_tasks_done + '</div><div class="stat-label">Total Tasks Done</div></div>' +
-    '<div class="stat-card"><div class="stat-value">' + stats.total_bugs_fixed + '</div><div class="stat-label">Total Bugs Fixed</div></div>';
+  var cards = [
+    { value: stats.agents_online, label: 'Agents Online', highlight: true },
+    { value: (stats.drones_online || 0) + '/' + (stats.drones_total || 0), label: 'Drones', highlight: false },
+    { value: stats.tasks_completed_today, label: 'Tasks Today', highlight: false },
+    { value: stats.bugs_fixed_today, label: 'Bugs Fixed Today', highlight: false },
+    { value: stats.plans_active, label: 'Active Plans', highlight: false },
+    { value: stats.total_tasks_done, label: 'Total Shipped', highlight: false }
+  ];
+  el.textContent = '';
+  for (var i = 0; i < cards.length; i++) {
+    var card = document.createElement('div');
+    card.className = 'stat-card' + (cards[i].highlight ? ' highlight' : '');
+    var val = document.createElement('div');
+    val.className = 'stat-value';
+    val.textContent = cards[i].value;
+    var lbl = document.createElement('div');
+    lbl.className = 'stat-label';
+    lbl.textContent = cards[i].label;
+    card.appendChild(val);
+    card.appendChild(lbl);
+    el.appendChild(card);
+  }
 }
 
 function renderAgents(agents) {
   var el = document.getElementById('agents');
-  if (!agents.length) { el.innerHTML = '<div class="loading">No agents registered</div>'; return; }
-  var html = '';
+  var countEl = document.getElementById('agents-count');
+  var online = agents.filter(function (a) { return a.online; }).length;
+  if (countEl) countEl.textContent = online + '/' + agents.length + ' online';
+  el.textContent = '';
+  if (!agents.length) { el.textContent = 'No agents registered'; return; }
   for (var i = 0; i < agents.length; i++) {
     var a = agents[i];
-    html += '<div class="agent-card">' +
-      '<div class="agent-dot ' + (a.online ? 'online' : 'offline') + '"></div>' +
-      '<div><div class="agent-name">' + escapeHtml(a.name) + '</div>' +
-      '<div class="agent-status">' + (a.online ? 'Online' : 'Offline') + '</div></div></div>';
+    var card = document.createElement('div');
+    card.className = 'agent-card';
+    var dot = document.createElement('div');
+    dot.className = 'agent-dot ' + (a.online ? 'online' : 'offline');
+    var info = document.createElement('div');
+    var name = document.createElement('div');
+    name.className = 'agent-name';
+    name.textContent = a.name;
+    var status = document.createElement('div');
+    status.className = 'agent-status';
+    status.textContent = a.online ? 'Online' : 'Offline';
+    info.appendChild(name);
+    info.appendChild(status);
+    card.appendChild(dot);
+    card.appendChild(info);
+    el.appendChild(card);
   }
-  el.innerHTML = html;
+}
+
+function renderDrones(drones) {
+  var section = document.getElementById('drones-section');
+  var el = document.getElementById('drones');
+  var countEl = document.getElementById('drones-count');
+  if (!drones || !drones.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  var online = drones.filter(function (d) { return d.online; }).length;
+  if (countEl) countEl.textContent = online + '/' + drones.length + ' online';
+  el.textContent = '';
+  for (var i = 0; i < drones.length; i++) {
+    var d = drones[i];
+    var card = document.createElement('div');
+    card.className = 'drone-card';
+    var dot = document.createElement('div');
+    dot.className = 'drone-dot ' + (d.online ? 'online' : 'offline');
+    var info = document.createElement('div');
+    var name = document.createElement('div');
+    name.className = 'agent-name';
+    name.textContent = d.name;
+    var status = document.createElement('div');
+    status.className = 'agent-status';
+    status.textContent = d.online ? 'Online' : 'Idle';
+    info.appendChild(name);
+    info.appendChild(status);
+    var label = document.createElement('div');
+    label.className = 'drone-label';
+    label.textContent = 'GPU';
+    card.appendChild(dot);
+    card.appendChild(info);
+    card.appendChild(label);
+    el.appendChild(card);
+  }
 }
 
 function renderPlans(plans) {
@@ -426,6 +535,7 @@ function fetchActivity() {
     .then(function (data) {
       renderStats(data.stats);
       renderAgents(data.agents);
+      renderDrones(data.drones || []);
       renderPlans(data.plans);
       renderEvents(data.events);
       refreshCount++;
