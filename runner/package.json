@@ -10,6 +10,6 @@
   },
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "latest"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.70"
   }
 }
