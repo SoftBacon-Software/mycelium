@@ -8,9 +8,12 @@
   "license": "AGPL-3.0-only",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
   "homepage": "https://mycelium.fyi",
+  "workspaces": ["mcp", "runner"],
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js"
+    "dev": "node server/index.js",
+    "start:mcp": "node mcp/index.js",
+    "start:runner": "node runner/index.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
