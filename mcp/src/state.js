@@ -3,6 +3,10 @@
 import { apiPost, apiPut } from './api.js';
 import { startSSE, stopSSE } from './sse.js';
 
+var IDLE_INTERVAL = 5 * 60 * 1000;    // 5 min when idle
+var ACTIVE_INTERVAL = 90 * 1000;       // 90s when actively working
+var ACTIVE_THRESHOLD = 5 * 60 * 1000;  // tool call within 5 min = active
+
 var state = {
   agentId: process.env.MYCELIUM_AGENT_ID || null,
   role: process.env.MYCELIUM_ROLE || 'admin',
@@ -16,13 +20,19 @@ var state = {
   // Auto-tracked working state — populates state_snapshot automatically
   claimedItem: null,    // { type, id, title } — from claim_task, claim_bug, get_work auto_claim
   currentStep: null,    // { plan_id, step_id, title } — from update_step
-  progressNotes: []     // brief notes accumulated during work
+  progressNotes: [],    // brief notes accumulated during work
+  lastToolCall: null,   // timestamp of last MCP tool invocation
+  currentInterval: IDLE_INTERVAL
 };
 
 export function getState() { return state; }
 
 export function setWorkingOn(text) {
   state.workingOn = text || '';
+}
+
+export function touchToolCall() {
+  state.lastToolCall = Date.now();
 }
 
 export function setBooted(bootData) {
@@ -74,7 +84,15 @@ export function getAutoSnapshot() {
   if (state.claimedItem) snapshot.claimed_item = state.claimedItem;
   if (state.currentStep) snapshot.current_step = state.currentStep;
   if (state.progressNotes.length) snapshot.progress = state.progressNotes;
+  if (state.lastToolCall) snapshot.last_tool_call = state.lastToolCall;
   return snapshot;
+}
+
+// Determine if session is actively working (for adaptive heartbeat)
+function isActive() {
+  if (state.claimedItem || state.currentStep) return true;
+  if (state.lastToolCall && (Date.now() - state.lastToolCall) < ACTIVE_THRESHOLD) return true;
+  return false;
 }
 
 export async function sendHeartbeat() {
@@ -115,6 +133,19 @@ export async function sendHeartbeat() {
   } catch (e) {
     process.stderr.write('Heartbeat failed: ' + e.message + '\n');
   }
+
+  // Adaptive interval: check if we should switch frequency
+  var targetInterval = isActive() ? ACTIVE_INTERVAL : IDLE_INTERVAL;
+  if (targetInterval !== state.currentInterval) {
+    state.currentInterval = targetInterval;
+    // Restart timer with new interval
+    if (state.heartbeatTimer) {
+      clearInterval(state.heartbeatTimer);
+      state.heartbeatTimer = setInterval(sendHeartbeat, targetInterval);
+    }
+    var mode = targetInterval === ACTIVE_INTERVAL ? 'active (90s)' : 'idle (5m)';
+    process.stderr.write('[mycelium] Heartbeat switched to ' + mode + '\n');
+  }
 }
 
 export function setMcpServer(mcpServer) {
@@ -125,8 +156,8 @@ export function startHeartbeat(mcpServer) {
   if (state.role !== 'agent') return;
   if (mcpServer) state.mcpServer = mcpServer;
   stopHeartbeat();
-  // Heartbeat every 5 minutes (boot already marks agent online — no need to send immediately)
-  state.heartbeatTimer = setInterval(sendHeartbeat, 5 * 60 * 1000);
+  state.currentInterval = IDLE_INTERVAL;
+  state.heartbeatTimer = setInterval(sendHeartbeat, IDLE_INTERVAL);
   // Send one immediately
   sendHeartbeat();
   // Start SSE subscription — pass server so sleep_mode_on can wake this session
@@ -144,18 +175,21 @@ export async function shutdown() {
   stopHeartbeat();
   stopSSE();
   if (state.role === 'agent' && state.agentId) {
-    // Auto-save session summary
+    // Final snapshot with session_end flag so next boot knows we shut down cleanly
     try {
-      var sessionData = {
-        working_on: state.workingOn || '',
-        timestamp: new Date().toISOString()
-      };
-      await apiPut('/context/keys/' + state.agentId + '/last_session', {
-        value: JSON.stringify(sessionData)
+      var finalSnapshot = getAutoSnapshot();
+      finalSnapshot.session_end = true;
+      finalSnapshot.ended_at = new Date().toISOString();
+      await apiPost('/agents/heartbeat', {
+        status: 'online',
+        working_on: state.workingOn,
+        session_id: state.sessionId,
+        messages_acked: JSON.stringify(state.messagesAcked),
+        state_snapshot: JSON.stringify(finalSnapshot)
       });
     } catch (e) { /* best effort */ }
 
-    // Clear working_on on shutdown
+    // Go offline
     try {
       await apiPost('/agents/heartbeat', {
         status: 'offline',

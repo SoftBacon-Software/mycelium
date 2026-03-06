@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 import { apiGet, apiPost, apiPut, apiDelete } from './api.js';
-import { getState, setWorkingOn, setBooted, startHeartbeat, sendHeartbeat, setClaimedItem, setCurrentStep, addProgressNote } from './state.js';
+import { getState, setWorkingOn, setBooted, startHeartbeat, sendHeartbeat, setClaimedItem, setCurrentStep, addProgressNote, touchToolCall } from './state.js';
 
 function text(s) {
   return { content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }] };
@@ -14,6 +14,7 @@ function text(s) {
 function registerDual(server, studioName, description, schema, handler) {
   var myceliumName = studioName.replace(/^studio_/, 'mycelium_');
   var safeHandler = async function(args) {
+    touchToolCall();
     try {
       return await handler(args);
     } catch (err) {
@@ -157,17 +158,50 @@ export function registerTools(server) {
           }
         }
 
-        // Savepoint
+        // Structured session resume from savepoint
         if (data.savepoint && data.savepoint.has_savepoint) {
           var sp = data.savepoint;
+          var prevState = sp.previous_state || {};
+          var cleanShutdown = prevState.session_end === true;
           lines.push('');
-          lines.push('=== Session Resume ===');
-          lines.push('Last session: ' + (sp.was_working_on || 'idle'));
-          if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-        }
-
-        if (data.changes_since_last) {
-          lines.push('Changes: ' + data.changes_since_last);
+          if (sp.was_working_on || prevState.claimed_item || prevState.current_step) {
+            lines.push('=== RESUME SESSION' + (cleanShutdown ? '' : ' (previous session did not shut down cleanly)') + ' ===');
+            if (sp.was_working_on) lines.push('You were: ' + sp.was_working_on);
+            if (prevState.claimed_item) {
+              var ci = prevState.claimed_item;
+              lines.push('Claimed: ' + (ci.type || 'item') + ' #' + ci.id + (ci.title ? ' — ' + ci.title : ''));
+            }
+            if (prevState.current_step) {
+              var cs = prevState.current_step;
+              lines.push('Plan step: plan #' + cs.plan_id + ' step #' + cs.step_id + (cs.title ? ' — ' + cs.title : ''));
+            }
+            if (prevState.progress && prevState.progress.length > 0) {
+              lines.push('Progress:');
+              for (var pn of prevState.progress) {
+                lines.push('  - ' + pn);
+              }
+            }
+            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
+            // Changes since last session
+            var summary = sp.summary || (data.changes_since_last ? null : null);
+            if (sp.summary) {
+              var changeParts = [];
+              if (sp.summary.messages) changeParts.push(sp.summary.messages + ' new message(s)');
+              if (sp.summary.tasks) changeParts.push(sp.summary.tasks + ' task change(s)');
+              if (sp.summary.plans) changeParts.push(sp.summary.plans + ' plan change(s)');
+              if (sp.summary.bugs) changeParts.push(sp.summary.bugs + ' bug change(s)');
+              if (sp.summary.context) changeParts.push(sp.summary.context + ' context update(s)');
+              if (changeParts.length) lines.push('Changes while away: ' + changeParts.join(', '));
+            } else if (data.changes_since_last) {
+              lines.push('Changes while away: ' + data.changes_since_last);
+            }
+            lines.push('Action: Check messages/requests first if any pending, then continue where you left off.');
+          } else {
+            lines.push('=== Session Resume ===');
+            lines.push('Last session: idle');
+            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
+            if (data.changes_since_last) lines.push('Changes: ' + data.changes_since_last);
+          }
         }
 
         lines.push('', 'Auto-heartbeat started. Server time: ' + data.server_time);
