@@ -574,7 +574,16 @@ export function fetchResolvedProfile(agentId: string): Promise<import('./types')
 
 export function fetchCalibration(agentId: string): Promise<import('./types').CalibrationData> {
   return fetchContextKey(agentId, 'standup').then((entry) => {
-    const data = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data;
-    return data as import('./types').CalibrationData;
+    try {
+      const data = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data;
+      const cal = (data || {}) as import('./types').CalibrationData;
+      // Ensure required array fields exist
+      if (!Array.isArray(cal.drift)) cal.drift = [];
+      if (!Array.isArray(cal.md_checkpoints)) cal.md_checkpoints = [];
+      if (!Array.isArray(cal.md_blocklist)) cal.md_blocklist = [];
+      return cal;
+    } catch {
+      return { status: 'aligned', profile_chain: [], rules: {}, drift: [], md_checkpoints: [], md_blocklist: [], last_standup: '' } as import('./types').CalibrationData;
+    }
   });
 }

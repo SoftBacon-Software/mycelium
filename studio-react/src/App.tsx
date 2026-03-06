@@ -51,7 +51,7 @@ export default function App() {
           },
         }}
       />
-      <Suspense>
+      <Suspense fallback={<div style={{ padding: '2rem', color: '#F0E8DB80' }}>Loading...</div>}>
         <Routes>
           <Route
             path="/login"
