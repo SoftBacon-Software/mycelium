@@ -579,7 +579,7 @@ router.get('/stats/public', function (req, res) {
     var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM dv_bugs").get();
     var messages = db.prepare("SELECT COUNT(*) as total FROM dv_messages").get();
     var projects = db.prepare("SELECT COUNT(*) as total FROM dv_projects").get();
-    var recentActivity = db.prepare("SELECT description FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.description; });
+    var recentActivity = db.prepare("SELECT summary FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.summary; });
     res.json({
       agents: { total: agents.total, online: agents.online },
       tasks: { total: tasks.total, completed: tasks.completed },
@@ -638,12 +638,12 @@ router.get('/public/activity', function (req, res) {
     ];
     var placeholders = safeEventTypes.map(function () { return '?'; }).join(',');
     var evtStmt = db.prepare(
-      'SELECT event_type, agent_id, created_at FROM dv_events WHERE event_type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
+      'SELECT type, agent, created_at FROM dv_events WHERE type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
     );
     var events = evtStmt.all.apply(evtStmt, safeEventTypes).map(function (e) {
       return {
-        type: e.event_type,
-        agent: e.agent_id || 'system',
+        type: e.type,
+        agent: e.agent || 'system',
         time: e.created_at
       };
     });
