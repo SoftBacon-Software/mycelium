@@ -579,7 +579,7 @@ router.get('/stats/public', function (req, res) {
     var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM dv_bugs").get();
     var messages = db.prepare("SELECT COUNT(*) as total FROM dv_messages").get();
     var projects = db.prepare("SELECT COUNT(*) as total FROM dv_projects").get();
-    var recentActivity = db.prepare("SELECT summary FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.summary; });
+    var recentActivity = db.prepare("SELECT type, agent FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.type.replace(/_/g, ' '); });
     res.json({
       agents: { total: agents.total, online: agents.online },
       tasks: { total: tasks.total, completed: tasks.completed },
@@ -648,15 +648,16 @@ router.get('/public/activity', function (req, res) {
       };
     });
 
-    // Mycelium project plans only — title + progress, no other project plans
+    // Active plans — progress only, titles genericized for public view
+    var genericLabels = ['Initiative A', 'Initiative B', 'Initiative C', 'Initiative D', 'Initiative E'];
     var plans = db.prepare(
-      "SELECT id, title FROM dv_plans WHERE status = 'active' AND (project_id = 'mycelium' OR project_id = '' OR project_id IS NULL) ORDER BY updated_at DESC LIMIT 5"
-    ).all().map(function (p) {
+      "SELECT id FROM dv_plans WHERE status = 'active' ORDER BY updated_at DESC LIMIT 5"
+    ).all().map(function (p, i) {
       var steps = db.prepare(
         'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM dv_plan_steps WHERE plan_id = ?'
       ).get(p.id);
       return {
-        title: p.title,
+        title: genericLabels[i] || 'Initiative ' + (i + 1),
         progress: steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
       };
     });
