@@ -691,6 +691,31 @@ router.get('/public/activity', function (req, res) {
       };
     });
 
+    // Calibration / alignment — sanitized: status only, no rules or CLAUDE.md content
+    var profileCount = db.prepare('SELECT COUNT(*) as c FROM dv_node_profiles').get().c;
+    var agentRows = db.prepare(
+      "SELECT id, name, status FROM dv_agents WHERE role != 'drone' ORDER BY name"
+    ).all();
+    var alignmentAgents = agentRows.map(function (a) {
+      var entry = db.prepare(
+        "SELECT data FROM dv_context_store WHERE namespace = ? AND key = 'standup'"
+      ).get(a.id);
+      var status = 'unknown';
+      var driftCount = 0;
+      if (entry) {
+        try {
+          var cal = typeof entry.data === 'string' ? JSON.parse(entry.data) : entry.data;
+          status = cal.status || 'unknown';
+          driftCount = Array.isArray(cal.drift) ? cal.drift.length : 0;
+        } catch (e) { /* malformed data */ }
+      }
+      return { name: a.name, online: a.status === 'online', alignment: status, drift: driftCount };
+    });
+    var aligned = alignmentAgents.filter(function (a) { return a.alignment === 'aligned'; }).length;
+    var drifted = alignmentAgents.filter(function (a) { return a.alignment === 'drifted'; }).length;
+    var critical = alignmentAgents.filter(function (a) { return a.alignment === 'critical'; }).length;
+    var uncalibrated = alignmentAgents.filter(function (a) { return a.alignment === 'unknown'; }).length;
+
     res.json({
       agents: agents,
       drones: drones,
@@ -706,6 +731,11 @@ router.get('/public/activity', function (req, res) {
       },
       events: events,
       plans: plans,
+      alignment: {
+        profiles: profileCount,
+        agents: alignmentAgents,
+        summary: { aligned: aligned, drifted: drifted, critical: critical, uncalibrated: uncalibrated }
+      },
       updated_at: new Date().toISOString()
     });
   } catch (e) {

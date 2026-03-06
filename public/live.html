@@ -299,6 +299,104 @@ body {
 
 .footer a:hover { color: #94a3b8; }
 
+/* Alignment */
+.alignment-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.alignment-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.alignment-pill .pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.alignment-pill .pill-count {
+  font-weight: 700;
+  color: #fff;
+  font-size: 14px;
+}
+
+.alignment-pill.aligned .pill-dot { background: #10b981; }
+.alignment-pill.aligned .pill-count { color: #10b981; }
+.alignment-pill.aligned { border-color: rgba(16, 185, 129, 0.2); }
+
+.alignment-pill.drifted .pill-dot { background: #f59e0b; }
+.alignment-pill.drifted .pill-count { color: #f59e0b; }
+.alignment-pill.drifted { border-color: rgba(245, 158, 11, 0.2); }
+
+.alignment-pill.critical .pill-dot { background: #ef4444; }
+.alignment-pill.critical .pill-count { color: #ef4444; }
+.alignment-pill.critical { border-color: rgba(239, 68, 68, 0.2); }
+
+.alignment-pill.uncalibrated .pill-dot { background: #374151; }
+.alignment-pill.uncalibrated .pill-count { color: #636e8a; }
+
+.alignment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.alignment-card {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.alignment-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alignment-indicator.aligned { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+.alignment-indicator.drifted { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
+.alignment-indicator.critical { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); animation: pulse 2s ease-in-out infinite; }
+.alignment-indicator.unknown { background: #374151; }
+
+.alignment-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.alignment-status {
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.alignment-status.aligned { color: #10b981; }
+.alignment-status.drifted { color: #f59e0b; }
+.alignment-status.critical { color: #ef4444; }
+.alignment-status.unknown { color: #636e8a; }
+
+.alignment-drift {
+  font-size: 10px;
+  color: #636e8a;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 /* Loading */
 .loading {
   text-align: center;
@@ -342,6 +440,12 @@ body {
   <div class="section" id="drones-section" style="display:none">
     <div class="section-title">Drones <span class="section-count" id="drones-count"></span></div>
     <div id="drones" class="agents-grid"></div>
+  </div>
+
+  <div class="section" id="alignment-section" style="display:none">
+    <div class="section-title">Agent Alignment</div>
+    <div id="alignment-summary" class="alignment-summary"></div>
+    <div id="alignment-grid" class="alignment-grid"></div>
   </div>
 
   <div class="section">
@@ -521,6 +625,78 @@ function renderEvents(events) {
   el.innerHTML = html;
 }
 
+function renderAlignment(alignment) {
+  var section = document.getElementById('alignment-section');
+  if (!alignment || !alignment.agents || !alignment.agents.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  // Summary pills
+  var summaryEl = document.getElementById('alignment-summary');
+  summaryEl.textContent = '';
+  var s = alignment.summary;
+  var pills = [
+    { cls: 'aligned', label: 'Aligned', count: s.aligned },
+    { cls: 'drifted', label: 'Drifted', count: s.drifted },
+    { cls: 'critical', label: 'Critical', count: s.critical },
+    { cls: 'uncalibrated', label: 'Pending', count: s.uncalibrated }
+  ];
+  for (var i = 0; i < pills.length; i++) {
+    var p = pills[i];
+    var pill = document.createElement('div');
+    pill.className = 'alignment-pill ' + p.cls;
+    var dot = document.createElement('span');
+    dot.className = 'pill-dot';
+    var count = document.createElement('span');
+    count.className = 'pill-count';
+    count.textContent = p.count;
+    var lbl = document.createElement('span');
+    lbl.textContent = p.label;
+    pill.appendChild(dot);
+    pill.appendChild(count);
+    pill.appendChild(lbl);
+    summaryEl.appendChild(pill);
+  }
+
+  // Agent grid
+  var gridEl = document.getElementById('alignment-grid');
+  gridEl.textContent = '';
+  for (var j = 0; j < alignment.agents.length; j++) {
+    var a = alignment.agents[j];
+    var statusLabel = a.alignment === 'unknown' ? 'pending' : a.alignment;
+
+    var card = document.createElement('div');
+    card.className = 'alignment-card';
+
+    var indicator = document.createElement('div');
+    indicator.className = 'alignment-indicator ' + a.alignment;
+
+    var info = document.createElement('div');
+    var nameEl = document.createElement('div');
+    nameEl.className = 'alignment-name';
+    nameEl.textContent = a.name;
+    var statusEl = document.createElement('div');
+    statusEl.className = 'alignment-status ' + a.alignment;
+    statusEl.textContent = statusLabel;
+    info.appendChild(nameEl);
+    info.appendChild(statusEl);
+
+    card.appendChild(indicator);
+    card.appendChild(info);
+
+    if (a.drift > 0) {
+      var driftEl = document.createElement('div');
+      driftEl.className = 'alignment-drift';
+      driftEl.textContent = a.drift + ' drift' + (a.drift > 1 ? 's' : '');
+      card.appendChild(driftEl);
+    }
+
+    gridEl.appendChild(card);
+  }
+}
+
 function escapeHtml(str) {
   var div = document.createElement('div');
   div.appendChild(document.createTextNode(str || ''));
@@ -536,6 +712,7 @@ function fetchActivity() {
       renderStats(data.stats);
       renderAgents(data.agents);
       renderDrones(data.drones || []);
+      renderAlignment(data.alignment);
       renderPlans(data.plans);
       renderEvents(data.events);
       refreshCount++;
