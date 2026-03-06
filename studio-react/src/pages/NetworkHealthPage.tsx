@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import React, { useCallback, useEffect, useMemo, useState, useRef, Component } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
 import { fetchApiLimits, fetchProfiles, fetchCalibration } from '../api/endpoints'
@@ -1573,9 +1573,45 @@ function DriftMatrix({
   )
 }
 
+// ─── Error Boundary ──────────────────────────────────────────────────────────
+
+class HealthErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-8 bg-surface rounded-lg border border-red/30 space-y-4">
+          <h2 className="text-lg font-semibold text-red">Health Page Crash</h2>
+          <pre className="text-xs text-text-muted bg-bg p-4 rounded overflow-auto max-h-64 whitespace-pre-wrap">
+            {this.state.error.message}
+            {'\n\n'}
+            {this.state.error.stack}
+          </pre>
+          <button
+            type="button"
+            onClick={() => this.setState({ error: null })}
+            className="text-xs px-3 py-1.5 rounded bg-surface-raised text-text-muted hover:text-accent"
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function NetworkHealthPage() {
+function NetworkHealthPageInner() {
   const {
     agents,
     drones,
@@ -1772,5 +1808,13 @@ export default function NetworkHealthPage() {
         <RecentActivityFeed events={events} />
       </section>
     </div>
+  )
+}
+
+export default function NetworkHealthPage() {
+  return (
+    <HealthErrorBoundary>
+      <NetworkHealthPageInner />
+    </HealthErrorBoundary>
   )
 }
