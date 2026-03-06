@@ -56,8 +56,7 @@ function validateStringLength(res, value, maxLen, fieldName) {
 
 // Login: 10 attempts per 15 minutes per IP
 var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.connection.remoteAddress); }, 10, 15 * 60 * 1000);
-// Agent key validation: 30 attempts per minute per IP
-var agentAuthLimiter = rateLimit(function (req) { return 'agent:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
+// Agent key validation: 30 failed attempts per minute per IP (enforced inline in checkAgent)
 
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
@@ -341,6 +340,16 @@ function checkAgent(req, res) {
     res.status(401).json({ error: 'Missing X-Agent-Key header' });
     return null;
   }
+  // Rate limit agent key attempts
+  var rlKey = 'agent:' + (req.ip || req.connection.remoteAddress);
+  var now = Date.now();
+  var rlEntry = _rateLimitStore[rlKey];
+  if (rlEntry && rlEntry.resetAt >= now && rlEntry.count > 30) {
+    var retryAfter = Math.ceil((rlEntry.resetAt - now) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.status(429).json({ error: 'Too many attempts. Try again in ' + retryAfter + ' seconds.' });
+    return null;
+  }
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
   // In-memory cache: avoids DB lookup on every request
   if (agentKeyCache.has(keyHash)) {
@@ -372,6 +381,12 @@ function checkAgent(req, res) {
       return a.id;
     }
   }
+  // Track failed attempt for rate limiting
+  if (!rlEntry || rlEntry.resetAt < now) {
+    _rateLimitStore[rlKey] = { count: 1, resetAt: now + 60 * 1000 };
+  } else {
+    rlEntry.count++;
+  }
   res.status(403).json({ error: 'Invalid agent key' });
   return null;
 }
@@ -383,6 +398,10 @@ function checkAdmin(req, res) {
   if (user) { req._authIsAdmin = true; return true; }
   // Try admin key
   var key = req.headers['x-admin-key'];
+  if (!key && !req.headers['authorization']) {
+    res.status(401).json({ error: 'Authentication required' });
+    return false;
+  }
   if (key === ADMIN_KEY) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
   return false;
