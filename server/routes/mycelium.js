@@ -142,7 +142,7 @@ import {
   getPluginConfig, setPluginConfig, deletePluginConfig,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent, archiveOldMessages, archiveOldEvents,
+  countPendingForAgent, getAgentInbox, archiveOldMessages, archiveOldEvents,
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
@@ -887,11 +887,15 @@ router.post('/agents/heartbeat', function (req, res) {
     try { updateDroneDiagnostics(agentId, stateSnapshot.system_info); } catch (e) { /* non-critical */ }
   }
 
-  // Slim heartbeat: pending count + wake flag only
+  // Heartbeat: pending counts + inbox when there are unread items
   var pendingCounts = countPendingForAgent(agentId);
   var pending = pendingCounts.requests + pendingCounts.directives + pendingCounts.unread;
   var wake = (pendingCounts.directives + pendingCounts.requests) > 0;
   var response = { ok: true, pending: pending, wake: wake };
+  // Include actual inbox so agents see messages without a separate call
+  if (pending > 0) {
+    response.inbox = getAgentInbox(agentId, 20);
+  }
 
   // Auto-dispatch: if agent just came online or is idle with no work, try to assign
   if (!workingOn && (status === 'online' || status === 'idle')) {
