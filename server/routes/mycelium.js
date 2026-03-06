@@ -609,6 +609,13 @@ router.get('/public/activity', function (req, res) {
       return { name: a.name, online: a.status === 'online' };
     });
 
+    // Drones — separate from agents
+    var drones = db.prepare(
+      "SELECT name, status FROM dv_agents WHERE role = 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
+    ).all().map(function (d) {
+      return { name: d.name, online: d.status === 'online' };
+    });
+
     // Aggregate stats — counts only, no details
     var tasksToday = db.prepare(
       "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done' AND updated_at >= ?"
@@ -664,8 +671,11 @@ router.get('/public/activity', function (req, res) {
 
     res.json({
       agents: agents,
+      drones: drones,
       stats: {
         agents_online: agentsOnline,
+        drones_total: drones.length,
+        drones_online: drones.filter(function (d) { return d.online; }).length,
         tasks_completed_today: tasksToday,
         bugs_fixed_today: bugsToday,
         plans_active: plansActive,
@@ -679,7 +689,7 @@ router.get('/public/activity', function (req, res) {
   } catch (e) {
     console.error('[public/activity] Error:', e.message);
     res.json({
-      agents: [], stats: { agents_online: 0, tasks_completed_today: 0, bugs_fixed_today: 0, plans_active: 0, total_tasks_done: 0, total_bugs_fixed: 0 },
+      agents: [], drones: [], stats: { agents_online: 0, drones_total: 0, drones_online: 0, tasks_completed_today: 0, bugs_fixed_today: 0, plans_active: 0, total_tasks_done: 0, total_bugs_fixed: 0 },
       events: [], plans: [], updated_at: new Date().toISOString()
     });
   }
