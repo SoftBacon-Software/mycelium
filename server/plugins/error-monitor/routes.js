@@ -109,10 +109,27 @@ export default function (core) {
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError, parseIntParam } = core;
 
-  // ---- Webhook endpoints (no auth) ----
+  // ---- Webhook endpoints (signature-verified or admin-authed) ----
+
+  function verifyWebhookAuth(req, res) {
+    // Check for webhook_secret in query param or X-Webhook-Secret header
+    var secret = getConfig(core.db, 'webhook_secret');
+    if (!secret) {
+      // No secret configured — require admin auth as fallback
+      var who = checkAdmin(req, res);
+      return !!who;
+    }
+    var provided = req.headers['x-webhook-secret'] || req.query.secret;
+    if (!provided || provided !== secret) {
+      res.status(403).json({ error: 'Invalid webhook secret' });
+      return false;
+    }
+    return true;
+  }
 
   // POST /errors/webhook/sentry
   router.post('/webhook/sentry', function (req, res) {
+    if (!verifyWebhookAuth(req, res)) return;
     var issue = req.body.data && req.body.data.issue;
     var errorKey = 'sentry:' + (issue && issue.id);
     var title = issue && issue.title;
@@ -124,6 +141,7 @@ export default function (core) {
 
   // POST /errors/webhook/bugsnag
   router.post('/webhook/bugsnag', function (req, res) {
+    if (!verifyWebhookAuth(req, res)) return;
     var error = req.body.error;
     var errorKey = 'bugsnag:' + (error && error.exceptionClass) + ':' + (error && error.message || '').substring(0, 100);
     var title = error && error.exceptionClass;
@@ -136,6 +154,7 @@ export default function (core) {
 
   // POST /errors/webhook/datadog
   router.post('/webhook/datadog', function (req, res) {
+    if (!verifyWebhookAuth(req, res)) return;
     var errorKey = 'datadog:' + req.body.id;
     var title = req.body.title || '';
     var message = req.body.text || '';

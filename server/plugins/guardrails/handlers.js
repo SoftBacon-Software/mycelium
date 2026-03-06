@@ -20,13 +20,9 @@ function evaluateCondition(conditions, eventData) {
       if ((eventData.agent || '') === conditions.agent_id) return { violated: true, detail: conditions.message || 'Agent ' + conditions.agent_id + ' is restricted' };
       return { violated: false };
     case 'custom':
-      try {
-        var fn = new Function('data', 'event', 'return (' + conditions.expression + ')');
-        if (fn(data, eventData)) return { violated: true, detail: conditions.message || 'Custom rule violated' };
-        return { violated: false };
-      } catch (e) {
-        return { violated: false };
-      }
+      // SECURITY: custom expressions disabled — arbitrary code execution risk.
+      // Use built-in condition types instead (require_field, max_value, require_approval, block_agent).
+      return { violated: false, detail: 'Custom expressions are disabled for security reasons' };
     default:
       return { violated: false };
   }

@@ -5,11 +5,11 @@ import { Router } from 'express';
 import createTrackerDB from './db.js';
 
 function createLinearIssue(apiKey, teamId, title, description) {
-  var query = 'mutation { issueCreate(input: { teamId: "' + teamId + '", title: "' + title.replace(/"/g, '\\"') + '", description: "' + (description || '').replace(/"/g, '\\"') + '" }) { success issue { id identifier } } }';
+  var query = 'mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier } } }';
   return fetch('https://api.linear.app/graphql', {
     method: 'POST',
     headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: query })
+    body: JSON.stringify({ query: query, variables: { input: { teamId: teamId, title: title, description: description || '' } } })
   }).then(function (r) { return r.json(); });
 }
 
@@ -34,11 +34,11 @@ function createJiraIssue(domain, email, apiToken, projectKey, summary, descripti
 }
 
 function fetchLinearIssue(apiKey, issueId) {
-  var query = '{ issue(id: "' + issueId + '") { id identifier title description state { name } assignee { name } } }';
+  var query = 'query GetIssue($id: String!) { issue(id: $id) { id identifier title description state { name } assignee { name } } }';
   return fetch('https://api.linear.app/graphql', {
     method: 'POST',
     headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: query })
+    body: JSON.stringify({ query: query, variables: { id: issueId } })
   }).then(function (r) { return r.json(); });
 }
 
@@ -60,8 +60,20 @@ export default function (core) {
     return row ? row.value : '';
   }
 
-  // POST /tracker/webhook — Inbound webhook from Linear or Jira
+  // POST /tracker/webhook — Inbound webhook from Linear or Jira (requires webhook_secret or admin auth)
   router.post('/webhook', function (req, res) {
+    // Verify webhook auth — check secret or fall back to admin key
+    var webhookSecret = getConfig('webhook_secret');
+    if (webhookSecret) {
+      var provided = req.headers['x-webhook-secret'] || req.query.secret;
+      if (!provided || provided !== webhookSecret) {
+        return res.status(403).json({ error: 'Invalid webhook secret' });
+      }
+    } else {
+      var who = checkAdmin(req, res);
+      if (!who) return;
+    }
+
     try {
       var provider = getConfig('provider');
       var direction = getConfig('sync_direction');
