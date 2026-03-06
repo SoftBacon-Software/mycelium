@@ -4,11 +4,11 @@
 import createTrackerDB from './db.js';
 
 function createLinearIssue(apiKey, teamId, title, description) {
-  var query = 'mutation { issueCreate(input: { teamId: "' + teamId + '", title: "' + title.replace(/"/g, '\\"') + '", description: "' + (description || '').replace(/"/g, '\\"') + '" }) { success issue { id identifier } } }';
+  var query = 'mutation CreateIssue($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier } } }';
   return fetch('https://api.linear.app/graphql', {
     method: 'POST',
     headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: query })
+    body: JSON.stringify({ query: query, variables: { input: { teamId: teamId, title: title, description: description || '' } } })
   }).then(function (r) { return r.json(); });
 }
 
