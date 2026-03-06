@@ -108,44 +108,32 @@ export function registerTools(server) {
           }
         }
 
-        // Counts summary
-        if (data.counts) {
-          var c = data.counts;
-          var parts = [];
-          if (c.directives) parts.push(c.directives + ' directive' + (c.directives > 1 ? 's' : ''));
-          if (c.requests) parts.push(c.requests + ' request' + (c.requests > 1 ? 's' : ''));
-          if (c.messages_unread) parts.push(c.messages_unread + ' unread');
-          if (c.tasks_mine) parts.push(c.tasks_mine + ' task' + (c.tasks_mine > 1 ? 's' : ''));
-          if (c.bugs_open) parts.push(c.bugs_open + ' bug' + (c.bugs_open > 1 ? 's' : ''));
-          if (c.plans_active) parts.push(c.plans_active + ' active plan' + (c.plans_active > 1 ? 's' : ''));
-          if (parts.length) lines.push('\nPending: ' + parts.join(', '));
-        }
-
-        // Work queue
-        if (data.work_queue && data.work_queue.length > 0) {
+        // === DIRECTIVES FIRST — these override everything ===
+        var hasDirectives = data.pending_directives && data.pending_directives.length > 0;
+        if (hasDirectives) {
           lines.push('');
-          lines.push('=== Work Queue (' + data.work_queue.length + ' items) ===');
-          for (var item of data.work_queue) {
-            lines.push((item.type || '').toUpperCase() + ' #' + item.id + ': ' + item.title);
-          }
-        }
-
-        // Blocking directives
-        if (data.pending_directives && data.pending_directives.length > 0) {
+          lines.push('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+          lines.push('!!! ' + data.pending_directives.length + ' BLOCKING DIRECTIVE(S) — HANDLE BEFORE ALL OTHER WORK !!!');
+          lines.push('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
           lines.push('');
-          lines.push('*** BLOCKING DIRECTIVES (' + data.pending_directives.length + ') ***');
-          lines.push('You MUST respond to these before receiving work assignments.');
+          lines.push('Directives override session resume, prior work, and all other tasks.');
+          lines.push('You MUST read and act on these NOW. Do NOT continue previous work.');
+          lines.push('');
           for (var dir of data.pending_directives) {
-            lines.push('  #' + dir.id + ' from ' + dir.from + ': ' + (dir.content || '').substring(0, 200));
+            lines.push('--- DIRECTIVE #' + dir.id + ' from ' + dir.from + ' ---');
+            lines.push(dir.content || '(no content)');
+            lines.push('');
           }
+          lines.push('After handling all directives, call mycelium_respond_to_request for each one.');
+          lines.push('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
         }
 
-        // Pending requests
+        // Pending requests (high priority, but not blocking like directives)
         if (data.pending_requests && data.pending_requests.length > 0) {
           lines.push('');
           lines.push('=== Pending Requests (' + data.pending_requests.length + ') ===');
           for (var r of data.pending_requests) {
-            lines.push('[REQ] ' + r.from + ': ' + (r.content || '').substring(0, 200));
+            lines.push('[REQ #' + r.id + '] ' + r.from + ': ' + (r.content || '').substring(0, 200));
           }
         }
 
@@ -158,13 +146,18 @@ export function registerTools(server) {
           }
         }
 
-        // Structured session resume from savepoint
+        // Session resume — but ONLY if no directives are pending
         if (data.savepoint && data.savepoint.has_savepoint) {
           var sp = data.savepoint;
           var prevState = sp.previous_state || {};
           var cleanShutdown = prevState.session_end === true;
           lines.push('');
-          if (sp.was_working_on || prevState.claimed_item || prevState.current_step) {
+          if (hasDirectives) {
+            // Minimal resume context when directives are pending — don't encourage continuing prior work
+            if (sp.was_working_on) lines.push('=== Session Resume (PAUSED — handle directives first) ===');
+            if (sp.was_working_on) lines.push('Last session: ' + sp.was_working_on);
+            if (sp.notes) lines.push('Notes: ' + sp.notes);
+          } else if (sp.was_working_on || prevState.claimed_item || prevState.current_step) {
             lines.push('=== RESUME SESSION' + (cleanShutdown ? '' : ' (previous session did not shut down cleanly)') + ' ===');
             if (sp.was_working_on) lines.push('You were: ' + sp.was_working_on);
             if (prevState.claimed_item) {
@@ -182,8 +175,6 @@ export function registerTools(server) {
               }
             }
             if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-            // Changes since last session
-            var summary = sp.summary || (data.changes_since_last ? null : null);
             if (sp.summary) {
               var changeParts = [];
               if (sp.summary.messages) changeParts.push(sp.summary.messages + ' new message(s)');
@@ -202,6 +193,28 @@ export function registerTools(server) {
             if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
             if (data.changes_since_last) lines.push('Changes: ' + data.changes_since_last);
           }
+        }
+
+        // Work queue — after directives and resume
+        if (data.work_queue && data.work_queue.length > 0) {
+          lines.push('');
+          lines.push('=== Work Queue (' + data.work_queue.length + ' items) ===');
+          for (var item of data.work_queue) {
+            lines.push((item.type || '').toUpperCase() + ' #' + item.id + ': ' + item.title);
+          }
+        }
+
+        // Counts summary at end for reference
+        if (data.counts) {
+          var c = data.counts;
+          var parts = [];
+          if (c.directives) parts.push(c.directives + ' directive' + (c.directives > 1 ? 's' : ''));
+          if (c.requests) parts.push(c.requests + ' request' + (c.requests > 1 ? 's' : ''));
+          if (c.messages_unread) parts.push(c.messages_unread + ' unread');
+          if (c.tasks_mine) parts.push(c.tasks_mine + ' task' + (c.tasks_mine > 1 ? 's' : ''));
+          if (c.bugs_open) parts.push(c.bugs_open + ' bug' + (c.bugs_open > 1 ? 's' : ''));
+          if (c.plans_active) parts.push(c.plans_active + ' active plan' + (c.plans_active > 1 ? 's' : ''));
+          if (parts.length) lines.push('\nPending: ' + parts.join(', '));
         }
 
         lines.push('', 'Auto-heartbeat started. Server time: ' + data.server_time);
