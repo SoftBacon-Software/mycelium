@@ -150,15 +150,15 @@ function computeNetworkHealth(
   bugs: Bug[],
   instanceConfig: ConfigEntry[],
 ): { level: HealthLevel; label: string } {
-  const isFrozen = instanceConfig.some(
+  const isFrozen = (instanceConfig || []).some(
     (c) => c.key === 'admin_status' && c.value === 'frozen',
   )
   if (isFrozen) return { level: 'red', label: 'Frozen' }
 
-  const allWorkers = [...agents, ..._drones]
+  const allWorkers = [...(agents || []), ...(_drones || [])]
   const onlineWorkers = allWorkers.filter((a) => a.status === 'online' || a.status === 'idle').length
   const totalWorkers = allWorkers.length
-  const criticalBugs = bugs.filter(
+  const criticalBugs = (bugs || []).filter(
     (b) => b.severity === 'critical' && b.status !== 'fixed' && b.status !== 'closed',
   ).length
   const workerRatio = totalWorkers > 0 ? onlineWorkers / totalWorkers : 0
