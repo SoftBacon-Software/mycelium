@@ -306,7 +306,7 @@ function useEventRate() {
 
   const currentRate = eventCountRef.current
   const avgRate = buckets.length > 0
-    ? Math.round(buckets.reduce((a, b) => a + b, 0) / buckets.filter((b) => b > 0).length || 0)
+    ? (() => { const active = buckets.filter((b) => b > 0).length; return active > 0 ? Math.round(buckets.reduce((a, b) => a + b, 0) / active) : 0 })()
     : 0
   const peakRate = Math.max(...buckets, currentRate)
 
@@ -1253,7 +1253,7 @@ function CalibrationTable({
             </div>
 
             {/* Expanded drift details */}
-            {isExpanded && cal && cal.drift.length > 0 && (
+            {isExpanded && cal && cal.drift && cal.drift.length > 0 && (
               <div className="px-6 py-3 bg-bg border-b border-border/50">
                 <div className="space-y-2">
                   {cal.drift.map((d, idx) => (
@@ -1262,7 +1262,7 @@ function CalibrationTable({
                 </div>
               </div>
             )}
-            {isExpanded && (!cal || cal.drift.length === 0) && (
+            {isExpanded && (!cal || !cal.drift || cal.drift.length === 0) && (
               <div className="px-6 py-3 bg-bg border-b border-border/50">
                 <p className="text-xs text-text-muted italic">
                   {cal ? 'No drift detected -- agent is fully aligned' : 'No calibration data available. Agent needs to send md_report in heartbeat.'}
@@ -1517,7 +1517,7 @@ function DriftMatrix({
                 const cal = calibrations.get(agent.id)
                 // Get present checkpoints from drift items (if a checkpoint is missing, it's in drift)
                 const missingCheckpoints = new Set<string>()
-                if (cal) {
+                if (cal && Array.isArray(cal.drift)) {
                   for (const d of cal.drift) {
                     if (d.rule === 'md_checkpoint_missing') {
                       const anchor = d.detail.replace('Expected anchor not found in CLAUDE.md: ', '')
