@@ -95,6 +95,10 @@ export default function (core) {
       posted_by: who
     });
 
+    // Emit event so handlers can route to operator inbox
+    core.emitEvent('x_draft_created', who, req.body.project_id || '',
+      'Tweet draft created', { post_id: id, text: text, posted_by: who });
+
     res.json({ ok: true, id: id });
   });
 

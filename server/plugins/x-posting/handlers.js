@@ -6,6 +6,30 @@ import createXDB from './db.js';
 export function registerHooks(core) {
   var db = createXDB(core.db);
 
+  // When any X draft is created, send to operator inbox for review + publish approval
+  core.onEvent('x_draft_created', function (eventData) {
+    try {
+      var data = eventData.data || {};
+      var postId = data.post_id;
+      var text = data.text || '';
+      if (!postId) return;
+
+      var preview = text.length > 100 ? text.substring(0, 97) + '...' : text;
+
+      core.inbox.createInboxItemForAllOperators(
+        'approval',
+        'x_draft',
+        String(postId),
+        'Tweet draft #' + postId + ' ready for review',
+        preview,
+        { post_id: postId, full_text: text, action_url: '/x/posts/' + postId + '/publish' },
+        'normal'
+      );
+    } catch (e) {
+      console.error('[x-posting] Error routing draft to inbox:', e.message);
+    }
+  });
+
   // When a BIP draft is approved, auto-create an X post (and optionally auto-publish)
   core.onEvent('bip_draft_approved', function (eventData) {
     try {
