@@ -1,0 +1,7 @@
+node_modules/
+mcp/node_modules/
+config.json
+*.log
+/workspace/
+start.bat
+.git/

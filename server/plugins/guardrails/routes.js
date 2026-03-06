@@ -3,30 +3,7 @@
 
 import { Router } from 'express';
 import createGuardrailsDB from './db.js';
-
-function evaluateCondition(conditions, eventData) {
-  var data = eventData.data || {};
-  switch (conditions.type) {
-    case 'require_field':
-      if (!data[conditions.field]) return { violated: true, detail: conditions.message || 'Missing required field: ' + conditions.field };
-      return { violated: false };
-    case 'max_value':
-      var val = parseInt(data[conditions.field]) || 0;
-      if (val > (conditions.max || 0)) return { violated: true, detail: conditions.message || conditions.field + ' exceeds max (' + val + ' > ' + conditions.max + ')' };
-      return { violated: false };
-    case 'require_approval':
-      if (!data.approval_id) return { violated: true, detail: conditions.message || 'Approval required for ' + conditions.action_type };
-      return { violated: false };
-    case 'block_agent':
-      if ((eventData.agent || '') === conditions.agent_id) return { violated: true, detail: conditions.message || 'Agent ' + conditions.agent_id + ' is restricted' };
-      return { violated: false };
-    case 'custom':
-      // SECURITY: custom expressions disabled — arbitrary code execution risk.
-      return { violated: false, detail: 'Custom expressions are disabled for security reasons' };
-    default:
-      return { violated: false };
-  }
-}
+import { evaluateCondition } from './evaluate.js';
 
 export default function (core) {
   var router = Router();
@@ -60,9 +37,6 @@ export default function (core) {
     }
 
     var conditions = req.body.conditions || {};
-    if (conditions.type === 'custom') {
-      return apiError(res, 400, 'Custom expression rules are disabled for security reasons. Use built-in types: require_field, max_value, require_approval, block_agent');
-    }
     var enforcement = req.body.enforcement || 'warn';
     if (enforcement !== 'warn' && enforcement !== 'block') {
       return apiError(res, 400, 'enforcement must be "warn" or "block"');

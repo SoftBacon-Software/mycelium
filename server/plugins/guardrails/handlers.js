@@ -2,31 +2,7 @@
 // Subscribes to all events and evaluates guardrail rules against them.
 
 import createGuardrailsDB from './db.js';
-
-function evaluateCondition(conditions, eventData) {
-  var data = eventData.data || {};
-  switch (conditions.type) {
-    case 'require_field':
-      if (!data[conditions.field]) return { violated: true, detail: conditions.message || 'Missing required field: ' + conditions.field };
-      return { violated: false };
-    case 'max_value':
-      var val = parseInt(data[conditions.field]) || 0;
-      if (val > (conditions.max || 0)) return { violated: true, detail: conditions.message || conditions.field + ' exceeds max (' + val + ' > ' + conditions.max + ')' };
-      return { violated: false };
-    case 'require_approval':
-      if (!data.approval_id) return { violated: true, detail: conditions.message || 'Approval required for ' + conditions.action_type };
-      return { violated: false };
-    case 'block_agent':
-      if ((eventData.agent || '') === conditions.agent_id) return { violated: true, detail: conditions.message || 'Agent ' + conditions.agent_id + ' is restricted' };
-      return { violated: false };
-    case 'custom':
-      // SECURITY: custom expressions disabled — arbitrary code execution risk.
-      // Use built-in condition types instead (require_field, max_value, require_approval, block_agent).
-      return { violated: false, detail: 'Custom expressions are disabled for security reasons' };
-    default:
-      return { violated: false };
-  }
-}
+import { evaluateCondition } from './evaluate.js';
 
 export function registerHooks(core) {
   var db = createGuardrailsDB(core.db);

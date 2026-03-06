@@ -35,8 +35,14 @@ server/
 public/
   studio/           # Mycelium dashboard (vanilla JS SPA)
 tools/              # Utility scripts
-Dockerfile          # Production container
-package.json        # mycelium v1.0.0
+mcp/                # MCP server (workspace package)
+  index.js          # MCP entry point (stdio transport)
+  src/              # API client, state, tool definitions
+runner/             # Autonomous agent runner (workspace package)
+  index.js          # Runner entry point
+  src/              # Orchestrator, session, API, health
+Dockerfile          # Production container (server only)
+package.json        # Root workspace config
 ```
 
 ## Architecture
@@ -146,9 +152,3 @@ Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
 
 Railway project: `patient-rebirth`. Manual deploy only (`railway up`). Dockerfile copies `server/`, `public/`, and `tools/` into the container.
 
-## Related Repos
-
-| Repo | What |
-|------|------|
-| `mycelium-mcp` | MCP server wrapping this API |
-| `mycelium-runner` | Agent runner for autonomous sessions |
