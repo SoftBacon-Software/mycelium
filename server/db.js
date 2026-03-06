@@ -957,6 +957,34 @@ export function getBootPayload(agentId) {
     }
   }
 
+  // ---- Stand Up: calibration block (verbose boot only) ----
+  var calibration = null;
+  try { calibration = buildCalibrationBlock(agentId); } catch (e) { console.warn('[mycelium] calibration block failed for ' + agentId + ':', e.message); }
+
+  // ---- Since last session: changes since agent's last heartbeat ----
+  var sinceLastSession = null;
+  if (since && since !== '2000-01-01') {
+    var newMsgCount = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND created_at > ?"
+    ).get(agentId, since).c;
+    var taskChangeCount = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ?"
+    ).get(agentId, since).c;
+    var planStepChangeCount = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_plan_steps WHERE updated_at > ?"
+    ).get(since).c;
+    var newBugCount = db.prepare(
+      "SELECT COUNT(*) as c FROM dv_bugs WHERE created_at > ?"
+    ).get(since).c;
+    sinceLastSession = {
+      new_messages: newMsgCount,
+      task_changes: taskChangeCount,
+      plan_step_changes: planStepChangeCount,
+      new_bugs: newBugCount,
+      since: since
+    };
+  }
+
   return {
     agent: safeAgent,
     project: project || null,
@@ -982,6 +1010,8 @@ export function getBootPayload(agentId) {
     concepts: concepts,
     plugins: listPluginRecords().filter(function (p) { return p.enabled; }),
     team_agents: otherAgents.filter(function (a) { return a.project_id === agent.project_id; }),
+    calibration: calibration,
+    since_last_session: sinceLastSession,
     server_time: new Date().toISOString()
   };
 }
@@ -3108,4 +3138,78 @@ export function seedPlatformProfiles() {
   );
 
   console.log('Seeded platform node profiles: default-agent, default-drone, default-admin');
+}
+
+// ---- Stand Up: Calibration Block ----
+
+export function buildCalibrationBlock(agentId) {
+  var resolved = resolveProfileChain(agentId);
+  var drift = [];
+
+  // Get latest savepoint to extract md_report
+  var savepoint = getLatestSavepoint(agentId);
+  var stateSnapshot = {};
+  if (savepoint && savepoint.state_snapshot) {
+    if (typeof savepoint.state_snapshot === 'object') {
+      stateSnapshot = savepoint.state_snapshot;
+    } else {
+      try { stateSnapshot = JSON.parse(savepoint.state_snapshot || '{}'); } catch (e) { /* */ }
+    }
+  }
+
+  var mdReport = stateSnapshot.md_report || null;
+
+  // Also check context key for md_report (heartbeat may have persisted it)
+  if (!mdReport) {
+    var mdCtx = getContextKey(agentId, 'md_report');
+    if (mdCtx && mdCtx.data) {
+      try { mdReport = typeof mdCtx.data === 'object' ? mdCtx.data : JSON.parse(mdCtx.data); } catch (e) { /* */ }
+    }
+  }
+
+  if (mdReport) {
+    // Check anchors: md_checkpoints should be present in agent's CLAUDE.md
+    var checkpoints = resolved.md_checkpoints || [];
+    var anchorsPresent = mdReport.anchors_present || [];
+    for (var i = 0; i < checkpoints.length; i++) {
+      var cp = checkpoints[i];
+      if (anchorsPresent.indexOf(cp) === -1) {
+        drift.push({ level: 'warning', rule: 'md_checkpoint_missing', detail: 'Expected anchor not found in CLAUDE.md: ' + cp });
+      }
+    }
+
+    // Check blocklist: md_blocklist items should NOT be present
+    var blocklist = resolved.md_blocklist || [];
+    var blocklistFound = mdReport.blocklist_found || [];
+    for (var j = 0; j < blocklist.length; j++) {
+      var bl = blocklist[j];
+      if (blocklistFound.indexOf(bl) !== -1) {
+        drift.push({ level: 'critical', rule: 'md_blocklist_found', detail: 'Blocked term found in CLAUDE.md: ' + bl });
+      }
+    }
+  } else {
+    drift.push({ level: 'info', rule: 'md_report_missing', detail: 'Send md_report in heartbeat state_snapshot to enable CLAUDE.md drift detection' });
+  }
+
+  // Determine status based on drift items
+  var status = 'aligned';
+  for (var d = 0; d < drift.length; d++) {
+    if (drift[d].level === 'critical') { status = 'critical'; break; }
+    if (drift[d].level === 'warning') { status = 'drifted'; }
+  }
+
+  var calibration = {
+    status: status,
+    profile_chain: resolved.layers_applied || [],
+    rules: resolved.rules || {},
+    drift: drift,
+    md_checkpoints: resolved.md_checkpoints || [],
+    md_blocklist: resolved.md_blocklist || [],
+    last_standup: new Date().toISOString()
+  };
+
+  // Persist to context key
+  upsertContextKey(agentId, 'standup', JSON.stringify(calibration), 'system');
+
+  return calibration;
 }

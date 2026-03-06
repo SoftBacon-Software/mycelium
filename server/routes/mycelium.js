@@ -147,7 +147,9 @@ import {
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
   createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket,
-  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats
+  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
+  createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
+  resolveProfileChain, buildCalibrationBlock
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -886,6 +888,33 @@ router.post('/agents/heartbeat', function (req, res) {
   if (stateSnapshot.system_info && typeof stateSnapshot.system_info === 'object') {
     try { updateDroneDiagnostics(agentId, stateSnapshot.system_info); } catch (e) { /* non-critical */ }
   }
+
+  // Stand Up: persist md_report from state_snapshot
+  if (stateSnapshot && stateSnapshot.md_report && typeof stateSnapshot.md_report === 'object') {
+    try { upsertContextKey(agentId, 'md_report', JSON.stringify(stateSnapshot.md_report), 'system'); } catch (e) { /* non-critical */ }
+  }
+
+  // Stand Up: 6-hour calibration refresh
+  try {
+    var standupCtx = getContextKey(agentId, 'standup');
+    var needsStandup = true;
+    if (standupCtx && standupCtx.data) {
+      var standupData = typeof standupCtx.data === 'object' ? standupCtx.data : JSON.parse(standupCtx.data);
+      if (standupData.last_standup) {
+        var lastStandup = new Date(standupData.last_standup).getTime();
+        var sixHours = 6 * 60 * 60 * 1000;
+        if (Date.now() - lastStandup < sixHours) needsStandup = false;
+      }
+    }
+    if (needsStandup) {
+      var calibration = buildCalibrationBlock(agentId);
+      // On critical drift, create a directive so the agent must acknowledge
+      if (calibration && calibration.status === 'critical') {
+        var driftDetails = calibration.drift.filter(function (d) { return d.level === 'critical'; }).map(function (d) { return d.detail; }).join('; ');
+        createMessage('__system__', agentId, null, null, 'CALIBRATION DRIFT (critical): ' + driftDetails + '. Review your CLAUDE.md and remove blocked terms.', '{}', 'directive', null, 'urgent');
+      }
+    }
+  } catch (e) { /* non-critical — don't break heartbeat */ }
 
   // Heartbeat: pending counts + inbox when there are unread items
   var pendingCounts = countPendingForAgent(agentId);
@@ -4451,6 +4480,77 @@ router.post('/github/prs/:owner/:repo', function (req, res) {
       res.json({ number: r.data.number, title: r.data.title, url: r.data.html_url });
     })
     .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
+});
+
+// ======== NODE PROFILES (Stand Up Calibration) ========
+
+// List all profiles (admin only)
+router.get('/profiles', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var filter = {};
+  if (req.query.node_type) filter.node_type = req.query.node_type;
+  if (req.query.layer) filter.layer = req.query.layer;
+  var profiles = listNodeProfiles(filter);
+  res.json({ count: profiles.length, profiles: profiles });
+});
+
+// Resolve profile chain for an agent (admin only)
+// NOTE: This route must be before /profiles/:id to avoid matching "resolve" as an ID
+router.get('/profiles/resolve/:agentId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var resolved = resolveProfileChain(req.params.agentId);
+  res.json(resolved);
+});
+
+// Get single profile (admin only)
+router.get('/profiles/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var profile = getNodeProfile(req.params.id);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  res.json(profile);
+});
+
+// Create profile (admin only)
+router.post('/profiles', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var id = req.body.id;
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  // Check if profile already exists
+  var existing = getNodeProfile(id);
+  if (existing) return res.status(409).json({ error: 'Profile already exists: ' + id });
+  try {
+    var profile = createNodeProfile(id, req.body);
+    emitEvent('profile_created', getAdminDisplayName(req), null, 'Profile created: ' + id);
+    res.status(201).json(profile);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update profile (admin only, partial)
+router.put('/profiles/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var updated = updateNodeProfile(req.params.id, req.body);
+  if (!updated) {
+    var existing = getNodeProfile(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Profile not found' });
+    return res.status(403).json({ error: 'Cannot modify platform-layer profiles' });
+  }
+  emitEvent('profile_updated', getAdminDisplayName(req), null, 'Profile updated: ' + req.params.id);
+  res.json(updated);
+});
+
+// Delete profile (admin only, blocked for platform layer)
+router.delete('/profiles/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var deleted = deleteNodeProfile(req.params.id);
+  if (!deleted) {
+    var existing = getNodeProfile(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Profile not found' });
+    return res.status(403).json({ error: 'Cannot delete platform-layer profiles' });
+  }
+  emitEvent('profile_deleted', getAdminDisplayName(req), null, 'Profile deleted: ' + req.params.id);
+  res.json({ ok: true, deleted: deleted });
 });
 
 // ======== SUPPORT TICKETS ========
