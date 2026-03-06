@@ -118,7 +118,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         plans: data.plans,
         concepts: data.concepts,
         operators: data.operators,
-        instanceConfig: data.instance_config,
+        instanceConfig: data.instance_config || [],
         channels: data.channels || [],
         channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
         drones: data.drones || [],
