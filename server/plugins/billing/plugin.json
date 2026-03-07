@@ -22,6 +22,48 @@
       "label": "Grace Period (days)",
       "description": "Days to allow API access after payment fails before enforcing 403.",
       "default": "7"
+    },
+    {
+      "key": "auto_provision",
+      "type": "boolean",
+      "label": "Auto-Provision on Payment",
+      "description": "Automatically provision a new instance when a customer pays.",
+      "default": "false"
+    },
+    {
+      "key": "railway_token",
+      "type": "string",
+      "label": "Railway API Token",
+      "description": "Railway API token for auto-provisioning customer instances.",
+      "default": ""
+    },
+    {
+      "key": "cloudflare_token",
+      "type": "string",
+      "label": "Cloudflare API Token",
+      "description": "Cloudflare API token for DNS record creation.",
+      "default": ""
+    },
+    {
+      "key": "cloudflare_zone_id",
+      "type": "string",
+      "label": "Cloudflare Zone ID",
+      "description": "Cloudflare zone ID for the base domain.",
+      "default": ""
+    },
+    {
+      "key": "base_domain",
+      "type": "string",
+      "label": "Base Domain",
+      "description": "Base domain for customer subdomains (e.g. mycelium.fyi).",
+      "default": "mycelium.fyi"
+    },
+    {
+      "key": "github_repo",
+      "type": "string",
+      "label": "GitHub Repo URL",
+      "description": "GitHub repo to deploy customer instances from.",
+      "default": "https://github.com/SoftBacon-Software/mycelium"
     }
   ]
 }
