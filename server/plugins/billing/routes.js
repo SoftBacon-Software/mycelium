@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import Stripe from 'stripe';
+import crypto from 'crypto';
 import createBillingDB from './db.js';
+import { createInstance, updateInstance } from '../../db.js';
+import { provisionCustomerInstance } from '../../provisioning.js';
+import { sendEmail, templateInstanceReady } from '../../email.js';
 
 export default function (core) {
   var router = Router();
@@ -77,6 +81,121 @@ export default function (core) {
 
           db.createSubscription(orgId, customerId, subscriptionId, 'active', 'managed', '');
           console.log('[billing] New subscription created for org:', orgId);
+
+          // ---- Auto-Provisioning ----
+          var autoProvision = getConfig('auto_provision', 'false');
+          if (autoProvision === 'true') {
+            var railwayToken = getConfig('railway_token', '');
+            var cloudflareToken = getConfig('cloudflare_token', '');
+            var cloudflareZoneId = getConfig('cloudflare_zone_id', '');
+
+            if (railwayToken && cloudflareToken && cloudflareZoneId) {
+              var baseDomain = getConfig('base_domain', 'mycelium.fyi');
+              var githubRepo = getConfig('github_repo', 'https://github.com/SoftBacon-Software/mycelium');
+
+              // Generate slug from email (before @, sanitized) or customer ID
+              var slug = customerEmail
+                ? customerEmail.split('@')[0].replace(/[^a-z0-9-]/gi, '-').toLowerCase().substring(0, 32)
+                : customerId.replace(/[^a-z0-9-]/gi, '-').toLowerCase().substring(0, 32);
+
+              var tempPassword = crypto.randomBytes(16).toString('base64url');
+              var adminKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+              var jwtSecret = crypto.randomBytes(32).toString('hex');
+              var adminUsername = 'admin';
+              var customerDomain = slug + '.' + baseDomain;
+
+              // Create instance record with status='provisioning'
+              var instance = createInstance({
+                org_id: orgId,
+                domain: customerDomain,
+                status: 'provisioning',
+                admin_username: adminUsername,
+                customer_email: customerEmail
+              });
+
+              console.log('[billing] Auto-provisioning instance', instance.id, 'for', slug, 'at', customerDomain);
+
+              // Run provisioning async — don't block the webhook 200 response
+              (async () => {
+                try {
+                  var result = await provisionCustomerInstance({
+                    customerName: slug,
+                    railwayToken: railwayToken,
+                    repoUrl: githubRepo,
+                    cloudflareToken: cloudflareToken,
+                    cloudflareZoneId: cloudflareZoneId,
+                    baseDomain: baseDomain,
+                    adminKey: adminKey,
+                    jwtSecret: jwtSecret,
+                    adminUsername: adminUsername,
+                    adminPassword: tempPassword,
+                    onProgress: function (step, detail) {
+                      console.log('[billing] Provisioning', slug, '-', step + ':', detail);
+                    }
+                  });
+
+                  // Update instance record with Railway/CF IDs and status
+                  updateInstance(instance.id, {
+                    railway_project_id: result.railway.projectId,
+                    railway_service_id: result.railway.serviceId,
+                    railway_environment_id: result.railway.environmentId,
+                    cloudflare_record_id: result.dns.recordId,
+                    status: result.health.ok ? 'active' : 'deployed',
+                    health_status: result.health.ok ? 'healthy' : 'unhealthy',
+                    last_health_check: new Date().toISOString()
+                  });
+
+                  console.log('[billing] Provisioning complete for', slug, '- healthy:', result.health.ok);
+
+                  // Send welcome email if health check passed and customer email exists
+                  if (result.health.ok && customerEmail) {
+                    try {
+                      var dashboardUrl = 'https://' + customerDomain + '/studio/';
+                      var emailData = templateInstanceReady(
+                        customerEmail.split('@')[0],
+                        customerEmail,
+                        customerDomain,
+                        dashboardUrl,
+                        adminUsername,
+                        tempPassword
+                      );
+                      await sendEmail(emailData);
+                      console.log('[billing] Welcome email sent to', customerEmail);
+                    } catch (emailErr) {
+                      console.error('[billing] Failed to send welcome email:', emailErr.message);
+                    }
+                  }
+
+                  // Notify operators
+                  core.inbox.createInboxItemForAllOperators(
+                    'instance_provisioned', 'instance', String(instance.id),
+                    'Instance provisioned: ' + customerDomain,
+                    (result.health.ok ? 'Healthy' : 'Health check timed out') + ' — ' + customerEmail,
+                    { org_id: orgId, domain: customerDomain, healthy: result.health.ok },
+                    'normal'
+                  );
+
+                } catch (provisionErr) {
+                  console.error('[billing] Provisioning FAILED for', slug, ':', provisionErr.message);
+
+                  updateInstance(instance.id, {
+                    status: 'failed',
+                    health_status: 'error'
+                  });
+
+                  core.inbox.createInboxItemForAllOperators(
+                    'instance_provision_failed', 'instance', String(instance.id),
+                    'FAILED: Instance provisioning for ' + slug,
+                    provisionErr.message,
+                    { org_id: orgId, slug: slug, error: provisionErr.message },
+                    'urgent'
+                  );
+                }
+              })();
+            } else {
+              console.log('[billing] Auto-provision enabled but missing credentials (railway_token, cloudflare_token, or cloudflare_zone_id) — skipping');
+            }
+          }
 
           core.emitEvent('subscription_created', '__system__', null,
             'New subscription for ' + orgId, { org_id: orgId, stripe_customer_id: customerId });
