@@ -530,6 +530,19 @@ export interface CalibrationData {
   last_standup: string;
 }
 
+// ── Team Settings ──
+
+export interface TeamSetting {
+  id: number;
+  section: string;
+  key: string;
+  value: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export type TeamSettingsGrouped = Record<string, Record<string, unknown>>;
+
 // Customer Instances
 
 export interface CustomerInstance {

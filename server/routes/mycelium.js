@@ -154,7 +154,9 @@ import {
   purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
   createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
   resolveProfileChain, buildCalibrationBlock,
-  createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance
+  createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance,
+  listTeamSettings, getTeamSetting, upsertTeamSetting, deleteTeamSetting,
+  getAllTeamSettingsGrouped, syncTeamSettingsToProfile
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -5118,6 +5120,55 @@ router.delete('/profiles/:id', function (req, res) {
   }
   emitEvent('profile_deleted', getAdminDisplayName(req), null, 'Profile deleted: ' + req.params.id);
   res.json({ ok: true, deleted: deleted });
+});
+
+// ======== TEAM SETTINGS ========
+
+// GET /team-settings — all settings grouped by section
+router.get('/team-settings', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  res.json(getAllTeamSettingsGrouped());
+});
+
+// GET /team-settings/:section — one section
+router.get('/team-settings/:section', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var rows = listTeamSettings(req.params.section);
+  var result = {};
+  for (var row of rows) {
+    try { result[row.key] = JSON.parse(row.value); } catch (e) { result[row.key] = row.value; }
+  }
+  res.json(result);
+});
+
+// PUT /team-settings/:section/:key — upsert a setting
+router.put('/team-settings/:section/:key', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var section = req.params.section;
+  var key = req.params.key;
+  var value = req.body.value;
+  if (value === undefined) return res.status(400).json({ error: 'value is required' });
+  var validSections = ['coding_standards', 'deploy_workflow', 'brand', 'guardrails', 'team_rules'];
+  if (validSections.indexOf(section) === -1) {
+    return res.status(400).json({ error: 'Invalid section. Must be one of: ' + validSections.join(', ') });
+  }
+  var who = getAdminDisplayName(req);
+  var result = upsertTeamSetting(section, key, value, who);
+  res.json({ ok: true, setting: result });
+});
+
+// DELETE /team-settings/:section/:key — remove a setting
+router.delete('/team-settings/:section/:key', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  deleteTeamSetting(req.params.section, req.params.key);
+  res.json({ ok: true });
+});
+
+// POST /team-settings/sync — force re-sync to profiles
+router.post('/team-settings/sync', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  syncTeamSettingsToProfile();
+  res.json({ ok: true, message: 'Profile sync complete' });
 });
 
 // ======== SUPPORT TICKETS ========

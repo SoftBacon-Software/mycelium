@@ -3273,6 +3273,130 @@ export function buildCalibrationBlock(agentId) {
   return calibration;
 }
 
+// =============== TEAM SETTINGS ===============
+
+export function listTeamSettings(section) {
+  if (section) {
+    return db.prepare('SELECT * FROM dv_team_settings WHERE section = ? ORDER BY key').all(section);
+  }
+  return db.prepare('SELECT * FROM dv_team_settings ORDER BY section, key').all();
+}
+
+export function getTeamSetting(section, key) {
+  return db.prepare('SELECT * FROM dv_team_settings WHERE section = ? AND key = ?').get(section, key);
+}
+
+export function upsertTeamSetting(section, key, value, updatedBy) {
+  var now = new Date().toISOString();
+  var valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  db.prepare(
+    "INSERT INTO dv_team_settings (section, key, value, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) " +
+    "ON CONFLICT(section, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
+  ).run(section, key, valueStr, now, updatedBy || '');
+  syncTeamSettingsToProfile();
+  return getTeamSetting(section, key);
+}
+
+export function deleteTeamSetting(section, key) {
+  var result = db.prepare('DELETE FROM dv_team_settings WHERE section = ? AND key = ?').run(section, key);
+  syncTeamSettingsToProfile();
+  return result;
+}
+
+export function getAllTeamSettingsGrouped() {
+  var rows = listTeamSettings();
+  var grouped = {};
+  for (var row of rows) {
+    if (!grouped[row.section]) grouped[row.section] = {};
+    try {
+      grouped[row.section][row.key] = JSON.parse(row.value);
+    } catch (e) {
+      grouped[row.section][row.key] = row.value;
+    }
+  }
+  return grouped;
+}
+
+export function syncTeamSettingsToProfile() {
+  var settings = getAllTeamSettingsGrouped();
+  var profileId = 'customer-agent';
+  var existing = getNodeProfile(profileId);
+
+  var updates = {};
+
+  // Guardrails → direct profile mapping
+  var guardrails = settings.guardrails || {};
+  if (guardrails.tool_whitelist) updates.tool_whitelist = guardrails.tool_whitelist;
+  if (guardrails.repo_list) updates.repo_list = guardrails.repo_list;
+  if (guardrails.md_checkpoints) updates.md_checkpoints = guardrails.md_checkpoints;
+  if (guardrails.md_blocklist) updates.md_blocklist = guardrails.md_blocklist;
+
+  // Build rules from multiple sections
+  var rules = {};
+  if (existing) {
+    try { rules = typeof existing.rules === 'object' ? existing.rules : JSON.parse(existing.rules || '{}'); } catch (e) { rules = {}; }
+  }
+
+  // Coding standards → rule
+  var coding = settings.coding_standards || {};
+  if (Object.keys(coding).length > 0) {
+    var parts = [];
+    if (coding.languages && coding.languages.length) parts.push('Languages: ' + coding.languages.join(', '));
+    if (coding.linter) parts.push('Linter: ' + coding.linter);
+    if (coding.formatter) parts.push('Formatter: ' + coding.formatter);
+    if (coding.test_framework) parts.push('Tests: ' + coding.test_framework);
+    if (coding.style_notes) parts.push(coding.style_notes);
+    rules.coding_standards = { severity: 'high', description: parts.join('. ') };
+
+    // Also add language names to md_checkpoints
+    if (coding.languages && coding.languages.length) {
+      var checkpoints = updates.md_checkpoints || (existing && existing.md_checkpoints) || [];
+      if (typeof checkpoints === 'string') try { checkpoints = JSON.parse(checkpoints); } catch (e) { checkpoints = []; }
+      for (var lang of coding.languages) {
+        if (checkpoints.indexOf(lang) === -1) checkpoints.push(lang);
+      }
+      updates.md_checkpoints = checkpoints;
+    }
+  }
+
+  // Deploy workflow → rule
+  var deploy = settings.deploy_workflow || {};
+  if (Object.keys(deploy).length > 0) {
+    var deployParts = [];
+    if (deploy.stages && deploy.stages.length) deployParts.push('Stages: ' + deploy.stages.join(' \u2192 '));
+    if (deploy.deploy_method) deployParts.push('Method: ' + deploy.deploy_method);
+    if (deploy.pr_requirements) deployParts.push('PR: ' + JSON.stringify(deploy.pr_requirements));
+    rules.deploy_workflow = { severity: 'high', description: deployParts.join('. ') };
+  }
+
+  // Team rules → rule
+  var teamRules = settings.team_rules || {};
+  if (Object.keys(teamRules).length > 0) {
+    var trParts = [];
+    if (teamRules.communication_style) trParts.push('Style: ' + teamRules.communication_style);
+    if (teamRules.timezone) trParts.push('TZ: ' + teamRules.timezone);
+    if (teamRules.working_hours) trParts.push('Hours: ' + teamRules.working_hours);
+    rules.team_rules = { severity: 'medium', description: trParts.join('. ') };
+  }
+
+  // Custom guardrail rules
+  if (guardrails.custom_rules && Array.isArray(guardrails.custom_rules)) {
+    for (var cr of guardrails.custom_rules) {
+      if (cr.key && cr.description) {
+        rules[cr.key] = { severity: cr.severity || 'medium', description: cr.description };
+      }
+    }
+  }
+
+  updates.rules = rules;
+
+  if (existing) {
+    updateNodeProfile(profileId, updates);
+  } else {
+    createNodeProfile(profileId, Object.assign({ node_type: 'agent', layer: 'customer' }, updates));
+  }
+}
+
 // =============== CUSTOMER INSTANCES ===============
 
 export function createInstance(data) {

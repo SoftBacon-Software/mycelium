@@ -32,6 +32,7 @@ import type {
   FeedbackSummary,
   InboxItem,
   InboxCountResponse,
+  TeamSettingsGrouped,
 } from './types';
 
 // Auth
@@ -665,4 +666,26 @@ export function healthCheckAll(): Promise<{ results: Array<{ id: number; domain:
 
 export function runChurnCheck(): Promise<{ ok: boolean; results: { archived: any[]; deleted: any[]; errors: any[] } }> {
   return apiPost('/admin/churn-check', {});
+}
+
+// Team Settings
+
+export function fetchTeamSettings(): Promise<TeamSettingsGrouped> {
+  return apiGet<TeamSettingsGrouped>('/team-settings');
+}
+
+export function fetchTeamSettingsSection(section: string): Promise<Record<string, unknown>> {
+  return apiGet<Record<string, unknown>>(`/team-settings/${section}`);
+}
+
+export function updateTeamSetting(section: string, key: string, value: unknown): Promise<{ ok: boolean }> {
+  return apiPut<{ ok: boolean }>(`/team-settings/${encodeURIComponent(section)}/${encodeURIComponent(key)}`, { value });
+}
+
+export function deleteTeamSetting(section: string, key: string): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(`/team-settings/${encodeURIComponent(section)}/${encodeURIComponent(key)}`);
+}
+
+export function syncTeamSettings(): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>('/team-settings/sync', {});
 }

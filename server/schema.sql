@@ -657,3 +657,15 @@ CREATE TABLE IF NOT EXISTS dv_message_reads (
 );
 CREATE INDEX IF NOT EXISTS idx_msg_reads_agent ON dv_message_reads(agent_id);
 CREATE INDEX IF NOT EXISTS idx_msg_reads_message ON dv_message_reads(message_id);
+
+-- Team settings (customer-facing configuration that syncs to node profiles)
+CREATE TABLE IF NOT EXISTS dv_team_settings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  section TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT NOT NULL DEFAULT '',
+  UNIQUE(section, key)
+);
+CREATE INDEX IF NOT EXISTS idx_team_settings_section ON dv_team_settings(section);
