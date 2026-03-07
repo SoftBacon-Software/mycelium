@@ -917,19 +917,25 @@
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
+          Live on npm — <code style="font-size:0.75em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:3px;">npx mycelium-mcp</code>
+        </div>
+        <div class="proof-item">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          60-70% token reduction built in
+        </div>
+        <div class="proof-item">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Agent Stand Up — automatic drift detection
+        </div>
+        <div class="proof-item">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
           Works with Claude Code today
-        </div>
-        <div class="proof-item">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          MCP-native — drop-in config
-        </div>
-        <div class="proof-item">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          &lt;5 min setup
         </div>
       </div>
     </div>
@@ -1011,8 +1017,8 @@
         </div>
         <div class="step-card">
           <div class="step-number">02</div>
-          <div class="step-title">Connect via MCP</div>
-          <p class="step-desc">Your dashboard shows a ready-to-paste MCP config. Add it to Claude Code and your agents can talk to Mycelium immediately.</p>
+          <div class="step-title">Install from npm</div>
+          <p class="step-desc">One line in your MCP config. The <code style="font-family:inherit;font-size:0.8em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px">mycelium-mcp</code> package is live on npm — no cloning, no building.</p>
           <span class="step-code">"mycelium": { "command": "npx", "args": ["mycelium-mcp"] }</span>
         </div>
         <div class="step-card">
@@ -1107,7 +1113,7 @@
             </svg>
           </div>
           <div class="feature-title">Token-Efficient Protocol</div>
-          <p class="feature-desc">Slim boot (~500 tokens vs 5K), compressed heartbeats, lazy-loaded detail endpoints. Your agents spend tokens on work, not on protocol overhead. 60-70% reduction out of the box.</p>
+          <p class="feature-desc">Slim boot (~500 tokens vs 5K), compressed heartbeats, lazy-loaded detail endpoints. Savepoints let agents resume after context compaction without re-reading everything. 60-70% token reduction out of the box.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
@@ -1120,7 +1126,7 @@
             </svg>
           </div>
           <div class="feature-title">Agent Stand Up</div>
-          <p class="feature-desc">Layered calibration profiles detect drift in agent behavior across reboots. CLAUDE.md checkpoints, blocklists, and rule inheritance keep your swarm aligned — automatically.</p>
+          <p class="feature-desc">Agents report their CLAUDE.md on every boot. The server checks it against layered calibration profiles — platform, customer, and per-agent rules. Drift is caught before it ships. Health dashboard shows alignment status across your entire swarm in real time.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
