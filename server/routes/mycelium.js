@@ -447,6 +447,59 @@ function checkAgentOrAdmin(req, res) {
   return checkAgent(req, res);
 }
 
+// Billing plan enforcement — check subscription status on org-scoped requests
+// TODO: Mount on org-scoped routes when multi-tenant isolation ships (Plan #19 step 5)
+function checkBillingEnforcement(req, res, next) {
+  var orgId = req.headers['x-org-id'] || req.query.org_id;
+  if (!orgId) return next();
+
+  try {
+    var db = getDB();
+    var org = db.prepare('SELECT * FROM dv_organizations WHERE id = ?').get(orgId);
+    if (!org) return next();
+    if (org.plan === 'free') return next();
+
+    var sub = db.prepare(
+      'SELECT * FROM dv_subscriptions WHERE org_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).get(orgId);
+
+    if (!sub) {
+      return res.status(403).json({ error: 'Subscription required', plan: org.plan });
+    }
+
+    if (sub.status === 'active') return next();
+
+    if (sub.status === 'past_due') {
+      var graceDays = 7;
+      try {
+        var row = db.prepare(
+          "SELECT value FROM dv_plugin_config WHERE plugin_name = 'billing' AND key = 'grace_period_days'"
+        ).get();
+        if (row) graceDays = parseInt(row.value) || 7;
+      } catch (e) { /* use default */ }
+
+      var updatedAt = new Date(sub.updated_at);
+      var graceEnd = new Date(updatedAt.getTime() + graceDays * 86400000);
+      if (new Date() < graceEnd) return next();
+
+      return res.status(403).json({
+        error: 'Subscription past due — grace period expired',
+        plan: org.plan,
+        status: sub.status
+      });
+    }
+
+    return res.status(403).json({
+      error: 'Subscription ' + sub.status,
+      plan: org.plan,
+      status: sub.status
+    });
+  } catch (e) {
+    console.error('[billing] Enforcement check error:', e.message);
+    return next();
+  }
+}
+
 // ---- SSE clients registry ----
 // Each entry: { res, filters: { project_id, type, agent } }
 var sseClients = new Set();
