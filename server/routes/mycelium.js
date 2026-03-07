@@ -61,6 +61,8 @@ var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.c
 // Agent key validation: 30 failed attempts per minute per IP (enforced inline in checkAgent)
 // Admin write operations: 30 per minute per IP
 var adminWriteLimiter = rateLimit(function (req) { return 'admin_write:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
+// Waitlist: 5 signups per 15 minutes per IP
+var waitlistLimiter = rateLimit(function (req) { return 'waitlist:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
 
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
@@ -670,7 +672,7 @@ router.use(normalizeProjectField);
 
 // POST /waitlist — public, no auth. Captures landing page signups.
 // Creates inbox item for greatness operator so they get notified.
-router.post('/waitlist', asyncHandler(async function (req, res) {
+router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res) {
   var { name, email, subdomain, use_case } = req.body;
   if (!email) return apiError(res, 400, 'email is required');
   var db = getDB();
@@ -2207,7 +2209,7 @@ router.post('/studio/users', asyncHandler(async function (req, res) {
   if (!username || !password || !displayName) {
     return res.status(400).json({ error: 'username, password, and display_name are required' });
   }
-  if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   if (getStudioUserByUsername(username)) {
     return res.status(409).json({ error: 'Username already taken' });
   }
@@ -4766,6 +4768,7 @@ router.get('/admin/backups', function (req, res) {
 
 // ======== API DOCS ========
 router.get('/docs', function (req, res) {
+  if (!checkAgentOrAdmin(req, res)) return;
   var routes = [];
   router.stack.forEach(function (layer) {
     if (!layer.route) return;
