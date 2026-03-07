@@ -153,7 +153,8 @@ import {
   createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket, deleteSupportTicket,
   purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
   createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
-  resolveProfileChain, buildCalibrationBlock
+  resolveProfileChain, buildCalibrationBlock,
+  createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -2925,6 +2926,60 @@ router.delete('/orgs/:id', function (req, res) {
   if (!org) return res.status(404).json({ error: 'Organization not found' });
   deleteOrg(req.params.id);
   res.json({ ok: true });
+});
+
+// =============== CUSTOMER INSTANCES ===============
+
+router.get('/instances', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({
+    status: req.query.status || undefined,
+    org_id: req.query.org_id || undefined,
+    limit: parseIntParam(req.query.limit) || 100
+  });
+  res.json({ instances: instances });
+});
+
+router.get('/instances/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  res.json(instance);
+});
+
+router.put('/instances/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  var updated = updateInstance(req.params.id, req.body);
+  res.json(updated);
+});
+
+router.post('/instances/:id/health-check', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  if (!instance.domain) return apiError(res, 400, 'Instance has no domain');
+
+  try {
+    var { pollHealth } = await import('../provisioning.js');
+    var result = await pollHealth({
+      domain: instance.domain,
+      timeout: 15000,
+      interval: 5000
+    });
+    updateInstance(req.params.id, {
+      health_status: result.ok ? 'healthy' : 'unhealthy',
+      last_health_check: new Date().toISOString()
+    });
+    res.json({ ok: result.ok, attempts: result.attempts, elapsed: result.elapsed });
+  } catch (err) {
+    updateInstance(req.params.id, {
+      health_status: 'error',
+      last_health_check: new Date().toISOString()
+    });
+    res.json({ ok: false, error: err.message });
+  }
 });
 
 // =============== PROJECTS ===============
