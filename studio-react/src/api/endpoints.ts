@@ -605,3 +605,49 @@ export interface SubscriptionRecord {
 export function fetchSubscriptionStatus(orgId: string): Promise<SubscriptionRecord> {
   return apiGet<SubscriptionRecord>(`/billing/subscriptions/${encodeURIComponent(orgId)}`);
 }
+
+// Customer Instances
+
+export function fetchInstances(params?: { status?: string; org_id?: string }): Promise<{ instances: import('./types').CustomerInstance[] }> {
+  const q = new URLSearchParams();
+  if (params?.status) q.set('status', params.status);
+  if (params?.org_id) q.set('org_id', params.org_id);
+  const qs = q.toString();
+  return apiGet(`/instances${qs ? '?' + qs : ''}`);
+}
+
+export function updateInstance(id: number, data: Partial<import('./types').CustomerInstance>): Promise<import('./types').CustomerInstance> {
+  return apiPut(`/instances/${id}`, data);
+}
+
+export function healthCheckInstance(id: number): Promise<{ ok: boolean; health_status: string }> {
+  return apiPost(`/instances/${id}/health-check`, {});
+}
+
+// Support Tickets
+
+export function fetchSupportTickets(params?: { status?: string; tier?: string }): Promise<{ tickets: import('./types').SupportTicket[] }> {
+  const q = new URLSearchParams();
+  if (params?.status) q.set('status', params.status);
+  if (params?.tier) q.set('tier', params.tier);
+  const qs = q.toString();
+  return apiGet(`/support/tickets${qs ? '?' + qs : ''}`);
+}
+
+export function updateSupportTicket(id: number, data: Partial<import('./types').SupportTicket>): Promise<import('./types').SupportTicket> {
+  return apiPut(`/support/tickets/${id}`, data);
+}
+
+// Deploy Operations
+
+export function fetchDeployStatus(): Promise<{ instances: import('./types').DeployInstance[] }> {
+  return apiGet('/admin/deploy/status');
+}
+
+export function healthCheckAll(): Promise<{ results: Array<{ id: number; domain: string; healthy: boolean; error?: string }> }> {
+  return apiPost('/admin/deploy/health-check-all', {});
+}
+
+export function runChurnCheck(): Promise<{ ok: boolean; results: { archived: any[]; deleted: any[]; errors: any[] } }> {
+  return apiPost('/admin/churn-check', {});
+}

@@ -529,3 +529,57 @@ export interface CalibrationData {
   md_blocklist: string[];
   last_standup: string;
 }
+
+// Customer Instances
+
+export interface CustomerInstance {
+  id: number;
+  org_id: string;
+  railway_project_id: string | null;
+  railway_service_id: string | null;
+  domain: string | null;
+  cloudflare_record_id: string | null;
+  status: string;
+  version: string | null;
+  health_status: string;
+  last_health_check: string | null;
+  admin_username: string | null;
+  customer_email: string | null;
+  suspended_at: string | null;
+  archived_at: string | null;
+  snapshot_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Support Tickets
+
+export interface SupportTicket {
+  id: number;
+  org_id: string | null;
+  subject: string;
+  description: string | null;
+  category: string | null;
+  priority: string;
+  status: string;
+  reporter_email: string | null;
+  assignee: string | null;
+  resolution: string | null;
+  tier: string;
+  assigned_agent: string | null;
+  requires_approval: boolean;
+  draft_response: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Deploy Status
+
+export interface DeployInstance {
+  id: number;
+  org_id: string;
+  domain: string | null;
+  version: string | null;
+  health_status: string;
+  last_health_check: string | null;
+}
