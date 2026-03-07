@@ -19,9 +19,29 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
+
+// Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
+function checkVoiceAuth(req, res) {
+  var adminKey = req.headers['x-admin-key'];
+  if (adminKey === process.env.ADMIN_KEY) return true;
+  var auth = req.headers['authorization'];
+  if (auth && auth.startsWith('Bearer ')) {
+    try { jwt.verify(auth.slice(7), process.env.JWT_SECRET); return true; } catch (e) { /* invalid */ }
+  }
+  var agentKey = req.headers['x-agent-key'];
+  if (agentKey) {
+    var keyHash = crypto.createHash('sha256').update(agentKey).digest('hex');
+    var db = getDB();
+    var match = db.prepare("SELECT id FROM dv_agents WHERE api_key_hash = ?").get(keyHash);
+    if (match) return true;
+  }
+  res.status(401).json({ error: 'Authentication required' });
+  return false;
+}
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 3002;
@@ -115,7 +135,8 @@ app.use(function (req, res, next) {
 app.use(express.json({
   limit: '1mb',
   verify: function (req, res, buf) {
-    if (req.url.includes('/billing/webhook')) {
+    // Capture raw body for all webhook endpoints that need signature verification
+    if (req.url.includes('/webhook')) {
       req.rawBody = buf;
     }
   }
@@ -209,6 +230,7 @@ app.use('/api/mycelium', myceliumRoutes);
 var voicePeers = new Map();
 
 app.get('/api/voice/peers', function (req, res) {
+  if (!checkVoiceAuth(req, res)) return;
   var peers = [];
   voicePeers.forEach(function (p) {
     peers.push({ id: p.id, name: p.name, muted: p.muted });
@@ -217,6 +239,7 @@ app.get('/api/voice/peers', function (req, res) {
 });
 
 app.get('/api/voice/turn-credentials', function (req, res) {
+  if (!checkVoiceAuth(req, res)) return;
   var secret = process.env.TURN_SECRET || 'openrelayprojectsecret';
   var expiry = Math.floor(Date.now() / 1000) + 24 * 3600;
   var username = expiry + ':studiouser';
@@ -345,7 +368,13 @@ import { WebSocketServer } from 'ws';
 var wss = new WebSocketServer({ server: server, path: '/voice' });
 var peerCounter = 0;
 
-wss.on('connection', function (ws) {
+wss.on('connection', function (ws, req) {
+  // Authenticate via ?token= query param (JWT)
+  var url = new URL(req.url, 'http://localhost');
+  var token = url.searchParams.get('token');
+  if (!token) { ws.close(4401, 'Authentication required'); return; }
+  try { jwt.verify(token, process.env.JWT_SECRET); } catch (e) { ws.close(4403, 'Invalid token'); return; }
+
   ws.isAlive = true;
   var peerId = 'peer_' + (++peerCounter);
   voicePeers.set(ws, { id: peerId, name: 'User ' + peerCounter, muted: false });

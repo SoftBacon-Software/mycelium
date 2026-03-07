@@ -32,7 +32,7 @@ export default function (core) {
     var webhookSecret = getConfig('stripe_webhook_secret', '');
     if (!webhookSecret) {
       console.error('[billing] No stripe_webhook_secret configured');
-      return apiError(res, 500, 'Webhook secret not configured');
+      return apiError(res, 500, 'Webhook processing error');
     }
 
     var sig = req.headers['stripe-signature'];
