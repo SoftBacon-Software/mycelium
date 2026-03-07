@@ -146,7 +146,7 @@ import {
   getPluginConfig, setPluginConfig, deletePluginConfig,
   getIdleAgents, getNextUnassignedTask, getNextUnassignedPlanStep,
   createFeedback, getFeedback, listFeedback, deleteFeedback, getFeedbackSummary,
-  countPendingForAgent, getAgentInbox, archiveOldMessages, archiveOldEvents,
+  countPendingForAgent, getAgentInbox, getUnreadMessages, markMessagesRead, archiveOldMessages, archiveOldEvents,
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
@@ -1061,14 +1061,23 @@ router.post('/agents/heartbeat', function (req, res) {
     }
   } catch (e) { /* non-critical — don't break heartbeat */ }
 
-  // Heartbeat: pending counts + inbox when there are unread items
-  var pendingCounts = countPendingForAgent(agentId);
-  var pending = pendingCounts.requests + pendingCounts.directives + pendingCounts.unread;
-  var wake = (pendingCounts.directives + pendingCounts.requests) > 0;
-  var response = { ok: true, pending: pending, wake: wake };
-  // Include actual inbox so agents see messages without a separate call
-  if (pending > 0) {
-    response.inbox = getAgentInbox(agentId, 20);
+  // Heartbeat: return unread messages (filtered by read tracking)
+  var unread = getUnreadMessages(agentId, 20);
+  var unreadCount = unread.directives.length + unread.requests.length + unread.messages.length;
+  var wake = (unread.directives.length + unread.requests.length) > 0;
+  var response = { ok: true, pending: unreadCount, wake: wake };
+  if (unreadCount > 0) {
+    response.inbox = unread;
+    // Auto-ack regular messages delivered via heartbeat (directives/requests stay unacked until resolved)
+    var msgIdsToAck = unread.messages.map(function (m) { return m.id; });
+    if (msgIdsToAck.length > 0) {
+      try { markMessagesRead(agentId, msgIdsToAck); } catch (_) {}
+    }
+  }
+
+  // Also process explicit acks from the request body
+  if (messagesAcked.length > 0) {
+    try { markMessagesRead(agentId, messagesAcked); } catch (_) {}
   }
 
   // Auto-dispatch: if agent just came online or is idle with no work, try to assign

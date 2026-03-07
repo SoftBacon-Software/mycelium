@@ -681,6 +681,37 @@ export function getMessage(id) {
   return db.prepare("SELECT * FROM dv_messages WHERE id = ?").get(id);
 }
 
+// Mark messages as read by an agent (idempotent via UNIQUE constraint)
+export function markMessagesRead(agentId, messageIds) {
+  var stmt = db.prepare("INSERT OR IGNORE INTO dv_message_reads (message_id, agent_id) VALUES (?, ?)");
+  var tx = db.transaction(function (ids) {
+    for (var id of ids) stmt.run(id, agentId);
+  });
+  tx(messageIds);
+}
+
+// Get unread messages for an agent (excludes messages they've already acked)
+export function getUnreadMessages(agentId, limit) {
+  limit = limit || 20;
+  // Directives + requests (blocking — always unread if status is pending/sent)
+  var directives = db.prepare(
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
+  ).all(agentId);
+  var requests = db.prepare(
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
+  ).all(agentId);
+  // Regular messages: directed to me OR broadcast, not yet read by me
+  var messages = db.prepare(
+    "SELECT m.id, m.from_agent, m.to_agent, m.content, m.msg_type, m.priority, m.project_id, m.created_at " +
+    "FROM dv_messages m " +
+    "LEFT JOIN dv_message_reads r ON r.message_id = m.id AND r.agent_id = ? " +
+    "WHERE (m.to_agent = ? OR m.to_agent IS NULL) AND m.msg_type IN ('message', 'info') AND m.status = 'sent' " +
+    "AND r.id IS NULL " +
+    "ORDER BY m.created_at DESC LIMIT ?"
+  ).all(agentId, agentId, limit);
+  return { directives, requests, messages };
+}
+
 export function listMessages(filters) {
   var where = ["msg_type != 'chat'"];
   var params = [];
