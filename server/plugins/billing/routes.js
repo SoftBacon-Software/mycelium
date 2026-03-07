@@ -5,6 +5,7 @@ import createBillingDB from './db.js';
 export default function (core) {
   var router = Router();
   var db = createBillingDB(core.db);
+  // Only used for webhooks.constructEvent() — no API calls made
   var stripe = new Stripe('');
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError } = core;
@@ -63,12 +64,13 @@ export default function (core) {
             break;
           }
 
-          var orgId = customerEmail || customerId;
+          // Use Stripe customer ID as canonical org ID (stable, unlike email)
+          var orgId = customerId;
           var org = db.getOrg(orgId);
           if (!org) {
             core.db.prepare(
-              "INSERT INTO dv_organizations (id, name, plan) VALUES (?, ?, 'managed')"
-            ).run(orgId, customerEmail || 'Customer ' + customerId);
+              "INSERT INTO dv_organizations (id, name, description, plan) VALUES (?, ?, ?, 'managed')"
+            ).run(orgId, customerEmail || 'Customer ' + customerId, customerEmail ? 'email:' + customerEmail : '');
           } else {
             db.updateOrgPlan(orgId, 'managed');
           }
@@ -148,7 +150,7 @@ export default function (core) {
           var subRecord = db.getSubscriptionByCustomer(invoice.customer);
           if (!subRecord) break;
 
-          db.updateSubscriptionStatus(subRecord.stripe_subscription_id, 'past_due', '');
+          db.updateSubscriptionStatus(subRecord.stripe_subscription_id, 'past_due', subRecord.current_period_end || '');
           console.log('[billing] Payment failed for org:', subRecord.org_id);
 
           core.inbox.createInboxItemForAllOperators(
