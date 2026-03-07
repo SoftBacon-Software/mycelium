@@ -13,6 +13,7 @@ import multer from 'multer';
 import fs from 'fs';
 import nodePath from 'path';
 import https from 'https';
+import { sendEmail, isEmailEnabled, templateWaitlistConfirmation, templatePasswordReset, templateOperatorAlert, templateTicketConfirmation, templateTicketResolution } from '../email.js';
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
@@ -478,6 +479,21 @@ function emitEvent(type, agentId, projectId, summary, data) {
   callEventHooks(type, eventObj);
 }
 
+// ---- Operator email alerts (fire-and-forget) ----
+function notifyOperators(alertTitle, alertBodyHtml, actionUrl) {
+  if (!isEmailEnabled()) return;
+  try {
+    var operators = listOperators();
+    for (var op of operators) {
+      if (op.email && op.status === 'active') {
+        sendEmail(templateOperatorAlert(op.email, op.display_name, alertTitle, alertBodyHtml, actionUrl || 'https://mycelium.fyi/studio/'));
+      }
+    }
+  } catch (e) {
+    console.error('[email] notifyOperators failed:', e.message);
+  }
+}
+
 // ---- Approval gate helpers ----
 // Soft enforcement: warns agents but doesn't block (returns warning field).
 // Hard enforcement: blocks agents without an approved approval_id.
@@ -591,6 +607,9 @@ router.post('/waitlist', asyncHandler(async function (req, res) {
     );
   } catch (e) { /* non-fatal — still confirm signup */ }
   emitEvent('waitlist_signup', '__system__', null, 'New waitlist signup: ' + email, { waitlist_id: waitlistId, email, subdomain });
+  // Fire-and-forget: waitlist confirmation + operator alert emails
+  sendEmail(templateWaitlistConfirmation(name || '', email));
+  notifyOperators('New Waitlist Signup', '<p><strong>' + (name || 'Someone') + '</strong> (' + email + ') just signed up for the waitlist.' + (subdomain ? ' Requested subdomain: <strong>' + subdomain + '</strong>' : '') + (use_case ? '<br>Use case: ' + use_case : '') + '</p>', 'https://mycelium.fyi/studio/waitlist');
   res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
 }));
 
@@ -2118,6 +2137,71 @@ router.delete('/studio/users/:id', function (req, res) {
   res.json({ ok: true, deleted: user.username });
 });
 
+// ======== PASSWORD RESET (public, rate-limited) ========
+
+// Ensure dv_password_resets table exists (inline migration pattern, same as dv_waitlist)
+try {
+  getDB().prepare(`CREATE TABLE IF NOT EXISTS dv_password_resets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT NOT NULL,
+    token_hash  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    used        INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  )`).run();
+} catch (e) { /* already exists */ }
+
+var forgotPasswordLimiter = rateLimit(function (req) { return 'forgot:' + (req.body.email || '').toLowerCase(); }, 3, 15 * 60 * 1000);
+var resetPasswordLimiter = rateLimit(function (req) { return 'reset:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
+
+// POST /studio/forgot-password — request password reset email
+router.post('/studio/forgot-password', forgotPasswordLimiter, asyncHandler(async function (req, res) {
+  var email = (req.body.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'email is required' });
+  // Always return 200 (no user enumeration)
+  var GENERIC = { ok: true, message: 'If that email is associated with an account, a reset link has been sent.' };
+  // Find operator by email → get their studio_user_id
+  var db = getDB();
+  var operator = db.prepare('SELECT * FROM dv_operators WHERE LOWER(email) = ? AND status = ?').get(email, 'active');
+  if (!operator || !operator.studio_user_id) return res.json(GENERIC);
+  var studioUser = getStudioUserById(operator.studio_user_id);
+  if (!studioUser) return res.json(GENERIC);
+  // Generate secure token (48 hex chars), store SHA-256 hash
+  var token = crypto.randomBytes(32).toString('hex');
+  var tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  var expiresMinutes = 30;
+  var expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000).toISOString();
+  db.prepare('INSERT INTO dv_password_resets (email, token_hash, expires_at) VALUES (?, ?, ?)').run(email, tokenHash, expiresAt);
+  // Build reset URL (dashboard handles the UI)
+  var resetUrl = 'https://mycelium.fyi/studio/#/reset-password?token=' + token;
+  sendEmail(templatePasswordReset(email, studioUser.display_name, resetUrl, expiresMinutes));
+  res.json(GENERIC);
+}));
+
+// POST /studio/reset-password — validate token and set new password
+router.post('/studio/reset-password', resetPasswordLimiter, asyncHandler(async function (req, res) {
+  var token = (req.body.token || '').trim();
+  var newPassword = req.body.password || '';
+  if (!token) return res.status(400).json({ error: 'token is required' });
+  if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  var tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  var db = getDB();
+  var row = db.prepare("SELECT * FROM dv_password_resets WHERE token_hash = ? AND used = 0 AND expires_at > datetime('now')").get(tokenHash);
+  if (!row) return res.status(400).json({ error: 'Invalid or expired reset token' });
+  // Find operator → studio user
+  var operator = db.prepare('SELECT * FROM dv_operators WHERE LOWER(email) = ?').get(row.email);
+  if (!operator || !operator.studio_user_id) return res.status(400).json({ error: 'Account not found' });
+  var studioUser = getStudioUserById(operator.studio_user_id);
+  if (!studioUser) return res.status(400).json({ error: 'Account not found' });
+  // Update password (bcrypt 10 rounds for human passwords)
+  var hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS_PASSWORD);
+  updateStudioUser(studioUser.id, { password_hash: hash });
+  // Mark token as used
+  db.prepare('UPDATE dv_password_resets SET used = 1 WHERE id = ?').run(row.id);
+  emitEvent('password_reset', '__system__', null, 'Password reset for ' + studioUser.display_name + ' (' + studioUser.username + ')');
+  res.json({ ok: true, message: 'Password has been reset. You can now log in.' });
+}));
+
 // ======== OPERATORS (people) ========
 
 router.get('/operators', function (req, res) {
@@ -3087,6 +3171,18 @@ router.put('/bugs/:id', function (req, res) {
   var bugTarget = updates.assignee || bug.assignee;
   if (bugTarget && (updates.assignee || updates.status)) {
     dispatchWebhook('bug_assigned', bugTarget, { bug_id: bug.id, title: bug.title, status: updates.status || bug.status });
+  }
+  // If bug fixed/closed and linked to a support ticket, email the customer
+  if ((updates.status === 'fixed' || updates.status === 'closed') && bug.linked_ticket_id) {
+    try {
+      var linkedTicket = getSupportTicket(bug.linked_ticket_id);
+      if (linkedTicket && linkedTicket.reporter_email) {
+        var resolution = updates.admin_notes || bug.admin_notes || '';
+        sendEmail(templateTicketResolution(linkedTicket.reporter_email, linkedTicket.reporter_name, linkedTicket.id, linkedTicket.subject, resolution));
+        // Also update ticket status to resolved
+        updateSupportTicket(linkedTicket.id, { status: 'resolved', resolution: resolution });
+      }
+    } catch (e) { console.error('[support] resolution email failed:', e.message); }
   }
   res.json({ ok: true, id: bug.id });
 });
@@ -4633,19 +4729,68 @@ router.delete('/profiles/:id', function (req, res) {
 
 // ======== SUPPORT TICKETS ========
 
+// ---- Ticket ↔ Bug bridge: migrations ----
+try {
+  var db = getDB();
+  var bugCols = db.pragma('table_info(dv_bugs)').map(function(c) { return c.name; });
+  if (!bugCols.includes('linked_ticket_id')) {
+    db.prepare("ALTER TABLE dv_bugs ADD COLUMN linked_ticket_id INTEGER").run();
+    process.stdout.write('[boot] migrated dv_bugs: added linked_ticket_id\n');
+  }
+  var ticketCols = db.pragma('table_info(dv_support_tickets)').map(function(c) { return c.name; });
+  if (!ticketCols.includes('linked_bug_id')) {
+    db.prepare("ALTER TABLE dv_support_tickets ADD COLUMN linked_bug_id INTEGER").run();
+    process.stdout.write('[boot] migrated dv_support_tickets: added linked_bug_id\n');
+  }
+} catch (e) { /* already exists or table not yet created */ }
+
 // Create support ticket (public — no auth required for customers)
-router.post('/support/tickets', function (req, res) {
+var ticketCreateLimiter = rateLimit(function (req) { return 'ticket:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
+router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
   var subject = req.body.subject;
   if (!subject) return res.status(400).json({ error: 'subject is required' });
+  if (!validateStringLength(res, subject, MAX_TITLE, 'subject')) return;
+  if (!validateStringLength(res, req.body.description, MAX_DESCRIPTION, 'description')) return;
+  var reporterEmail = (req.body.reporter_email || req.body.email || '').trim();
+  var reporterName = (req.body.reporter_name || req.body.name || '').trim();
   var ticket = createSupportTicket({
     instance_id: req.body.instance_id || '',
     subject: subject,
     description: req.body.description || '',
     category: req.body.category || 'general',
     priority: req.body.priority || 'normal',
-    reporter_email: req.body.reporter_email || req.body.email || '',
-    reporter_name: req.body.reporter_name || req.body.name || ''
+    reporter_email: reporterEmail,
+    reporter_name: reporterName
   });
+  // Auto-create a bug so agents can claim and work it
+  try {
+    var bugId = createBug(
+      req.body.instance_id || '',
+      '[Support] ' + subject,
+      (ticket.description || '') + '\n\n---\nReported by: ' + (reporterName || 'Customer') + (reporterEmail ? ' (' + reporterEmail + ')' : '') + '\nTicket #' + ticket.id,
+      req.body.category || 'other',
+      req.body.priority === 'urgent' ? 'critical' : (req.body.priority || 'normal'),
+      '__customer__',
+      null,
+      null
+    );
+    // Link ticket ↔ bug
+    var db = getDB();
+    db.prepare('UPDATE dv_support_tickets SET linked_bug_id = ? WHERE id = ?').run(bugId, ticket.id);
+    db.prepare('UPDATE dv_bugs SET linked_ticket_id = ? WHERE id = ?').run(ticket.id, bugId);
+    ticket.linked_bug_id = bugId;
+    emitEvent('bug_created', '__customer__', req.body.instance_id || '', 'Customer filed support ticket → bug #' + bugId + ': ' + subject, { bug_id: bugId, ticket_id: ticket.id });
+  } catch (e) {
+    console.error('[support] auto-bug creation failed:', e.message);
+  }
+  // Email: confirmation to customer + alert to operators
+  if (reporterEmail) {
+    sendEmail(templateTicketConfirmation(reporterEmail, reporterName, ticket.id, subject));
+  }
+  notifyOperators('New Support Ticket #' + ticket.id,
+    '<p><strong>' + (reporterName || 'A customer') + '</strong>' + (reporterEmail ? ' (' + reporterEmail + ')' : '') + ' submitted a support ticket:</p><p><strong>' + subject + '</strong></p>' + (ticket.description ? '<p>' + ticket.description.substring(0, 300) + '</p>' : ''),
+    'https://mycelium.fyi/studio/support'
+  );
   res.status(201).json(ticket);
 });
 
@@ -4674,7 +4819,19 @@ router.put('/support/tickets/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
   var ticket = getSupportTicket(parseInt(req.params.id));
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  var wasOpen = ticket.status !== 'resolved' && ticket.status !== 'closed';
   var updated = updateSupportTicket(parseInt(req.params.id), req.body);
+  // Email customer on resolution (only if transitioning from open → resolved/closed)
+  if (wasOpen && (req.body.status === 'resolved' || req.body.status === 'closed') && ticket.reporter_email) {
+    sendEmail(templateTicketResolution(ticket.reporter_email, ticket.reporter_name, ticket.id, ticket.subject, req.body.resolution || updated.resolution || ''));
+  }
+  // If ticket has a linked bug, sync status
+  if (req.body.status && ticket.linked_bug_id) {
+    try {
+      var bugStatus = req.body.status === 'resolved' ? 'fixed' : (req.body.status === 'closed' ? 'closed' : null);
+      if (bugStatus) updateBug(ticket.linked_bug_id, { status: bugStatus });
+    } catch (e) { /* non-fatal */ }
+  }
   res.json(updated);
 });
 

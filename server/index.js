@@ -21,6 +21,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
+import { initEmail } from './email.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 3002;
@@ -65,6 +66,9 @@ var purged = purgeExpiredContextKeys();
 if (purged > 0) process.stdout.write('[boot] purged ' + purged + ' expired context keys\n');
 
 process.stdout.write('[boot] DB ready\n');
+
+// Initialize email (after DB, before routes — non-fatal if RESEND_KEY missing)
+initEmail();
 
 // Load plugins (after DB init, before routes are used)
 process.stdout.write('[boot] loading plugins...\n');
@@ -318,6 +322,11 @@ setInterval(function () {
     if (pruned > 0) console.log('[daily] Pruned ' + pruned + ' old webhook delivery logs');
     var ctxPurged = purgeExpiredContextKeys();
     if (ctxPurged > 0) console.log('[daily] Purged ' + ctxPurged + ' expired context keys');
+    // Clean expired password reset tokens (older than 1 day)
+    try {
+      var tokensPurged = getDB().prepare("DELETE FROM dv_password_resets WHERE expires_at < datetime('now', '-1 day')").run().changes;
+      if (tokensPurged > 0) console.log('[daily] Purged ' + tokensPurged + ' expired password reset tokens');
+    } catch (e) { /* table may not exist yet — non-fatal */ }
   } catch (e) {
     console.error('[daily] Maintenance error:', e.message);
   }

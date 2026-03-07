@@ -8,7 +8,11 @@
   "license": "AGPL-3.0-only",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
   "homepage": "https://mycelium.fyi",
-  "workspaces": ["mcp", "runner", "printer-drone"],
+  "workspaces": [
+    "mcp",
+    "runner",
+    "printer-drone"
+  ],
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
@@ -28,6 +32,7 @@
     "http-proxy-middleware": "^3.0.5",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.0",
+    "resend": "^6.9.3",
     "ws": "^8.19.0"
   }
 }
