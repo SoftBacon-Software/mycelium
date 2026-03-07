@@ -501,6 +501,45 @@ function checkBillingEnforcement(req, res, next) {
   }
 }
 
+// Plan enforcement middleware — suspended=read-only, archived/deleted=blocked
+// Plan enforcement is available via checkOrgPlanEnforcement()
+// Mount on org-scoped routes when multi-tenant isolation is needed
+function checkOrgPlanEnforcement(req, res, next) {
+  // Read org context from multiple sources
+  var orgId = req.query.org_id || (req.body && req.body.org_id) || req.headers['x-org-id'];
+  if (!orgId) return next(); // No org context, skip
+
+  var db = getDB();
+  var org = db.prepare('SELECT plan FROM dv_organizations WHERE id = ?').get(orgId);
+  if (!org) return next(); // Unknown org, skip
+
+  var plan = org.plan || 'free';
+
+  // Free, managed, past_due: full access
+  if (plan === 'free' || plan === 'managed' || plan === 'past_due') return next();
+
+  // Suspended: read-only
+  if (plan === 'suspended') {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+      return next();
+    }
+    return res.status(403).json({
+      error: 'Instance suspended — read-only access. Update payment to restore full access.',
+      plan: 'suspended'
+    });
+  }
+
+  // Archived or deleted: no access
+  if (plan === 'archived' || plan === 'deleted') {
+    return res.status(403).json({
+      error: 'Instance archived. Contact support to reactivate.',
+      plan: plan
+    });
+  }
+
+  next();
+}
+
 // ---- SSE clients registry ----
 // Each entry: { res, filters: { project_id, type, agent } }
 var sseClients = new Set();
