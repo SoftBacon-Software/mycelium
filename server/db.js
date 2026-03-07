@@ -749,21 +749,20 @@ export function listThreads(limit) {
 // Archive resolved messages older than N days (default 90)
 // Deletes from dv_messages, returns count of rows removed
 export function archiveOldMessages(daysOld) {
-  daysOld = daysOld || 90;
-  var cutoff = "datetime('now', '-" + daysOld + " days')";
-  // Only archive resolved requests/directives and old info messages
+  daysOld = parseInt(daysOld) || 90;
   var result = db.prepare(
-    "DELETE FROM dv_messages WHERE created_at < " + cutoff +
+    "DELETE FROM dv_messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
     " AND (status = 'resolved' OR msg_type = 'info')"
-  ).run();
+  ).run(String(daysOld));
   return result.changes;
 }
 
 // Archive old events older than N days (default 60)
 export function archiveOldEvents(daysOld) {
-  daysOld = daysOld || 60;
-  var cutoff = "datetime('now', '-" + daysOld + " days')";
-  var result = db.prepare("DELETE FROM dv_events WHERE created_at < " + cutoff).run();
+  daysOld = parseInt(daysOld) || 60;
+  var result = db.prepare(
+    "DELETE FROM dv_events WHERE created_at < datetime('now', '-' || ? || ' days')"
+  ).run(String(daysOld));
   return result.changes;
 }
 
@@ -2002,14 +2001,22 @@ export function getDronesWithProfile(profileId) {
 }
 
 export function bulkCancelDroneJobs(statuses, olderThanDays) {
-  var where = "status IN ('" + statuses.join("','") + "')";
-  if (olderThanDays > 0) {
-    where += " AND completed_at < datetime('now', '-" + olderThanDays + " days')";
+  var placeholders = statuses.map(function () { return '?'; }).join(',');
+  var params = statuses.slice();
+  var where = 'status IN (' + placeholders + ')';
+  if (parseInt(olderThanDays) > 0) {
+    where += " AND completed_at < datetime('now', '-' || ? || ' days')";
+    params.push(String(parseInt(olderThanDays)));
   }
-  var jobs = db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where).all();
+  var jobs = db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where).all.apply(
+    db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where), params
+  );
   if (jobs.length > 0) {
+    var idPlaceholders = jobs.map(function () { return '?'; }).join(',');
     var ids = jobs.map(function (j) { return j.id; });
-    db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + ids.join(',') + ")").run();
+    db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')').run.apply(
+      db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')'), ids
+    );
   }
   return jobs;
 }
@@ -2936,7 +2943,9 @@ export function listSupportTickets(filters) {
   if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters && filters.instance_id) { where.push('instance_id = ?'); params.push(filters.instance_id); }
   if (filters && filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
-  var sql = 'SELECT * FROM dv_support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
+  var limit = parseInt((filters && filters.limit) || 100) || 100;
+  params.push(limit);
+  var sql = 'SELECT * FROM dv_support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
   return db.prepare(sql).all.apply(db.prepare(sql), params);
 }
 
