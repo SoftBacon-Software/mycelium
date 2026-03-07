@@ -5,7 +5,7 @@ import createBillingDB from './db.js';
 export default function (core) {
   var router = Router();
   var db = createBillingDB(core.db);
-  var stripe = new Stripe('sk_not_used');
+  var stripe = new Stripe('');
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError } = core;
 
