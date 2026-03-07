@@ -152,3 +152,12 @@ Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
 
 Railway project: `patient-rebirth`. Manual deploy only (`railway up`). Dockerfile copies `server/`, `public/`, and `tools/` into the container.
 
+## Git Workflow
+
+- Default branch: `master`
+- Feature branches: `feature/<agent-name>/<short-description>`
+- Bug fixes: `fix/<agent-name>/<short-description>`
+- All changes via PR — no direct pushes to default branch
+- One feature/fix per PR (no bundling)
+- Delete branch after merge
+
