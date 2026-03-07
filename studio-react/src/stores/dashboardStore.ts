@@ -9,6 +9,7 @@ import type {
   ContextEntry,
   ContextKey,
   Project,
+  Organization,
   Approval,
   Asset,
   Bug,
@@ -45,6 +46,7 @@ interface DashboardState {
   channelCounts: { total: number; active: number; archived: number };
   drones: Agent[];
   droneJobs: DroneJob[];
+  organizations: Organization[];
   plugins: Plugin[];
   inboxUnread: number;
   activeOperators: { id: number; username: string; display_name: string; last_seen: string }[];
@@ -83,6 +85,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   channelCounts: { total: 0, active: 0, archived: 0 },
   drones: [],
   droneJobs: [],
+  organizations: [],
   plugins: [],
   inboxUnread: 0,
   activeOperators: [],
@@ -123,6 +126,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
         channelCounts: data.channel_counts || { total: 0, active: 0, archived: 0 },
         drones: data.drones || [],
         droneJobs: data.drone_jobs || [],
+        organizations: data.organizations || [],
         plugins: data.plugins || [],
         activeOperators: data.active_operators || [],
         loading: false,

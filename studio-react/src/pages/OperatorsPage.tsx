@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
-import { updateConfig, createOperator, updateOperator, deleteOperator } from '../api/endpoints'
+import { updateConfig, createOperator, updateOperator, deleteOperator, fetchSubscriptionStatus } from '../api/endpoints'
+import type { SubscriptionRecord } from '../api/endpoints'
 import ConfigPanel from '../components/operators/ConfigPanel'
 import KillSwitch from '../components/operators/KillSwitch'
 import ModalOverlay from '../components/modals/ModalOverlay'
@@ -282,6 +283,80 @@ function OperatorCard({ operator, onEdit, onDelete }: { operator: Operator; onEd
   )
 }
 
+// ─── Subscription Status Badge ────────────────────────────────────────────────
+
+const subStatusColors: Record<string, string> = {
+  active: 'bg-[#4ade80]/15 text-[#4ade80]',
+  past_due: 'bg-[#fbbf24]/15 text-[#fbbf24]',
+  canceled: 'bg-[#f87171]/15 text-[#f87171]',
+  none: 'bg-[#6b7280]/15 text-[#6b7280]',
+}
+
+function SubscriptionBadge({ status }: { status: string }) {
+  const cls = subStatusColors[status] || subStatusColors.none
+  const label = status === 'none' ? 'no subscription' : status.replace(/_/g, ' ')
+  return (
+    <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>
+      {label}
+    </span>
+  )
+}
+
+// ─── Organizations Section ────────────────────────────────────────────────────
+
+function OrganizationsSection() {
+  const organizations = useDashboardStore((s) => s.organizations)
+  const [subStatuses, setSubStatuses] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (organizations.length === 0) return
+    // Fetch subscription status for each org
+    organizations.forEach((org) => {
+      fetchSubscriptionStatus(org.id)
+        .then((sub: SubscriptionRecord) => {
+          setSubStatuses((prev) => ({ ...prev, [org.id]: sub.status }))
+        })
+        .catch(() => {
+          setSubStatuses((prev) => ({ ...prev, [org.id]: 'none' }))
+        })
+    })
+  }, [organizations])
+
+  if (organizations.length === 0) return null
+
+  return (
+    <section>
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-text">Organizations</h2>
+        <p className="text-text-muted text-sm mt-0.5">
+          {organizations.length} organization{organizations.length !== 1 ? 's' : ''} registered
+        </p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {organizations.map((org) => (
+          <div
+            key={org.id}
+            className="bg-surface-raised rounded-lg p-4 flex flex-col gap-2 border border-border/50"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-semibold text-text truncate">{org.name}</h3>
+              <SubscriptionBadge status={subStatuses[org.id] ?? 'none'} />
+            </div>
+            <p className="text-text-muted font-mono text-sm leading-none">{org.id}</p>
+            {org.description && (
+              <p className="text-text-dim text-sm leading-relaxed">{org.description}</p>
+            )}
+            <div className="flex items-center gap-3 text-xs text-text-muted mt-auto pt-1">
+              <span>Plan: <span className="text-text-dim font-medium">{org.plan || 'free'}</span></span>
+              <span>Status: <span className="text-text-dim font-medium">{org.status || 'active'}</span></span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function OperatorsPage() {
@@ -374,7 +449,10 @@ export default function OperatorsPage() {
         )}
       </section>
 
-      {/* Section 2: Instance Config */}
+      {/* Section 2: Organizations */}
+      <OrganizationsSection />
+
+      {/* Section 3: Instance Config */}
       <section>
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-text">Instance Configuration</h2>
@@ -385,7 +463,7 @@ export default function OperatorsPage() {
         <ConfigPanel configs={instanceConfig} onSave={handleConfigSave} />
       </section>
 
-      {/* Section 3: Kill Switch */}
+      {/* Section 4: Kill Switch */}
       <section>
         <div className="mb-4">
           <h2 className="text-lg font-semibold text-text">Emergency Controls</h2>
