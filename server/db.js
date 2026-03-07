@@ -2468,6 +2468,7 @@ export function getOverview(userId) {
     drone_jobs: listDroneJobs({ limit: 50 }),
     plugins: listPluginRecords(),
     active_operators: getActiveStudioUsers(5),
+    instances: listInstances({}),
   };
 }
 
