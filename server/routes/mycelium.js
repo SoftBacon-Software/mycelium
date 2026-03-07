@@ -153,7 +153,8 @@ import {
   createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket, deleteSupportTicket,
   purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
   createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
-  resolveProfileChain, buildCalibrationBlock
+  resolveProfileChain, buildCalibrationBlock,
+  createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -498,6 +499,45 @@ function checkBillingEnforcement(req, res, next) {
     console.error('[billing] Enforcement check error:', e.message);
     return next();
   }
+}
+
+// Plan enforcement middleware — suspended=read-only, archived/deleted=blocked
+// Plan enforcement is available via checkOrgPlanEnforcement()
+// Mount on org-scoped routes when multi-tenant isolation is needed
+function checkOrgPlanEnforcement(req, res, next) {
+  // Read org context from multiple sources
+  var orgId = req.query.org_id || (req.body && req.body.org_id) || req.headers['x-org-id'];
+  if (!orgId) return next(); // No org context, skip
+
+  var db = getDB();
+  var org = db.prepare('SELECT plan FROM dv_organizations WHERE id = ?').get(orgId);
+  if (!org) return next(); // Unknown org, skip
+
+  var plan = org.plan || 'free';
+
+  // Free, managed, past_due: full access
+  if (plan === 'free' || plan === 'managed' || plan === 'past_due') return next();
+
+  // Suspended: read-only
+  if (plan === 'suspended') {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+      return next();
+    }
+    return res.status(403).json({
+      error: 'Instance suspended — read-only access. Update payment to restore full access.',
+      plan: 'suspended'
+    });
+  }
+
+  // Archived or deleted: no access
+  if (plan === 'archived' || plan === 'deleted') {
+    return res.status(403).json({
+      error: 'Instance archived. Contact support to reactivate.',
+      plan: plan
+    });
+  }
+
+  next();
 }
 
 // ---- SSE clients registry ----
@@ -2927,6 +2967,175 @@ router.delete('/orgs/:id', function (req, res) {
   res.json({ ok: true });
 });
 
+// =============== CUSTOMER INSTANCES ===============
+
+router.get('/instances', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({
+    status: req.query.status || undefined,
+    org_id: req.query.org_id || undefined,
+    limit: parseIntParam(req.query.limit) || 100
+  });
+  res.json({ instances: instances });
+});
+
+router.get('/instances/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  res.json(instance);
+});
+
+router.put('/instances/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  var updated = updateInstance(req.params.id, req.body);
+  res.json(updated);
+});
+
+router.post('/instances/:id/health-check', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instance = getInstance(req.params.id);
+  if (!instance) return apiError(res, 404, 'Instance not found');
+  if (!instance.domain) return apiError(res, 400, 'Instance has no domain');
+
+  try {
+    var { pollHealth } = await import('../provisioning.js');
+    var result = await pollHealth({
+      domain: instance.domain,
+      timeout: 15000,
+      interval: 5000
+    });
+    updateInstance(req.params.id, {
+      health_status: result.ok ? 'healthy' : 'unhealthy',
+      last_health_check: new Date().toISOString()
+    });
+    res.json({ ok: result.ok, attempts: result.attempts, elapsed: result.elapsed });
+  } catch (err) {
+    updateInstance(req.params.id, {
+      health_status: 'error',
+      last_health_check: new Date().toISOString()
+    });
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+// POST /admin/churn-check — daily lifecycle check for suspended/archived instances
+router.post('/admin/churn-check', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var now = new Date();
+  var results = { archived: [], deleted: [], errors: [] };
+
+  // Suspended > 30 days => archive
+  var suspended = listInstances({ status: 'suspended' });
+  for (var i = 0; i < suspended.length; i++) {
+    var inst = suspended[i];
+    if (!inst.suspended_at) continue;
+    var daysSuspended = (now - new Date(inst.suspended_at)) / (1000 * 60 * 60 * 24);
+    if (daysSuspended >= 30) {
+      try {
+        // TODO: snapshot DB to S3/R2 before teardown
+        // TODO: tear down Railway service + Cloudflare CNAME
+        updateInstance(inst.id, { status: 'archived', archived_at: now.toISOString() });
+        var { sendEmail: sendChurnEmail, templateInstanceArchived } = await import('../email.js');
+        if (inst.customer_email) {
+          await sendChurnEmail(templateInstanceArchived(null, inst.customer_email));
+        }
+        results.archived.push(inst.id);
+      } catch (err) {
+        results.errors.push({ id: inst.id, error: err.message });
+      }
+    }
+  }
+
+  // Archived > 90 days => delete
+  var archived = listInstances({ status: 'archived' });
+  for (var i = 0; i < archived.length; i++) {
+    var inst = archived[i];
+    if (!inst.archived_at) continue;
+    var daysArchived = (now - new Date(inst.archived_at)) / (1000 * 60 * 60 * 24);
+    if (daysArchived >= 90) {
+      try {
+        // TODO: delete S3/R2 snapshot
+        updateInstance(inst.id, { status: 'deleted', snapshot_url: null });
+        getDB().prepare("UPDATE dv_organizations SET plan = 'deleted' WHERE id = ?").run(inst.org_id);
+        var { sendEmail: sendDeleteEmail, templateDataDeleted } = await import('../email.js');
+        if (inst.customer_email) {
+          await sendDeleteEmail(templateDataDeleted(null, inst.customer_email));
+        }
+        results.deleted.push(inst.id);
+      } catch (err) {
+        results.errors.push({ id: inst.id, error: err.message });
+      }
+    }
+  }
+
+  res.json({ ok: true, results: results });
+});
+
+// =============== DEPLOY WORKFLOW ===============
+
+// POST /admin/deploy/health-check-all — health check all active instances
+router.post('/admin/deploy/health-check-all', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({ status: 'active' });
+  var results = [];
+
+  var { pollHealth } = await import('../provisioning.js');
+  for (var i = 0; i < instances.length; i++) {
+    var inst = instances[i];
+    if (!inst.domain) continue;
+    try {
+      var health = await pollHealth({ domain: inst.domain, timeout: 15000, interval: 5000 });
+      updateInstance(inst.id, {
+        health_status: health.ok ? 'healthy' : 'unhealthy',
+        last_health_check: new Date().toISOString()
+      });
+      results.push({ id: inst.id, domain: inst.domain, ok: health.ok });
+    } catch (err) {
+      updateInstance(inst.id, {
+        health_status: 'error',
+        last_health_check: new Date().toISOString()
+      });
+      results.push({ id: inst.id, domain: inst.domain, ok: false, error: err.message });
+    }
+  }
+
+  res.json({ ok: true, results: results });
+});
+
+// GET /admin/deploy/status — current deploy status for all active instances
+router.get('/admin/deploy/status', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({ status: 'active' });
+  res.json({
+    instances: instances.map(function (i) {
+      return {
+        id: i.id, org_id: i.org_id, domain: i.domain,
+        version: i.version, health_status: i.health_status,
+        last_health_check: i.last_health_check
+      };
+    })
+  });
+});
+
+// POST /admin/deploy/record — record a deploy version across instances
+router.post('/admin/deploy/record', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var version = req.body.version;
+  if (!version) return apiError(res, 400, 'version required');
+
+  var ids = req.body.instance_ids || listInstances({ status: 'active' }).map(function (i) { return i.id; });
+  var updated = [];
+  for (var i = 0; i < ids.length; i++) {
+    updateInstance(ids[i], { version: version });
+    updated.push(ids[i]);
+  }
+
+  res.json({ ok: true, version: version, updated: updated });
+});
+
 // =============== PROJECTS ===============
 
 // List projects (optional ?org_id= filter)
@@ -4782,6 +4991,32 @@ router.delete('/profiles/:id', function (req, res) {
 
 // ======== SUPPORT TICKETS ========
 
+// Classify support ticket into L1 (auto-handleable) or L2 (requires human triage)
+function classifyTicket(subject, description) {
+  var text = ((subject || '') + ' ' + (description || '')).toLowerCase();
+  if (/password|reset|login|sign.?in|locked.?out|can.?t.?log/i.test(text)) {
+    return { tier: 'L1', category: 'password_reset', auto_action: 'password_reset' };
+  }
+  if (/config|setup|how.?to|setting|install|getting.?started/i.test(text)) {
+    return { tier: 'L1', category: 'config' };
+  }
+  if (/billing|charge|invoice|payment|cancel|refund|subscription/i.test(text)) {
+    return { tier: 'L2', category: 'billing' };
+  }
+  if (/data.?loss|delete|missing|gone|corrupt/i.test(text)) {
+    return { tier: 'L2', category: 'data_issue' };
+  }
+  // Check if matches existing open bug title
+  var openBugs = listBugs({ status: 'open', limit: 50 });
+  var bugList = openBugs.bugs || openBugs || [];
+  for (var i = 0; i < bugList.length; i++) {
+    if (bugList[i].title && text.indexOf(bugList[i].title.toLowerCase()) !== -1) {
+      return { tier: 'L1', category: 'known_bug', linked_bug_id: bugList[i].id };
+    }
+  }
+  return { tier: 'L2', category: 'general' };
+}
+
 // ---- Ticket ↔ Bug bridge: migrations ----
 try {
   var db = getDB();
@@ -4836,6 +5071,38 @@ router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
   } catch (e) {
     console.error('[support] auto-bug creation failed:', e.message);
   }
+  // Classify and route
+  var classification = classifyTicket(req.body.subject, req.body.description);
+  var tierUpdates = {
+    tier: classification.tier,
+    category: classification.category || req.body.category || 'general'
+  };
+
+  if (classification.tier === 'L1') {
+    // Auto-assign to an available agent
+    var agents = listAgents().filter(function(a) { return a.status === 'online' && a.role !== 'drone'; });
+    if (agents.length > 0) {
+      tierUpdates.assigned_agent = agents[0].id;
+    }
+    tierUpdates.requires_approval = 0;
+  } else {
+    // L2: route to operator inbox as urgent, require approval on responses
+    tierUpdates.requires_approval = 1;
+    createInboxItemForAllOperators(
+      'support_ticket', 'ticket', String(ticket.id),
+      'L2 Support Ticket: ' + (req.body.subject || '').slice(0, 80),
+      'From: ' + (reporterEmail || 'unknown') + ' — Requires triage',
+      { ticket_id: ticket.id, tier: 'L2', category: classification.category },
+      'urgent'
+    );
+  }
+
+  if (classification.linked_bug_id) {
+    tierUpdates.linked_bug_id = classification.linked_bug_id;
+  }
+
+  updateSupportTicket(ticket.id, tierUpdates);
+
   // Email: confirmation to customer + alert to operators
   if (reporterEmail) {
     sendEmail(templateTicketConfirmation(reporterEmail, reporterName, ticket.id, subject));
