@@ -8,12 +8,14 @@
   "license": "AGPL-3.0-only",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
   "homepage": "https://mycelium.fyi",
-  "workspaces": ["mcp", "runner"],
+  "workspaces": ["mcp", "runner", "printer-drone"],
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "start:mcp": "node mcp/index.js",
-    "start:runner": "node runner/index.js"
+    "start:runner": "node runner/index.js",
+    "start:printer": "node printer-drone/index.js",
+    "start:printer:mock": "node printer-drone/index.js --mock"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

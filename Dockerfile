@@ -11,9 +11,11 @@ WORKDIR /app
 COPY package*.json ./
 COPY mcp/package*.json mcp/
 COPY runner/package*.json runner/
+COPY printer-drone/package*.json printer-drone/
 RUN npm ci --production
 COPY server/ server/
 COPY tools/ tools/
+COPY printer-drone/ printer-drone/
 COPY --from=builder /app/public/ public/
 EXPOSE 3002
 CMD ["node", "server/boot.js"]

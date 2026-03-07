@@ -119,6 +119,7 @@ export function initDB() {
 
   ensureDefaultChannels();
   seedPlatformProfiles();
+  seedDefaultJobTemplates();
 
   console.log('Mycelium DB initialized at ' + DB_PATH);
 }
@@ -1970,8 +1971,16 @@ export function bulkCancelDroneJobs(statuses, olderThanDays) {
 
 // -- Job Templates --
 
-// Job templates are created via the API — no hardcoded seed data.
-// Use POST /drones/templates to create custom job templates for your project.
+// Seed the 3d_print template so new instances support printer drones out of the box.
+export function seedDefaultJobTemplates() {
+  var existing = db.prepare("SELECT id FROM dv_job_templates WHERE id = '3d_print'").get();
+  if (!existing) {
+    db.prepare(
+      "INSERT INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run('3d_print', '3D Print Job', '', '["3d_printer"]', 0, 1);
+    console.log('Seeded 3d_print job template');
+  }
+}
 
 export function createJobTemplate(id, fields) {
   db.prepare(

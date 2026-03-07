@@ -1,0 +1,19 @@
+{
+  "mycelium": {
+    "apiUrl": "https://mycelium.fyi/api/mycelium",
+    "agentKey": "env:PRINTER_DRONE_KEY"
+  },
+  "printer": {
+    "provider": "bambu",
+    "address": "192.168.1.100",
+    "accessCode": "env:BAMBU_ACCESS_CODE",
+    "serial": "env:BAMBU_SERIAL"
+  },
+  "slicer": {
+    "path": "/usr/bin/prusa-slicer",
+    "profile": "bambu-a1-mini"
+  },
+  "pollIntervalMs": 30000,
+  "jobTypes": ["3d_print"],
+  "workDir": "./work"
+}
