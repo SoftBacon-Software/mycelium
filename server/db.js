@@ -1066,13 +1066,21 @@ export function getSlimBootPayload(agentId) {
   ).all(agentId);
   var pendingRequests = listPendingRequests(agentId);
 
+  // Inbox — unread messages (read-tracked), delivered on boot
+  var inbox = getUnreadMessages(agentId, 20);
+  var unreadMsgCount = inbox.messages.length;
+
+  // Auto-ack regular messages delivered on boot (directives/requests stay unacked until resolved)
+  var bootAckIds = inbox.messages.map(function (m) { return m.id; });
+  if (bootAckIds.length > 0) {
+    try { markMessagesRead(agentId, bootAckIds); } catch (_) {}
+  }
+
   // Counts — derive from fetched data where possible
   var counts = {
     directives: pendingDirectives.length,
     requests: pendingRequests.length,
-    messages_unread: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent'"
-    ).get(agentId).c,
+    messages_unread: unreadMsgCount,
     tasks_mine: db.prepare(
       "SELECT COUNT(*) as c FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress')"
     ).get(agentId).c,
@@ -1127,6 +1135,7 @@ export function getSlimBootPayload(agentId) {
     other_agents: otherAgents.map(function (a) {
       return { id: a.id, status: a.status, working_on: a.working_on || '' };
     }),
+    inbox: inbox.messages.length > 0 || inbox.directives.length > 0 || inbox.requests.length > 0 ? inbox : undefined,
     sleep_mode: sleepMode,
     autonomous_mode: autonomousMode,
     operators_available: operatorsAvailable,
