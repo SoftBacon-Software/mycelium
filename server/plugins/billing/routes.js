@@ -26,6 +26,103 @@ export default function (core) {
     return row ? row.value : fallback;
   }
 
+  // Auto-provision a customer instance after successful payment
+  async function provisionAndNotify(orgId, customerEmail, customerName) {
+    var railwayToken = getConfig('railway_token', '');
+    var cloudflareToken = getConfig('cloudflare_token', '');
+    var cloudflareZoneId = getConfig('cloudflare_zone_id', '');
+    var repoUrl = getConfig('repo_url', 'SoftBacon-Software/mycelium');
+    var baseDomain = getConfig('base_domain', 'mycelium.fyi');
+
+    if (!railwayToken || !cloudflareToken || !cloudflareZoneId) {
+      console.log('[billing] Provisioning skipped — missing railway_token, cloudflare_token, or cloudflare_zone_id config');
+      core.inbox.createInboxItemForAllOperators(
+        'provision_manual', 'subscription', orgId,
+        'Manual provisioning needed: ' + orgId,
+        'Auto-provisioning not configured. Customer email: ' + (customerEmail || 'none'),
+        { org_id: orgId, email: customerEmail },
+        'urgent'
+      );
+      return;
+    }
+
+    // Derive a URL-safe slug from the customer name or org ID
+    var slug = (customerName || orgId).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 30);
+    var adminKey = crypto.randomBytes(24).toString('hex');
+    var jwtSecret = crypto.randomBytes(32).toString('hex');
+    var tempPassword = crypto.randomBytes(8).toString('base64url');
+    var username = 'admin';
+
+    console.log('[billing] Starting auto-provisioning for', slug);
+
+    try {
+      var result = await provisionCustomerInstance({
+        customerName: slug,
+        railwayToken: railwayToken,
+        repoUrl: repoUrl,
+        cloudflareToken: cloudflareToken,
+        cloudflareZoneId: cloudflareZoneId,
+        baseDomain: baseDomain,
+        adminKey: adminKey,
+        jwtSecret: jwtSecret,
+        adminUsername: username,
+        adminPassword: tempPassword,
+        onProgress: function (step, detail) {
+          console.log('[billing] Provision [' + slug + '] ' + step + ': ' + detail);
+        }
+      });
+
+      if (result.health && result.health.ok) {
+        console.log('[billing] Instance provisioned successfully:', result.domain);
+
+        // Send instance-ready email to customer
+        if (customerEmail) {
+          var dashboardUrl = 'https://' + result.domain;
+          await sendEmail(templateInstanceReady(
+            customerName || customerEmail,
+            customerEmail,
+            result.domain,
+            dashboardUrl,
+            username,
+            tempPassword
+          ));
+          console.log('[billing] Instance-ready email sent to', customerEmail);
+        }
+
+        // Notify operators
+        core.inbox.createInboxItemForAllOperators(
+          'provision_complete', 'subscription', orgId,
+          'Instance provisioned: ' + result.domain,
+          'Customer: ' + (customerEmail || orgId) + ' | Domain: ' + result.domain,
+          { org_id: orgId, domain: result.domain, url: 'https://' + result.domain },
+          'normal'
+        );
+
+        core.emitEvent('instance_provisioned', '__system__', null,
+          'Instance provisioned: ' + result.domain,
+          { org_id: orgId, domain: result.domain, customer_email: customerEmail });
+      } else {
+        console.error('[billing] Instance health check failed for', slug);
+        core.inbox.createInboxItemForAllOperators(
+          'provision_failed', 'subscription', orgId,
+          'Provisioning health check failed: ' + slug,
+          'Instance deployed but not responding. Manual intervention needed.',
+          { org_id: orgId, slug: slug, health: result.health },
+          'urgent'
+        );
+      }
+    } catch (err) {
+      console.error('[billing] Provisioning failed for', slug, ':', err.message);
+      core.inbox.createInboxItemForAllOperators(
+        'provision_failed', 'subscription', orgId,
+        'Provisioning failed: ' + slug,
+        'Error: ' + err.message + '. Manual provisioning needed.',
+        { org_id: orgId, slug: slug, error: err.message },
+        'urgent'
+      );
+    }
+  }
+
   // POST /billing/webhook — Stripe webhook receiver
   // This endpoint does NOT require auth — Stripe signs the payload
   router.post('/webhook', function (req, res) {
@@ -212,6 +309,11 @@ export default function (core) {
             { org_id: orgId, customer_id: customerId, email: customerEmail },
             'normal'
           );
+
+          // Fire-and-forget — provisioning runs async, webhook returns immediately
+          provisionAndNotify(orgId, customerEmail, session.customer_details?.name || '').catch(function (err) {
+            console.error('[billing] provisionAndNotify error:', err.message);
+          });
           break;
         }
 
