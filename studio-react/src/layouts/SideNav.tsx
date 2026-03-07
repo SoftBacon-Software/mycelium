@@ -8,7 +8,7 @@ import type { PluginNavEntry } from '../api/endpoints'
 import {
   LayoutDashboard, CheckSquare, Map, Bug,
   MessageSquare, Radio, ShieldCheck, Inbox,
-  Users, Cpu, FolderOpen, Lightbulb, Database,
+  Users, Cpu, FolderOpen, Lightbulb, Database, Server,
   Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
@@ -72,6 +72,7 @@ const staticNavSections: NavSection[] = [
     label: 'Manage',
     items: [
       { to: '/operators', label: 'Operators', icon: Users },
+      { to: '/deployments', label: 'Deployments', icon: Server, adminOnly: true },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },
       { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
       { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true },
