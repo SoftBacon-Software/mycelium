@@ -2,9 +2,9 @@ import { Router } from 'express';
 import Stripe from 'stripe';
 import crypto from 'crypto';
 import createBillingDB from './db.js';
-import { createInstance, updateInstance } from '../../db.js';
+import { createInstance, updateInstance, getInstanceByOrg } from '../../db.js';
 import { provisionCustomerInstance } from '../../provisioning.js';
-import { sendEmail, templateInstanceReady } from '../../email.js';
+import { sendEmail, templateInstanceReady, templatePaymentFailed, templateInstanceSuspended } from '../../email.js';
 
 export default function (core) {
   var router = Router();
@@ -251,15 +251,37 @@ export default function (core) {
           if (!subRecord) break;
 
           db.updateSubscriptionStatus(sub.id, 'canceled', '');
-          db.updateOrgPlan(subRecord.org_id, 'free');
+          db.updateOrgPlan(subRecord.org_id, 'suspended');
           console.log('[billing] Subscription canceled for org:', subRecord.org_id);
+
+          // Suspend the customer instance
+          var inst = getInstanceByOrg(subRecord.org_id);
+          if (inst) {
+            updateInstance(inst.id, {
+              status: 'suspended',
+              suspended_at: new Date().toISOString()
+            });
+            console.log('[billing] Instance', inst.id, 'suspended for org:', subRecord.org_id);
+
+            // Send suspension email (fire-and-forget)
+            if (inst.customer_email) {
+              (async () => {
+                try {
+                  await sendEmail(templateInstanceSuspended(null, inst.customer_email, inst.domain));
+                  console.log('[billing] Suspension email sent to', inst.customer_email);
+                } catch (emailErr) {
+                  console.error('[billing] Failed to send suspension email:', emailErr.message);
+                }
+              })();
+            }
+          }
 
           core.inbox.createInboxItemForAllOperators(
             'subscription_canceled', 'subscription', sub.id,
             'Subscription canceled: ' + subRecord.org_id,
-            'Customer canceled their subscription',
+            'Customer subscription canceled — instance suspended',
             { org_id: subRecord.org_id },
-            'normal'
+            'urgent'
           );
           break;
         }
@@ -270,7 +292,22 @@ export default function (core) {
           if (!subRecord) break;
 
           db.updateSubscriptionStatus(subRecord.stripe_subscription_id, 'past_due', subRecord.current_period_end || '');
+          db.updateOrgPlan(subRecord.org_id, 'past_due');
           console.log('[billing] Payment failed for org:', subRecord.org_id);
+
+          // Send payment failed email (fire-and-forget)
+          var inst = getInstanceByOrg(subRecord.org_id);
+          if (inst && inst.customer_email) {
+            (async () => {
+              try {
+                var portalUrl = ''; // TODO: generate Stripe billing portal URL
+                await sendEmail(templatePaymentFailed(null, inst.customer_email, portalUrl));
+                console.log('[billing] Payment failed email sent to', inst.customer_email);
+              } catch (emailErr) {
+                console.error('[billing] Failed to send payment failed email:', emailErr.message);
+              }
+            })();
+          }
 
           core.inbox.createInboxItemForAllOperators(
             'payment_failed', 'subscription', subRecord.stripe_subscription_id,

@@ -194,6 +194,70 @@ export function templateTicketResolution(email, name, ticketId, subject, resolut
   return { to: email, subject: 'Resolved — Ticket #' + ticketId + ': ' + subject, replyTo: 'support@mycelium.fyi', html: html };
 }
 
+/** Payment failed — 7-day grace period warning */
+export function templatePaymentFailed(name, email, portalUrl) {
+  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var portalBlock = portalUrl ? button('Update Payment Method', portalUrl) : '';
+  var html = emailWrapper('Payment Failed', `
+    <p>${greeting}</p>
+    <p>We were unable to process your latest payment. Your Mycelium instance is still active, but you have a <strong style="color:${COLORS.primary};">7-day grace period</strong> to update your payment method before service is interrupted.</p>
+    <div style="background:${COLORS.surface};border-left:3px solid ${COLORS.rust};padding:16px 20px;margin:16px 0;border-radius:0 6px 6px 0;">
+      <p style="margin:0;color:${COLORS.text};">If payment is not resolved within 7 days, your instance will be <strong>suspended</strong> (read-only access only).</p>
+    </div>
+    ${portalBlock}
+    ${muted("If you believe this is an error, please reply to this email or contact support@mycelium.fyi.")}
+  `);
+  return { to: email, subject: 'Action required: Payment failed for your Mycelium instance', html: html };
+}
+
+/** Instance suspended — read-only for 30 days */
+export function templateInstanceSuspended(name, email, domain) {
+  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var html = emailWrapper('Instance Suspended', `
+    <p>${greeting}</p>
+    <p>Your Mycelium instance has been <strong style="color:${COLORS.rust};">suspended</strong> due to an unpaid subscription.</p>
+    <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Instance:</strong> ${domain || 'your instance'}</p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Status:</strong> <span style="color:${COLORS.rust};">Suspended (read-only)</span></p>
+      <p style="margin:0;"><strong style="color:${COLORS.primary};">Data retention:</strong> 30 days</p>
+    </div>
+    <p>During the suspension period, you can still access and <strong>export your data</strong>. After 30 days, your instance will be archived.</p>
+    <p>To reactivate, renew your subscription or contact <a href="mailto:support@mycelium.fyi" style="color:${COLORS.teal};text-decoration:none;">support@mycelium.fyi</a>.</p>
+    ${muted("Your data is safe for 30 days. After that, the instance will be archived and eventually deleted.")}
+  `);
+  return { to: email, subject: 'Your Mycelium instance has been suspended', html: html };
+}
+
+/** Instance archived — 90 days to reactivate */
+export function templateInstanceArchived(name, email) {
+  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var html = emailWrapper('Instance Archived', `
+    <p>${greeting}</p>
+    <p>Your Mycelium instance has been <strong style="color:${COLORS.rust};">archived</strong> after 30 days of suspension.</p>
+    <div style="background:${COLORS.surface};border-left:3px solid ${COLORS.primary};padding:16px 20px;margin:16px 0;border-radius:0 6px 6px 0;">
+      <p style="margin:0;color:${COLORS.text};">Your data snapshot has been preserved. You have <strong>90 days</strong> to request reactivation before permanent deletion.</p>
+    </div>
+    <p>To reactivate your instance, contact us at <a href="mailto:support@mycelium.fyi" style="color:${COLORS.teal};text-decoration:none;">support@mycelium.fyi</a> and we'll restore your data.</p>
+    ${muted("After 90 days, archived data will be permanently deleted and cannot be recovered.")}
+  `);
+  return { to: email, subject: 'Your Mycelium instance has been archived', html: html };
+}
+
+/** Data permanently deleted */
+export function templateDataDeleted(name, email) {
+  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var html = emailWrapper('Data Permanently Deleted', `
+    <p>${greeting}</p>
+    <p>Your Mycelium instance data has been <strong>permanently deleted</strong> after 90 days in the archive.</p>
+    <p>This action is irreversible. All project data, agent configurations, and stored assets associated with your instance have been removed.</p>
+    <div style="background:${COLORS.surface};border-left:3px solid ${COLORS.textMuted};padding:16px 20px;margin:16px 0;border-radius:0 6px 6px 0;">
+      <p style="margin:0;color:${COLORS.textMuted};">If you'd like to start fresh with a new Mycelium instance, visit <a href="https://mycelium.fyi" style="color:${COLORS.teal};text-decoration:none;">mycelium.fyi</a>.</p>
+    </div>
+    ${muted("Thank you for having been a Mycelium user. We hope to see you again.")}
+  `);
+  return { to: email, subject: 'Your Mycelium data has been permanently deleted', html: html };
+}
+
 /** Operator alert email */
 export function templateOperatorAlert(operatorEmail, operatorName, alertTitle, alertBody, actionUrl) {
   var greeting = operatorName ? ('Hey ' + operatorName + ',') : 'Hey,';

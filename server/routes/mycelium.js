@@ -3021,6 +3021,59 @@ router.post('/instances/:id/health-check', async function (req, res) {
   }
 });
 
+// POST /admin/churn-check — daily lifecycle check for suspended/archived instances
+router.post('/admin/churn-check', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var now = new Date();
+  var results = { archived: [], deleted: [], errors: [] };
+
+  // Suspended > 30 days => archive
+  var suspended = listInstances({ status: 'suspended' });
+  for (var i = 0; i < suspended.length; i++) {
+    var inst = suspended[i];
+    if (!inst.suspended_at) continue;
+    var daysSuspended = (now - new Date(inst.suspended_at)) / (1000 * 60 * 60 * 24);
+    if (daysSuspended >= 30) {
+      try {
+        // TODO: snapshot DB to S3/R2 before teardown
+        // TODO: tear down Railway service + Cloudflare CNAME
+        updateInstance(inst.id, { status: 'archived', archived_at: now.toISOString() });
+        var { sendEmail: sendChurnEmail, templateInstanceArchived } = await import('../email.js');
+        if (inst.customer_email) {
+          await sendChurnEmail(templateInstanceArchived(null, inst.customer_email));
+        }
+        results.archived.push(inst.id);
+      } catch (err) {
+        results.errors.push({ id: inst.id, error: err.message });
+      }
+    }
+  }
+
+  // Archived > 90 days => delete
+  var archived = listInstances({ status: 'archived' });
+  for (var i = 0; i < archived.length; i++) {
+    var inst = archived[i];
+    if (!inst.archived_at) continue;
+    var daysArchived = (now - new Date(inst.archived_at)) / (1000 * 60 * 60 * 24);
+    if (daysArchived >= 90) {
+      try {
+        // TODO: delete S3/R2 snapshot
+        updateInstance(inst.id, { status: 'deleted', snapshot_url: null });
+        getDB().prepare("UPDATE dv_organizations SET plan = 'deleted' WHERE id = ?").run(inst.org_id);
+        var { sendEmail: sendDeleteEmail, templateDataDeleted } = await import('../email.js');
+        if (inst.customer_email) {
+          await sendDeleteEmail(templateDataDeleted(null, inst.customer_email));
+        }
+        results.deleted.push(inst.id);
+      } catch (err) {
+        results.errors.push({ id: inst.id, error: err.message });
+      }
+    }
+  }
+
+  res.json({ ok: true, results: results });
+});
+
 // =============== PROJECTS ===============
 
 // List projects (optional ?org_id= filter)
