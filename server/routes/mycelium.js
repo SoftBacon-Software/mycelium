@@ -2924,6 +2924,128 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
   }
 }));
 
+// GET /admin/api-usage — Fetch Anthropic usage + cost data (requires ANTHROPIC_ADMIN_KEY)
+// Returns last 7 days of usage by model and daily cost
+router.get('/admin/api-usage', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+
+  // Check cache (15 min TTL)
+  try {
+    var cached = getContextKey('admin', 'api_usage');
+    if (cached && cached.data) {
+      var raw = typeof cached.data === 'string' ? JSON.parse(cached.data) : cached.data;
+      var age = Date.now() - new Date(raw.checked_at || 0).getTime();
+      if (age < 15 * 60 * 1000) {
+        return res.json({ cached: true, data: raw });
+      }
+    }
+  } catch (_) {}
+
+  var adminKey = process.env.ANTHROPIC_ADMIN_KEY;
+  if (!adminKey) {
+    return res.status(503).json({ error: 'ANTHROPIC_ADMIN_KEY not set on server' });
+  }
+
+  var days = parseInt(req.query.days) || 7;
+  if (days > 31) days = 31;
+  var now = new Date();
+  var endAt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  var startAt = new Date(endAt.getTime() - days * 24 * 60 * 60 * 1000);
+
+  function apiGet(path) {
+    return new Promise(function (resolve, reject) {
+      var r = https.request({
+        hostname: 'api.anthropic.com',
+        path: path,
+        method: 'GET',
+        headers: {
+          'x-api-key': adminKey,
+          'anthropic-version': '2023-06-01',
+        }
+      }, function (resp) {
+        var body = '';
+        resp.on('data', function (d) { body += d; });
+        resp.on('end', function () {
+          if (resp.statusCode >= 400) {
+            reject(new Error('Anthropic API ' + resp.statusCode + ': ' + body.slice(0, 200)));
+          } else {
+            try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+          }
+        });
+      });
+      r.on('error', reject);
+      r.setTimeout(15000, function () { r.destroy(new Error('timeout')); });
+      r.end();
+    });
+  }
+
+  try {
+    var startStr = startAt.toISOString().replace(/\.\d+Z$/, 'Z');
+    var endStr = endAt.toISOString().replace(/\.\d+Z$/, 'Z');
+
+    var [usageData, costData] = await Promise.all([
+      apiGet('/v1/organizations/usage_report/messages?starting_at=' + startStr + '&ending_at=' + endStr + '&group_by[]=model&bucket_width=1d'),
+      apiGet('/v1/organizations/cost_report?starting_at=' + startStr + '&ending_at=' + endStr + '&bucket_width=1d'),
+    ]);
+
+    // Aggregate usage by model
+    var modelTotals = {};
+    var dailyTokens = [];
+    for (var bucket of (usageData.data || [])) {
+      var dayTotal = { date: bucket.starting_at, input: 0, output: 0, cached_read: 0, cached_create: 0 };
+      for (var r of (bucket.results || [])) {
+        var model = r.model || 'unknown';
+        if (!modelTotals[model]) modelTotals[model] = { input: 0, output: 0, cached_read: 0, cached_create: 0 };
+        var inp = r.uncached_input_tokens || 0;
+        var out = r.output_tokens || 0;
+        var cacheRead = r.cache_read_input_tokens || 0;
+        var cacheCreate = 0;
+        if (r.cache_creation) {
+          cacheCreate = (r.cache_creation.ephemeral_5m_input_tokens || 0) + (r.cache_creation.ephemeral_1h_input_tokens || 0);
+        }
+        modelTotals[model].input += inp;
+        modelTotals[model].output += out;
+        modelTotals[model].cached_read += cacheRead;
+        modelTotals[model].cached_create += cacheCreate;
+        dayTotal.input += inp;
+        dayTotal.output += out;
+        dayTotal.cached_read += cacheRead;
+        dayTotal.cached_create += cacheCreate;
+      }
+      dailyTokens.push(dayTotal);
+    }
+
+    // Aggregate cost by day
+    var totalCost = 0;
+    var dailyCost = [];
+    for (var cb of (costData.data || [])) {
+      var dayCost = 0;
+      for (var cr of (cb.results || [])) {
+        dayCost += parseFloat(cr.amount || 0);
+      }
+      totalCost += dayCost;
+      dailyCost.push({ date: cb.starting_at, cost_usd: Math.round(dayCost * 100) / 100 });
+    }
+
+    var data = {
+      period_days: days,
+      start: startStr,
+      end: endStr,
+      total_cost_usd: Math.round(totalCost * 100) / 100,
+      daily_cost: dailyCost,
+      by_model: modelTotals,
+      daily_tokens: dailyTokens,
+      checked_at: new Date().toISOString(),
+    };
+
+    try { upsertContextKey('admin', 'api_usage', JSON.stringify(data), 'system'); } catch (_) {}
+    res.json({ cached: false, data });
+  } catch (err) {
+    console.error('[mycelium] API usage error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch API usage: ' + err.message });
+  }
+}));
+
 // =============== ORGANIZATIONS ===============
 
 router.get('/orgs', function (req, res) {

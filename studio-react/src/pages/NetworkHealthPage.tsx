@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef, Component } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useLiveStore } from '../stores/liveStore'
-import { fetchApiLimits, fetchProfiles, fetchCalibration } from '../api/endpoints'
+import { fetchApiLimits, fetchApiUsage, fetchProfiles, fetchCalibration } from '../api/endpoints'
+import type { ApiUsageData } from '../api/endpoints'
 import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
@@ -654,6 +655,159 @@ function ApiLimitsPanel() {
             <span>HTTP {data.http_status}{data.model_probed ? ` · ${data.model_probed}` : ''}</span>
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+// ─── API Usage Panel ──────────────────────────────────────────────────────────
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return n.toString()
+}
+
+function ApiUsagePanel() {
+  const [data, setData] = useState<ApiUsageData | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [days, setDays] = useState(7)
+
+  const load = useCallback(async () => {
+    try {
+      const result = await fetchApiUsage(days)
+      setData(result?.data ?? null)
+      setError(null)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('ANTHROPIC_ADMIN_KEY') || msg.includes('not set') || msg.includes('503')) {
+        setError('not_configured')
+      } else {
+        setError('Could not fetch usage data')
+      }
+    }
+  }, [days])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Find max daily cost for bar scaling
+  const maxDailyCost = data ? Math.max(...data.daily_cost.map((d) => d.cost_usd), 1) : 1
+
+  // Sort models by total tokens (descending)
+  const modelEntries = data
+    ? Object.entries(data.by_model).sort(
+        ([, a], [, b]) => (b.input + b.output + b.cached_read) - (a.input + a.output + a.cached_read)
+      )
+    : []
+
+  const modelColors: Record<string, string> = {
+    'claude-opus-4-6': 'bg-accent',
+    'claude-sonnet-4-6': 'bg-green',
+    'claude-haiku-4-5-20251001': 'bg-teal',
+  }
+
+  return (
+    <div className="bg-surface rounded-lg border border-border p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-text-dim">API Usage & Cost</h3>
+        <div className="flex items-center gap-2">
+          {[7, 14, 30].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors ${
+                days === d
+                  ? 'bg-accent/20 text-accent font-bold'
+                  : 'text-text-muted hover:text-text-dim'
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error === 'not_configured' ? (
+        <div className="flex items-center gap-3 py-2">
+          <span className="text-xs text-text-muted px-2 py-1 rounded bg-surface-raised font-mono">ANTHROPIC_ADMIN_KEY</span>
+          <p className="text-xs text-text-muted">not set on server — set it to enable usage tracking</p>
+        </div>
+      ) : error || !data ? (
+        <p className="text-xs text-text-muted italic">{error ?? 'Loading…'}</p>
+      ) : (
+        <div className="space-y-5">
+          {/* Total cost */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-accent tabular-nums">${data.total_cost_usd.toFixed(2)}</span>
+            <span className="text-xs text-text-muted">last {data.period_days} days</span>
+          </div>
+
+          {/* Daily cost bars */}
+          <div>
+            <h4 className="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-2">Daily Cost</h4>
+            <div className="flex items-end gap-1" style={{ height: 64 }}>
+              {data.daily_cost.map((day) => {
+                const pct = maxDailyCost > 0 ? (day.cost_usd / maxDailyCost) * 100 : 0
+                const dateLabel = new Date(day.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                return (
+                  <div
+                    key={day.date}
+                    className="flex-1 group relative"
+                    style={{ height: '100%' }}
+                  >
+                    <div className="absolute bottom-0 w-full bg-accent/30 rounded-t transition-all hover:bg-accent/50"
+                      style={{ height: `${Math.max(pct, 2)}%` }}
+                    />
+                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-surface-raised border border-border rounded px-1.5 py-0.5 text-[10px] font-mono text-text-dim z-10 pointer-events-none">
+                      {dateLabel}: ${day.cost_usd.toFixed(2)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="flex justify-between mt-1 text-[9px] text-text-muted font-mono">
+              <span>{data.daily_cost.length > 0 ? new Date(data.daily_cost[0].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}</span>
+              <span>{data.daily_cost.length > 1 ? new Date(data.daily_cost[data.daily_cost.length - 1].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}</span>
+            </div>
+          </div>
+
+          {/* By model */}
+          <div>
+            <h4 className="text-[10px] uppercase tracking-widest text-text-muted font-semibold mb-2">Usage by Model</h4>
+            <div className="space-y-2">
+              {modelEntries.map(([model, usage]) => {
+                const total = usage.input + usage.output + usage.cached_read + usage.cached_create
+                const barColor = modelColors[model] || 'bg-accent/50'
+                const shortName = model.replace('claude-', '').replace('-20251001', '')
+                return (
+                  <div key={model} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-text-dim font-medium truncate max-w-[160px]" title={model}>{shortName}</span>
+                      <span className="text-text-muted font-mono tabular-nums">{formatTokens(total)} tokens</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 text-[10px] text-text-muted font-mono">
+                      <span>in: {formatTokens(usage.input)}</span>
+                      <span>out: {formatTokens(usage.output)}</span>
+                      <span>cache-r: {formatTokens(usage.cached_read)}</span>
+                      <span>cache-w: {formatTokens(usage.cached_create)}</span>
+                    </div>
+                    <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden">
+                      <div className={`h-full ${barColor} rounded-full`} style={{ width: '100%' }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Checked at */}
+          <div className="text-[10px] text-text-muted font-mono pt-2 border-t border-border">
+            checked {timeAgo(data.checked_at)} · cached 15 min
+          </div>
+        </div>
       )}
     </div>
   )
@@ -1736,8 +1890,11 @@ function NetworkHealthPageInner() {
         </div>
       </div>
 
-      {/* 3. API Limits */}
-      <ApiLimitsPanel />
+      {/* 3. API Limits + Usage */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ApiLimitsPanel />
+        <ApiUsagePanel />
+      </div>
 
       {/* 4. Calibration Summary */}
       <section>

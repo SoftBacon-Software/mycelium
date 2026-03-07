@@ -562,6 +562,21 @@ export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string
   return apiGet('/admin/api-limits');
 }
 
+export interface ApiUsageData {
+  period_days: number
+  start: string
+  end: string
+  total_cost_usd: number
+  daily_cost: { date: string; cost_usd: number }[]
+  by_model: Record<string, { input: number; output: number; cached_read: number; cached_create: number }>
+  daily_tokens: { date: string; input: number; output: number; cached_read: number; cached_create: number }[]
+  checked_at: string
+}
+
+export function fetchApiUsage(days = 7): Promise<{ cached: boolean; data: ApiUsageData }> {
+  return apiGet(`/admin/api-usage?days=${days}`);
+}
+
 // Profiles & Calibration
 
 export function fetchProfiles(): Promise<import('./types').NodeProfile[]> {
