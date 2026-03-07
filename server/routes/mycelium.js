@@ -444,6 +444,7 @@ function checkAgentOrAdmin(req, res) {
 }
 
 // Billing plan enforcement — check subscription status on org-scoped requests
+// TODO: Mount on org-scoped routes when multi-tenant isolation ships (Plan #19 step 5)
 function checkBillingEnforcement(req, res, next) {
   var orgId = req.headers['x-org-id'] || req.query.org_id;
   if (!orgId) return next();
