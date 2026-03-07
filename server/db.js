@@ -3226,3 +3226,57 @@ export function buildCalibrationBlock(agentId) {
 
   return calibration;
 }
+
+// =============== CUSTOMER INSTANCES ===============
+
+export function createInstance(data) {
+  var result = db.prepare(
+    'INSERT INTO dv_customer_instances (org_id, railway_project_id, railway_service_id, railway_environment_id, domain, cloudflare_record_id, status, admin_username, customer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
+  ).get(
+    data.org_id,
+    data.railway_project_id || null,
+    data.railway_service_id || null,
+    data.railway_environment_id || null,
+    data.domain || null,
+    data.cloudflare_record_id || null,
+    data.status || 'provisioning',
+    data.admin_username || null,
+    data.customer_email || null
+  );
+  return result;
+}
+
+export function getInstance(id) {
+  return db.prepare('SELECT * FROM dv_customer_instances WHERE id = ?').get(id);
+}
+
+export function getInstanceByOrg(orgId) {
+  return db.prepare('SELECT * FROM dv_customer_instances WHERE org_id = ? ORDER BY created_at DESC LIMIT 1').get(orgId);
+}
+
+export function getInstanceByDomain(domain) {
+  return db.prepare('SELECT * FROM dv_customer_instances WHERE domain = ?').get(domain);
+}
+
+export function listInstances(filters) {
+  var where = [];
+  var params = [];
+  if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
+  if (filters && filters.org_id) { where.push('org_id = ?'); params.push(filters.org_id); }
+  var sql = 'SELECT * FROM dv_customer_instances' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
+  return db.prepare(sql).all.apply(db.prepare(sql), params);
+}
+
+export function updateInstance(id, updates) {
+  var sets = [];
+  var params = [];
+  var allowed = ['railway_project_id', 'railway_service_id', 'railway_environment_id', 'domain', 'cloudflare_record_id', 'status', 'version', 'health_status', 'last_health_check', 'admin_username', 'customer_email', 'suspended_at', 'archived_at', 'snapshot_url'];
+  for (var key of allowed) {
+    if (updates[key] !== undefined) { sets.push(key + ' = ?'); params.push(updates[key]); }
+  }
+  if (sets.length === 0) return getInstance(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE dv_customer_instances SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE dv_customer_instances SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  return getInstance(id);
+}

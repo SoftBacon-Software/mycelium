@@ -617,3 +617,28 @@ CREATE TABLE IF NOT EXISTS dv_node_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_dv_node_profiles_layer ON dv_node_profiles(layer);
 CREATE INDEX IF NOT EXISTS idx_dv_node_profiles_node_type ON dv_node_profiles(node_type);
+
+-- Customer instances (links billing to provisioning to deploys to churn)
+CREATE TABLE IF NOT EXISTS dv_customer_instances (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id                TEXT NOT NULL,
+  railway_project_id    TEXT,
+  railway_service_id    TEXT,
+  railway_environment_id TEXT,
+  domain                TEXT,
+  cloudflare_record_id  TEXT,
+  status                TEXT NOT NULL DEFAULT 'provisioning',
+  version               TEXT,
+  health_status         TEXT DEFAULT 'unknown',
+  last_health_check     TEXT,
+  admin_username        TEXT,
+  customer_email        TEXT,
+  suspended_at          TEXT,
+  archived_at           TEXT,
+  snapshot_url          TEXT,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_instances_org ON dv_customer_instances(org_id);
+CREATE INDEX IF NOT EXISTS idx_instances_status ON dv_customer_instances(status);
+CREATE INDEX IF NOT EXISTS idx_instances_domain ON dv_customer_instances(domain);
