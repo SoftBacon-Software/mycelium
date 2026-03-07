@@ -1,0 +1,27 @@
+{
+  "name": "billing",
+  "version": "1.0.0",
+  "displayName": "Billing",
+  "description": "Stripe subscription tracking and plan enforcement via webhooks.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/billing",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "configSchema": [
+    {
+      "key": "stripe_webhook_secret",
+      "type": "string",
+      "label": "Stripe Webhook Secret",
+      "description": "whsec_... from Stripe dashboard. Required for webhook signature verification.",
+      "default": ""
+    },
+    {
+      "key": "grace_period_days",
+      "type": "number",
+      "label": "Grace Period (days)",
+      "description": "Days to allow API access after payment fails before enforcing 403.",
+      "default": "7"
+    }
+  ]
+}

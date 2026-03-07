@@ -588,3 +588,20 @@ export function fetchCalibration(agentId: string): Promise<import('./types').Cal
     }
   }).catch(() => null);
 }
+
+// Billing / Subscriptions
+
+export interface SubscriptionRecord {
+  id: number;
+  org_id: string;
+  stripe_customer_id: string;
+  stripe_subscription_id: string;
+  status: string;
+  plan: string;
+  current_period_end: string;
+  created_at: string;
+}
+
+export function fetchSubscriptionStatus(orgId: string): Promise<SubscriptionRecord> {
+  return apiGet<SubscriptionRecord>(`/billing/subscriptions/${encodeURIComponent(orgId)}`);
+}
