@@ -5,6 +5,7 @@ import createBillingDB from './db.js';
 export default function (core) {
   var router = Router();
   var db = createBillingDB(core.db);
+  var stripe = new Stripe('sk_not_used');
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError } = core;
 
@@ -31,9 +32,11 @@ export default function (core) {
 
     var event;
     try {
-      var stripe = new Stripe('not-needed');
-      var payload = req.rawBody || Buffer.from(JSON.stringify(req.body));
-      event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
+      if (!req.rawBody) {
+        console.error('[billing] rawBody not captured — signature verification will fail');
+        return apiError(res, 500, 'Raw body not available for signature verification');
+      }
+      event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
     } catch (err) {
       console.error('[billing] Webhook signature verification failed:', err.message);
       return apiError(res, 400, 'Webhook signature verification failed');
