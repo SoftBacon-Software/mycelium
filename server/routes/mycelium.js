@@ -1651,11 +1651,13 @@ router.put('/requests/:id', function (req, res) {
   }
 
   if (status === 'resolved' || status === 'completed' || status === 'done') {
-    resolveMessage(msg.id, agentId);
-    emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
+    // If auth is __system__ (admin without X-Acting-As), use the request's to_agent as responder
+    var responderId = (agentId === '__system__' && msg.to_agent) ? msg.to_agent : agentId;
+    resolveMessage(msg.id, responderId);
+    emitEvent('request_resolved', responderId, msg.project_id, responderId + ' resolved request #' + msg.id, { message_id: msg.id });
     var result = { ok: true, id: msg.id, status: 'resolved' };
     if (req.body.response) {
-      var responseId = createMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
+      var responseId = createMessage(responderId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
       result.response_id = responseId;
     }
     return res.json(result);
@@ -1776,14 +1778,16 @@ router.put('/messages/:id/resolve', function (req, res) {
   if (!agentId) return;
   var msg = getMessage(parseIntParam(req.params.id));
   if (!msg) return res.status(404).json({ error: 'Message not found' });
-  resolveMessage(msg.id, agentId);
-  emitEvent('request_resolved', agentId, msg.project_id, agentId + ' resolved request #' + msg.id, { message_id: msg.id });
+  // If auth is __system__ (admin without X-Acting-As), use the message's to_agent as responder
+  var responderId = (agentId === '__system__' && msg.to_agent) ? msg.to_agent : agentId;
+  resolveMessage(msg.id, responderId);
+  emitEvent('request_resolved', responderId, msg.project_id, responderId + ' resolved request #' + msg.id, { message_id: msg.id });
 
   var result = { ok: true, id: msg.id, status: 'resolved' };
 
   // Optionally send a response message back
   if (req.body.response) {
-    var responseId = createMessage(agentId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
+    var responseId = createMessage(responderId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
     result.response_id = responseId;
   }
 
@@ -3524,6 +3528,11 @@ router.put('/drones/jobs/:id', function (req, res) {
       var MAX_REQUEUES = 3;   // max cross-drone requeue cycles
       var inputData = {};
       try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for input_data (job: ' + job.id + '):', e.message); }
+
+      // Honor _no_retry flag — skip all retry/requeue logic
+      if (inputData._no_retry) {
+        emitEvent('drone_job_exhausted', who, 'drone', 'Job #' + job.id + ' failed (no-retry flag set)', { original_job_id: inputData._original_job_id || job.id, reason: '_no_retry flag set' });
+      } else {
       var retryCount = inputData._retry_count || 0;
       var requeueCount = inputData._requeue_count || 0;
       var failedDrones = inputData._failed_drones || [];
@@ -3571,6 +3580,7 @@ router.put('/drones/jobs/:id', function (req, res) {
           emitEvent('drone_job_requeue', who, 'drone', 'Job #' + originalJobId + ' requeued as #' + requeueId + ' (cycle ' + (requeueCount + 1) + '/' + MAX_REQUEUES + ') after failures on ' + failedDroneId, { original_job_id: originalJobId, requeue_job_id: requeueId, failed_drone: failedDroneId, requeue_count: requeueCount + 1 });
         }
       }
+      } // end _no_retry else
     }
   }
   res.json({ ok: true, id: job.id });
