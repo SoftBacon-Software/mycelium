@@ -9,7 +9,7 @@ import {
   LayoutDashboard, CheckSquare, Map, Bug,
   MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database, Server,
-  Settings, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
+  Settings, Settings2, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -72,6 +72,7 @@ const staticNavSections: NavSection[] = [
     label: 'Manage',
     items: [
       { to: '/operators', label: 'Operators', icon: Users },
+      { to: '/team-settings', label: 'Team Settings', icon: Settings2, adminOnly: true },
       { to: '/deployments', label: 'Deployments', icon: Server, adminOnly: true },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },
       { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
