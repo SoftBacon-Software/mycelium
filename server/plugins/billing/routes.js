@@ -34,8 +34,8 @@ export default function (core) {
     var repoUrl = getConfig('repo_url', 'SoftBacon-Software/mycelium');
     var baseDomain = getConfig('base_domain', 'mycelium.fyi');
 
-    if (!railwayToken || !cloudflareToken || !cloudflareZoneId) {
-      console.log('[billing] Provisioning skipped — missing railway_token, cloudflare_token, or cloudflare_zone_id config');
+    if (!railwayToken) {
+      console.log('[billing] Provisioning skipped — missing railway_token config');
       core.inbox.createInboxItemForAllOperators(
         'provision_manual', 'subscription', orgId,
         'Manual provisioning needed: ' + orgId,
