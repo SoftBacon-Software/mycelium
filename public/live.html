@@ -580,7 +580,9 @@ function renderDrones(drones) {
     info.appendChild(status);
     var label = document.createElement('div');
     label.className = 'drone-label';
-    label.textContent = 'GPU';
+    var caps = [];
+    try { caps = JSON.parse(d.capabilities || '[]'); } catch (e) { caps = []; }
+    label.textContent = caps.length ? caps.join(', ').toUpperCase() : 'DRONE';
     card.appendChild(dot);
     card.appendChild(info);
     card.appendChild(label);
