@@ -7,6 +7,7 @@ import { Resend } from 'resend';
 var resend = null;
 var FROM_DEFAULT = 'Mycelium <noreply@mycelium.fyi>';
 var REPLY_TO_DEFAULT = 'support@mycelium.fyi';
+var COMPANY_ADDRESS = 'SoftBacon Software, 816 Eagles Way, Leander, TX 78641';
 
 // ---- Colors (Mycelium earth-tone palette) ----
 var COLORS = {
@@ -90,7 +91,8 @@ function emailWrapper(title, bodyHtml) {
   <!-- Footer -->
   <tr><td style="padding:20px 32px;background:${COLORS.surface};border-radius:0 0 12px 12px;text-align:center;">
     <span style="color:${COLORS.textMuted};font-size:12px;">Mycelium &mdash; The distributed development platform</span><br>
-    <a href="https://mycelium.fyi" style="color:${COLORS.teal};font-size:12px;text-decoration:none;">mycelium.fyi</a>
+    <a href="https://mycelium.fyi" style="color:${COLORS.teal};font-size:12px;text-decoration:none;">mycelium.fyi</a><br>
+    <span style="color:${COLORS.textMuted};font-size:11px;line-height:1.8;">${COMPANY_ADDRESS}</span>
   </td></tr>
 </table>
 </td></tr>
@@ -111,6 +113,14 @@ function muted(text) {
 }
 
 // ======== Email Templates ========
+// CAN-SPAM classification:
+//   TRANSACTIONAL (exempt from most requirements): password reset, ticket
+//   confirmation/resolution, instance ready, payment failed, suspended,
+//   operator alerts.
+//   COMMERCIAL/MIXED: waitlist confirmation (includes unsubscribe opt-out).
+//   END-OF-RELATIONSHIP: archived, data deleted (purely informational,
+//   no promotional content).
+// All emails include physical postal address in footer (CAN-SPAM §7704).
 
 /** Waitlist confirmation email */
 export function templateWaitlistConfirmation(name, email) {
@@ -126,6 +136,7 @@ export function templateWaitlistConfirmation(name, email) {
       <li>You'll get an email with your dashboard URL and login credentials</li>
     </ul>
     ${muted("If you didn't sign up for Mycelium, you can safely ignore this email.")}
+    ${muted('To remove yourself from the waitlist, reply to this email with "unsubscribe".')}
   `);
   return { to: email, subject: "You're on the Mycelium waitlist", html: html };
 }
@@ -250,10 +261,7 @@ export function templateDataDeleted(name, email) {
     <p>${greeting}</p>
     <p>Your Mycelium instance data has been <strong>permanently deleted</strong> after 90 days in the archive.</p>
     <p>This action is irreversible. All project data, agent configurations, and stored assets associated with your instance have been removed.</p>
-    <div style="background:${COLORS.surface};border-left:3px solid ${COLORS.textMuted};padding:16px 20px;margin:16px 0;border-radius:0 6px 6px 0;">
-      <p style="margin:0;color:${COLORS.textMuted};">If you'd like to start fresh with a new Mycelium instance, visit <a href="https://mycelium.fyi" style="color:${COLORS.teal};text-decoration:none;">mycelium.fyi</a>.</p>
-    </div>
-    ${muted("Thank you for having been a Mycelium user. We hope to see you again.")}
+    ${muted("This is the final notice regarding your account. No further emails will be sent.")}
   `);
   return { to: email, subject: 'Your Mycelium data has been permanently deleted', html: html };
 }
