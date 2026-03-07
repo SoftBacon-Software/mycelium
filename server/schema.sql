@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS dv_bugs (
   assignee        TEXT,
   admin_notes     TEXT NOT NULL DEFAULT '',
   diagnostic_data TEXT,
+  linked_ticket_id INTEGER,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -185,6 +186,16 @@ CREATE TABLE IF NOT EXISTS dv_studio_users (
   password_hash TEXT NOT NULL,
   role          TEXT NOT NULL DEFAULT 'admin',
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Password reset tokens (SHA-256 hashed, single-use, 30-min expiry)
+CREATE TABLE IF NOT EXISTS dv_password_resets (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  email       TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  used        INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Agent webhooks
@@ -265,6 +276,7 @@ CREATE TABLE IF NOT EXISTS dv_support_tickets (
   reporter_name   TEXT NOT NULL DEFAULT '',
   assignee        TEXT,
   resolution      TEXT NOT NULL DEFAULT '',
+  linked_bug_id   INTEGER,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
