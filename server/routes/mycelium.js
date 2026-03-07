@@ -4837,6 +4837,32 @@ router.delete('/profiles/:id', function (req, res) {
 
 // ======== SUPPORT TICKETS ========
 
+// Classify support ticket into L1 (auto-handleable) or L2 (requires human triage)
+function classifyTicket(subject, description) {
+  var text = ((subject || '') + ' ' + (description || '')).toLowerCase();
+  if (/password|reset|login|sign.?in|locked.?out|can.?t.?log/i.test(text)) {
+    return { tier: 'L1', category: 'password_reset', auto_action: 'password_reset' };
+  }
+  if (/config|setup|how.?to|setting|install|getting.?started/i.test(text)) {
+    return { tier: 'L1', category: 'config' };
+  }
+  if (/billing|charge|invoice|payment|cancel|refund|subscription/i.test(text)) {
+    return { tier: 'L2', category: 'billing' };
+  }
+  if (/data.?loss|delete|missing|gone|corrupt/i.test(text)) {
+    return { tier: 'L2', category: 'data_issue' };
+  }
+  // Check if matches existing open bug title
+  var openBugs = listBugs({ status: 'open', limit: 50 });
+  var bugList = openBugs.bugs || openBugs || [];
+  for (var i = 0; i < bugList.length; i++) {
+    if (bugList[i].title && text.indexOf(bugList[i].title.toLowerCase()) !== -1) {
+      return { tier: 'L1', category: 'known_bug', linked_bug_id: bugList[i].id };
+    }
+  }
+  return { tier: 'L2', category: 'general' };
+}
+
 // ---- Ticket ↔ Bug bridge: migrations ----
 try {
   var db = getDB();
@@ -4891,6 +4917,38 @@ router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
   } catch (e) {
     console.error('[support] auto-bug creation failed:', e.message);
   }
+  // Classify and route
+  var classification = classifyTicket(req.body.subject, req.body.description);
+  var tierUpdates = {
+    tier: classification.tier,
+    category: classification.category || req.body.category || 'general'
+  };
+
+  if (classification.tier === 'L1') {
+    // Auto-assign to an available agent
+    var agents = listAgents().filter(function(a) { return a.status === 'online' && a.role !== 'drone'; });
+    if (agents.length > 0) {
+      tierUpdates.assigned_agent = agents[0].id;
+    }
+    tierUpdates.requires_approval = 0;
+  } else {
+    // L2: route to operator inbox as urgent, require approval on responses
+    tierUpdates.requires_approval = 1;
+    createInboxItemForAllOperators(
+      'support_ticket', 'ticket', String(ticket.id),
+      'L2 Support Ticket: ' + (req.body.subject || '').slice(0, 80),
+      'From: ' + (reporterEmail || 'unknown') + ' — Requires triage',
+      { ticket_id: ticket.id, tier: 'L2', category: classification.category },
+      'urgent'
+    );
+  }
+
+  if (classification.linked_bug_id) {
+    tierUpdates.linked_bug_id = classification.linked_bug_id;
+  }
+
+  updateSupportTicket(ticket.id, tierUpdates);
+
   // Email: confirmation to customer + alert to operators
   if (reporterEmail) {
     sendEmail(templateTicketConfirmation(reporterEmail, reporterName, ticket.id, subject));

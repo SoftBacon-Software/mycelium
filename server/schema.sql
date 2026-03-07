@@ -277,6 +277,10 @@ CREATE TABLE IF NOT EXISTS dv_support_tickets (
   assignee        TEXT,
   resolution      TEXT NOT NULL DEFAULT '',
   linked_bug_id   INTEGER,
+  tier            TEXT NOT NULL DEFAULT 'L2',
+  assigned_agent  TEXT,
+  requires_approval INTEGER NOT NULL DEFAULT 0,
+  draft_response  TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -76,6 +76,11 @@ export function initDB() {
     // Drone system overhaul — smart job routing
     ["dv_agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
     ["dv_drone_jobs", "job_type", "TEXT"],
+    // Support ticket tiered routing
+    ["dv_support_tickets", "tier", "TEXT NOT NULL DEFAULT 'L2'"],
+    ["dv_support_tickets", "assigned_agent", "TEXT"],
+    ["dv_support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
+    ["dv_support_tickets", "draft_response", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -2897,7 +2902,7 @@ export function listSupportTickets(filters) {
 export function updateSupportTicket(id, updates) {
   var sets = [];
   var params = [];
-  var allowed = ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution'];
+  var allowed = ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution', 'tier', 'assigned_agent', 'requires_approval', 'draft_response'];
   for (var key of allowed) {
     if (updates[key] !== undefined) { sets.push(key + ' = ?'); params.push(updates[key]); }
   }
