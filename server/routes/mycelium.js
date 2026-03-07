@@ -3517,45 +3517,58 @@ router.put('/drones/jobs/:id', function (req, res) {
       }
     }
     // Smart retry logic for failed drone jobs
+    // Tracks: _retry_count (per-drone attempts), _requeue_count (cross-drone cycles),
+    //         _original_title (clean title), _original_job_id, _failed_drones
     if (fields.status === 'failed') {
+      var MAX_RETRIES = 2;    // per-drone retries (0,1,2 = 3 attempts)
+      var MAX_REQUEUES = 3;   // max cross-drone requeue cycles
       var inputData = {};
       try { inputData = JSON.parse(job.input_data || '{}'); } catch (e) { console.warn('[mycelium] JSON parse failed for input_data (job: ' + job.id + '):', e.message); }
       var retryCount = inputData._retry_count || 0;
+      var requeueCount = inputData._requeue_count || 0;
       var failedDrones = inputData._failed_drones || [];
       var originalJobId = inputData._original_job_id || job.id;
+      var originalTitle = inputData._original_title || job.title;
       var failedDroneId = job.drone_id;
 
-      if (retryCount < 2) {
+      if (retryCount < MAX_RETRIES) {
         // Retry on same drone (up to 3 attempts: 0, 1, 2)
         var retryInput = Object.assign({}, inputData, {
           _retry_count: retryCount + 1,
+          _requeue_count: requeueCount,
           _failed_drones: failedDrones,
-          _original_job_id: originalJobId
+          _original_job_id: originalJobId,
+          _original_title: originalTitle
         });
-        var retryId = createDroneJob(job.title + ' (retry ' + (retryCount + 1) + ')', job.command, retryInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
+        var retryTitle = originalTitle + ' [retry ' + (retryCount + 1) + '/' + MAX_RETRIES + ']';
+        var retryId = createDroneJob(retryTitle, job.command, retryInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
         emitEvent('drone_job_retry', who, 'drone', 'Auto-retry #' + (retryCount + 1) + ' for job #' + originalJobId + ' -> new job #' + retryId, { original_job_id: originalJobId, retry_job_id: retryId, retry_count: retryCount + 1 });
       } else {
-        // 3 failures on this drone — add to failed list, check if all drones exhausted
+        // Max retries on this drone — add to failed list, check if we should requeue
         if (failedDroneId && failedDrones.indexOf(failedDroneId) === -1) {
           failedDrones.push(failedDroneId);
         }
         var allDrones = listDrones();
         var allDroneIds = allDrones.map(function (d) { return d.id; });
-        var allExhausted = allDroneIds.length > 0 && allDroneIds.every(function (did) { return failedDrones.indexOf(did) !== -1; });
+        var allExhausted = allDroneIds.length === 0 || allDroneIds.every(function (did) { return failedDrones.indexOf(did) !== -1; });
 
-        if (allExhausted) {
-          // All drones have failed this job — emit exhausted event, don't retry
-          emitEvent('drone_job_exhausted', who, 'drone', 'All drones exhausted for job #' + originalJobId + ' — escalating', { original_job_id: originalJobId, failed_drones: failedDrones });
-          dispatchWebhook('drone_job_exhausted', job.requester, { job_id: job.id, original_job_id: originalJobId, title: job.title, failed_drones: failedDrones, error: fields.error });
+        if (allExhausted || requeueCount >= MAX_REQUEUES) {
+          // All drones exhausted OR max requeue limit reached — stop retrying
+          var reason = allExhausted ? 'all drones exhausted' : 'max requeue limit (' + MAX_REQUEUES + ') reached';
+          emitEvent('drone_job_exhausted', who, 'drone', 'Job #' + originalJobId + ' abandoned: ' + reason, { original_job_id: originalJobId, failed_drones: failedDrones, requeue_count: requeueCount });
+          dispatchWebhook('drone_job_exhausted', job.requester, { job_id: job.id, original_job_id: originalJobId, title: originalTitle, failed_drones: failedDrones, error: fields.error, reason: reason });
         } else {
           // Reset retry count, put back in queue for next drone
           var resetInput = Object.assign({}, inputData, {
             _retry_count: 0,
+            _requeue_count: requeueCount + 1,
             _failed_drones: failedDrones,
-            _original_job_id: originalJobId
+            _original_job_id: originalJobId,
+            _original_title: originalTitle
           });
-          var requeueId = createDroneJob(job.title + ' (requeue)', job.command, resetInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
-          emitEvent('drone_job_requeue', who, 'drone', 'Job #' + originalJobId + ' requeued as #' + requeueId + ' after 3 failures on ' + failedDroneId, { original_job_id: originalJobId, requeue_job_id: requeueId, failed_drone: failedDroneId });
+          var requeueTitle = originalTitle + ' [requeue ' + (requeueCount + 1) + '/' + MAX_REQUEUES + ']';
+          var requeueId = createDroneJob(requeueTitle, job.command, resetInput, job.requires, job.requester, job.priority, job.workspace_repo, job.workspace_branch, job.profile_id);
+          emitEvent('drone_job_requeue', who, 'drone', 'Job #' + originalJobId + ' requeued as #' + requeueId + ' (cycle ' + (requeueCount + 1) + '/' + MAX_REQUEUES + ') after failures on ' + failedDroneId, { original_job_id: originalJobId, requeue_job_id: requeueId, failed_drone: failedDroneId, requeue_count: requeueCount + 1 });
         }
       }
     }
