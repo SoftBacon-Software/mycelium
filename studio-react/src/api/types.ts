@@ -215,7 +215,7 @@ export interface Concept {
   data: unknown;
   created_at: string;
   updated_at: string;
-  projects: string[];
+  projects: (string | { id: string; name?: string })[];
 }
 
 export interface Operator {
