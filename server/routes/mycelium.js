@@ -367,23 +367,22 @@ function checkAgent(req, res) {
     req._authProjectId = cached.project_id;
     return cached.id;
   }
-  // DB lookup: SHA-256 direct comparison, bcrypt fallback for legacy hashes
+  // DB lookup: O(1) SHA-256 direct lookup first, then bcrypt fallback for legacy hashes
+  var directMatch = getDB().prepare("SELECT id, project_id FROM dv_agents WHERE api_key_hash = ?").get(keyHash);
+  if (directMatch) {
+    agentKeyCache.set(keyHash, { id: directMatch.id, project_id: directMatch.project_id || null });
+    req._authAgentId = directMatch.id;
+    req._authProjectId = directMatch.project_id || null;
+    return directMatch.id;
+  }
+  // Fallback: scan for legacy bcrypt hashes and auto-migrate
   var agents = listAllAgentsIncludingDrones();
   for (var a of agents) {
     var full = getAgent(a.id);
     if (!full || !full.api_key_hash) continue;
-    var match = false;
-    if (full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) {
-      // Legacy bcrypt hash — compare and auto-migrate to SHA-256
-      if (bcrypt.compareSync(key, full.api_key_hash)) {
-        match = true;
-        updateAgentKey(a.id, keyHash);
-        clearAgentKeyCache();
-      }
-    } else if (full.api_key_hash === keyHash) {
-      match = true;
-    }
-    if (match) {
+    if ((full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) && bcrypt.compareSync(key, full.api_key_hash)) {
+      updateAgentKey(a.id, keyHash);
+      clearAgentKeyCache();
       agentKeyCache.set(keyHash, { id: a.id, project_id: full.project_id || null });
       req._authAgentId = a.id;
       req._authProjectId = full.project_id || null;
@@ -594,8 +593,8 @@ function notifyOperators(alertTitle, alertBodyHtml, actionUrl) {
 // Soft enforcement: warns agents but doesn't block (returns warning field).
 // Hard enforcement: blocks agents without an approved approval_id.
 function checkApprovalGate(req, who, actionType) {
-  // Admin/studio users bypass gates
-  if (who === '__admin__' || who === '__system__' || !who || who.indexOf('-claude') === -1) return { ok: true };
+  // Admin/studio users and system bypass gates
+  if (who === '__admin__' || who === '__system__' || !who || req._authIsAdmin) return { ok: true };
   var approvalId = req.body.approval_id || req.query.approval_id;
   if (!approvalId) {
     return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call mycelium_request_approval first.' };
@@ -674,7 +673,7 @@ router.use(normalizeProjectField);
 // Creates inbox item for greatness operator so they get notified.
 router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res) {
   var { name, email, subdomain, use_case } = req.body;
-  if (!email) return apiError(res, 400, 'email is required');
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return apiError(res, 400, 'Valid email is required');
   var db = getDB();
   // Ensure table exists (created on first use if migration hasn't run yet)
   db.prepare(`CREATE TABLE IF NOT EXISTS dv_waitlist (
@@ -1657,6 +1656,12 @@ router.post('/events', function (req, res) {
 // On connect: replays last 20 matching events so the client isn't blank
 // Heartbeat: SSE comment every 30s to keep proxies from closing idle connections
 router.get('/events/stream', function (req, res) {
+  // Limit SSE connections per IP to prevent resource exhaustion
+  var clientIp = req.ip || req.connection.remoteAddress;
+  var sseCount = 0;
+  sseClients.forEach(function (c) { if (c.ip === clientIp) sseCount++; });
+  if (sseCount >= 5) return res.status(429).json({ error: 'Too many SSE connections from this IP' });
+
   // Auth must happen before SSE headers are set so we can send error JSON
   var authOk = false;
 
@@ -1703,7 +1708,7 @@ router.get('/events/stream', function (req, res) {
   } catch (e) { /* non-fatal — stream still opens */ }
 
   // Register this client
-  var client = { res: res, filters: filters };
+  var client = { res: res, filters: filters, ip: clientIp };
   sseClients.add(client);
 
   // Keepalive heartbeat every 30s — SSE comment (ignored by EventSource)
