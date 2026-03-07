@@ -2908,6 +2908,10 @@ export function updateSupportTicket(id, updates) {
   return getSupportTicket(id);
 }
 
+export function deleteSupportTicket(id) {
+  return db.prepare('DELETE FROM dv_support_tickets WHERE id = ?').run(id);
+}
+
 // =============== NODE PROFILES — Stand Up Calibration ===============
 
 var NODE_PROFILE_JSON_FIELDS = ['rules', 'required_concepts', 'mcp_config', 'tool_whitelist', 'repo_list', 'md_checkpoints', 'md_blocklist'];
