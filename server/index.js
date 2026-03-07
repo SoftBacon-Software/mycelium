@@ -108,7 +108,14 @@ app.use(function (req, res, next) {
   next();
 });
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: function (req, res, buf) {
+    if (req.url.includes('/billing/webhook')) {
+      req.rawBody = buf;
+    }
+  }
+}));
 
 // Ensure all JSON responses use UTF-8 charset
 app.use(function (req, res, next) {
