@@ -17,4 +17,4 @@ COPY tools/ tools/
 COPY --from=builder /app/public/ public/
 USER node
 EXPOSE 3002
-CMD ["node", "server/index.js"]
+CMD ["node", "server/boot.js"]
