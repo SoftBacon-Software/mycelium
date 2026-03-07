@@ -9,8 +9,13 @@ import { sendEmail, templateInstanceReady, templatePaymentFailed, templateInstan
 export default function (core) {
   var router = Router();
   var db = createBillingDB(core.db);
-  // Only used for webhooks.constructEvent() — no API calls made
-  var stripe = new Stripe('');
+  // Lazy-init: Stripe SDK only needed for webhook signature verification.
+  // Constructing with empty string throws, so defer until first webhook call.
+  var stripe = null;
+  function getStripe() {
+    if (!stripe) stripe = new Stripe(getConfig('stripe_secret_key', 'sk_none'));
+    return stripe;
+  }
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError } = core;
 
@@ -41,7 +46,7 @@ export default function (core) {
         console.error('[billing] rawBody not captured — signature verification will fail');
         return apiError(res, 500, 'Raw body not available for signature verification');
       }
-      event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+      event = getStripe().webhooks.constructEvent(req.rawBody, sig, webhookSecret);
     } catch (err) {
       console.error('[billing] Webhook signature verification failed:', err.message);
       return apiError(res, 400, 'Webhook signature verification failed');
