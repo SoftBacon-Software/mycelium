@@ -389,7 +389,7 @@
   }
 
   function fetchOverview(cb) {
-    apiGet('/admin/overview', function (err, data) {
+    apiGet('/admin/overview?verbose=true', function (err, data) {
       if (err) { if (cb) cb(err); return; }
       render(data);
       if (cb) cb(null);
