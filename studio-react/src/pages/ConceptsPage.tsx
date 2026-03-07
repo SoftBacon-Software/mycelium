@@ -305,7 +305,7 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
   }, [concept.id, refresh])
 
   const availableProjects = useMemo(() => {
-    const linked = new Set(concept.projects || [])
+    const linked = new Set((concept.projects || []).map((p) => typeof p === 'string' ? p : (p as { id?: string }).id || ''))
     return projects.filter((p) => !linked.has(p.id))
   }, [projects, concept.projects])
 
@@ -381,19 +381,22 @@ function ConceptDetail({ concept, onClose }: ConceptDetailProps) {
               {(concept.projects || []).length === 0 && (
                 <span className="text-xs text-text-muted">No linked projects</span>
               )}
-              {(concept.projects || []).map((p) => (
-                <span key={p} className="inline-flex items-center gap-1 bg-surface-raised rounded-full px-2.5 py-0.5 text-xs text-text-dim">
-                  {p}
+              {(concept.projects || []).map((p) => {
+                const pid = typeof p === 'string' ? p : (p as { id?: string }).id || ''
+                return (
+                <span key={pid} className="inline-flex items-center gap-1 bg-surface-raised rounded-full px-2.5 py-0.5 text-xs text-text-dim">
+                  {pid}
                   <button
                     type="button"
-                    onClick={() => handleUnlink(p)}
+                    onClick={() => handleUnlink(pid)}
                     className="text-text-muted hover:text-red transition-colors ml-0.5"
                     title="Unlink"
                   >
                     x
                   </button>
                 </span>
-              ))}
+                )
+              })}
             </div>
             {availableProjects.length > 0 && (
               <div className="flex gap-2">
@@ -611,7 +614,8 @@ export default function ConceptsPage() {
               const projectMap = new Map<string, number>()
               for (const c of concepts) {
                 for (const p of c.projects || []) {
-                  projectMap.set(p, (projectMap.get(p) || 0) + 1)
+                  const pid = typeof p === 'string' ? p : (p as { id?: string }).id || ''
+                  if (pid) projectMap.set(pid, (projectMap.get(pid) || 0) + 1)
                 }
               }
               const unlinked = concepts.filter((c) => !c.projects?.length).length

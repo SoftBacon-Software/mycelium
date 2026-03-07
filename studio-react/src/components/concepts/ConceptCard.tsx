@@ -57,9 +57,10 @@ export default function ConceptCard({ concept, onClick }: ConceptCardProps) {
           <Badge variant={typeBadgeVariant[concept.type] ?? 'muted'}>
             {concept.type}
           </Badge>
-          {concept.projects?.map((p) => (
-            <Badge key={p} variant="default">{p}</Badge>
-          ))}
+          {concept.projects?.map((p) => {
+            const pid = typeof p === 'string' ? p : (p as { id?: string; project_id?: string }).id || (p as { id?: string; project_id?: string }).project_id || ''
+            return <Badge key={pid} variant="default">{pid}</Badge>
+          })}
         </div>
 
         {/* Meta row */}
