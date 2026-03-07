@@ -307,9 +307,9 @@ export async function addRailwayCustomDomain(opts) {
  * @param {string} config.railwayToken - Railway API token
  * @param {string} [config.railwayProjectId] - Existing project ID (creates new if omitted)
  * @param {string} config.repoUrl - GitHub repo to deploy
- * @param {string} config.cloudflareToken - Cloudflare API token
- * @param {string} config.cloudflareZoneId - Cloudflare zone ID
- * @param {string} config.baseDomain - Base domain (e.g. "mycelium.fyi")
+ * @param {string} [config.cloudflareToken] - Cloudflare API token (optional — skips DNS if missing)
+ * @param {string} [config.cloudflareZoneId] - Cloudflare zone ID (optional — skips DNS if missing)
+ * @param {string} [config.baseDomain] - Base domain (e.g. "mycelium.fyi") — used for custom domain if Cloudflare configured
  * @param {string} config.adminKey - ADMIN_KEY to set on the new instance
  * @param {string} config.jwtSecret - JWT_SECRET to set on the new instance
  * @param {string} config.adminUsername - First admin user's username
@@ -319,7 +319,8 @@ export async function addRailwayCustomDomain(opts) {
  */
 export async function provisionCustomerInstance(config) {
   var progress = config.onProgress || function () {};
-  var customerDomain = config.customerName + '.' + config.baseDomain;
+  var hasCloudflare = config.cloudflareToken && config.cloudflareZoneId && config.baseDomain;
+  var customerDomain = hasCloudflare ? config.customerName + '.' + config.baseDomain : null;
 
   // Step 1: Create Railway instance
   progress('railway', 'Creating Railway service...');
@@ -336,28 +337,39 @@ export async function provisionCustomerInstance(config) {
     }
   });
 
-  // Step 2: Add custom domain to Railway
-  progress('domain', 'Adding custom domain to Railway...');
-  var customDomain = await addRailwayCustomDomain({
-    railwayToken: config.railwayToken,
-    serviceId: railway.serviceId,
-    environmentId: railway.environmentId,
-    domain: customerDomain
-  });
+  var customDomain = null;
+  var dns = null;
 
-  // Step 3: Create Cloudflare CNAME
-  progress('dns', 'Creating Cloudflare CNAME record...');
-  var dns = await createCloudflareCname({
-    cloudflareToken: config.cloudflareToken,
-    zoneId: config.cloudflareZoneId,
-    subdomain: config.customerName,
-    target: customerDomain
-  });
+  if (hasCloudflare) {
+    // Step 2: Add custom domain to Railway
+    progress('domain', 'Adding custom domain to Railway...');
+    customDomain = await addRailwayCustomDomain({
+      railwayToken: config.railwayToken,
+      serviceId: railway.serviceId,
+      environmentId: railway.environmentId,
+      domain: customerDomain
+    });
+
+    // Step 3: Create Cloudflare CNAME
+    progress('dns', 'Creating Cloudflare CNAME record...');
+    dns = await createCloudflareCname({
+      cloudflareToken: config.cloudflareToken,
+      zoneId: config.cloudflareZoneId,
+      subdomain: config.customerName,
+      target: customerDomain
+    });
+  } else {
+    progress('domain', 'Skipping custom domain — no Cloudflare config, using Railway default domain');
+  }
+
+  // Resolve the domain to use for health checks and user-facing URL
+  // Custom domain if Cloudflare configured, otherwise Railway's default
+  var liveDomain = customerDomain || config.customerName + '.up.railway.app';
 
   // Step 4: Wait for instance to come online
   progress('health', 'Waiting for instance to come online...');
   var health = await pollHealth({
-    url: 'https://' + customerDomain + '/health',
+    url: 'https://' + liveDomain + '/health',
     intervalMs: 5000,
     timeoutMs: 180000,
     onPoll: function (attempt, elapsed) {
@@ -367,8 +379,8 @@ export async function provisionCustomerInstance(config) {
 
   var result = {
     customerName: config.customerName,
-    domain: customerDomain,
-    url: 'https://' + customerDomain,
+    domain: liveDomain,
+    url: 'https://' + liveDomain,
     railway: railway,
     customDomain: customDomain,
     dns: dns,
