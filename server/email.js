@@ -6,6 +6,12 @@ import { Resend } from 'resend';
 
 var resend = null;
 var FROM_DEFAULT = 'Mycelium <noreply@mycelium.fyi>';
+
+// HTML entity escaping for user-provided values in email templates
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 var REPLY_TO_DEFAULT = 'support@mycelium.fyi';
 var COMPANY_ADDRESS = 'SoftBacon Software, 816 Eagles Way, Leander, TX 78641';
 
@@ -175,34 +181,39 @@ export function templatePasswordReset(email, displayName, resetUrl, expiresMinut
 
 /** Support ticket confirmation (sent to customer) */
 export function templateTicketConfirmation(email, name, ticketId, subject) {
-  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var safeName = escapeHtml(name);
+  var safeSubject = escapeHtml(subject);
+  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi,';
   var html = emailWrapper('We Received Your Request', `
     <p>${greeting}</p>
     <p>Thanks for reaching out. We've received your support request and our team is on it.</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
       <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${ticketId}</strong></p>
-      <p style="margin:0;color:${COLORS.text};">${subject}</p>
+      <p style="margin:0;color:${COLORS.text};">${safeSubject}</p>
     </div>
     <p>We'll follow up by email when there's an update. Most issues are resolved within 24 hours.</p>
     ${muted('Reply to this email if you have additional details to share.')}
   `);
-  return { to: email, subject: 'Ticket #' + ticketId + ': ' + subject, replyTo: 'support@mycelium.fyi', html: html };
+  return { to: email, subject: 'Ticket #' + ticketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
 }
 
 /** Support ticket resolution (sent to customer) */
 export function templateTicketResolution(email, name, ticketId, subject, resolution) {
-  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var safeName = escapeHtml(name);
+  var safeSubject = escapeHtml(subject);
+  var safeResolution = escapeHtml(resolution);
+  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi,';
   var html = emailWrapper('Your Issue Has Been Resolved', `
     <p>${greeting}</p>
     <p>We've resolved your support request:</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${ticketId}</strong>: ${subject}</p>
-      ${resolution ? '<p style="margin:12px 0 0;color:' + COLORS.moss + ';"><strong>Resolution:</strong> ' + resolution + '</p>' : ''}
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${ticketId}</strong>: ${safeSubject}</p>
+      ${safeResolution ? '<p style="margin:12px 0 0;color:' + COLORS.moss + ';"><strong>Resolution:</strong> ' + safeResolution + '</p>' : ''}
     </div>
     <p>If this doesn't fully address your issue, just reply to this email and we'll reopen it.</p>
     ${muted('Thank you for using Mycelium.')}
   `);
-  return { to: email, subject: 'Resolved — Ticket #' + ticketId + ': ' + subject, replyTo: 'support@mycelium.fyi', html: html };
+  return { to: email, subject: 'Resolved — Ticket #' + ticketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
 }
 
 /** Payment failed — 7-day grace period warning */

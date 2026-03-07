@@ -115,7 +115,8 @@ app.use(function (req, res, next) {
 app.use(express.json({
   limit: '1mb',
   verify: function (req, res, buf) {
-    if (req.url.includes('/billing/webhook')) {
+    // Capture raw body for all webhook endpoints that need signature verification
+    if (req.url.includes('/webhook')) {
       req.rawBody = buf;
     }
   }

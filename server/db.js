@@ -749,21 +749,20 @@ export function listThreads(limit) {
 // Archive resolved messages older than N days (default 90)
 // Deletes from dv_messages, returns count of rows removed
 export function archiveOldMessages(daysOld) {
-  daysOld = daysOld || 90;
-  var cutoff = "datetime('now', '-" + daysOld + " days')";
-  // Only archive resolved requests/directives and old info messages
+  daysOld = parseInt(daysOld) || 90;
   var result = db.prepare(
-    "DELETE FROM dv_messages WHERE created_at < " + cutoff +
+    "DELETE FROM dv_messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
     " AND (status = 'resolved' OR msg_type = 'info')"
-  ).run();
+  ).run(String(daysOld));
   return result.changes;
 }
 
 // Archive old events older than N days (default 60)
 export function archiveOldEvents(daysOld) {
-  daysOld = daysOld || 60;
-  var cutoff = "datetime('now', '-" + daysOld + " days')";
-  var result = db.prepare("DELETE FROM dv_events WHERE created_at < " + cutoff).run();
+  daysOld = parseInt(daysOld) || 60;
+  var result = db.prepare(
+    "DELETE FROM dv_events WHERE created_at < datetime('now', '-' || ? || ' days')"
+  ).run(String(daysOld));
   return result.changes;
 }
 

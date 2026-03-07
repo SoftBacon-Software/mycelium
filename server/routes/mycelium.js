@@ -400,9 +400,10 @@ function checkAgent(req, res) {
 
 // Admin auth: validates X-Admin-Key, studio JWT, or legacy admin key
 function checkAdmin(req, res) {
-  // Try studio JWT first
+  // Try studio JWT first — must have admin role
   var user = getStudioUser(req);
-  if (user) { req._authIsAdmin = true; return true; }
+  if (user && user.role === 'admin') { req._authIsAdmin = true; return true; }
+  if (user) { res.status(403).json({ error: 'Admin role required' }); return false; }
   // Try admin key
   var key = req.headers['x-admin-key'];
   if (!key && !req.headers['authorization']) {
@@ -702,7 +703,7 @@ router.post('/waitlist', asyncHandler(async function (req, res) {
   emitEvent('waitlist_signup', '__system__', null, 'New waitlist signup: ' + email, { waitlist_id: waitlistId, email, subdomain });
   // Fire-and-forget: waitlist confirmation + operator alert emails
   sendEmail(templateWaitlistConfirmation(name || '', email));
-  notifyOperators('New Waitlist Signup', '<p><strong>' + (name || 'Someone') + '</strong> (' + email + ') just signed up for the waitlist.' + (subdomain ? ' Requested subdomain: <strong>' + subdomain + '</strong>' : '') + (use_case ? '<br>Use case: ' + use_case : '') + '</p>', 'https://mycelium.fyi/studio/waitlist');
+  notifyOperators('New Waitlist Signup', '<p><strong>' + escapeHtml(name || 'Someone') + '</strong> (' + escapeHtml(email) + ') just signed up for the waitlist.' + (subdomain ? ' Requested subdomain: <strong>' + escapeHtml(subdomain) + '</strong>' : '') + (use_case ? '<br>Use case: ' + escapeHtml(use_case) : '') + '</p>', 'https://mycelium.fyi/studio/waitlist');
   res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
 }));
 
@@ -1577,8 +1578,12 @@ router.get('/assets/:id/download', function (req, res) {
   if (!asset.file_path && !asset.path) return res.status(404).json({ error: 'No file attached to this asset' });
 
   var filePath = asset.file_path || nodePath.join(FILES_DIR, asset.path);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
-  res.download(filePath);
+  var resolved = nodePath.resolve(filePath);
+  if (!resolved.startsWith(nodePath.resolve(FILES_DIR)) && !resolved.startsWith(nodePath.resolve(ARTIFACTS_DIR)) && !resolved.startsWith(nodePath.resolve(DATA_DIR))) {
+    return res.status(403).json({ error: 'File path outside allowed directory' });
+  }
+  if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found on disk' });
+  res.download(resolved);
 });
 
 // Link assets to a drone job (bulk update status + drone_job_id)
