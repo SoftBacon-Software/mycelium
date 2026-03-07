@@ -646,3 +646,14 @@ CREATE TABLE IF NOT EXISTS dv_customer_instances (
 CREATE INDEX IF NOT EXISTS idx_instances_org ON dv_customer_instances(org_id);
 CREATE INDEX IF NOT EXISTS idx_instances_status ON dv_customer_instances(status);
 CREATE INDEX IF NOT EXISTS idx_instances_domain ON dv_customer_instances(domain);
+
+-- Message read tracking (agent ↔ message acknowledgment)
+CREATE TABLE IF NOT EXISTS dv_message_reads (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id  INTEGER NOT NULL,
+  agent_id    TEXT NOT NULL,
+  read_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(message_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_msg_reads_agent ON dv_message_reads(agent_id);
+CREATE INDEX IF NOT EXISTS idx_msg_reads_message ON dv_message_reads(message_id);
