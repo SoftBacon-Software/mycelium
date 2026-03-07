@@ -561,3 +561,20 @@ export function bulkDismissInbox(ids?: number[], all?: boolean): Promise<{ ok: b
 export function fetchApiLimits(): Promise<{ cached: boolean; data: Record<string, unknown> }> {
   return apiGet('/admin/api-limits');
 }
+
+// Billing / Subscriptions
+
+export interface SubscriptionRecord {
+  id: number;
+  org_id: string;
+  stripe_customer_id: string;
+  stripe_subscription_id: string;
+  status: string;
+  plan: string;
+  current_period_end: string;
+  created_at: string;
+}
+
+export function fetchSubscriptionStatus(orgId: string): Promise<SubscriptionRecord> {
+  return apiGet<SubscriptionRecord>(`/billing/subscriptions/${encodeURIComponent(orgId)}`);
+}
