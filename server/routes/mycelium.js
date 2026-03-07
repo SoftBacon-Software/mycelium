@@ -149,7 +149,7 @@ import {
   createInboxItem, createInboxItemForAllOperators,
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
-  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket,
+  createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket, deleteSupportTicket,
   purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
   createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
   resolveProfileChain, buildCalibrationBlock
@@ -1094,6 +1094,12 @@ router.post('/tasks', function (req, res) {
   if (req.body.assignee) updates.assignee = req.body.assignee;
   if (req.body.needs_approval) updates.needs_approval = 1;
   if (Object.keys(updates).length > 0) updateTask(id, updates);
+  // Process blocked_by dependencies inline (Bug #92)
+  if (Array.isArray(req.body.blocked_by)) {
+    for (var i = 0; i < req.body.blocked_by.length; i++) {
+      setTaskDependency(id, parseInt(req.body.blocked_by[i]));
+    }
+  }
   emitEvent('task_created', agentId, projectId, agentId + ' created task: ' + title, { task_id: id });
   if (req.body.assignee) {
     dispatchWebhook('task_created', req.body.assignee, { task_id: id, title: title });
@@ -1590,9 +1596,11 @@ router.get('/events/stream', function (req, res) {
 // ======== REQUESTS ========
 
 router.get('/requests/pending', function (req, res) {
-  var agentId = checkAgent(req, res);
+  var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
-  res.json(listPendingRequests(agentId));
+  // Admin can query any agent's pending requests via ?agent_id=
+  var targetAgent = req.query.agent_id || agentId;
+  res.json(listPendingRequests(targetAgent));
 });
 
 router.post('/requests', function (req, res) {
@@ -1828,9 +1836,24 @@ router.post('/plans', function (req, res) {
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
   var id = createPlan(title, description, projectId, owner, priority, tags, agentId);
+  // Process inline steps array if provided (Bug #90)
+  var stepIds = [];
+  if (Array.isArray(req.body.steps)) {
+    for (var i = 0; i < req.body.steps.length; i++) {
+      var s = req.body.steps[i];
+      var sTitle = escapeHtml(s.title || '');
+      if (!sTitle) continue;
+      var sDesc = escapeHtml(s.description || '');
+      var sAssignee = escapeHtml(s.assignee || '');
+      var sPhase = s.phase || null;
+      var stepId = createPlanStep(id, sTitle, sDesc, sAssignee, sPhase);
+      stepIds.push(stepId);
+    }
+  }
   emitEvent('plan_created', agentId, projectId, agentId + ' created plan: ' + title, { plan_id: id });
   dispatchWebhook('plan_created', agentId, { plan_id: id, title: title, project_id: projectId, owner: owner });
   var result = { id: id, title: title };
+  if (stepIds.length) result.steps_created = stepIds.length;
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
 });
@@ -4630,6 +4653,14 @@ router.put('/support/tickets/:id', function (req, res) {
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   var updated = updateSupportTicket(parseInt(req.params.id), req.body);
   res.json(updated);
+});
+
+router.delete('/support/tickets/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var ticket = getSupportTicket(parseInt(req.params.id));
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  deleteSupportTicket(parseInt(req.params.id));
+  res.json({ ok: true, id: parseInt(req.params.id) });
 });
 
 export default router;

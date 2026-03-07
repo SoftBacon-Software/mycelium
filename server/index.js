@@ -110,6 +110,14 @@ app.use(function (req, res, next) {
 
 app.use(express.json({ limit: '1mb' }));
 
+// Catch malformed JSON from body parser (Bug #89 — return 400 not 500)
+app.use(function (err, req, res, next) {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON in request body' });
+  }
+  next(err);
+});
+
 // Ensure all JSON responses use UTF-8 charset
 app.use(function (req, res, next) {
   var origJson = res.json.bind(res);
