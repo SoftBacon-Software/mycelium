@@ -3074,6 +3074,68 @@ router.post('/admin/churn-check', async function (req, res) {
   res.json({ ok: true, results: results });
 });
 
+// =============== DEPLOY WORKFLOW ===============
+
+// POST /admin/deploy/health-check-all — health check all active instances
+router.post('/admin/deploy/health-check-all', async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({ status: 'active' });
+  var results = [];
+
+  var { pollHealth } = await import('../provisioning.js');
+  for (var i = 0; i < instances.length; i++) {
+    var inst = instances[i];
+    if (!inst.domain) continue;
+    try {
+      var health = await pollHealth({ domain: inst.domain, timeout: 15000, interval: 5000 });
+      updateInstance(inst.id, {
+        health_status: health.ok ? 'healthy' : 'unhealthy',
+        last_health_check: new Date().toISOString()
+      });
+      results.push({ id: inst.id, domain: inst.domain, ok: health.ok });
+    } catch (err) {
+      updateInstance(inst.id, {
+        health_status: 'error',
+        last_health_check: new Date().toISOString()
+      });
+      results.push({ id: inst.id, domain: inst.domain, ok: false, error: err.message });
+    }
+  }
+
+  res.json({ ok: true, results: results });
+});
+
+// GET /admin/deploy/status — current deploy status for all active instances
+router.get('/admin/deploy/status', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var instances = listInstances({ status: 'active' });
+  res.json({
+    instances: instances.map(function (i) {
+      return {
+        id: i.id, org_id: i.org_id, domain: i.domain,
+        version: i.version, health_status: i.health_status,
+        last_health_check: i.last_health_check
+      };
+    })
+  });
+});
+
+// POST /admin/deploy/record — record a deploy version across instances
+router.post('/admin/deploy/record', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var version = req.body.version;
+  if (!version) return apiError(res, 400, 'version required');
+
+  var ids = req.body.instance_ids || listInstances({ status: 'active' }).map(function (i) { return i.id; });
+  var updated = [];
+  for (var i = 0; i < ids.length; i++) {
+    updateInstance(ids[i], { version: version });
+    updated.push(ids[i]);
+  }
+
+  res.json({ ok: true, version: version, updated: updated });
+});
+
 // =============== PROJECTS ===============
 
 // List projects (optional ?org_id= filter)
