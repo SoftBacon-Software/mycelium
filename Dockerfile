@@ -1,4 +1,4 @@
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
 COPY studio-react/package*.json studio-react/
 RUN cd studio-react && npm ci
@@ -6,7 +6,7 @@ COPY studio-react/ studio-react/
 COPY public/ public/
 RUN cd studio-react && npx vite build
 
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
 COPY package*.json ./
 COPY mcp/package*.json mcp/
