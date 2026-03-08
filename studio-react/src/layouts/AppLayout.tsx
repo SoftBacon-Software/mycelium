@@ -2,6 +2,7 @@ import { Outlet, useLocation, useSearchParams } from 'react-router-dom'
 import { useState, useMemo, useEffect } from 'react'
 import { Menu } from 'lucide-react'
 import SideNav from './SideNav'
+import VoiceCommand from '../components/voice/VoiceCommand'
 import DirectiveBanner from '../components/directives/DirectiveBanner'
 import VoiceBar from '../components/voice/VoiceBar'
 import { useAuthStore } from '../stores/authStore'
@@ -150,6 +151,9 @@ export default function AppLayout() {
             {user && (
               <span className="text-sm text-text-dim hidden sm:inline">{user.display_name}</span>
             )}
+
+            {/* Voice command */}
+            <VoiceCommand />
 
             {/* Last refresh */}
             <span className="text-xs text-text-muted font-mono hidden md:inline" title="Last refresh">

@@ -1800,6 +1800,99 @@ router.delete('/widgets/:id', function (req, res) {
   res.json({ ok: true });
 });
 
+// ======== VOICE COMMANDS ========
+
+// Process a voice command — parse natural language into Mycelium actions
+router.post('/voice/command', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text required' });
+
+  // Strip wake word
+  text = text.replace(/^(hey |ok |hello )?(mycelium|mycelia)[,.]?\s*/i, '').trim();
+  if (!text) return res.json({ action: 'none', response: 'How can I help?' });
+
+  // Parse intent
+  var result = parseVoiceCommand(text, who);
+  createEvent('voice_command', who.agentId || 'operator', '', text, { action: result.action });
+  res.json(result);
+});
+
+function parseVoiceCommand(text, who) {
+  var lower = text.toLowerCase();
+
+  // Status queries
+  if (lower.match(/status|how.*(things|going|look)|what.*(happening|going on)/)) {
+    var agents = listAgents ? listAgents() : [];
+    var online = agents.filter(function(a) { return a.status === 'online'; });
+    var working = online.filter(function(a) { return a.working_on; });
+    return {
+      action: 'status',
+      response: online.length + ' agents online, ' + working.length + ' working. ' +
+        (working.length > 0 ? working.map(function(a) { return a.id + ' is on ' + a.working_on; }).join('. ') : 'Everyone is idle.')
+    };
+  }
+
+  // Agent-specific status
+  var agentMatch = lower.match(/(?:status|what.* doing|where.*is|check on)\s+(\S+)/);
+  if (agentMatch) {
+    var agentId = agentMatch[1].replace(/-claude$/, '') + '-claude';
+    var agents2 = listAgents ? listAgents() : [];
+    var agent = agents2.find(function(a) { return a.id === agentId || a.id === agentMatch[1]; });
+    if (agent) {
+      return {
+        action: 'agent_status',
+        response: agent.id + ' is ' + agent.status + '. ' + (agent.working_on ? 'Working on: ' + agent.working_on : 'Currently idle.')
+      };
+    }
+  }
+
+  // Drone status
+  if (lower.match(/drone|gpu|3090|art.*drone/)) {
+    var drones = listAgents ? listAgents().filter(function(a) { return a.agent_type === 'drone'; }) : [];
+    return {
+      action: 'drone_status',
+      response: drones.length + ' drones registered. ' + drones.map(function(d) {
+        return d.id + ': ' + d.status + (d.working_on ? ' (' + d.working_on + ')' : '');
+      }).join('. ')
+    };
+  }
+
+  // Task queries
+  if (lower.match(/task|open.*task|pending.*task|what.*needs.*done/)) {
+    var tasks = listTasks ? listTasks({ status: 'open', limit: 5 }) : [];
+    return {
+      action: 'tasks',
+      response: tasks.length + ' open tasks. ' + (tasks.length > 0 ? tasks.slice(0, 3).map(function(t) { return '#' + t.id + ': ' + t.title; }).join('. ') : 'All clear.')
+    };
+  }
+
+  // Bug queries
+  if (lower.match(/bug|issue|problem/)) {
+    var bugs = listBugs ? listBugs({ status: 'open' }) : [];
+    return {
+      action: 'bugs',
+      response: bugs.length + ' open bugs. ' + (bugs.length > 0 ? bugs.slice(0, 3).map(function(b) { return '#' + b.id + ': ' + b.title; }).join('. ') : 'No open bugs.')
+    };
+  }
+
+  // Assign task
+  var assignMatch = lower.match(/assign\s+(.+?)\s+to\s+(\S+)/);
+  if (assignMatch) {
+    return {
+      action: 'assign',
+      response: 'To assign tasks, use the dashboard or send a directive. I noted your request: assign "' + assignMatch[1] + '" to ' + assignMatch[2] + '.'
+    };
+  }
+
+  // Fallback
+  return {
+    action: 'unknown',
+    response: 'I heard: "' + text + '". Try asking about agent status, tasks, bugs, or drones.'
+  };
+}
+
 // ======== SKILLS REGISTRY ========
 
 router.get('/skills', function (req, res) {
