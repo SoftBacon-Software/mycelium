@@ -531,6 +531,12 @@ export function deleteTaskComment(commentId) {
   return result.changes > 0;
 }
 
+export function deleteTask(id) {
+  db.prepare("DELETE FROM task_comments WHERE task_id = ?").run(id);
+  var result = db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
 // -- Plan Step Comments --
 
 export function addPlanStepComment(stepId, planId, author, content) {
