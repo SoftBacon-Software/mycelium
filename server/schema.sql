@@ -669,3 +669,30 @@ CREATE TABLE IF NOT EXISTS team_settings (
   UNIQUE(section, key)
 );
 CREATE INDEX IF NOT EXISTS idx_team_settings_section ON team_settings(section);
+
+-- Teams
+CREATE TABLE IF NOT EXISTS teams (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id);
+
+CREATE TABLE IF NOT EXISTS team_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  user_type TEXT NOT NULL DEFAULT 'operator',
+  role TEXT NOT NULL DEFAULT 'member',
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(team_id, user_id),
+  FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
+CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_team_members_primary ON team_members(is_primary) WHERE is_primary = 1;

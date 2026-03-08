@@ -91,6 +91,23 @@ export function initDB() {
     try { db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); } catch (e) { /* already exists */ }
   }
 
+  // Team columns migration
+  var projectCols = db.pragma('table_info(projects)').map(function(c) { return c.name; });
+  if (!projectCols.includes('team_id')) {
+    db.prepare('ALTER TABLE projects ADD COLUMN team_id TEXT').run();
+    console.log('[migration] Added team_id to projects');
+  }
+  var operatorCols = db.pragma('table_info(operators)').map(function(c) { return c.name; });
+  if (!operatorCols.includes('primary_team_id')) {
+    db.prepare('ALTER TABLE operators ADD COLUMN primary_team_id TEXT').run();
+    console.log('[migration] Added primary_team_id to operators');
+  }
+  var agentCols = db.pragma('table_info(agents)').map(function(c) { return c.name; });
+  if (!agentCols.includes('primary_team_id')) {
+    db.prepare('ALTER TABLE agents ADD COLUMN primary_team_id TEXT').run();
+    console.log('[migration] Added primary_team_id to agents');
+  }
+
   // Run platform schema AFTER migrations (schema has CREATE INDEX on migrated columns)
   var schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
@@ -3408,6 +3425,114 @@ export function syncTeamSettingsToProfile() {
   } else {
     createNodeProfile(profileId, Object.assign({ node_type: 'agent', layer: 'customer' }, updates));
   }
+}
+
+// =============== TEAMS ===============
+
+export function createTeam(id, orgId, name, description, createdBy) {
+  db.prepare(
+    'INSERT INTO teams (id, org_id, name, description, created_by) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, orgId, name, description || '', createdBy || '');
+  return getTeam(id);
+}
+
+export function getTeam(id) {
+  var team = db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
+  if (team) {
+    team.members = db.prepare(
+      'SELECT * FROM team_members WHERE team_id = ? ORDER BY role, joined_at'
+    ).all(id);
+  }
+  return team;
+}
+
+export function listTeams(orgId) {
+  var sql = orgId
+    ? 'SELECT t.*, (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) as member_count FROM teams t WHERE t.org_id = ? ORDER BY t.name'
+    : 'SELECT t.*, (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) as member_count FROM teams t ORDER BY t.name';
+  return orgId ? db.prepare(sql).all(orgId) : db.prepare(sql).all();
+}
+
+export function updateTeam(id, fields) {
+  var sets = [];
+  var values = [];
+  for (var key of Object.keys(fields)) {
+    if (['name', 'description', 'org_id'].includes(key)) {
+      sets.push(key + ' = ?');
+      values.push(fields[key]);
+    }
+  }
+  if (sets.length === 0) return getTeam(id);
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  db.prepare('UPDATE teams SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return getTeam(id);
+}
+
+export function deleteTeam(id) {
+  var memberCount = db.prepare('SELECT COUNT(*) as c FROM team_members WHERE team_id = ?').get(id).c;
+  if (memberCount > 0) throw new Error('Team has members — remove them first');
+  db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+}
+
+export function addTeamMember(teamId, userId, userType, role, isPrimary) {
+  if (isPrimary) {
+    db.prepare('UPDATE team_members SET is_primary = 0 WHERE user_id = ? AND is_primary = 1').run(userId);
+  }
+  db.prepare(
+    'INSERT INTO team_members (team_id, user_id, user_type, role, is_primary) VALUES (?, ?, ?, ?, ?)'
+  ).run(teamId, userId, userType || 'operator', role || 'member', isPrimary ? 1 : 0);
+
+  if (isPrimary) {
+    var table = userType === 'agent' ? 'agents' : 'operators';
+    db.prepare('UPDATE ' + table + ' SET primary_team_id = ? WHERE id = ?').run(teamId, userId);
+  }
+  return db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+}
+
+export function updateTeamMember(teamId, userId, fields) {
+  var sets = [];
+  var values = [];
+  if (fields.role) { sets.push('role = ?'); values.push(fields.role); }
+  if (fields.is_primary !== undefined) {
+    if (fields.is_primary) {
+      db.prepare('UPDATE team_members SET is_primary = 0 WHERE user_id = ? AND is_primary = 1').run(userId);
+    }
+    sets.push('is_primary = ?');
+    values.push(fields.is_primary ? 1 : 0);
+  }
+  if (sets.length === 0) return;
+  values.push(teamId, userId);
+  db.prepare('UPDATE team_members SET ' + sets.join(', ') + ' WHERE team_id = ? AND user_id = ?').run(...values);
+
+  if (fields.is_primary) {
+    var member = db.prepare('SELECT user_type FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+    if (member) {
+      var table = member.user_type === 'agent' ? 'agents' : 'operators';
+      db.prepare('UPDATE ' + table + ' SET primary_team_id = ? WHERE id = ?').run(teamId, userId);
+    }
+  }
+}
+
+export function removeTeamMember(teamId, userId) {
+  var member = db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+  if (!member) return;
+  db.prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ?').run(teamId, userId);
+
+  if (member.is_primary) {
+    var table = member.user_type === 'agent' ? 'agents' : 'operators';
+    db.prepare('UPDATE ' + table + ' SET primary_team_id = NULL WHERE id = ?').run(userId);
+  }
+}
+
+export function getTeamsForUser(userId) {
+  return db.prepare(
+    'SELECT t.*, tm.role, tm.is_primary FROM teams t JOIN team_members tm ON t.id = tm.team_id WHERE tm.user_id = ? ORDER BY tm.is_primary DESC, t.name'
+  ).all(userId);
+}
+
+export function getTeamProjects(teamId) {
+  return db.prepare('SELECT * FROM projects WHERE team_id = ?').all(teamId);
 }
 
 // =============== CUSTOMER INSTANCES ===============
