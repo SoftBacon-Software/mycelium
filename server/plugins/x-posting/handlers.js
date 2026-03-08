@@ -17,7 +17,7 @@ export function registerHooks(core) {
 
       // Create a real approval record so it appears in the Approvals page
       var result = core.db.prepare(
-        "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+        "INSERT INTO approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
       ).get(
         'x_publish',
         data.posted_by || '__system__',
@@ -54,7 +54,7 @@ export function registerHooks(core) {
       var approvalId = parsed.approval_id;
       if (!approvalId) return;
 
-      var approval = core.db.prepare('SELECT * FROM dv_approvals WHERE id = ?').get(approvalId);
+      var approval = core.db.prepare('SELECT * FROM approvals WHERE id = ?').get(approvalId);
       if (!approval || approval.action_type !== 'x_publish') return;
 
       var payload = JSON.parse(approval.payload || '{}');
@@ -75,7 +75,7 @@ export function registerHooks(core) {
       var replyTo = null;
       if (post.thread_id && post.thread_position > 0) {
         var prev = core.db.prepare(
-          "SELECT tweet_id FROM dv_x_posts WHERE thread_id = ? AND thread_position = ? AND status = 'published'"
+          "SELECT tweet_id FROM x_posts WHERE thread_id = ? AND thread_position = ? AND status = 'published'"
         ).get(post.thread_id, post.thread_position - 1);
         if (prev) replyTo = prev.tweet_id;
       }
@@ -97,7 +97,7 @@ export function registerHooks(core) {
 
           // Mark approval as executed
           core.db.prepare(
-            "UPDATE dv_approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+            "UPDATE approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
           ).run(approvalId);
 
           core.emitEvent('x_tweet_published', '__system__', post.project_id,
@@ -124,7 +124,7 @@ export function registerHooks(core) {
     try {
       // Check if auto-posting is enabled
       var autoPost = core.db.prepare(
-        "SELECT value FROM dv_plugin_config WHERE plugin_name = 'x-posting' AND key = 'auto_post_bip'"
+        "SELECT value FROM plugin_config WHERE plugin_name = 'x-posting' AND key = 'auto_post_bip'"
       ).get();
       if (!autoPost || autoPost.value !== 'true') return;
 
@@ -133,7 +133,7 @@ export function registerHooks(core) {
       if (!draftId) return;
 
       // Get the BIP draft content
-      var draft = core.db.prepare('SELECT * FROM dv_bip_drafts WHERE id = ?').get(draftId);
+      var draft = core.db.prepare('SELECT * FROM bip_drafts WHERE id = ?').get(draftId);
       if (!draft) return;
 
       var content = draft.content || '';
@@ -144,7 +144,7 @@ export function registerHooks(core) {
 
       // Get default project from config
       var projectConfig = core.db.prepare(
-        "SELECT value FROM dv_plugin_config WHERE plugin_name = 'x-posting' AND key = 'default_project'"
+        "SELECT value FROM plugin_config WHERE plugin_name = 'x-posting' AND key = 'default_project'"
       ).get();
       var projectId = (projectConfig && projectConfig.value) || 'mycelium';
 

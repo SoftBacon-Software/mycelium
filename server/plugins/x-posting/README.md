@@ -58,4 +58,4 @@ All routes are under `/api/mycelium/x`.
 
 ## Database Tables
 
-**`dv_x_posts`** -- Tweet drafts and published posts (project_id, tweet_text, tweet_id, tweet_url, thread_id, thread_position, source, source_id, status, error, posted_by, posted_at).
+**`x_posts`** -- Tweet drafts and published posts (project_id, tweet_text, tweet_id, tweet_url, thread_id, thread_position, source, source_id, status, error, posted_by, posted_at).

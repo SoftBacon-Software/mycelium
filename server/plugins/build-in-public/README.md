@@ -6,7 +6,7 @@ Watches for task completions, bug fixes, plan step completions, and drone job co
 
 ## Configuration
 
-No config schema fields. The plugin reads `instance_url` from `dv_instance_config` to include in draft content.
+No config schema fields. The plugin reads `instance_url` from `instance_config` to include in draft content.
 
 ## Gated Actions
 
@@ -49,7 +49,7 @@ All routes are prefixed with `/bip`.
 
 ## Database Tables
 
-### `dv_bip_drafts`
+### `bip_drafts`
 
 | Column | Type | Description |
 |--------|------|-------------|

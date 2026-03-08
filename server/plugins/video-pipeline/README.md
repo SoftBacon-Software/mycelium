@@ -52,7 +52,7 @@ All routes are prefixed with `/api/mycelium/video`.
 
 ## Database Tables
 
-**`dv_video_sessions`** -- Video processing sessions tracking footage through the pipeline.
+**`video_sessions`** -- Video processing sessions tracking footage through the pipeline.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -70,7 +70,7 @@ All routes are prefixed with `/api/mycelium/video`.
 | result_data | TEXT (JSON) | Pipeline output data |
 | created_by | TEXT | Who created the session |
 
-**`dv_video_clips`** -- Individual highlight clips within a session.
+**`video_clips`** -- Individual highlight clips within a session.
 
 | Column | Type | Description |
 |--------|------|-------------|

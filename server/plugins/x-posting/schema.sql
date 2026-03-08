@@ -1,6 +1,6 @@
 -- X/Twitter Posting plugin tables
 
-CREATE TABLE IF NOT EXISTS dv_x_posts (
+CREATE TABLE IF NOT EXISTS x_posts (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL DEFAULT '',
   tweet_text      TEXT NOT NULL,
@@ -18,6 +18,6 @@ CREATE TABLE IF NOT EXISTS dv_x_posts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_dv_x_posts_status ON dv_x_posts(status);
-CREATE INDEX IF NOT EXISTS idx_dv_x_posts_thread ON dv_x_posts(thread_id);
-CREATE INDEX IF NOT EXISTS idx_dv_x_posts_source ON dv_x_posts(source, source_id);
+CREATE INDEX IF NOT EXISTS idx_x_posts_status ON x_posts(status);
+CREATE INDEX IF NOT EXISTS idx_x_posts_thread ON x_posts(thread_id);
+CREATE INDEX IF NOT EXISTS idx_x_posts_source ON x_posts(source, source_id);

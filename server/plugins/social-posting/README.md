@@ -55,7 +55,7 @@ All routes are prefixed with `/api/mycelium/social`.
 
 ## Database Tables
 
-**`dv_social_accounts`** -- Registered social media accounts with platform credentials.
+**`social_accounts`** -- Registered social media accounts with platform credentials.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -67,13 +67,13 @@ All routes are prefixed with `/api/mycelium/social`.
 | config | TEXT (JSON) | Account-specific config |
 | enabled | INTEGER | 1 = active |
 
-**`dv_social_posts`** -- Post queue with scheduling and publishing state.
+**`social_posts`** -- Post queue with scheduling and publishing state.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | INTEGER PK | Auto-increment |
 | project_id | TEXT | Project identifier |
-| account_id | INTEGER FK | Links to dv_social_accounts |
+| account_id | INTEGER FK | Links to social_accounts |
 | platform | TEXT | Target platform |
 | clip_id | TEXT | Video pipeline clip ID (tracking) |
 | video_session_id | INTEGER | Video pipeline session ID |

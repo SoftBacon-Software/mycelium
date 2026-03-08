@@ -72,6 +72,7 @@ const staticNavSections: NavSection[] = [
     label: 'Manage',
     items: [
       { to: '/operators', label: 'Operators', icon: Users },
+      { to: '/teams', label: 'Teams', icon: Users, adminOnly: true },
       { to: '/team-settings', label: 'Team Settings', icon: Settings2, adminOnly: true },
       { to: '/deployments', label: 'Deployments', icon: Server, adminOnly: true },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },

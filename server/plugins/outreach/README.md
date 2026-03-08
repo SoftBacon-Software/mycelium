@@ -70,7 +70,7 @@ All routes are prefixed with `/api/mycelium/outreach`.
 
 ## Database Tables
 
-**`dv_outreach_campaigns`** -- Campaign configuration for outreach runs.
+**`outreach_campaigns`** -- Campaign configuration for outreach runs.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -84,7 +84,7 @@ All routes are prefixed with `/api/mycelium/outreach`.
 | status | TEXT | active, paused, completed |
 | created_by | TEXT | Who created the campaign |
 
-**`dv_outreach_contacts`** -- Press, creator, and influencer contacts.
+**`outreach_contacts`** -- Press, creator, and influencer contacts.
 
 | Column | Type | Description |
 |--------|------|-------------|

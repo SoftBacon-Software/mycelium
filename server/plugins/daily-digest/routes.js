@@ -5,29 +5,29 @@ import { Router } from 'express';
 import createDigestDB from './db.js';
 
 function gatherDigestData(db, coreDb, periodStart, periodEnd) {
-  // Query dv_tasks for completed tasks in period
+  // Query tasks for completed tasks in period
   var tasks = coreDb.prepare(
-    "SELECT * FROM dv_tasks WHERE status = 'done' AND updated_at BETWEEN ? AND ?"
+    "SELECT * FROM tasks WHERE status = 'done' AND updated_at BETWEEN ? AND ?"
   ).all(periodStart, periodEnd);
 
-  // Query dv_bugs for fixed bugs
+  // Query bugs for fixed bugs
   var bugs = coreDb.prepare(
-    "SELECT * FROM dv_bugs WHERE status = 'fixed' AND updated_at BETWEEN ? AND ?"
+    "SELECT * FROM bugs WHERE status = 'fixed' AND updated_at BETWEEN ? AND ?"
   ).all(periodStart, periodEnd);
 
-  // Query dv_plan_steps for completed steps
+  // Query plan_steps for completed steps
   var steps = coreDb.prepare(
-    "SELECT ps.*, p.title as plan_title FROM dv_plan_steps ps JOIN dv_plans p ON ps.plan_id = p.id WHERE ps.status = 'completed' AND ps.updated_at BETWEEN ? AND ?"
+    "SELECT ps.*, p.title as plan_title FROM plan_steps ps JOIN plans p ON ps.plan_id = p.id WHERE ps.status = 'completed' AND ps.updated_at BETWEEN ? AND ?"
   ).all(periodStart, periodEnd);
 
-  // Query dv_agents for agent activity (heartbeat counts)
+  // Query agents for agent activity (heartbeat counts)
   var agents = coreDb.prepare(
-    "SELECT id, display_name, status, working_on, last_heartbeat FROM dv_agents"
+    "SELECT id, display_name, status, working_on, last_heartbeat FROM agents"
   ).all();
 
   // Query messages sent in period
   var messageCount = coreDb.prepare(
-    "SELECT COUNT(*) as count FROM dv_messages WHERE created_at BETWEEN ? AND ?"
+    "SELECT COUNT(*) as count FROM messages WHERE created_at BETWEEN ? AND ?"
   ).get(periodStart, periodEnd).count;
 
   // Build per-agent stats
@@ -165,7 +165,7 @@ export default function (core) {
       );
 
       // Optional Slack delivery
-      var slackWebhook = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
+      var slackWebhook = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
       if (slackWebhook && slackWebhook.value) {
         try {
           await fetch(slackWebhook.value, {
@@ -236,7 +236,7 @@ export default function (core) {
       );
 
       // Optional Slack re-delivery
-      var slackWebhook = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
+      var slackWebhook = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
       if (slackWebhook && slackWebhook.value) {
         try {
           await fetch(slackWebhook.value, {

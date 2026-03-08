@@ -65,7 +65,7 @@ export function registerHooks(core) {
       core.onEvent(eventType, function (eventData) {
         try {
           var instanceUrl = '';
-          try { instanceUrl = core.db.prepare("SELECT value FROM dv_instance_config WHERE key = 'instance_url'").get()?.value || ''; } catch (e) { /* */ }
+          try { instanceUrl = core.db.prepare("SELECT value FROM instance_config WHERE key = 'instance_url'").get()?.value || ''; } catch (e) { /* */ }
           var draft = draftContent(eventType, eventData, instanceUrl);
 
           // Create the draft
