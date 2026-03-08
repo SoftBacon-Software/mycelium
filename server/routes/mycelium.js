@@ -2303,7 +2303,7 @@ router.put('/studio/users/:id/password', asyncHandler(async function (req, res) 
   var user = getStudioUserById(parseIntParam(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
   var newPassword = req.body.password || '';
-  if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   var hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS_PASSWORD);
   updateStudioUser(user.id, { password_hash: hash });
   res.json({ ok: true, username: user.username });
@@ -2364,7 +2364,7 @@ router.post('/studio/reset-password', resetPasswordLimiter, asyncHandler(async f
   var token = (req.body.token || '').trim();
   var newPassword = req.body.password || '';
   if (!token) return res.status(400).json({ error: 'token is required' });
-  if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   var tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   var db = getDB();
   var row = db.prepare("SELECT * FROM password_resets WHERE token_hash = ? AND used = 0 AND expires_at > datetime('now')").get(tokenHash);
@@ -3533,8 +3533,9 @@ router.post('/files', upload.single('file'), function (req, res) {
   res.json({ ok: true, filename: req.file.filename, url: fullUrl, size: req.file.size, expires_at: expiresAt });
 });
 
-// GET /files/:filename — download a file (no auth — public, wget-friendly)
+// GET /files/:filename — download a file (auth required)
 router.get('/files/:filename', function (req, res) {
+  if (!checkAgentOrAdmin(req, res)) return;
   var filename = req.params.filename.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(FILES_DIR, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found or expired' });
@@ -4387,8 +4388,9 @@ router.get('/drones/artifacts', function (req, res) {
   res.json(artifacts);
 });
 
-// Download a drone artifact (public, no auth — wget/curl friendly)
+// Download a drone artifact (auth required)
 router.get('/drones/artifacts/:name', function (req, res) {
+  if (!checkAgentOrAdmin(req, res)) return;
   var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(ARTIFACTS_DIR, name);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
