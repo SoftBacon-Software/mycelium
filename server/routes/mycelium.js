@@ -1773,7 +1773,7 @@ router.post('/widgets', function (req, res) {
   if (!who) return;
   var b = req.body;
   if (!b.title) return res.status(400).json({ error: 'title required' });
-  var agentId = who || b.agent_id || 'admin';
+  var agentId = (who === '__admin__' || who === '__system__') ? (b.agent_id || who) : who;
   var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
   emitEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
   res.status(201).json(result);
@@ -1935,7 +1935,7 @@ router.put('/skills/:id', function (req, res) {
 router.post('/skills/:id/install', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var agentId = who || req.body.agent_id;
+  var agentId = (who === '__admin__' || who === '__system__') ? (req.body.agent_id || who) : who;
   if (!agentId) return res.status(400).json({ error: 'agent_id required' });
   var skill = getSkill(req.params.id);
   if (!skill) return res.status(404).json({ error: 'skill not found' });
@@ -1947,7 +1947,7 @@ router.post('/skills/:id/install', function (req, res) {
 router.post('/skills/:id/uninstall', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var agentId = who || req.body.agent_id;
+  var agentId = (who === '__admin__' || who === '__system__') ? (req.body.agent_id || who) : who;
   if (!agentId) return res.status(400).json({ error: 'agent_id required' });
   uninstallSkill(agentId, req.params.id);
   res.json({ ok: true });
