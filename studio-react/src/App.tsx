@@ -88,6 +88,13 @@ export default function App() {
             <Route path="deployments" element={<DeploymentsPage />} />
             <Route path="team-settings" element={<TeamSettingsPage />} />
             <Route path="plugins/:pluginName/*" element={<Suspense fallback={<div className="p-8 text-text-dim">Loading...</div>}><PluginPageView /></Suspense>} />
+            <Route path="*" element={
+              <div className="flex flex-col items-center justify-center h-full gap-4 text-text-dim">
+                <span className="text-6xl font-bold text-primary/30">404</span>
+                <span className="text-lg">Page not found</span>
+                <a href="/studio/" className="text-primary hover:underline text-sm">Back to Dashboard</a>
+              </div>
+            } />
           </Route>
         </Routes>
       </Suspense>

@@ -65,10 +65,18 @@ function formatMessage(m) {
   return tag + m.from_agent + '→' + (m.to_agent || 'all') + ': ' + body;
 }
 
-function formatPlan(p) {
+function formatPlan(p, verbose) {
   var steps = (p.steps || []);
   var done = steps.filter(function (s) { return s.status === 'completed'; }).length;
-  return '#' + p.id + ' [' + p.status + '] ' + p.title + ' (' + done + '/' + steps.length + ' steps done)';
+  var header = '#' + p.id + ' [' + p.status + '] ' + p.title + ' (' + done + '/' + steps.length + ' steps done)';
+  if (!verbose || !steps.length) return header;
+  var lines = [header];
+  for (var s of steps) {
+    var icon = s.status === 'completed' ? 'done' : s.status === 'in_progress' ? 'ACTIVE' : s.status === 'blocked' ? 'BLOCKED' : 'pending';
+    var assignee = s.assignee ? ' → ' + s.assignee : '';
+    lines.push('  [' + icon + '] Step #' + s.id + ': ' + s.title + assignee);
+  }
+  return lines.join('\n');
 }
 
 export function registerTools(server) {
@@ -237,6 +245,26 @@ export function registerTools(server) {
     }
   );
 
+  registerDual(server,
+    'studio_list_agents',
+    'List all registered agents on the network with their status.',
+    {},
+    async () => {
+      var agents = await apiGet('/agents');
+      if (!agents.length) return text('No agents registered.');
+      var lines = ['=== Agents (' + agents.length + ') ==='];
+      for (var a of agents) {
+        var status = a.status || 'unknown';
+        var line = '[' + status.toUpperCase() + '] ' + a.id;
+        if (a.display_name) line += ' (' + a.display_name + ')';
+        if (a.working_on) line += ': ' + a.working_on;
+        if (a.last_heartbeat) line += ' | heartbeat ' + timeAgo(a.last_heartbeat);
+        lines.push(line);
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== TASKS =====
 
   registerDual(server,
@@ -346,8 +374,9 @@ export function registerTools(server) {
       if (st.role === 'agent' && st.agentId) {
         try {
           var workData = await apiGet('/work/' + st.agentId);
-          if (workData.tasks.length) {
-            nextWork = workData.tasks[0].title;
+          var queue = workData.queue || workData.tasks || [];
+          if (queue.length) {
+            nextWork = queue[0].title;
           }
         } catch { /* ignore */ }
       }
@@ -386,6 +415,75 @@ export function registerTools(server) {
       if (args.needs_approval) body.needs_approval = 1;
       var result = await apiPost('/tasks', body);
       return text('Created task #' + result.id + ': ' + args.title);
+    }
+  );
+
+  registerDual(server,
+    'studio_list_tasks',
+    'List tasks on the board. Filter by project, status, or assignee.',
+    {
+      project_id: z.string().optional().describe('Filter by project'),
+      status: z.string().optional().describe('Filter by status: open, in_progress, done, review'),
+      assignee: z.string().optional().describe('Filter by assignee agent ID')
+    },
+    async (args) => {
+      var params = [];
+      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
+      if (args.status) params.push('status=' + encodeURIComponent(args.status));
+      if (args.assignee) params.push('assignee=' + encodeURIComponent(args.assignee));
+      var tasks = await apiGet('/tasks' + (params.length ? '?' + params.join('&') : ''));
+      if (!tasks.length) return text('No tasks found.');
+      var lines = ['=== Tasks (' + tasks.length + ') ==='];
+      for (var t of tasks) {
+        var line = formatTask(t);
+        if (t.project_id) line += ' [' + t.project_id + ']';
+        lines.push(line);
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_get_task',
+    'Get full details for a specific task by ID.',
+    { task_id: z.number().describe('Task ID to retrieve') },
+    async (args) => {
+      var t = await apiGet('/tasks/' + args.task_id);
+      var lines = [
+        '=== Task #' + t.id + ' ===',
+        'Title: ' + t.title,
+        'Status: ' + t.status,
+        'Priority: ' + (t.priority || 'normal'),
+        'Project: ' + (t.project_id || 'none'),
+        'Assignee: ' + (t.assignee || 'unassigned'),
+        'Created: ' + (t.created_at || 'unknown')
+      ];
+      if (t.description) lines.push('', 'Description:', t.description);
+      if (t.needs_approval) lines.push('', 'Needs approval: yes');
+      return text(lines.join('\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_update_task',
+    'Update a task on the board. Can change status, assignee, priority, or description.',
+    {
+      task_id: z.number().describe('Task ID to update'),
+      status: z.string().optional().describe('New status: open, in_progress, done, review'),
+      assignee: z.string().optional().describe('New assignee agent ID'),
+      priority: z.enum(['low', 'normal', 'high']).optional().describe('New priority'),
+      title: z.string().optional().describe('New title'),
+      description: z.string().optional().describe('New description')
+    },
+    async (args) => {
+      var body = {};
+      if (args.status) body.status = args.status;
+      if (args.assignee) body.assignee = args.assignee;
+      if (args.priority) body.priority = args.priority;
+      if (args.title) body.title = args.title;
+      if (args.description) body.description = args.description;
+      await apiPut('/tasks/' + args.task_id, body);
+      return text('Updated task #' + args.task_id);
     }
   );
 
@@ -505,7 +603,7 @@ export function registerTools(server) {
       for (var p of plans) {
         // Fetch full plan with steps
         var full = await apiGet('/plans/' + p.id);
-        lines.push(formatPlan(full));
+        lines.push(formatPlan(full, true));
         lines.push('');
       }
       return text(lines.join('\n'));
@@ -632,6 +730,39 @@ export function registerTools(server) {
         data: args.data
       });
       return text('Saved context: ' + args.namespace + '/' + args.key);
+    }
+  );
+
+  registerDual(server,
+    'studio_delete_context',
+    'Delete a context key from namespaced storage.',
+    {
+      namespace: z.string().describe('Namespace'),
+      key: z.string().describe('Key name to delete')
+    },
+    async (args) => {
+      await apiDelete('/context/keys/' + encodeURIComponent(args.namespace) + '/' + encodeURIComponent(args.key));
+      return text('Deleted context key: ' + args.namespace + '/' + args.key);
+    }
+  );
+
+  registerDual(server,
+    'studio_list_namespaces',
+    'List all context namespaces that have stored keys.',
+    {},
+    async () => {
+      var allKeys = await apiGet('/context/keys');
+      if (!Array.isArray(allKeys) || !allKeys.length) return text('No context namespaces found.');
+      var nsSet = {};
+      for (var k of allKeys) {
+        if (!nsSet[k.namespace]) nsSet[k.namespace] = 0;
+        nsSet[k.namespace]++;
+      }
+      var lines = ['=== Context Namespaces ==='];
+      for (var ns of Object.keys(nsSet).sort()) {
+        lines.push('  ' + ns + ' (' + nsSet[ns] + ' keys)');
+      }
+      return text(lines.join('\n'));
     }
   );
 
@@ -1080,7 +1211,7 @@ export function registerTools(server) {
         from_agent: st.agentId || '__admin__',
         channel_id: args.channel_id
       };
-      var result = await apiPost('/messages', body);
+      var result = await apiPost('/channels/' + args.channel_id + '/messages', body);
       return text('Message sent to channel #' + args.channel_id + ' (msg id: ' + result.id + ')');
     }
   );
@@ -1106,7 +1237,7 @@ export function registerTools(server) {
         payload: args.payload ? safeParseJSON(args.payload) : {},
         project: args.project || 'mycelium'
       });
-      return text('Approval requested (id: ' + result.id + ')\nAction: ' + args.action_type + '\nTitle: ' + args.title + '\nStatus: pending — waiting for human approval in dashboard.\n\nPoll with studio_check_approval to check status.');
+      return text('Approval requested (id: ' + result.id + ')\nAction: ' + args.action_type + '\nTitle: ' + args.title + '\nStatus: pending — waiting for human approval in dashboard.\n\nPoll with mycelium_check_approval to check status.');
     }
   );
 
@@ -1126,7 +1257,7 @@ export function registerTools(server) {
       if (approval.status === 'approved') {
         lines.push('Approved by: ' + (approval.decided_by || 'unknown') + ' at ' + (approval.decided_at || ''));
         if (approval.reason) lines.push('Notes: ' + approval.reason);
-        lines.push('', 'You may now execute the action. Call studio_mark_executed when done.');
+        lines.push('', 'You may now execute the action. Call mycelium_mark_executed when done.');
       } else if (approval.status === 'denied') {
         lines.push('Denied by: ' + (approval.decided_by || 'unknown'));
         if (approval.reason) lines.push('Reason: ' + approval.reason);
@@ -1213,8 +1344,8 @@ export function registerTools(server) {
     async function (params) {
       var st = getState();
       var res = await apiPost('/messages', {
-        from: st.agentId || '__admin__',
-        to: params.to,
+        from_agent: st.agentId || '__admin__',
+        to_agent: params.to,
         msg_type: 'directive',
         content: params.content,
         project_id: params.project_id || ''
