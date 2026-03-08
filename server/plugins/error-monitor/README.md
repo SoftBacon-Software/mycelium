@@ -51,7 +51,7 @@ All routes are prefixed with `/errors`.
 
 ## Database Tables
 
-### `dv_error_events`
+### `error_events`
 
 | Column | Type | Description |
 |--------|------|-------------|

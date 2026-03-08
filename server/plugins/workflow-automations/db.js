@@ -4,7 +4,7 @@ export default function createAutomationDB(db) {
   return {
     createRule(name, description, triggerEvent, conditions, actions, projectId, createdBy) {
       var r = db.prepare(
-        'INSERT INTO dv_automation_rules (name, description, trigger_event, conditions, actions, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO automation_rules (name, description, trigger_event, conditions, actions, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         name || '',
         description || '',
@@ -18,7 +18,7 @@ export default function createAutomationDB(db) {
     },
 
     getRule(id) {
-      var row = db.prepare('SELECT * FROM dv_automation_rules WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM automation_rules WHERE id = ?').get(id);
       if (!row) return null;
       try { row.conditions = JSON.parse(row.conditions); } catch (e) { row.conditions = {}; }
       try { row.actions = JSON.parse(row.actions); } catch (e) { row.actions = []; }
@@ -35,7 +35,7 @@ export default function createAutomationDB(db) {
       var offset = filters.offset || 0;
       params.push(limit, offset);
       var rows = db.prepare(
-        'SELECT * FROM dv_automation_rules WHERE ' + where.join(' AND ') +
+        'SELECT * FROM automation_rules WHERE ' + where.join(' AND ') +
         ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
       ).all(...params);
       return rows.map(function (row) {
@@ -58,20 +58,20 @@ export default function createAutomationDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_automation_rules SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE automation_rules SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deleteRule(id) {
-      db.prepare('DELETE FROM dv_automation_rules WHERE id = ?').run(id);
+      db.prepare('DELETE FROM automation_rules WHERE id = ?').run(id);
     },
 
     incrementRunCount(id) {
-      db.prepare("UPDATE dv_automation_rules SET run_count = run_count + 1, last_run = datetime('now') WHERE id = ?").run(id);
+      db.prepare("UPDATE automation_rules SET run_count = run_count + 1, last_run = datetime('now') WHERE id = ?").run(id);
     },
 
     logExecution(ruleId, ruleName, triggerEvent, matched, actionsTaken, eventData, status, error, dryRun) {
       db.prepare(
-        'INSERT INTO dv_automation_log (rule_id, rule_name, trigger_event, matched, actions_taken, event_data, status, error, dry_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO automation_log (rule_id, rule_name, trigger_event, matched, actions_taken, event_data, status, error, dry_run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       ).run(
         ruleId,
         ruleName || '',
@@ -93,7 +93,7 @@ export default function createAutomationDB(db) {
       var limit = Math.min(filters.limit || 50, 500);
       params.push(limit);
       var rows = db.prepare(
-        'SELECT * FROM dv_automation_log WHERE ' + where.join(' AND ') +
+        'SELECT * FROM automation_log WHERE ' + where.join(' AND ') +
         ' ORDER BY created_at DESC LIMIT ?'
       ).all(...params);
       return rows.map(function (row) {
@@ -105,13 +105,13 @@ export default function createAutomationDB(db) {
 
     getLogStats() {
       var byStatus = db.prepare(
-        'SELECT status, COUNT(*) as count FROM dv_automation_log GROUP BY status'
+        'SELECT status, COUNT(*) as count FROM automation_log GROUP BY status'
       ).all();
       var byRule = db.prepare(
-        'SELECT rule_id, rule_name, COUNT(*) as count FROM dv_automation_log GROUP BY rule_id, rule_name ORDER BY count DESC LIMIT 20'
+        'SELECT rule_id, rule_name, COUNT(*) as count FROM automation_log GROUP BY rule_id, rule_name ORDER BY count DESC LIMIT 20'
       ).all();
       var last24h = db.prepare(
-        "SELECT COUNT(*) as count FROM dv_automation_log WHERE created_at >= datetime('now', '-24 hours')"
+        "SELECT COUNT(*) as count FROM automation_log WHERE created_at >= datetime('now', '-24 hours')"
       ).get();
       return {
         by_status: byStatus,
@@ -122,7 +122,7 @@ export default function createAutomationDB(db) {
 
     createTemplate(name, description, triggerEvent, conditions, actions, category) {
       var r = db.prepare(
-        'INSERT INTO dv_automation_templates (name, description, trigger_event, conditions, actions, category) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO automation_templates (name, description, trigger_event, conditions, actions, category) VALUES (?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         name || '',
         description || '',
@@ -135,7 +135,7 @@ export default function createAutomationDB(db) {
     },
 
     listTemplates(category) {
-      var sql = 'SELECT * FROM dv_automation_templates';
+      var sql = 'SELECT * FROM automation_templates';
       var params = [];
       if (category) {
         sql += ' WHERE category = ?';
@@ -151,7 +151,7 @@ export default function createAutomationDB(db) {
     },
 
     getTemplate(id) {
-      var row = db.prepare('SELECT * FROM dv_automation_templates WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM automation_templates WHERE id = ?').get(id);
       if (!row) return null;
       try { row.conditions = JSON.parse(row.conditions); } catch (e) { row.conditions = {}; }
       try { row.actions = JSON.parse(row.actions); } catch (e) { row.actions = []; }

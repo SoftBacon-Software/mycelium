@@ -54,7 +54,7 @@ export function sendTweet(text, replyToId, creds) {
 
 export function getCredentials(db) {
   try {
-    var rows = db.prepare("SELECT key, value FROM dv_plugin_config WHERE plugin_name = 'x-posting'").all();
+    var rows = db.prepare("SELECT key, value FROM plugin_config WHERE plugin_name = 'x-posting'").all();
     var config = {};
     for (var i = 0; i < rows.length; i++) {
       config[rows[i].key] = rows[i].value;

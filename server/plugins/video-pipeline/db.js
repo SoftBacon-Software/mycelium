@@ -10,7 +10,7 @@ export default function createVideoDB(db) {
     // ── Sessions ──
     createSession(projectId, title, footageUrl, eventLogUrl, config, createdBy) {
       var result = stmt('vpCreateSession',
-        `INSERT INTO dv_video_sessions (project_id, title, footage_url, event_log_url, config, created_by)
+        `INSERT INTO video_sessions (project_id, title, footage_url, event_log_url, config, created_by)
          VALUES (?, ?, ?, ?, ?, ?) RETURNING id`
       ).get(projectId, title, footageUrl || '', eventLogUrl || '',
         typeof config === 'string' ? config : JSON.stringify(config || {}), createdBy);
@@ -18,7 +18,7 @@ export default function createVideoDB(db) {
     },
 
     getSession(id) {
-      return stmt('vpGetSession', 'SELECT * FROM dv_video_sessions WHERE id = ?').get(id);
+      return stmt('vpGetSession', 'SELECT * FROM video_sessions WHERE id = ?').get(id);
     },
 
     listSessions(filters) {
@@ -26,7 +26,7 @@ export default function createVideoDB(db) {
       if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
       if (filters.status) { where.push('status = ?'); params.push(filters.status); }
       params.push(filters.limit || 50);
-      return db.prepare('SELECT * FROM dv_video_sessions WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+      return db.prepare('SELECT * FROM video_sessions WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
     },
 
     updateSession(id, fields) {
@@ -40,18 +40,18 @@ export default function createVideoDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_video_sessions SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      return db.prepare('UPDATE video_sessions SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deleteSession(id) {
-      db.prepare('DELETE FROM dv_video_clips WHERE session_id = ?').run(id);
-      return db.prepare('DELETE FROM dv_video_sessions WHERE id = ?').run(id);
+      db.prepare('DELETE FROM video_clips WHERE session_id = ?').run(id);
+      return db.prepare('DELETE FROM video_sessions WHERE id = ?').run(id);
     },
 
     // ── Clips ──
     createClip(sessionId, clipId, tier, eventType, startSec, endSec, metadata) {
       var result = stmt('vpCreateClip',
-        `INSERT INTO dv_video_clips (session_id, clip_id, tier, event_type, start_sec, end_sec, duration_sec, metadata)
+        `INSERT INTO video_clips (session_id, clip_id, tier, event_type, start_sec, end_sec, duration_sec, metadata)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
       ).get(sessionId, clipId, tier || 'C', eventType, startSec, endSec, endSec - startSec,
         typeof metadata === 'string' ? metadata : JSON.stringify(metadata || {}));
@@ -59,14 +59,14 @@ export default function createVideoDB(db) {
     },
 
     getClip(id) {
-      return stmt('vpGetClip', 'SELECT * FROM dv_video_clips WHERE id = ?').get(id);
+      return stmt('vpGetClip', 'SELECT * FROM video_clips WHERE id = ?').get(id);
     },
 
     listClips(sessionId, filters) {
       var where = ['session_id = ?']; var params = [sessionId];
       if (filters && filters.tier) { where.push('tier = ?'); params.push(filters.tier); }
       if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
-      return db.prepare('SELECT * FROM dv_video_clips WHERE ' + where.join(' AND ') + ' ORDER BY start_sec ASC').all(...params);
+      return db.prepare('SELECT * FROM video_clips WHERE ' + where.join(' AND ') + ' ORDER BY start_sec ASC').all(...params);
     },
 
     updateClip(id, fields) {
@@ -79,12 +79,12 @@ export default function createVideoDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_video_clips SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      return db.prepare('UPDATE video_clips SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     bulkCreateClips(sessionId, clips) {
       var insert = db.prepare(
-        `INSERT INTO dv_video_clips (session_id, clip_id, tier, event_type, start_sec, end_sec, duration_sec, metadata)
+        `INSERT INTO video_clips (session_id, clip_id, tier, event_type, start_sec, end_sec, duration_sec, metadata)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       );
       var insertMany = db.transaction(function (rows) {
@@ -97,17 +97,17 @@ export default function createVideoDB(db) {
       insertMany(clips);
       // Update session clip count
       stmt('vpUpdateClipCount',
-        'UPDATE dv_video_sessions SET clip_count = (SELECT COUNT(*) FROM dv_video_clips WHERE session_id = ?), updated_at = datetime(\'now\') WHERE id = ?'
+        'UPDATE video_sessions SET clip_count = (SELECT COUNT(*) FROM video_clips WHERE session_id = ?), updated_at = datetime(\'now\') WHERE id = ?'
       ).run(sessionId, sessionId);
       return clips.length;
     },
 
     getSessionStats(sessionId) {
       var tiers = db.prepare(
-        'SELECT tier, COUNT(*) as count FROM dv_video_clips WHERE session_id = ? GROUP BY tier'
+        'SELECT tier, COUNT(*) as count FROM video_clips WHERE session_id = ? GROUP BY tier'
       ).all(sessionId);
       var statuses = db.prepare(
-        'SELECT status, COUNT(*) as count FROM dv_video_clips WHERE session_id = ? GROUP BY status'
+        'SELECT status, COUNT(*) as count FROM video_clips WHERE session_id = ? GROUP BY status'
       ).all(sessionId);
       return { tiers: Object.fromEntries(tiers.map(function (r) { return [r.tier, r.count]; })),
                statuses: Object.fromEntries(statuses.map(function (r) { return [r.status, r.count]; })) };

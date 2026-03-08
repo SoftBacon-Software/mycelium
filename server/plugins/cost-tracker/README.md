@@ -51,7 +51,7 @@ All routes are prefixed with `/costs`.
 
 ## Database Tables
 
-### `dv_cost_entries`
+### `cost_entries`
 Individual token usage records.
 
 | Column | Type | Description |
@@ -67,7 +67,7 @@ Individual token usage records.
 | session_id | TEXT | Agent session identifier |
 | recorded_at | TEXT | Timestamp |
 
-### `dv_cost_daily`
+### `cost_daily`
 Daily aggregated cost summaries (unique per date + agent + project).
 
 | Column | Type | Description |
@@ -82,7 +82,7 @@ Daily aggregated cost summaries (unique per date + agent + project).
 | total_cost | REAL | Total cost in USD |
 | entry_count | INTEGER | Number of entries aggregated |
 
-### `dv_cost_alerts`
+### `cost_alerts`
 Budget alert history.
 
 | Column | Type | Description |

@@ -30,6 +30,7 @@ const SpawnsPage = lazy(() => import('./pages/SpawnsPage'))
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'))
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage'))
 const DeploymentsPage = lazy(() => import('./pages/DeploymentsPage'))
+const TeamsPage = lazy(() => import('./pages/TeamsPage'))
 const TeamSettingsPage = lazy(() => import('./pages/TeamSettingsPage'))
 const PluginPageView = lazy(() => import('./pages/PluginPageView'))
 
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="bugs" element={<BugsPage />} />
             <Route path="assets" element={<AssetsPage />} />
             <Route path="operators" element={<OperatorsPage />} />
+            <Route path="teams" element={<TeamsPage />} />
             <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="drones" element={<DronesPage />} />
             <Route path="concepts" element={<ConceptsPage />} />

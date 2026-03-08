@@ -66,7 +66,7 @@ export default function (core) {
     // Mark linked inbox items as actioned
     if (Array.isArray(draft.inbox_item_id)) {
       for (var inboxId of draft.inbox_item_id) {
-        try { core.db.prepare("UPDATE dv_operator_inbox SET status = 'actioned' WHERE id = ?").run(inboxId); } catch (e) {}
+        try { core.db.prepare("UPDATE operator_inbox SET status = 'actioned' WHERE id = ?").run(inboxId); } catch (e) {}
       }
     }
 
@@ -75,7 +75,7 @@ export default function (core) {
       { draft_id: draft.id, title: draft.title });
 
     // Hand off to social-posting plugin if available
-    var socialPlugin = core.db.prepare("SELECT enabled FROM dv_plugins WHERE name = 'social-posting'").get();
+    var socialPlugin = core.db.prepare("SELECT enabled FROM plugins WHERE name = 'social-posting'").get();
     if (socialPlugin && socialPlugin.enabled) {
       res.json({
         ok: true,
@@ -106,7 +106,7 @@ export default function (core) {
     // Mark linked inbox items as actioned
     if (Array.isArray(draft.inbox_item_id)) {
       for (var inboxId of draft.inbox_item_id) {
-        try { core.db.prepare("UPDATE dv_operator_inbox SET status = 'actioned' WHERE id = ?").run(inboxId); } catch (e) {}
+        try { core.db.prepare("UPDATE operator_inbox SET status = 'actioned' WHERE id = ?").run(inboxId); } catch (e) {}
       }
     }
 

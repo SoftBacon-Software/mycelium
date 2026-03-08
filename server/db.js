@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import migrateTableNames from './migrate-table-names.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -23,68 +24,88 @@ export function initDB() {
   // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
   migrateGameToProjectId();
 
+  // Migration: rename dv_* tables to clean names BEFORE schema.sql runs
+  migrateTableNames(db);
+
   // Migrations: add columns that may not exist yet on the LIVE database.
   // MUST run BEFORE schema.sql because schema has CREATE INDEX on these columns.
   var migrations = [
-    ["dv_tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"],
-    ["dv_tasks", "blocks", "TEXT NOT NULL DEFAULT '[]'"],
-    ["dv_tasks", "needs_approval", "INTEGER NOT NULL DEFAULT 0"],
-    ["dv_tasks", "approved_by", "TEXT"],
-    ["dv_tasks", "approved_at", "TEXT"],
-    ["dv_tasks", "linked_asset_id", "INTEGER"],
-    ["dv_tasks", "request_id", "INTEGER"],
-    ["dv_tasks", "branch", "TEXT"],
-    ["dv_tasks", "pr_url", "TEXT"],
-    ["dv_tasks", "repo", "TEXT"],
-    ["dv_messages", "msg_type", "TEXT NOT NULL DEFAULT 'message'"],
-    ["dv_messages", "status", "TEXT NOT NULL DEFAULT 'sent'"],
-    ["dv_messages", "resolved_at", "TEXT"],
-    ["dv_messages", "resolved_by", "TEXT"],
-    ["dv_agents", "avatar_url", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_agents", "role", "TEXT NOT NULL DEFAULT 'agent'"],
-    ["dv_agents", "operator_id", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_agents", "project", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_approvals", "risk_tier", "TEXT NOT NULL DEFAULT 'medium'"],
-    ["dv_approvals", "required_approvals", "INTEGER NOT NULL DEFAULT 1"],
-    ["dv_approvals", "current_approvals", "INTEGER NOT NULL DEFAULT 0"],
-    ["dv_assets", "file_path", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_assets", "download_url", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_assets", "requested_by", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_assets", "assigned_to", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_messages", "channel_id", "INTEGER"],
-    ["dv_drone_jobs", "workspace_repo", "TEXT"],
-    ["dv_drone_jobs", "workspace_branch", "TEXT NOT NULL DEFAULT 'main'"],
-    ["dv_assets", "drone_job_id", "INTEGER"],
-    ["dv_assets", "prompt", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_agents", "llm_backend", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_agents", "llm_model", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_agents", "agent_type", "TEXT NOT NULL DEFAULT 'agent'"],
-    ["dv_projects", "org_id", "TEXT NOT NULL DEFAULT ''"],
-    ["dv_projects", "type", "TEXT NOT NULL DEFAULT 'software'"],
-    ["dv_projects", "status", "TEXT NOT NULL DEFAULT 'active'"],
-    ["dv_operators", "availability", "TEXT NOT NULL DEFAULT 'available'"],
-    ["dv_operators", "last_seen_at", "TEXT"],
-    ["dv_operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
+    ["tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"],
+    ["tasks", "blocks", "TEXT NOT NULL DEFAULT '[]'"],
+    ["tasks", "needs_approval", "INTEGER NOT NULL DEFAULT 0"],
+    ["tasks", "approved_by", "TEXT"],
+    ["tasks", "approved_at", "TEXT"],
+    ["tasks", "linked_asset_id", "INTEGER"],
+    ["tasks", "request_id", "INTEGER"],
+    ["tasks", "branch", "TEXT"],
+    ["tasks", "pr_url", "TEXT"],
+    ["tasks", "repo", "TEXT"],
+    ["messages", "msg_type", "TEXT NOT NULL DEFAULT 'message'"],
+    ["messages", "status", "TEXT NOT NULL DEFAULT 'sent'"],
+    ["messages", "resolved_at", "TEXT"],
+    ["messages", "resolved_by", "TEXT"],
+    ["agents", "avatar_url", "TEXT NOT NULL DEFAULT ''"],
+    ["agents", "role", "TEXT NOT NULL DEFAULT 'agent'"],
+    ["agents", "operator_id", "TEXT NOT NULL DEFAULT ''"],
+    ["agents", "project", "TEXT NOT NULL DEFAULT ''"],
+    ["approvals", "risk_tier", "TEXT NOT NULL DEFAULT 'medium'"],
+    ["approvals", "required_approvals", "INTEGER NOT NULL DEFAULT 1"],
+    ["approvals", "current_approvals", "INTEGER NOT NULL DEFAULT 0"],
+    ["assets", "file_path", "TEXT NOT NULL DEFAULT ''"],
+    ["assets", "download_url", "TEXT NOT NULL DEFAULT ''"],
+    ["assets", "requested_by", "TEXT NOT NULL DEFAULT ''"],
+    ["assets", "assigned_to", "TEXT NOT NULL DEFAULT ''"],
+    ["messages", "channel_id", "INTEGER"],
+    ["drone_jobs", "workspace_repo", "TEXT"],
+    ["drone_jobs", "workspace_branch", "TEXT NOT NULL DEFAULT 'main'"],
+    ["assets", "drone_job_id", "INTEGER"],
+    ["assets", "prompt", "TEXT NOT NULL DEFAULT ''"],
+    ["agents", "llm_backend", "TEXT NOT NULL DEFAULT ''"],
+    ["agents", "llm_model", "TEXT NOT NULL DEFAULT ''"],
+    ["agents", "agent_type", "TEXT NOT NULL DEFAULT 'agent'"],
+    ["projects", "org_id", "TEXT NOT NULL DEFAULT ''"],
+    ["projects", "type", "TEXT NOT NULL DEFAULT 'software'"],
+    ["projects", "status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["operators", "availability", "TEXT NOT NULL DEFAULT 'available'"],
+    ["operators", "last_seen_at", "TEXT"],
+    ["operators", "away_message", "TEXT NOT NULL DEFAULT ''"],
     // Step #197 — message priority tiers (urgent/normal/fyi)
-    ["dv_messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
+    ["messages", "priority", "TEXT NOT NULL DEFAULT 'normal'"],
     // Plan #30 — dynamic bug categories per project
-    ["dv_projects", "bug_categories", "TEXT NOT NULL DEFAULT '[]'"],
+    ["projects", "bug_categories", "TEXT NOT NULL DEFAULT '[]'"],
     // Operator presence tracking — who's currently in the dashboard
-    ["dv_studio_users", "last_seen", "TEXT"],
+    ["studio_users", "last_seen", "TEXT"],
     // Drone profiles — link jobs to required profiles
-    ["dv_drone_jobs", "profile_id", "TEXT"],
+    ["drone_jobs", "profile_id", "TEXT"],
     // Drone system overhaul — smart job routing
-    ["dv_agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
-    ["dv_drone_jobs", "job_type", "TEXT"],
+    ["agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
+    ["drone_jobs", "job_type", "TEXT"],
     // Support ticket tiered routing
-    ["dv_support_tickets", "tier", "TEXT NOT NULL DEFAULT 'L2'"],
-    ["dv_support_tickets", "assigned_agent", "TEXT"],
-    ["dv_support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
-    ["dv_support_tickets", "draft_response", "TEXT"],
+    ["support_tickets", "tier", "TEXT NOT NULL DEFAULT 'L2'"],
+    ["support_tickets", "assigned_agent", "TEXT"],
+    ["support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
+    ["support_tickets", "draft_response", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
     try { db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); } catch (e) { /* already exists */ }
+  }
+
+  // Team columns migration
+  var projectCols = db.pragma('table_info(projects)').map(function(c) { return c.name; });
+  if (!projectCols.includes('team_id')) {
+    db.prepare('ALTER TABLE projects ADD COLUMN team_id TEXT').run();
+    console.log('[migration] Added team_id to projects');
+  }
+  var operatorCols = db.pragma('table_info(operators)').map(function(c) { return c.name; });
+  if (!operatorCols.includes('primary_team_id')) {
+    db.prepare('ALTER TABLE operators ADD COLUMN primary_team_id TEXT').run();
+    console.log('[migration] Added primary_team_id to operators');
+  }
+  var agentCols = db.pragma('table_info(agents)').map(function(c) { return c.name; });
+  if (!agentCols.includes('primary_team_id')) {
+    db.prepare('ALTER TABLE agents ADD COLUMN primary_team_id TEXT').run();
+    console.log('[migration] Added primary_team_id to agents');
   }
 
   // Run platform schema AFTER migrations (schema has CREATE INDEX on migrated columns)
@@ -92,22 +113,22 @@ export function initDB() {
   db.exec(schema);
 
   // Indexes on migrated columns
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_tasks_blocked ON dv_tasks(blocked_by)'); } catch (e) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_tasks_approval ON dv_tasks(needs_approval)'); } catch (e) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_type ON dv_messages(msg_type)'); } catch (e) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_status ON dv_messages(status)'); } catch (e) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_channel ON dv_messages(channel_id)'); } catch (e) {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_dv_messages_priority ON dv_messages(priority)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_blocked ON tasks(blocked_by)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_approval ON tasks(needs_approval)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(msg_type)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority)'); } catch (e) {}
 
-  // Bug #43: drop dead columns from dv_messages (is_stale, rerouted_from, rerouted_at)
+  // Bug #43: drop dead columns from messages (is_stale, rerouted_from, rerouted_at)
   // These were added in a prior branch but never used. SQLite 3.35+ supports DROP COLUMN.
   var deadCols = ['is_stale', 'rerouted_from', 'rerouted_at'];
   for (var dc of deadCols) {
-    try { db.exec('ALTER TABLE dv_messages DROP COLUMN ' + dc); } catch (e) { /* doesn't exist or older SQLite — skip */ }
+    try { db.exec('ALTER TABLE messages DROP COLUMN ' + dc); } catch (e) { /* doesn't exist or older SQLite — skip */ }
   }
 
   // Seed instance config defaults (if table is empty — fresh instance)
-  var cfgCount = db.prepare('SELECT COUNT(*) as c FROM dv_instance_config').get();
+  var cfgCount = db.prepare('SELECT COUNT(*) as c FROM instance_config').get();
   if (cfgCount.c === 0) {
     var riskTiers = JSON.stringify({
       plan_create: 'low', context_change: 'low',
@@ -115,11 +136,11 @@ export function initDB() {
       external_comm: 'high',
       money_action: 'critical', delete_agent: 'critical', instance_config: 'critical'
     });
-    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('instance_mode', 'developer', 'system');
-    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_agent_id', '', 'system');
-    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_status', 'coordinator', 'system');
-    db.prepare("INSERT INTO dv_instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('risk_tiers', riskTiers, 'system');
-    console.log('Seeded dv_instance_config with defaults (set admin_agent_id via dashboard or API)');
+    db.prepare("INSERT INTO instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('instance_mode', 'developer', 'system');
+    db.prepare("INSERT INTO instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_agent_id', '', 'system');
+    db.prepare("INSERT INTO instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('admin_status', 'coordinator', 'system');
+    db.prepare("INSERT INTO instance_config (key, value, updated_by) VALUES (?, ?, ?)").run('risk_tiers', riskTiers, 'system');
+    console.log('Seeded instance_config with defaults (set admin_agent_id via dashboard or API)');
   }
 
   ensureDefaultChannels();
@@ -132,15 +153,15 @@ export function initDB() {
 // Migration: rename game -> project_id columns for enterprise-ready schema
 function migrateGameToProjectId() {
   var tables = [
-    ['dv_agents', 'game', 'project_id'],
-    ['dv_tasks', 'game', 'project_id'],
-    ['dv_context', 'game', 'project_id'],
-    ['dv_assets', 'game', 'project_id'],
-    ['dv_events', 'game', 'project_id'],
-    ['dv_messages', 'game', 'project_id'],
-    ['dv_bugs', 'game', 'project_id'],
-    ['dv_plans', 'game', 'project_id'],
-    ['dv_approvals', 'project', 'project_id'],
+    ['agents', 'game', 'project_id'],
+    ['tasks', 'game', 'project_id'],
+    ['context', 'game', 'project_id'],
+    ['assets', 'game', 'project_id'],
+    ['events', 'game', 'project_id'],
+    ['messages', 'game', 'project_id'],
+    ['bugs', 'game', 'project_id'],
+    ['plans', 'game', 'project_id'],
+    ['approvals', 'project', 'project_id'],
   ];
   for (var [table, oldCol, newCol] of tables) {
     try {
@@ -155,15 +176,15 @@ function migrateGameToProjectId() {
       console.error('[migration] Error renaming ' + table + '.' + oldCol + ':', e.message);
     }
   }
-  // Rename dv_games table to dv_projects
+  // Rename games table to projects
   try {
-    var gamesTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='dv_games'").all();
+    var gamesTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='games'").all();
     if (gamesTables.length > 0) {
-      db.prepare("ALTER TABLE dv_games RENAME TO dv_projects").run();
-      console.log('[migration] Renamed table dv_games -> dv_projects');
+      db.prepare("ALTER TABLE games RENAME TO projects").run();
+      console.log('[migration] Renamed table games -> projects');
     }
   } catch (e) {
-    console.error('[migration] Error renaming dv_games:', e.message);
+    console.error('[migration] Error renaming games:', e.message);
   }
 }
 
@@ -179,37 +200,37 @@ function stmt(key, sql) {
 // -- Agents --
 
 export function createAgent(id, name, projectId, apiKeyHash, capabilities) {
-  stmt('dvCreateAgent', `INSERT INTO dv_agents (id, name, project_id, api_key_hash, capabilities)
+  stmt('dvCreateAgent', `INSERT INTO agents (id, name, project_id, api_key_hash, capabilities)
     VALUES (?, ?, ?, ?, ?)`).run(id, name, projectId, apiKeyHash, capabilities || '[]');
 }
 
 export function getAgent(id) {
-  return stmt('dvGetAgent', 'SELECT * FROM dv_agents WHERE id = ?').get(id);
+  return stmt('dvGetAgent', 'SELECT * FROM agents WHERE id = ?').get(id);
 }
 
 export function getAgentByKeyHash(apiKeyHash) {
-  return stmt('dvGetAgentByKey', 'SELECT * FROM dv_agents WHERE api_key_hash = ?').get(apiKeyHash);
+  return stmt('dvGetAgentByKey', 'SELECT * FROM agents WHERE api_key_hash = ?').get(apiKeyHash);
 }
 
 export function listAgents() {
-  return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents WHERE project_id != 'drone' ORDER BY created_at").all();
+  return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM agents WHERE project_id != 'drone' ORDER BY created_at").all();
 }
 
 export function listAllAgentsIncludingDrones() {
-  return stmt('dvListAllAgents', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM dv_agents ORDER BY created_at').all();
+  return stmt('dvListAllAgents', 'SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM agents ORDER BY created_at').all();
 }
 
 export function updateAgentHeartbeat(id, status, workingOn) {
-  stmt('dvHeartbeat', `UPDATE dv_agents SET status = ?, working_on = ?, last_heartbeat = datetime('now')
+  stmt('dvHeartbeat', `UPDATE agents SET status = ?, working_on = ?, last_heartbeat = datetime('now')
     WHERE id = ?`).run(status || 'online', workingOn || '', id);
 }
 
 export function updateAgentKey(id, apiKeyHash) {
-  stmt('dvUpdateAgentKey', 'UPDATE dv_agents SET api_key_hash = ? WHERE id = ?').run(apiKeyHash, id);
+  stmt('dvUpdateAgentKey', 'UPDATE agents SET api_key_hash = ? WHERE id = ?').run(apiKeyHash, id);
 }
 
 export function deleteAgent(id) {
-  stmt('dvDeleteAgent', 'DELETE FROM dv_agents WHERE id = ?').run(id);
+  stmt('dvDeleteAgent', 'DELETE FROM agents WHERE id = ?').run(id);
 }
 
 export function updateAgent(id, fields) {
@@ -227,22 +248,22 @@ export function updateAgent(id, fields) {
   if (fields.system_diagnostics !== undefined) { sets.push('system_diagnostics = ?'); values.push(typeof fields.system_diagnostics === 'string' ? fields.system_diagnostics : JSON.stringify(fields.system_diagnostics)); }
   if (sets.length === 0) return;
   values.push(id);
-  db.prepare('UPDATE dv_agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Operators --
 
 export function createOperator(id, displayName, role, responsibilities, email, studioUserId) {
-  stmt('dvCreateOperator', `INSERT INTO dv_operators (id, display_name, role, responsibilities, email, studio_user_id)
+  stmt('dvCreateOperator', `INSERT INTO operators (id, display_name, role, responsibilities, email, studio_user_id)
     VALUES (?, ?, ?, ?, ?, ?)`).run(id, displayName, role || 'member', responsibilities || '', email || '', studioUserId || null);
 }
 
 export function getOperator(id) {
-  return stmt('dvGetOperator', 'SELECT * FROM dv_operators WHERE id = ?').get(id);
+  return stmt('dvGetOperator', 'SELECT * FROM operators WHERE id = ?').get(id);
 }
 
 export function listOperators() {
-  return stmt('dvListOperators', 'SELECT * FROM dv_operators ORDER BY created_at').all();
+  return stmt('dvListOperators', 'SELECT * FROM operators ORDER BY created_at').all();
 }
 
 export function updateOperator(id, fields) {
@@ -257,16 +278,16 @@ export function updateOperator(id, fields) {
   if (fields.availability !== undefined) { sets.push('availability = ?'); values.push(fields.availability); }
   if (fields.away_message !== undefined) { sets.push('away_message = ?'); values.push(fields.away_message); }
   values.push(id);
-  db.prepare('UPDATE dv_operators SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE operators SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function setOperatorAvailability(id, availability, awayMessage) {
-  db.prepare(`UPDATE dv_operators SET availability = ?, away_message = ?, last_seen_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
+  db.prepare(`UPDATE operators SET availability = ?, away_message = ?, last_seen_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
     .run(availability, awayMessage || '', id);
 }
 
 export function getAvailableOperators() {
-  return db.prepare("SELECT * FROM dv_operators WHERE status = 'active' AND availability = 'available'").all();
+  return db.prepare("SELECT * FROM operators WHERE status = 'active' AND availability = 'available'").all();
 }
 
 export function isNetworkAutonomous() {
@@ -274,8 +295,8 @@ export function isNetworkAutonomous() {
   // dashboard user has been active recently. Agent heartbeats are automated and
   // do NOT indicate human presence.
   var count = db.prepare(
-    "SELECT COUNT(DISTINCT o.id) as c FROM dv_operators o " +
-    "LEFT JOIN dv_studio_users u ON u.id = o.studio_user_id " +
+    "SELECT COUNT(DISTINCT o.id) as c FROM operators o " +
+    "LEFT JOIN studio_users u ON u.id = o.studio_user_id " +
     "WHERE o.status = 'active' AND o.availability = 'available' AND " +
     "  u.last_seen > datetime('now', '-30 minutes')"
   ).get();
@@ -283,29 +304,29 @@ export function isNetworkAutonomous() {
 }
 
 export function deleteOperator(id) {
-  stmt('dvDeleteOperator', 'DELETE FROM dv_operators WHERE id = ?').run(id);
+  stmt('dvDeleteOperator', 'DELETE FROM operators WHERE id = ?').run(id);
 }
 
 // -- Instance Config --
 
 export function getInstanceConfig(key) {
-  var row = stmt('dvGetConfig', 'SELECT value FROM dv_instance_config WHERE key = ?').get(key);
+  var row = stmt('dvGetConfig', 'SELECT value FROM instance_config WHERE key = ?').get(key);
   return row ? row.value : null;
 }
 
 export function setInstanceConfig(key, value, updatedBy) {
-  stmt('dvSetConfig', `INSERT INTO dv_instance_config (key, value, updated_by, updated_at)
+  stmt('dvSetConfig', `INSERT INTO instance_config (key, value, updated_by, updated_at)
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
   ).run(key, value, updatedBy || '');
 }
 
 export function listInstanceConfig() {
-  return stmt('dvListConfig', 'SELECT * FROM dv_instance_config ORDER BY key').all();
+  return stmt('dvListConfig', 'SELECT * FROM instance_config ORDER BY key').all();
 }
 
 export function deleteInstanceConfig(key) {
-  stmt('dvDeleteConfig', 'DELETE FROM dv_instance_config WHERE key = ?').run(key);
+  stmt('dvDeleteConfig', 'DELETE FROM instance_config WHERE key = ?').run(key);
 }
 
 // -- Sleep Mode --
@@ -332,16 +353,16 @@ export function appendSleepLog(field, item) {
 // -- Organizations --
 
 export function createOrg(id, name, description, ownerId) {
-  stmt('dvCreateOrg', `INSERT OR IGNORE INTO dv_organizations (id, name, description, owner_id)
+  stmt('dvCreateOrg', `INSERT OR IGNORE INTO organizations (id, name, description, owner_id)
     VALUES (?, ?, ?, ?)`).run(id, name, description || '', ownerId || '');
 }
 
 export function listOrgs() {
-  return stmt('dvListOrgs', 'SELECT * FROM dv_organizations ORDER BY created_at').all();
+  return stmt('dvListOrgs', 'SELECT * FROM organizations ORDER BY created_at').all();
 }
 
 export function getOrg(id) {
-  return stmt('dvGetOrg', 'SELECT * FROM dv_organizations WHERE id = ?').get(id);
+  return stmt('dvGetOrg', 'SELECT * FROM organizations WHERE id = ?').get(id);
 }
 
 export function updateOrg(id, fields) {
@@ -352,27 +373,27 @@ export function updateOrg(id, fields) {
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
   if (sets.length === 0) return;
   values.push(id);
-  db.prepare('UPDATE dv_organizations SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE organizations SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function deleteOrg(id) {
-  db.prepare('DELETE FROM dv_organizations WHERE id = ?').run(id);
+  db.prepare('DELETE FROM organizations WHERE id = ?').run(id);
 }
 
 // -- Projects --
 
 export function createProject(id, name, description, repoUrl, orgId, type) {
-  stmt('dvCreateProject', `INSERT OR IGNORE INTO dv_projects (id, name, description, repo_url, org_id, type)
+  stmt('dvCreateProject', `INSERT OR IGNORE INTO projects (id, name, description, repo_url, org_id, type)
     VALUES (?, ?, ?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '', orgId || '', type || 'software');
 }
 
 export function listProjects(orgId) {
-  if (orgId) return db.prepare('SELECT * FROM dv_projects WHERE org_id = ? ORDER BY created_at').all(orgId);
-  return stmt('dvListProjects', 'SELECT * FROM dv_projects ORDER BY created_at').all();
+  if (orgId) return db.prepare('SELECT * FROM projects WHERE org_id = ? ORDER BY created_at').all(orgId);
+  return stmt('dvListProjects', 'SELECT * FROM projects ORDER BY created_at').all();
 }
 
 export function getProject(id) {
-  return stmt('dvGetProject', 'SELECT * FROM dv_projects WHERE id = ?').get(id);
+  return stmt('dvGetProject', 'SELECT * FROM projects WHERE id = ?').get(id);
 }
 
 export function updateProject(id, fields) {
@@ -386,19 +407,19 @@ export function updateProject(id, fields) {
   if (fields.bug_categories !== undefined) { sets.push('bug_categories = ?'); values.push(typeof fields.bug_categories === 'string' ? fields.bug_categories : JSON.stringify(fields.bug_categories)); }
   if (sets.length === 0) return;
   values.push(id);
-  db.prepare('UPDATE dv_projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Tasks --
 
 export function createTask(title, description, projectId, requester, priority, tags) {
-  var result = stmt('dvCreateTask', `INSERT INTO dv_tasks (title, description, project_id, requester, priority, tags)
+  var result = stmt('dvCreateTask', `INSERT INTO tasks (title, description, project_id, requester, priority, tags)
     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).get(title, description || '', projectId || '', requester, priority || 'normal', tags || '[]');
   return result.id;
 }
 
 export function getTask(id) {
-  return stmt('dvGetTask', 'SELECT * FROM dv_tasks WHERE id = ?').get(id);
+  return stmt('dvGetTask', 'SELECT * FROM tasks WHERE id = ?').get(id);
 }
 
 export function listTasks(filters) {
@@ -412,7 +433,7 @@ export function listTasks(filters) {
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_tasks WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM tasks WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateTask(id, fields) {
@@ -431,7 +452,7 @@ export function updateTask(id, fields) {
   if (fields.pr_url !== undefined) { sets.push('pr_url = ?'); values.push(fields.pr_url); }
   if (fields.repo !== undefined) { sets.push('repo = ?'); values.push(fields.repo); }
   values.push(id);
-  return db.prepare('UPDATE dv_tasks SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return db.prepare('UPDATE tasks SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Task dependencies --
@@ -445,14 +466,14 @@ export function setTaskDependency(taskId, blockedById) {
   try { blockedBy = JSON.parse(task.blocked_by || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocked_by (task: ' + taskId + '):', e.message); }
   if (blockedBy.indexOf(blockedById) === -1) {
     blockedBy.push(blockedById);
-    db.prepare("UPDATE dv_tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(blockedBy), taskId);
+    db.prepare("UPDATE tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(blockedBy), taskId);
   }
 
   var blocks = [];
   try { blocks = JSON.parse(blocker.blocks || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocks (task: ' + blockedById + '):', e.message); }
   if (blocks.indexOf(taskId) === -1) {
     blocks.push(taskId);
-    db.prepare("UPDATE dv_tasks SET blocks = ? WHERE id = ?").run(JSON.stringify(blocks), blockedById);
+    db.prepare("UPDATE tasks SET blocks = ? WHERE id = ?").run(JSON.stringify(blocks), blockedById);
   }
   return true;
 }
@@ -470,7 +491,7 @@ export function resolveTaskDependencies(completedTaskId) {
     var deps = [];
     try { deps = JSON.parse(blocked.blocked_by || '[]'); } catch (e) { console.warn('[mycelium] JSON parse failed for task.blocked_by (task: ' + blockedId + '):', e.message); }
     deps = deps.filter(function (d) { return d !== completedTaskId; });
-    db.prepare("UPDATE dv_tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(deps), blockedId);
+    db.prepare("UPDATE tasks SET blocked_by = ? WHERE id = ?").run(JSON.stringify(deps), blockedId);
     if (deps.length === 0) unblocked.push(blockedId);
   }
   return unblocked;
@@ -479,34 +500,34 @@ export function resolveTaskDependencies(completedTaskId) {
 // -- Task approval --
 
 export function approveTask(taskId, approvedBy) {
-  db.prepare("UPDATE dv_tasks SET approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(approvedBy, taskId);
+  db.prepare("UPDATE tasks SET approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(approvedBy, taskId);
 }
 
 export function listTasksNeedingApproval() {
-  return db.prepare("SELECT * FROM dv_tasks WHERE needs_approval = 1 AND approved_by IS NULL AND status != 'done' ORDER BY updated_at DESC").all();
+  return db.prepare("SELECT * FROM tasks WHERE needs_approval = 1 AND approved_by IS NULL AND status != 'done' ORDER BY updated_at DESC").all();
 }
 
 // -- Task Comments --
 
 export function addTaskComment(taskId, author, content) {
   var result = db.prepare(
-    "INSERT INTO dv_task_comments (task_id, author, content) VALUES (?, ?, ?) RETURNING *"
+    "INSERT INTO task_comments (task_id, author, content) VALUES (?, ?, ?) RETURNING *"
   ).get(taskId, author, content);
   return result;
 }
 
 export function getTaskComments(taskId) {
   return db.prepare(
-    "SELECT * FROM dv_task_comments WHERE task_id = ? ORDER BY created_at ASC"
+    "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC"
   ).all(taskId);
 }
 
 export function getTaskComment(commentId) {
-  return db.prepare("SELECT * FROM dv_task_comments WHERE id = ?").get(commentId);
+  return db.prepare("SELECT * FROM task_comments WHERE id = ?").get(commentId);
 }
 
 export function deleteTaskComment(commentId) {
-  var result = db.prepare("DELETE FROM dv_task_comments WHERE id = ?").run(commentId);
+  var result = db.prepare("DELETE FROM task_comments WHERE id = ?").run(commentId);
   return result.changes > 0;
 }
 
@@ -514,29 +535,29 @@ export function deleteTaskComment(commentId) {
 
 export function addPlanStepComment(stepId, planId, author, content) {
   var result = db.prepare(
-    "INSERT INTO dv_plan_step_comments (step_id, plan_id, author, content) VALUES (?, ?, ?, ?) RETURNING *"
+    "INSERT INTO plan_step_comments (step_id, plan_id, author, content) VALUES (?, ?, ?, ?) RETURNING *"
   ).get(stepId, planId, author, content);
   return result;
 }
 
 export function getPlanStepComments(stepId) {
   return db.prepare(
-    "SELECT * FROM dv_plan_step_comments WHERE step_id = ? ORDER BY created_at ASC"
+    "SELECT * FROM plan_step_comments WHERE step_id = ? ORDER BY created_at ASC"
   ).all(stepId);
 }
 
 // -- Context --
 
 export function getContext(projectId) {
-  return stmt('dvGetContext', 'SELECT * FROM dv_context WHERE project_id = ?').get(projectId);
+  return stmt('dvGetContext', 'SELECT * FROM context WHERE project_id = ?').get(projectId);
 }
 
 export function getAllContext() {
-  return stmt('dvGetAllContext', 'SELECT * FROM dv_context ORDER BY updated_at DESC').all();
+  return stmt('dvGetAllContext', 'SELECT * FROM context ORDER BY updated_at DESC').all();
 }
 
 export function upsertContext(projectId, data, agentId) {
-  stmt('dvUpsertContext', `INSERT INTO dv_context (project_id, data, updated_by, updated_at)
+  stmt('dvUpsertContext', `INSERT INTO context (project_id, data, updated_by, updated_at)
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(project_id) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`).run(projectId, data, agentId);
 }
@@ -544,13 +565,13 @@ export function upsertContext(projectId, data, agentId) {
 // -- Assets --
 
 export function createAsset(name, type, projectId, status, assetPath, metadata, requester) {
-  var result = stmt('dvCreateAsset', `INSERT INTO dv_assets (name, type, project_id, status, path, metadata, requester)
+  var result = stmt('dvCreateAsset', `INSERT INTO assets (name, type, project_id, status, path, metadata, requester)
     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(name, type || 'sprite', projectId || 'shared', status || 'requested', assetPath || '', metadata || '{}', requester || '');
   return result.id;
 }
 
 export function getAsset(id) {
-  return stmt('dvGetAsset', 'SELECT * FROM dv_assets WHERE id = ?').get(id);
+  return stmt('dvGetAsset', 'SELECT * FROM assets WHERE id = ?').get(id);
 }
 
 export function listAssets(filters) {
@@ -562,7 +583,7 @@ export function listAssets(filters) {
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_assets WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM assets WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateAsset(id, fields) {
@@ -578,21 +599,21 @@ export function updateAsset(id, fields) {
   if (fields.drone_job_id !== undefined) { sets.push('drone_job_id = ?'); values.push(fields.drone_job_id); }
   if (fields.prompt !== undefined) { sets.push('prompt = ?'); values.push(fields.prompt); }
   values.push(id);
-  return db.prepare('UPDATE dv_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return db.prepare('UPDATE assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function deleteAsset(id) {
-  return db.prepare('DELETE FROM dv_assets WHERE id = ?').run(id);
+  return db.prepare('DELETE FROM assets WHERE id = ?').run(id);
 }
 
 export function listAssetsByDroneJob(droneJobId) {
-  return db.prepare('SELECT * FROM dv_assets WHERE drone_job_id = ?').all(droneJobId);
+  return db.prepare('SELECT * FROM assets WHERE drone_job_id = ?').all(droneJobId);
 }
 
 // -- Events --
 
 export function createEvent(type, agent, projectId, summary, data) {
-  var result = stmt('dvCreateEvent', `INSERT INTO dv_events (type, agent, project_id, summary, data)
+  var result = stmt('dvCreateEvent', `INSERT INTO events (type, agent, project_id, summary, data)
     VALUES (?, ?, ?, ?, ?) RETURNING id`).get(type, agent || '', projectId || null, summary || '', data || '{}');
   return result.id;
 }
@@ -608,7 +629,7 @@ export function listEvents(filters) {
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_events WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM events WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 // -- Messages --
@@ -619,43 +640,43 @@ export function createMessage(fromAgent, toAgent, threadId, projectId, content, 
   var prio = VALID_MSG_PRIORITIES.includes(priority) ? priority : 'normal';
   if (msgType && msgType !== 'message') {
     var result = db.prepare(
-      "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+      "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
     ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', msgType, channelId || null, prio);
     return result.id;
   }
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', channelId || null, prio);
   return result.id;
 }
 
 export function createRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status, priority) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending', 'urgent') RETURNING id"
+    "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status, priority) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending', 'urgent') RETURNING id"
   ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}');
   return result.id;
 }
 
 export function acknowledgeMessage(id) {
-  db.prepare("UPDATE dv_messages SET status = 'acknowledged' WHERE id = ?").run(id);
+  db.prepare("UPDATE messages SET status = 'acknowledged' WHERE id = ?").run(id);
 }
 
 export function resolveMessage(id, resolvedBy) {
-  db.prepare("UPDATE dv_messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?").run(resolvedBy, id);
+  db.prepare("UPDATE messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?").run(resolvedBy, id);
 }
 
 export function listPendingRequests(agentId) {
   return db.prepare(
-    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
+    "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
   ).all(agentId);
 }
 
 export function countPendingForAgent(agentId) {
   var row = db.prepare(
     "SELECT " +
-    "(SELECT COUNT(*) FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent')) as requests, " +
-    "(SELECT COUNT(*) FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent')) as directives, " +
-    "(SELECT COUNT(*) FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent') as unread"
+    "(SELECT COUNT(*) FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent')) as requests, " +
+    "(SELECT COUNT(*) FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent')) as directives, " +
+    "(SELECT COUNT(*) FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent') as unread"
   ).get(agentId, agentId, agentId);
   return row;
 }
@@ -664,26 +685,26 @@ export function getAgentInbox(agentId, limit) {
   limit = limit || 20;
   // Directives (blocking, must handle first)
   var directives = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
   ).all(agentId);
   // Requests (blocking, must respond)
   var requests = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
   ).all(agentId);
   // Unread messages (directed to me or broadcast, status=sent)
   var messages = db.prepare(
-    "SELECT id, from_agent, to_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent' ORDER BY created_at DESC LIMIT ?"
+    "SELECT id, from_agent, to_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent' ORDER BY created_at DESC LIMIT ?"
   ).all(agentId, limit);
   return { directives: directives, requests: requests, messages: messages };
 }
 
 export function getMessage(id) {
-  return db.prepare("SELECT * FROM dv_messages WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM messages WHERE id = ?").get(id);
 }
 
 // Mark messages as read by an agent (idempotent via UNIQUE constraint)
 export function markMessagesRead(agentId, messageIds) {
-  var stmt = db.prepare("INSERT OR IGNORE INTO dv_message_reads (message_id, agent_id) VALUES (?, ?)");
+  var stmt = db.prepare("INSERT OR IGNORE INTO message_reads (message_id, agent_id) VALUES (?, ?)");
   var tx = db.transaction(function (ids) {
     for (var id of ids) stmt.run(id, agentId);
   });
@@ -695,16 +716,16 @@ export function getUnreadMessages(agentId, limit) {
   limit = limit || 20;
   // Directives + requests (blocking — always unread if status is pending/sent)
   var directives = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
   ).all(agentId);
   var requests = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM dv_messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
+    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
   ).all(agentId);
   // Regular messages: directed to me OR broadcast, not yet read by me
   var messages = db.prepare(
     "SELECT m.id, m.from_agent, m.to_agent, m.content, m.msg_type, m.priority, m.project_id, m.created_at " +
-    "FROM dv_messages m " +
-    "LEFT JOIN dv_message_reads r ON r.message_id = m.id AND r.agent_id = ? " +
+    "FROM messages m " +
+    "LEFT JOIN message_reads r ON r.message_id = m.id AND r.agent_id = ? " +
     "WHERE (m.to_agent = ? OR m.to_agent IS NULL) AND m.msg_type IN ('message', 'info') AND m.status = 'sent' " +
     "AND r.id IS NULL " +
     "ORDER BY m.created_at DESC LIMIT ?"
@@ -735,23 +756,23 @@ export function listMessages(filters) {
   var orderBy = filters.priority_sort
     ? "CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, created_at DESC"
     : 'created_at DESC';
-  return db.prepare('SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY ' + orderBy + ' LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM messages WHERE ' + where.join(' AND ') + ' ORDER BY ' + orderBy + ' LIMIT ? OFFSET ?').all(...params);
 }
 
 export function listThreads(limit) {
   return db.prepare(`SELECT thread_id, COUNT(*) as message_count,
     MAX(created_at) as last_message_at,
-    (SELECT from_agent FROM dv_messages m2 WHERE m2.thread_id = dv_messages.thread_id ORDER BY created_at DESC LIMIT 1) as last_sender
-    FROM dv_messages WHERE thread_id IS NOT NULL
+    (SELECT from_agent FROM messages m2 WHERE m2.thread_id = messages.thread_id ORDER BY created_at DESC LIMIT 1) as last_sender
+    FROM messages WHERE thread_id IS NOT NULL
     GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(Math.min(limit || 20, 500));
 }
 
 // Archive resolved messages older than N days (default 90)
-// Deletes from dv_messages, returns count of rows removed
+// Deletes from messages, returns count of rows removed
 export function archiveOldMessages(daysOld) {
   daysOld = parseInt(daysOld) || 90;
   var result = db.prepare(
-    "DELETE FROM dv_messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
+    "DELETE FROM messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
     " AND (status = 'resolved' OR msg_type = 'info')"
   ).run(String(daysOld));
   return result.changes;
@@ -761,7 +782,7 @@ export function archiveOldMessages(daysOld) {
 export function archiveOldEvents(daysOld) {
   daysOld = parseInt(daysOld) || 60;
   var result = db.prepare(
-    "DELETE FROM dv_events WHERE created_at < datetime('now', '-' || ? || ' days')"
+    "DELETE FROM events WHERE created_at < datetime('now', '-' || ? || ' days')"
   ).run(String(daysOld));
   return result.changes;
 }
@@ -773,7 +794,7 @@ export function bulkDeleteMessages(filters) {
   if (filters.to) { conditions.push('to_agent = ?'); params.push(filters.to); }
   if (filters.content_like) { conditions.push('content LIKE ?'); params.push('%' + filters.content_like + '%'); }
   if (conditions.length === 0) return 0;
-  var sql = 'DELETE FROM dv_messages WHERE ' + conditions.join(' AND ');
+  var sql = 'DELETE FROM messages WHERE ' + conditions.join(' AND ');
   return db.prepare(sql).run(...params).changes;
 }
 
@@ -794,7 +815,7 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     expiresAt = opts.expires_at;
   }
 
-  var existing = db.prepare("SELECT data FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
+  var existing = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
     try {
@@ -808,7 +829,7 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     merged = typeof data === 'string' ? data : JSON.stringify(data);
   }
   db.prepare(
-    "INSERT INTO dv_context_keys (namespace, key, data, category, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
+    "INSERT INTO context_keys (namespace, key, data, category, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
   ).run(namespace, key, merged, category, expiresAt, agentId);
 
   // Enforce size cap per namespace
@@ -816,20 +837,20 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
 }
 
 function enforceNamespaceCap(namespace) {
-  var count = db.prepare("SELECT COUNT(*) as c FROM dv_context_keys WHERE namespace = ?").get(namespace);
+  var count = db.prepare("SELECT COUNT(*) as c FROM context_keys WHERE namespace = ?").get(namespace);
   if (count.c > CONTEXT_MAX_KEYS_PER_NAMESPACE) {
     // Delete oldest ephemeral keys first, then oldest durable
     var excess = count.c - CONTEXT_MAX_KEYS_PER_NAMESPACE;
     db.prepare(
-      "DELETE FROM dv_context_keys WHERE id IN (SELECT id FROM dv_context_keys WHERE namespace = ? ORDER BY CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)"
+      "DELETE FROM context_keys WHERE id IN (SELECT id FROM context_keys WHERE namespace = ? ORDER BY CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)"
     ).run(namespace, excess);
   }
 }
 
 export function getContextKey(namespace, key) {
-  var row = db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
+  var row = db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   if (row && row.expires_at && new Date(row.expires_at) < new Date()) {
-    db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
+    db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
     return null;
   }
   return row;
@@ -839,43 +860,43 @@ export function listContextKeys(namespace) {
   // Filter out expired keys on read
   var now = new Date().toISOString();
   if (namespace) {
-    return db.prepare("SELECT * FROM dv_context_keys WHERE namespace = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key").all(namespace, now);
+    return db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key").all(namespace, now);
   }
-  return db.prepare("SELECT * FROM dv_context_keys WHERE expires_at IS NULL OR expires_at > ? ORDER BY namespace, key").all(now);
+  return db.prepare("SELECT * FROM context_keys WHERE expires_at IS NULL OR expires_at > ? ORDER BY namespace, key").all(now);
 }
 
 export function deleteContextKey(namespace, key) {
-  db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
+  db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
 }
 
 // Purge all expired context keys (called on server boot and periodically)
 export function purgeExpiredContextKeys() {
-  var result = db.prepare("DELETE FROM dv_context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
+  var result = db.prepare("DELETE FROM context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
   return result.changes;
 }
 
 // Clean up stale session keys for an agent (called on agent boot)
 export function cleanupAgentSessionKeys(agentId) {
-  var result = db.prepare("DELETE FROM dv_context_keys WHERE namespace = ? AND category = 'ephemeral' AND expires_at IS NOT NULL AND expires_at <= datetime('now')").run(agentId);
+  var result = db.prepare("DELETE FROM context_keys WHERE namespace = ? AND category = 'ephemeral' AND expires_at IS NOT NULL AND expires_at <= datetime('now')").run(agentId);
   return result.changes;
 }
 
 // Get context stats per namespace
 export function contextKeyStats() {
-  return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM dv_context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
+  return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
 // -- Bugs --
 
 export function createBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {
   var result = db.prepare(
-    "INSERT INTO dv_bugs (project_id, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO bugs (project_id, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(projectId || '', title, description, category || 'other', severity || 'normal', reporter || 'admin', assignee || null, diagnosticData || null);
   return result.id;
 }
 
 export function getBug(id) {
-  return db.prepare("SELECT * FROM dv_bugs WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM bugs WHERE id = ?").get(id);
 }
 
 export function listBugs(filters) {
@@ -890,7 +911,7 @@ export function listBugs(filters) {
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateBug(id, updates) {
@@ -901,15 +922,15 @@ export function updateBug(id, updates) {
   if (updates.admin_notes !== undefined) { sets.push('admin_notes = ?'); params.push(updates.admin_notes); }
   if (updates.severity !== undefined) { sets.push('severity = ?'); params.push(updates.severity); }
   params.push(id);
-  db.prepare('UPDATE dv_bugs SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
+  db.prepare('UPDATE bugs SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
 }
 
 export function deleteBug(id) {
-  return db.prepare('DELETE FROM dv_bugs WHERE id = ?').run(id);
+  return db.prepare('DELETE FROM bugs WHERE id = ?').run(id);
 }
 
 export function countBugs() {
-  return db.prepare("SELECT SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open, SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress, SUM(CASE WHEN status = 'fixed' THEN 1 ELSE 0 END) as fixed, COUNT(*) as total FROM dv_bugs").get();
+  return db.prepare("SELECT SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open, SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress, SUM(CASE WHEN status = 'fixed' THEN 1 ELSE 0 END) as fixed, COUNT(*) as total FROM bugs").get();
 }
 
 // -- Boot payload --
@@ -920,18 +941,18 @@ export function getBootPayload(agentId) {
   var { api_key_hash, ...safeAgent } = agent;
 
   var myTasks = db.prepare(
-    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+    "SELECT * FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
   ).all(agentId);
 
   var pendingRequests = listPendingRequests(agentId);
 
   var since = agent.last_heartbeat || '2000-01-01';
   var newMessages = db.prepare(
-    "SELECT * FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND created_at > ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND created_at > ? ORDER BY created_at DESC LIMIT 50"
   ).all(agentId, since);
 
   var pendingDirectives = db.prepare(
-    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+    "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
   ).all(agentId);
 
   var capabilities = [];
@@ -939,13 +960,13 @@ export function getBootPayload(agentId) {
   var assetRequests = [];
   if (capabilities.indexOf('assets') !== -1) {
     assetRequests = db.prepare(
-      "SELECT * FROM dv_assets WHERE status = 'requested' ORDER BY created_at DESC LIMIT 50"
+      "SELECT * FROM assets WHERE status = 'requested' ORDER BY created_at DESC LIMIT 50"
     ).all();
   }
 
   // Only include agents active in last 7 days or in the same project
   var otherAgents = db.prepare(
-    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM dv_agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
+    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
   ).all(agentId, agent.project_id);
 
   var projectContext = getContext(agent.project_id);
@@ -1001,16 +1022,16 @@ export function getBootPayload(agentId) {
   var sinceLastSession = null;
   if (since && since !== '2000-01-01') {
     var newMsgCount = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND created_at > ?"
+      "SELECT COUNT(*) as c FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND created_at > ?"
     ).get(agentId, since).c;
     var taskChangeCount = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ?"
+      "SELECT COUNT(*) as c FROM tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ?"
     ).get(agentId, since).c;
     var planStepChangeCount = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_plan_steps WHERE updated_at > ?"
+      "SELECT COUNT(*) as c FROM plan_steps WHERE updated_at > ?"
     ).get(since).c;
     var newBugCount = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_bugs WHERE created_at > ?"
+      "SELECT COUNT(*) as c FROM bugs WHERE created_at > ?"
     ).get(since).c;
     sinceLastSession = {
       new_messages: newMsgCount,
@@ -1059,9 +1080,20 @@ export function getSlimBootPayload(agentId) {
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
 
+  // Team context
+  var agentTeams = getTeamsForUser(agentId);
+  var primaryTeam = agentTeams.find(function(t) { return t.is_primary; }) || null;
+  var guestTeams = agentTeams.filter(function(t) { return !t.is_primary; });
+  var teamMembers = [];
+  if (primaryTeam) {
+    teamMembers = db.prepare(
+      'SELECT tm.user_id, tm.user_type, tm.role FROM team_members tm WHERE tm.team_id = ?'
+    ).all(primaryTeam.id);
+  }
+
   // Fetch directives and requests first — used for both counts and content
   var pendingDirectives = db.prepare(
-    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+    "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
   ).all(agentId);
   var pendingRequests = listPendingRequests(agentId);
 
@@ -1081,20 +1113,20 @@ export function getSlimBootPayload(agentId) {
     requests: pendingRequests.length,
     messages_unread: unreadMsgCount,
     tasks_mine: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress')"
+      "SELECT COUNT(*) as c FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress')"
     ).get(agentId).c,
     bugs_open: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_bugs WHERE status = 'open'"
+      "SELECT COUNT(*) as c FROM bugs WHERE status = 'open'"
     ).get().c,
     plans_active: db.prepare(
-      "SELECT COUNT(*) as c FROM dv_plans WHERE (project_id = ? OR project_id = '') AND status = 'active'"
+      "SELECT COUNT(*) as c FROM plans WHERE (project_id = ? OR project_id = '') AND status = 'active'"
     ).get(agent.project_id).c
   };
 
   // Role contract — small, always needed
   var roleContract = buildRoleContract(agent, agentId);
   var myTasks = db.prepare(
-    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+    "SELECT * FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
   ).all(agentId);
   var openBugs = listBugs({ status: 'open', limit: 5 });
   var myPlans = listPlans({ project_id: agent.project_id, limit: 5 });
@@ -1113,7 +1145,7 @@ export function getSlimBootPayload(agentId) {
 
   // Other agents — compact
   var otherAgents = db.prepare(
-    "SELECT id, status, working_on FROM dv_agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
+    "SELECT id, status, working_on FROM agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
   ).all(agentId, agent.project_id);
 
   // Sleep mode + autonomous mode — needed for MCP night directives
@@ -1135,6 +1167,9 @@ export function getSlimBootPayload(agentId) {
       return { id: a.id, status: a.status, working_on: a.working_on || '' };
     }),
     inbox: inbox.messages.length > 0 || inbox.directives.length > 0 || inbox.requests.length > 0 ? inbox : undefined,
+    team: primaryTeam || undefined,
+    guest_teams: guestTeams.length > 0 ? guestTeams : undefined,
+    team_members: teamMembers.length > 0 ? teamMembers : undefined,
     sleep_mode: sleepMode,
     autonomous_mode: autonomousMode,
     operators_available: operatorsAvailable,
@@ -1186,6 +1221,17 @@ function buildRoleContract(agent, agentId) {
   }
 
   return contract;
+}
+
+// Get project IDs scoped to an agent's teams (all teams: primary + guest)
+// Returns empty array if agent has no teams (legacy/unscoped)
+export function getTeamProjectIdsForAgent(agentId) {
+  var agentTeamIds = getTeamsForUser(agentId).map(function(t) { return t.id; });
+  if (agentTeamIds.length === 0) return [];
+  var placeholders = agentTeamIds.map(function() { return '?'; }).join(',');
+  return db.prepare(
+    'SELECT id FROM projects WHERE team_id IN (' + placeholders + ')'
+  ).all(...agentTeamIds).map(function(p) { return p.id; });
 }
 
 // Build a prioritized work queue: what should this agent do next?
@@ -1248,8 +1294,15 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     }
   }
 
-  // Priority 9: Unassigned bugs for this agent's project
-  var unassignedBugs = bugs.filter(function (b) { return !b.assignee && (b.project_id === projectId || !b.project_id); });
+  // Priority 9: Unassigned bugs for this agent's project/team
+  var teamProjIds = getTeamProjectIdsForAgent(agentId);
+  var unassignedBugs = bugs.filter(function (b) {
+    if (b.assignee) return false;
+    if (!b.project_id) return true; // unscoped bugs visible to everyone
+    if (b.project_id === projectId) return true;
+    if (teamProjIds.length > 0) return teamProjIds.indexOf(b.project_id) !== -1;
+    return true; // no team = legacy, see everything
+  });
   for (var b of unassignedBugs) {
     queue.push({ priority: 8, type: 'bug_unassigned', id: b.id, title: b.title, severity: b.severity, status: b.status, project_id: b.project_id });
   }
@@ -1266,7 +1319,7 @@ export function getIdleAgents() {
   // Agents that are online/idle, not drones, heartbeat within last 30 minutes
   return db.prepare(`
     SELECT id, name, project_id, status, working_on, capabilities, role
-    FROM dv_agents
+    FROM agents
     WHERE status IN ('online', 'idle')
       AND role != 'drone'
       AND last_heartbeat > datetime('now', '-30 minutes')
@@ -1274,33 +1327,45 @@ export function getIdleAgents() {
   `).all();
 }
 
-export function getNextUnassignedTask(excludeIds) {
+export function getNextUnassignedTask(excludeIds, teamProjectIds) {
   // Find highest priority open task not assigned to anyone
+  // If teamProjectIds provided, scope to those projects only
   var exclude = excludeIds && excludeIds.length > 0
     ? ' AND id NOT IN (' + excludeIds.map(() => '?').join(',') + ')'
     : '';
-  var params = excludeIds && excludeIds.length > 0 ? [...excludeIds] : [];
+  var teamScope = teamProjectIds && teamProjectIds.length > 0
+    ? ' AND project_id IN (' + teamProjectIds.map(() => '?').join(',') + ')'
+    : '';
+  var params = [];
+  if (excludeIds && excludeIds.length > 0) params = params.concat(excludeIds);
+  if (teamProjectIds && teamProjectIds.length > 0) params = params.concat(teamProjectIds);
   return db.prepare(
-    `SELECT * FROM dv_tasks
+    `SELECT * FROM tasks
      WHERE status = 'open' AND (assignee IS NULL OR assignee = '')
-     ${exclude}
+     ${exclude}${teamScope}
      ORDER BY priority DESC, created_at ASC
      LIMIT 1`
   ).get(...params) || null;
 }
 
-export function getNextUnassignedPlanStep() {
+export function getNextUnassignedPlanStep(teamProjectIds) {
   // Find next unassigned pending plan step from an active plan
+  // If teamProjectIds provided, scope to those plan projects only
+  var teamScope = teamProjectIds && teamProjectIds.length > 0
+    ? ' AND p.project_id IN (' + teamProjectIds.map(() => '?').join(',') + ')'
+    : '';
+  var params = teamProjectIds && teamProjectIds.length > 0 ? teamProjectIds : [];
   return db.prepare(
     `SELECT s.*, p.title as plan_title
-     FROM dv_plan_steps s
-     JOIN dv_plans p ON p.id = s.plan_id
+     FROM plan_steps s
+     JOIN plans p ON p.id = s.plan_id
      WHERE p.status = 'active'
        AND s.status = 'pending'
        AND (s.assignee IS NULL OR s.assignee = '')
+       ${teamScope}
      ORDER BY s.step_order ASC
      LIMIT 1`
-  ).get() || null;
+  ).get(...params) || null;
 }
 
 // -- Auto-task from asset request --
@@ -1309,7 +1374,7 @@ var _autoTaskFromAsset = null;
 
 export function initTransactions() {
   _autoTaskFromAsset = db.transaction(function (assetId, projectId, requester) {
-    var agents = db.prepare("SELECT id FROM dv_agents WHERE capabilities LIKE '%assets%'").all();
+    var agents = db.prepare("SELECT id FROM agents WHERE capabilities LIKE '%assets%'").all();
     var assignee = agents.length > 0 ? agents[0].id : null;
 
     var asset = getAsset(assetId);
@@ -1324,7 +1389,7 @@ export function initTransactions() {
       JSON.stringify(['auto', 'assets'])
     );
 
-    db.prepare("UPDATE dv_tasks SET assignee = ?, linked_asset_id = ? WHERE id = ?").run(assignee, assetId, taskId);
+    db.prepare("UPDATE tasks SET assignee = ?, linked_asset_id = ? WHERE id = ?").run(assignee, assetId, taskId);
 
     return { task_id: taskId, assignee: assignee };
   });
@@ -1339,17 +1404,17 @@ export function autoTaskFromAsset(assetId, projectId, requester) {
 
 export function createPlan(title, description, projectId, owner, priority, tags, createdBy) {
   var result = db.prepare(
-    "INSERT INTO dv_plans (title, description, project_id, owner, priority, tags, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO plans (title, description, project_id, owner, priority, tags, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(title, description || '', projectId || '', owner || '', priority || 'normal', tags || '[]', createdBy || '');
   return result.id;
 }
 
 export function getPlan(id) {
-  var plan = db.prepare("SELECT * FROM dv_plans WHERE id = ?").get(id);
+  var plan = db.prepare("SELECT * FROM plans WHERE id = ?").get(id);
   if (!plan) return null;
-  var steps = db.prepare("SELECT * FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order, id").all(id);
+  var steps = db.prepare("SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY step_order, id").all(id);
   // Batch-fetch all comments for this plan and group by step
-  var allComments = db.prepare("SELECT * FROM dv_plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(id);
+  var allComments = db.prepare("SELECT * FROM plan_step_comments WHERE plan_id = ? ORDER BY created_at ASC").all(id);
   var commentsByStep = {};
   for (var c of allComments) {
     if (!commentsByStep[c.step_id]) commentsByStep[c.step_id] = [];
@@ -1375,9 +1440,9 @@ export function listPlans(filters) {
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  var plans = db.prepare('SELECT * FROM dv_plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+  var plans = db.prepare('SELECT * FROM plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
   for (var p of plans) {
-    var steps = db.prepare("SELECT id, status, title, assignee FROM dv_plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
+    var steps = db.prepare("SELECT id, status, title, assignee FROM plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
     var total = steps.length;
     var completed = steps.filter(function (s) { return s.status === 'completed'; }).length;
     p.step_count = total;
@@ -1401,21 +1466,21 @@ export function updatePlan(id, fields) {
   if (fields.tags !== undefined) { sets.push('tags = ?'); values.push(typeof fields.tags === 'string' ? fields.tags : JSON.stringify(fields.tags)); }
   if (fields.project_id !== undefined) { sets.push('project_id = ?'); values.push(fields.project_id); }
   values.push(id);
-  return db.prepare('UPDATE dv_plans SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return db.prepare('UPDATE plans SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function deletePlan(id) {
-  db.prepare("DELETE FROM dv_plan_steps WHERE plan_id = ?").run(id);
-  db.prepare("DELETE FROM dv_plans WHERE id = ?").run(id);
+  db.prepare("DELETE FROM plan_steps WHERE plan_id = ?").run(id);
+  db.prepare("DELETE FROM plans WHERE id = ?").run(id);
 }
 
 export function createPlanStep(planId, title, description, assignee, phase) {
-  var maxOrder = db.prepare("SELECT MAX(step_order) as m FROM dv_plan_steps WHERE plan_id = ?").get(planId);
+  var maxOrder = db.prepare("SELECT MAX(step_order) as m FROM plan_steps WHERE plan_id = ?").get(planId);
   var order = (maxOrder && maxOrder.m !== null) ? maxOrder.m + 1 : 0;
   var result = db.prepare(
-    "INSERT INTO dv_plan_steps (plan_id, step_order, title, description, assignee, phase) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO plan_steps (plan_id, step_order, title, description, assignee, phase) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(planId, order, title, description || '', assignee || null, phase || '');
-  db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
+  db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
   return result.id;
 }
 
@@ -1433,44 +1498,44 @@ export function updatePlanStep(stepId, fields) {
   if (fields.step_order !== undefined) { sets.push('step_order = ?'); values.push(fields.step_order); }
   if (fields.status === 'completed') { sets.push("completed_at = datetime('now')"); }
   values.push(stepId);
-  db.prepare('UPDATE dv_plan_steps SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE plan_steps SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
   // Update parent plan's updated_at
-  var step = db.prepare("SELECT plan_id FROM dv_plan_steps WHERE id = ?").get(stepId);
-  if (step) db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
+  var step = db.prepare("SELECT plan_id FROM plan_steps WHERE id = ?").get(stepId);
+  if (step) db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
 }
 
 export function deletePlanStep(stepId) {
-  var step = db.prepare("SELECT plan_id FROM dv_plan_steps WHERE id = ?").get(stepId);
-  db.prepare("DELETE FROM dv_plan_steps WHERE id = ?").run(stepId);
-  if (step) db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
+  var step = db.prepare("SELECT plan_id FROM plan_steps WHERE id = ?").get(stepId);
+  db.prepare("DELETE FROM plan_steps WHERE id = ?").run(stepId);
+  if (step) db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
 }
 
 export function reorderPlanSteps(planId, stepIds) {
   var reorder = db.transaction(function () {
     for (var i = 0; i < stepIds.length; i++) {
-      db.prepare("UPDATE dv_plan_steps SET step_order = ? WHERE id = ? AND plan_id = ?").run(i, stepIds[i], planId);
+      db.prepare("UPDATE plan_steps SET step_order = ? WHERE id = ? AND plan_id = ?").run(i, stepIds[i], planId);
     }
-    db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
+    db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
   });
   reorder();
 }
 
 export function completeLinkedPlanSteps(taskId) {
-  var steps = db.prepare("SELECT id, plan_id FROM dv_plan_steps WHERE linked_task_id = ? AND status != 'completed'").all(taskId);
+  var steps = db.prepare("SELECT id, plan_id FROM plan_steps WHERE linked_task_id = ? AND status != 'completed'").all(taskId);
   var affectedPlanIds = [];
   for (var step of steps) {
-    db.prepare("UPDATE dv_plan_steps SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(step.id);
+    db.prepare("UPDATE plan_steps SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(step.id);
     if (affectedPlanIds.indexOf(step.plan_id) === -1) affectedPlanIds.push(step.plan_id);
   }
   // Check if any affected plans are now fully complete
   var completedPlans = [];
   for (var planId of affectedPlanIds) {
-    var remaining = db.prepare("SELECT COUNT(*) as c FROM dv_plan_steps WHERE plan_id = ? AND status NOT IN ('completed', 'skipped')").get(planId);
+    var remaining = db.prepare("SELECT COUNT(*) as c FROM plan_steps WHERE plan_id = ? AND status NOT IN ('completed', 'skipped')").get(planId);
     if (remaining.c === 0) {
-      db.prepare("UPDATE dv_plans SET status = 'completed', updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(planId);
+      db.prepare("UPDATE plans SET status = 'completed', updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(planId);
       completedPlans.push(planId);
     } else {
-      db.prepare("UPDATE dv_plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
+      db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
     }
   }
   return { steps_completed: steps.length, plans_completed: completedPlans };
@@ -1480,36 +1545,36 @@ export function completeLinkedPlanSteps(taskId) {
 
 export function createStudioUser(username, displayName, passwordHash, role) {
   var result = db.prepare(
-    "INSERT INTO dv_studio_users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?) RETURNING id"
+    "INSERT INTO studio_users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?) RETURNING id"
   ).get(username, displayName, passwordHash, role || 'admin');
   return result.id;
 }
 
 export function getStudioUserByUsername(username) {
-  return db.prepare("SELECT * FROM dv_studio_users WHERE username = ?").get(username);
+  return db.prepare("SELECT * FROM studio_users WHERE username = ?").get(username);
 }
 
 export function getStudioUserById(id) {
-  return db.prepare("SELECT id, username, display_name, role, created_at FROM dv_studio_users WHERE id = ?").get(id);
+  return db.prepare("SELECT id, username, display_name, role, created_at FROM studio_users WHERE id = ?").get(id);
 }
 
 export function listStudioUsers() {
-  return db.prepare("SELECT id, username, display_name, role, created_at, last_seen FROM dv_studio_users ORDER BY created_at").all();
+  return db.prepare("SELECT id, username, display_name, role, created_at, last_seen FROM studio_users ORDER BY created_at").all();
 }
 
 export function touchStudioUserSeen(id) {
-  db.prepare("UPDATE dv_studio_users SET last_seen = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE studio_users SET last_seen = datetime('now') WHERE id = ?").run(id);
 }
 
 export function getActiveStudioUsers(withinMinutes) {
   var mins = withinMinutes || 5;
   return db.prepare(
-    "SELECT id, username, display_name, role, last_seen FROM dv_studio_users WHERE last_seen >= datetime('now', '-' || ? || ' minutes') ORDER BY last_seen DESC"
+    "SELECT id, username, display_name, role, last_seen FROM studio_users WHERE last_seen >= datetime('now', '-' || ? || ' minutes') ORDER BY last_seen DESC"
   ).all(mins);
 }
 
 export function deleteStudioUser(id) {
-  db.prepare("DELETE FROM dv_studio_users WHERE id = ?").run(id);
+  db.prepare("DELETE FROM studio_users WHERE id = ?").run(id);
 }
 
 export function updateStudioUser(id, fields) {
@@ -1520,7 +1585,7 @@ export function updateStudioUser(id, fields) {
   if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
   if (sets.length === 0) return;
   values.push(id);
-  db.prepare('UPDATE dv_studio_users SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE studio_users SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 // -- Webhooks --
@@ -1528,26 +1593,26 @@ export function updateStudioUser(id, fields) {
 export function createWebhook(agentId, url, events, secret) {
   var eventsJson = Array.isArray(events) ? JSON.stringify(events) : (events || '["task_created","request_created","message_sent"]');
   var result = db.prepare(
-    "INSERT INTO dv_webhooks (agent_id, url, events, secret) VALUES (?, ?, ?, ?) RETURNING id"
+    "INSERT INTO webhooks (agent_id, url, events, secret) VALUES (?, ?, ?, ?) RETURNING id"
   ).get(agentId, url, eventsJson, secret || '');
   return result.id;
 }
 
 export function listWebhooks(agentId) {
   if (agentId) {
-    return db.prepare("SELECT * FROM dv_webhooks WHERE agent_id = ? AND active = 1").all(agentId);
+    return db.prepare("SELECT * FROM webhooks WHERE agent_id = ? AND active = 1").all(agentId);
   }
-  return db.prepare("SELECT * FROM dv_webhooks WHERE active = 1").all();
+  return db.prepare("SELECT * FROM webhooks WHERE active = 1").all();
 }
 
 export function deleteWebhook(id) {
-  db.prepare("DELETE FROM dv_webhooks WHERE id = ?").run(id);
+  db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
 }
 
 export function dispatchWebhook(event, agentId, data) {
   // Query webhooks for the target agent AND __global__ (admin-claude receives all events)
   var webhooks = db.prepare(
-    "SELECT * FROM dv_webhooks WHERE active = 1 AND (agent_id = ? OR agent_id = '__global__')"
+    "SELECT * FROM webhooks WHERE active = 1 AND (agent_id = ? OR agent_id = '__global__')"
   ).all(agentId);
 
   for (var wh of webhooks) {
@@ -1596,7 +1661,7 @@ export function dispatchWebhook(event, agentId, data) {
 function logWebhookDelivery(webhookId, event, agentId, payload, statusCode, responseBody, error, durationMs) {
   try {
     db.prepare(
-      "INSERT INTO dv_webhook_deliveries (webhook_id, event, agent_id, payload, status_code, response_body, error, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO webhook_deliveries (webhook_id, event, agent_id, payload, status_code, response_body, error, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(webhookId, event, agentId, payload, statusCode, responseBody, error, durationMs);
   } catch (e) {
     console.error('[webhook-log] Failed to log delivery:', e.message);
@@ -1612,12 +1677,12 @@ export function listWebhookDeliveries(filters) {
   var limit = Math.min(filters.limit || 50, 200);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_webhook_deliveries WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM webhook_deliveries WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function pruneWebhookDeliveries(keepDays) {
   var days = keepDays || 7;
-  var result = db.prepare("DELETE FROM dv_webhook_deliveries WHERE created_at < datetime('now', '-' || ? || ' days')").run(days);
+  var result = db.prepare("DELETE FROM webhook_deliveries WHERE created_at < datetime('now', '-' || ? || ' days')").run(days);
   return result.changes;
 }
 
@@ -1625,14 +1690,14 @@ export function pruneWebhookDeliveries(keepDays) {
 
 export function createTeamChat(fromUser, content) {
   var result = db.prepare(
-    "INSERT INTO dv_messages (from_agent, content, msg_type) VALUES (?, ?, 'chat') RETURNING id"
+    "INSERT INTO messages (from_agent, content, msg_type) VALUES (?, ?, 'chat') RETURNING id"
   ).get(fromUser, content);
   return result.id;
 }
 
 export function listTeamChat(limit) {
   return db.prepare(
-    "SELECT * FROM dv_messages WHERE msg_type = 'chat' ORDER BY created_at DESC LIMIT ?"
+    "SELECT * FROM messages WHERE msg_type = 'chat' ORDER BY created_at DESC LIMIT ?"
   ).all(limit || 50);
 }
 
@@ -1640,21 +1705,21 @@ export function listTeamChat(limit) {
 
 export function createChannel(name, slug, type, linkedType, linkedId, description, createdBy) {
   var result = db.prepare(
-    "INSERT INTO dv_channels (name, slug, type, linked_type, linked_id, description, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO channels (name, slug, type, linked_type, linked_id, description, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(name, slug, type || 'general', linkedType || null, linkedId || null, description || '', createdBy);
   return result.id;
 }
 
 export function getChannel(id) {
-  return db.prepare("SELECT * FROM dv_channels WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM channels WHERE id = ?").get(id);
 }
 
 export function getChannelBySlug(slug) {
-  return db.prepare("SELECT * FROM dv_channels WHERE slug = ?").get(slug);
+  return db.prepare("SELECT * FROM channels WHERE slug = ?").get(slug);
 }
 
 export function getChannelByLink(linkedType, linkedId) {
-  return db.prepare("SELECT * FROM dv_channels WHERE linked_type = ? AND linked_id = ?").get(linkedType, linkedId);
+  return db.prepare("SELECT * FROM channels WHERE linked_type = ? AND linked_id = ?").get(linkedType, linkedId);
 }
 
 export function listChannels(filters) {
@@ -1664,13 +1729,13 @@ export function listChannels(filters) {
   if (filters.status && filters.status !== 'all') { where.push('status = ?'); params.push(filters.status); }
   else if (!filters.status) { where.push("status = 'active'"); }
   if (filters.member) {
-    where.push('id IN (SELECT channel_id FROM dv_channel_members WHERE user_id = ?)');
+    where.push('id IN (SELECT channel_id FROM channel_members WHERE user_id = ?)');
     params.push(filters.member);
   }
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_channels WHERE ' + where.join(' AND ') + ' ORDER BY created_at ASC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM channels WHERE ' + where.join(' AND ') + ' ORDER BY created_at ASC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateChannel(id, fields) {
@@ -1681,11 +1746,11 @@ export function updateChannel(id, fields) {
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
   if (sets.length === 0) return;
   values.push(id);
-  db.prepare('UPDATE dv_channels SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE channels SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function deleteChannel(id) {
-  db.prepare("DELETE FROM dv_channels WHERE id = ?").run(id);
+  db.prepare("DELETE FROM channels WHERE id = ?").run(id);
 }
 
 // -- Channel Members --
@@ -1693,7 +1758,7 @@ export function deleteChannel(id) {
 export function addChannelMember(channelId, userId, userType, role) {
   try {
     db.prepare(
-      "INSERT INTO dv_channel_members (channel_id, user_id, user_type, role) VALUES (?, ?, ?, ?)"
+      "INSERT INTO channel_members (channel_id, user_id, user_type, role) VALUES (?, ?, ?, ?)"
     ).run(channelId, userId, userType || 'agent', role || 'member');
     return true;
   } catch (e) {
@@ -1702,22 +1767,22 @@ export function addChannelMember(channelId, userId, userType, role) {
 }
 
 export function removeChannelMember(channelId, userId) {
-  var result = db.prepare("DELETE FROM dv_channel_members WHERE channel_id = ? AND user_id = ?").run(channelId, userId);
+  var result = db.prepare("DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?").run(channelId, userId);
   return result.changes > 0;
 }
 
 export function listChannelMembers(channelId) {
-  return db.prepare("SELECT * FROM dv_channel_members WHERE channel_id = ? ORDER BY joined_at ASC").all(channelId);
+  return db.prepare("SELECT * FROM channel_members WHERE channel_id = ? ORDER BY joined_at ASC").all(channelId);
 }
 
 export function isChannelMember(channelId, userId) {
-  var row = db.prepare("SELECT 1 FROM dv_channel_members WHERE channel_id = ? AND user_id = ?").get(channelId, userId);
+  var row = db.prepare("SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?").get(channelId, userId);
   return !!row;
 }
 
 export function getChannelsByUser(userId) {
   return db.prepare(
-    "SELECT c.*, cm.role as member_role FROM dv_channels c JOIN dv_channel_members cm ON c.id = cm.channel_id WHERE cm.user_id = ? AND c.status = 'active' ORDER BY c.created_at ASC"
+    "SELECT c.*, cm.role as member_role FROM channels c JOIN channel_members cm ON c.id = cm.channel_id WHERE cm.user_id = ? AND c.status = 'active' ORDER BY c.created_at ASC"
   ).all(userId);
 }
 
@@ -1725,18 +1790,18 @@ export function getChannelsByUser(userId) {
 
 export function markChannelRead(channelId, userId, messageId) {
   db.prepare(
-    "INSERT INTO dv_channel_reads (channel_id, user_id, last_read_at, last_read_message_id) VALUES (?, ?, datetime('now'), ?) ON CONFLICT(channel_id, user_id) DO UPDATE SET last_read_at = datetime('now'), last_read_message_id = excluded.last_read_message_id"
+    "INSERT INTO channel_reads (channel_id, user_id, last_read_at, last_read_message_id) VALUES (?, ?, datetime('now'), ?) ON CONFLICT(channel_id, user_id) DO UPDATE SET last_read_at = datetime('now'), last_read_message_id = excluded.last_read_message_id"
   ).run(channelId, userId, messageId || 0);
 }
 
 export function getUnreadCounts(userId) {
   return db.prepare(
-    "SELECT c.id as channel_id, c.name, c.slug, COUNT(m.id) as unread FROM dv_channels c JOIN dv_channel_members cm ON c.id = cm.channel_id LEFT JOIN dv_messages m ON m.channel_id = c.id AND m.id > COALESCE((SELECT last_read_message_id FROM dv_channel_reads WHERE channel_id = c.id AND user_id = ?), 0) WHERE cm.user_id = ? AND c.status = 'active' GROUP BY c.id"
+    "SELECT c.id as channel_id, c.name, c.slug, COUNT(m.id) as unread FROM channels c JOIN channel_members cm ON c.id = cm.channel_id LEFT JOIN messages m ON m.channel_id = c.id AND m.id > COALESCE((SELECT last_read_message_id FROM channel_reads WHERE channel_id = c.id AND user_id = ?), 0) WHERE cm.user_id = ? AND c.status = 'active' GROUP BY c.id"
   ).all(userId, userId);
 }
 
 export function getLatestChannelMessageId(channelId) {
-  var row = db.prepare("SELECT MAX(id) as max_id FROM dv_messages WHERE channel_id = ?").get(channelId);
+  var row = db.prepare("SELECT MAX(id) as max_id FROM messages WHERE channel_id = ?").get(channelId);
   return row ? (row.max_id || 0) : 0;
 }
 
@@ -1750,13 +1815,13 @@ export function listChannelMessages(channelId, filters) {
   var limit = Math.min(filters.limit || 50, 500);
   params.push(limit);
   return db.prepare(
-    'SELECT * FROM dv_messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+    'SELECT * FROM messages WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
   ).all(...params);
 }
 
 export function createChannelMessage(channelId, fromAgent, content, metadata) {
   var result = db.prepare(
-    "INSERT INTO dv_messages (channel_id, from_agent, content, metadata, msg_type) VALUES (?, ?, ?, ?, 'message') RETURNING id"
+    "INSERT INTO messages (channel_id, from_agent, content, metadata, msg_type) VALUES (?, ?, ?, ?, 'message') RETURNING id"
   ).get(channelId, fromAgent, content, metadata || '{}');
   return result.id;
 }
@@ -1808,11 +1873,11 @@ export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
   // Find any existing active DM channel that has exactly these two participants (case-insensitive).
   // This prevents duplicate channels when usernames differ by case or creation order.
   var existing = db.prepare(`
-    SELECT c.id FROM dv_channels c
+    SELECT c.id FROM channels c
     WHERE c.type = 'dm' AND c.status = 'active'
-      AND (SELECT COUNT(*) FROM dv_channel_members m
+      AND (SELECT COUNT(*) FROM channel_members m
            WHERE m.channel_id = c.id AND LOWER(m.user_id) IN (LOWER(?), LOWER(?))) = 2
-      AND (SELECT COUNT(*) FROM dv_channel_members m WHERE m.channel_id = c.id) = 2
+      AND (SELECT COUNT(*) FROM channel_members m WHERE m.channel_id = c.id) = 2
     ORDER BY c.id ASC
     LIMIT 1
   `).get(userA, userB);
@@ -1844,7 +1909,7 @@ export function getOrCreateDmChannel(userA, userB, userAType, userBType) {
 
 export function createDroneJob(title, command, inputData, requires, requester, priority, workspaceRepo, workspaceBranch, profileId) {
   var result = db.prepare(
-    "INSERT INTO dv_drone_jobs (title, command, input_data, requires, requester, priority, workspace_repo, workspace_branch, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO drone_jobs (title, command, input_data, requires, requester, priority, workspace_repo, workspace_branch, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(
     title,
     command || '',
@@ -1860,7 +1925,7 @@ export function createDroneJob(title, command, inputData, requires, requester, p
 }
 
 export function getDroneJob(id) {
-  return db.prepare("SELECT * FROM dv_drone_jobs WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM drone_jobs WHERE id = ?").get(id);
 }
 
 export function claimDroneJob(droneId, capabilities) {
@@ -1868,7 +1933,7 @@ export function claimDroneJob(droneId, capabilities) {
   // If job has profile_id, drone must have completed setup for that profile
   var caps = Array.isArray(capabilities) ? capabilities : [];
   var pending = db.prepare(
-    "SELECT * FROM dv_drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
+    "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
   ).all();
   for (var job of pending) {
     var reqs = [];
@@ -1878,12 +1943,12 @@ export function claimDroneJob(droneId, capabilities) {
     // Check profile requirement — drone must have setup_done=1 for this profile
     if (job.profile_id) {
       var assignment = db.prepare(
-        "SELECT setup_done FROM dv_drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
+        "SELECT setup_done FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
       ).get(droneId, job.profile_id);
       if (!assignment || !assignment.setup_done) continue;
     }
     var result = db.prepare(
-      "UPDATE dv_drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
+      "UPDATE drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
     ).run(droneId, job.id);
     if (result.changes > 0) return getDroneJob(job.id);
   }
@@ -1902,7 +1967,7 @@ export function updateDroneJob(id, fields) {
   if (fields.completed_at !== undefined) { sets.push('completed_at = ?'); values.push(fields.completed_at); }
   if (sets.length === 0) return;
   values.push(id);
-  return db.prepare('UPDATE dv_drone_jobs SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return db.prepare('UPDATE drone_jobs SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
 }
 
 export function listDroneJobs(filters) {
@@ -1914,18 +1979,18 @@ export function listDroneJobs(filters) {
   var limit = Math.min(filters.limit || 50, 200);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM dv_drone_jobs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM drone_jobs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function listDrones() {
-  return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM dv_agents WHERE project_id = 'drone' ORDER BY created_at").all();
+  return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM agents WHERE project_id = 'drone' ORDER BY created_at").all();
 }
 
 // -- Drone Profiles --
 
 export function createDroneProfile(id, name, description, requires, artifacts, setupScript, workspace, env) {
   db.prepare(
-    "INSERT INTO dv_drone_profiles (id, name, description, requires, artifacts, setup_script, workspace, env) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO drone_profiles (id, name, description, requires, artifacts, setup_script, workspace, env) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     id, name, description || '',
     typeof requires === 'string' ? requires : JSON.stringify(requires || {}),
@@ -1938,11 +2003,11 @@ export function createDroneProfile(id, name, description, requires, artifacts, s
 }
 
 export function getDroneProfile(id) {
-  return db.prepare("SELECT * FROM dv_drone_profiles WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM drone_profiles WHERE id = ?").get(id);
 }
 
 export function listDroneProfiles() {
-  return db.prepare("SELECT * FROM dv_drone_profiles ORDER BY created_at").all();
+  return db.prepare("SELECT * FROM drone_profiles ORDER BY created_at").all();
 }
 
 export function updateDroneProfile(id, fields) {
@@ -1960,43 +2025,43 @@ export function updateDroneProfile(id, fields) {
   if (sets.length === 0) return getDroneProfile(id);
   sets.push("updated_at = datetime('now')");
   values.push(id);
-  db.prepare('UPDATE dv_drone_profiles SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE drone_profiles SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
   // Invalidate setup_done for all drones assigned to this profile
-  db.prepare("UPDATE dv_drone_profile_assignments SET setup_done = 0, checksum = '' WHERE profile_id = ?").run(id);
+  db.prepare("UPDATE drone_profile_assignments SET setup_done = 0, checksum = '' WHERE profile_id = ?").run(id);
   return getDroneProfile(id);
 }
 
 export function deleteDroneProfile(id) {
-  return db.prepare("DELETE FROM dv_drone_profiles WHERE id = ?").run(id);
+  return db.prepare("DELETE FROM drone_profiles WHERE id = ?").run(id);
 }
 
 export function assignDroneProfile(droneId, profileId) {
   db.prepare(
-    "INSERT OR REPLACE INTO dv_drone_profile_assignments (drone_id, profile_id, setup_done, checksum) VALUES (?, ?, 0, '')"
+    "INSERT OR REPLACE INTO drone_profile_assignments (drone_id, profile_id, setup_done, checksum) VALUES (?, ?, 0, '')"
   ).run(droneId, profileId);
 }
 
 export function unassignDroneProfile(droneId, profileId) {
-  return db.prepare("DELETE FROM dv_drone_profile_assignments WHERE drone_id = ? AND profile_id = ?").run(droneId, profileId);
+  return db.prepare("DELETE FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?").run(droneId, profileId);
 }
 
 export function getDroneProfileAssignments(droneId) {
   return db.prepare(
     "SELECT a.*, p.name, p.description, p.requires, p.artifacts, p.setup_script, p.workspace, p.env, p.updated_at as profile_updated_at " +
-    "FROM dv_drone_profile_assignments a JOIN dv_drone_profiles p ON a.profile_id = p.id WHERE a.drone_id = ? ORDER BY p.created_at"
+    "FROM drone_profile_assignments a JOIN drone_profiles p ON a.profile_id = p.id WHERE a.drone_id = ? ORDER BY p.created_at"
   ).all(droneId);
 }
 
 export function markProfileSetupDone(droneId, profileId, checksum) {
   db.prepare(
-    "UPDATE dv_drone_profile_assignments SET setup_done = 1, setup_at = datetime('now'), checksum = ? WHERE drone_id = ? AND profile_id = ?"
+    "UPDATE drone_profile_assignments SET setup_done = 1, setup_at = datetime('now'), checksum = ? WHERE drone_id = ? AND profile_id = ?"
   ).run(checksum || '', droneId, profileId);
 }
 
 export function getDronesWithProfile(profileId) {
   return db.prepare(
     "SELECT a.drone_id, a.setup_done, a.setup_at, a.checksum, ag.status, ag.last_heartbeat " +
-    "FROM dv_drone_profile_assignments a JOIN dv_agents ag ON a.drone_id = ag.id WHERE a.profile_id = ?"
+    "FROM drone_profile_assignments a JOIN agents ag ON a.drone_id = ag.id WHERE a.profile_id = ?"
   ).all(profileId);
 }
 
@@ -2008,14 +2073,14 @@ export function bulkCancelDroneJobs(statuses, olderThanDays) {
     where += " AND completed_at < datetime('now', '-' || ? || ' days')";
     params.push(String(parseInt(olderThanDays)));
   }
-  var jobs = db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where).all.apply(
-    db.prepare('SELECT id, title, status FROM dv_drone_jobs WHERE ' + where), params
+  var jobs = db.prepare('SELECT id, title, status FROM drone_jobs WHERE ' + where).all.apply(
+    db.prepare('SELECT id, title, status FROM drone_jobs WHERE ' + where), params
   );
   if (jobs.length > 0) {
     var idPlaceholders = jobs.map(function () { return '?'; }).join(',');
     var ids = jobs.map(function (j) { return j.id; });
-    db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')').run.apply(
-      db.prepare("UPDATE dv_drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')'), ids
+    db.prepare("UPDATE drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')').run.apply(
+      db.prepare("UPDATE drone_jobs SET status = 'cancelled' WHERE id IN (" + idPlaceholders + ')'), ids
     );
   }
   return jobs;
@@ -2025,10 +2090,10 @@ export function bulkCancelDroneJobs(statuses, olderThanDays) {
 
 // Seed the 3d_print template so new instances support printer drones out of the box.
 export function seedDefaultJobTemplates() {
-  var existing = db.prepare("SELECT id FROM dv_job_templates WHERE id = '3d_print'").get();
+  var existing = db.prepare("SELECT id FROM job_templates WHERE id = '3d_print'").get();
   if (!existing) {
     db.prepare(
-      "INSERT INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb) VALUES (?, ?, ?, ?, ?, ?)"
     ).run('3d_print', '3D Print Job', '', '["3d_printer"]', 0, 1);
     console.log('Seeded 3d_print job template');
   }
@@ -2036,7 +2101,7 @@ export function seedDefaultJobTemplates() {
 
 export function createJobTemplate(id, fields) {
   db.prepare(
-    "INSERT INTO dv_job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb, python_deps, python_deps_install, artifacts, setup_repo, command_template, workspace_name) " +
+    "INSERT INTO job_templates (id, name, project_id, requires, min_vram_gb, min_disk_gb, python_deps, python_deps_install, artifacts, setup_repo, command_template, workspace_name) " +
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     id,
@@ -2056,11 +2121,11 @@ export function createJobTemplate(id, fields) {
 }
 
 export function getJobTemplate(id) {
-  return db.prepare("SELECT * FROM dv_job_templates WHERE id = ?").get(id);
+  return db.prepare("SELECT * FROM job_templates WHERE id = ?").get(id);
 }
 
 export function listJobTemplates() {
-  return db.prepare("SELECT * FROM dv_job_templates ORDER BY created_at").all();
+  return db.prepare("SELECT * FROM job_templates ORDER BY created_at").all();
 }
 
 export function updateJobTemplate(id, fields) {
@@ -2080,23 +2145,23 @@ export function updateJobTemplate(id, fields) {
   }
   if (sets.length === 0) return getJobTemplate(id);
   values.push(id);
-  db.prepare('UPDATE dv_job_templates SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  db.prepare('UPDATE job_templates SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
   return getJobTemplate(id);
 }
 
 export function deleteJobTemplate(id) {
-  return db.prepare("DELETE FROM dv_job_templates WHERE id = ?").run(id);
+  return db.prepare("DELETE FROM job_templates WHERE id = ?").run(id);
 }
 
 // -- Drone Diagnostics --
 
 export function updateDroneDiagnostics(agentId, diagnostics) {
   var json = typeof diagnostics === 'string' ? diagnostics : JSON.stringify(diagnostics);
-  db.prepare("UPDATE dv_agents SET system_diagnostics = ? WHERE id = ?").run(json, agentId);
+  db.prepare("UPDATE agents SET system_diagnostics = ? WHERE id = ?").run(json, agentId);
 }
 
 export function getDroneDiagnostics(agentId) {
-  var row = db.prepare("SELECT system_diagnostics FROM dv_agents WHERE id = ?").get(agentId);
+  var row = db.prepare("SELECT system_diagnostics FROM agents WHERE id = ?").get(agentId);
   if (!row) return null;
   try { return JSON.parse(row.system_diagnostics || '{}'); } catch (e) { return {}; }
 }
@@ -2286,19 +2351,19 @@ export function checkDroneCompatibility(droneId) {
 // -- Shared Concepts --
 
 export function createConcept(name, type, description, data, createdBy) {
-  var r = stmt('dvCreateConcept', `INSERT INTO dv_concepts (name, type, description, data, created_by)
+  var r = stmt('dvCreateConcept', `INSERT INTO concepts (name, type, description, data, created_by)
     VALUES (?, ?, ?, ?, ?)`).run(name, type || 'custom', description || '', JSON.stringify(data || {}), createdBy || '');
   return r.lastInsertRowid;
 }
 
 export function getConcept(id) {
-  return stmt('dvGetConcept', 'SELECT * FROM dv_concepts WHERE id = ?').get(id);
+  return stmt('dvGetConcept', 'SELECT * FROM concepts WHERE id = ?').get(id);
 }
 
 export function listConcepts(filters) {
   var where = []; var params = [];
   if (filters && filters.type) { where.push('type = ?'); params.push(filters.type); }
-  var sql = 'SELECT * FROM dv_concepts' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY updated_at DESC';
+  var sql = 'SELECT * FROM concepts' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY updated_at DESC';
   if (filters && filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit); }
   return stmt('dvListConcepts_' + where.join('_') + (filters && filters.limit || ''), sql).all(...params);
 }
@@ -2313,31 +2378,31 @@ export function updateConcept(id, fields) {
   sets.push("version = version + 1");
   sets.push("updated_at = datetime('now')");
   params.push(id);
-  db.prepare('UPDATE dv_concepts SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
+  db.prepare('UPDATE concepts SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
 }
 
 export function deleteConcept(id) {
-  db.prepare('DELETE FROM dv_concepts WHERE id = ?').run(id);
+  db.prepare('DELETE FROM concepts WHERE id = ?').run(id);
 }
 
 export function linkConceptToProject(projectId, conceptId, linkedBy) {
-  stmt('dvLinkConcept', `INSERT OR IGNORE INTO dv_project_concepts (project_id, concept_id, linked_by)
+  stmt('dvLinkConcept', `INSERT OR IGNORE INTO project_concepts (project_id, concept_id, linked_by)
     VALUES (?, ?, ?)`).run(projectId, conceptId, linkedBy || '');
 }
 
 export function unlinkConceptFromProject(projectId, conceptId) {
-  stmt('dvUnlinkConcept', 'DELETE FROM dv_project_concepts WHERE project_id = ? AND concept_id = ?').run(projectId, conceptId);
+  stmt('dvUnlinkConcept', 'DELETE FROM project_concepts WHERE project_id = ? AND concept_id = ?').run(projectId, conceptId);
 }
 
 export function getProjectConcepts(projectId) {
   return stmt('dvGetProjectConcepts', `SELECT c.*, pc.linked_at, pc.linked_by
-    FROM dv_concepts c JOIN dv_project_concepts pc ON c.id = pc.concept_id
+    FROM concepts c JOIN project_concepts pc ON c.id = pc.concept_id
     WHERE pc.project_id = ? ORDER BY c.name`).all(projectId);
 }
 
 export function getConceptProjects(conceptId) {
   return stmt('dvGetConceptProjects', `SELECT p.*, pc.linked_at, pc.linked_by
-    FROM dv_projects p JOIN dv_project_concepts pc ON p.id = pc.project_id
+    FROM projects p JOIN project_concepts pc ON p.id = pc.project_id
     WHERE pc.concept_id = ? ORDER BY p.name`).all(conceptId);
 }
 
@@ -2350,13 +2415,13 @@ export { GATED_ACTIONS };
 
 export function createApproval(actionType, requestedBy, title, payload, projectId, riskTier, requiredApprovals) {
   var result = stmt('dvCreateApproval2',
-    "INSERT INTO dv_approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+    "INSERT INTO approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
   ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), projectId || 'mycelium', riskTier || 'medium', requiredApprovals || 1);
   return result.id;
 }
 
 export function getApproval(id) {
-  return stmt('dvGetApproval', "SELECT * FROM dv_approvals WHERE id = ?").get(id);
+  return stmt('dvGetApproval', "SELECT * FROM approvals WHERE id = ?").get(id);
 }
 
 export function listApprovals(filters) {
@@ -2367,65 +2432,65 @@ export function listApprovals(filters) {
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   var limit = Math.min(filters.limit || 50, 500);
   params.push(limit);
-  return db.prepare('SELECT * FROM dv_approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+  return db.prepare('SELECT * FROM approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
 }
 
 export function decideApproval(id, status, decidedBy, reason) {
   db.prepare(
-    "UPDATE dv_approvals SET status = ?, decided_by = ?, decided_at = datetime('now'), reason = ?, updated_at = datetime('now') WHERE id = ?"
+    "UPDATE approvals SET status = ?, decided_by = ?, decided_at = datetime('now'), reason = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(status, decidedBy, reason || '', id);
 }
 
 export function markApprovalExecuted(id) {
-  db.prepare("UPDATE dv_approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
+  db.prepare("UPDATE approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
 }
 
 export function countPendingApprovals() {
-  return stmt('dvCountApprovals', "SELECT COUNT(*) as count FROM dv_approvals WHERE status = 'pending'").get();
+  return stmt('dvCountApprovals', "SELECT COUNT(*) as count FROM approvals WHERE status = 'pending'").get();
 }
 
 export function listPendingApprovalsByAgent(agentId) {
-  return db.prepare("SELECT * FROM dv_approvals WHERE requested_by = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC").all(agentId);
+  return db.prepare("SELECT * FROM approvals WHERE requested_by = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC").all(agentId);
 }
 
 // -- Approval Votes --
 
 export function castApprovalVote(approvalId, voter, vote, notes) {
-  stmt('dvCastVote', `INSERT INTO dv_approval_votes (approval_id, voter, vote, notes)
+  stmt('dvCastVote', `INSERT INTO approval_votes (approval_id, voter, vote, notes)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(approval_id, voter) DO UPDATE SET vote = excluded.vote, notes = excluded.notes, created_at = datetime('now')`
   ).run(approvalId, voter, vote || 'approve', notes || '');
 }
 
 export function getApprovalVotes(approvalId) {
-  return stmt('dvGetVotes', 'SELECT * FROM dv_approval_votes WHERE approval_id = ? ORDER BY created_at').all(approvalId);
+  return stmt('dvGetVotes', 'SELECT * FROM approval_votes WHERE approval_id = ? ORDER BY created_at').all(approvalId);
 }
 
 export function countApprovalVotes(approvalId) {
   var row = db.prepare(
-    "SELECT SUM(CASE WHEN vote = 'approve' THEN 1 ELSE 0 END) as approves, SUM(CASE WHEN vote = 'deny' THEN 1 ELSE 0 END) as denies FROM dv_approval_votes WHERE approval_id = ?"
+    "SELECT SUM(CASE WHEN vote = 'approve' THEN 1 ELSE 0 END) as approves, SUM(CASE WHEN vote = 'deny' THEN 1 ELSE 0 END) as denies FROM approval_votes WHERE approval_id = ?"
   ).get(approvalId);
   return { approves: row.approves || 0, denies: row.denies || 0 };
 }
 
 export function getAdminOps() {
   var pendingRequests = db.prepare(
-    "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 50"
   ).all();
   var unassignedTasks = db.prepare(
-    "SELECT * FROM dv_tasks WHERE assignee IS NULL AND status IN ('open', 'in_progress') ORDER BY updated_at DESC LIMIT 50"
+    "SELECT * FROM tasks WHERE assignee IS NULL AND status IN ('open', 'in_progress') ORDER BY updated_at DESC LIMIT 50"
   ).all();
   var unassignedBugs = db.prepare(
-    "SELECT * FROM dv_bugs WHERE assignee IS NULL AND status = 'open' ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM bugs WHERE assignee IS NULL AND status = 'open' ORDER BY created_at DESC LIMIT 50"
   ).all();
   var failedDroneJobs = db.prepare(
-    "SELECT * FROM dv_drone_jobs WHERE status = 'failed' ORDER BY completed_at DESC LIMIT 50"
+    "SELECT * FROM drone_jobs WHERE status = 'failed' ORDER BY completed_at DESC LIMIT 50"
   ).all();
   var pendingApprovals = db.prepare(
-    "SELECT * FROM dv_approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at DESC LIMIT 50"
   ).all();
   var staleRequests = db.prepare(
-    "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-1 day') ORDER BY created_at ASC LIMIT 50"
+    "SELECT * FROM messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-1 day') ORDER BY created_at ASC LIMIT 50"
   ).all();
   return {
     pending_requests: pendingRequests,
@@ -2441,11 +2506,11 @@ export function getAdminOps() {
 export function resolveStaleRequests(hoursOld) {
   var hours = hoursOld || 72;
   var stale = db.prepare(
-    "SELECT id FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-' || ? || ' hours')"
+    "SELECT id FROM messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-' || ? || ' hours')"
   ).all(hours);
   for (var req of stale) {
     db.prepare(
-      "UPDATE dv_messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = 'system', content = content || '\n\n[Auto-resolved: request was pending for over ' || ? || ' hours]' WHERE id = ?"
+      "UPDATE messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = 'system', content = content || '\n\n[Auto-resolved: request was pending for over ' || ? || ' hours]' WHERE id = ?"
     ).run(hours, req.id);
   }
   return stale.length;
@@ -2464,7 +2529,7 @@ export function getOverview(userId) {
   var projects = listProjects();
   var approvalQueue = listTasksNeedingApproval();
   var pendingRequests = db.prepare(
-    "SELECT * FROM dv_messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 20"
+    "SELECT * FROM messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC LIMIT 20"
   ).all();
   var assets = listAssets({ limit: 50 });
   var bugs = listBugs({ limit: 50 });
@@ -2532,7 +2597,7 @@ function timeSince(dateStr) {
 export function getSlimOverview() {
   // Agent statuses — compact
   var agents = db.prepare(
-    "SELECT id, status, working_on, last_heartbeat FROM dv_agents ORDER BY created_at"
+    "SELECT id, status, working_on, last_heartbeat FROM agents ORDER BY created_at"
   ).all().map(function (a) {
     var hb = a.last_heartbeat ? timeSince(a.last_heartbeat) : 'never';
     return { id: a.id, status: a.status, working_on: a.working_on || '', heartbeat: hb };
@@ -2540,14 +2605,14 @@ export function getSlimOverview() {
 
   // Counts
   var counts = {
-    tasks_open: db.prepare("SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'open'").get().c,
-    tasks_in_progress: db.prepare("SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'in_progress'").get().c,
-    bugs_open: db.prepare("SELECT COUNT(*) as c FROM dv_bugs WHERE status = 'open'").get().c,
-    plans_active: db.prepare("SELECT COUNT(*) as c FROM dv_plans WHERE status = 'active'").get().c,
-    requests_pending: db.prepare("SELECT COUNT(*) as c FROM dv_messages WHERE msg_type = 'request' AND status IN ('sent', 'pending')").get().c,
-    approvals_pending: db.prepare("SELECT COUNT(*) as c FROM dv_approvals WHERE status = 'pending'").get().c,
-    drones_online: db.prepare("SELECT COUNT(*) as c FROM dv_agents WHERE agent_type = 'drone' AND status = 'online'").get().c,
-    drone_jobs_pending: db.prepare("SELECT COUNT(*) as c FROM dv_drone_jobs WHERE status = 'pending'").get().c
+    tasks_open: db.prepare("SELECT COUNT(*) as c FROM tasks WHERE status = 'open'").get().c,
+    tasks_in_progress: db.prepare("SELECT COUNT(*) as c FROM tasks WHERE status = 'in_progress'").get().c,
+    bugs_open: db.prepare("SELECT COUNT(*) as c FROM bugs WHERE status = 'open'").get().c,
+    plans_active: db.prepare("SELECT COUNT(*) as c FROM plans WHERE status = 'active'").get().c,
+    requests_pending: db.prepare("SELECT COUNT(*) as c FROM messages WHERE msg_type = 'request' AND status IN ('sent', 'pending')").get().c,
+    approvals_pending: db.prepare("SELECT COUNT(*) as c FROM approvals WHERE status = 'pending'").get().c,
+    drones_online: db.prepare("SELECT COUNT(*) as c FROM agents WHERE agent_type = 'drone' AND status = 'online'").get().c,
+    drone_jobs_pending: db.prepare("SELECT COUNT(*) as c FROM drone_jobs WHERE status = 'pending'").get().c
   };
 
   // Attention array — server-side triage
@@ -2555,7 +2620,7 @@ export function getSlimOverview() {
 
   // Stale requests (>1h unresolved)
   var staleRequests = db.prepare(
-    "SELECT id, from_agent, content, created_at FROM dv_messages WHERE msg_type = 'request' AND status IN ('sent', 'pending') AND created_at < datetime('now', '-1 hour') ORDER BY created_at ASC LIMIT 5"
+    "SELECT id, from_agent, content, created_at FROM messages WHERE msg_type = 'request' AND status IN ('sent', 'pending') AND created_at < datetime('now', '-1 hour') ORDER BY created_at ASC LIMIT 5"
   ).all();
   for (var r of staleRequests) {
     attention.push({ type: 'stale_request', id: r.id, from: r.from_agent, title: r.content.slice(0, 80), action: 'respond', age: timeSince(r.created_at) });
@@ -2563,7 +2628,7 @@ export function getSlimOverview() {
 
   // Pending approvals
   var pendingApprovals = db.prepare(
-    "SELECT id, title, created_at FROM dv_approvals WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
+    "SELECT id, title, created_at FROM approvals WHERE status = 'pending' ORDER BY created_at ASC LIMIT 5"
   ).all();
   for (var a of pendingApprovals) {
     attention.push({ type: 'pending_approval', id: a.id, title: a.title, action: 'approve_or_deny', age: timeSince(a.created_at) });
@@ -2571,7 +2636,7 @@ export function getSlimOverview() {
 
   // Stale tasks (in_progress >6h without update)
   var staleTasks = db.prepare(
-    "SELECT t.id, t.title, t.assignee, t.updated_at FROM dv_tasks t WHERE t.status = 'in_progress' AND t.updated_at < datetime('now', '-6 hours') ORDER BY t.updated_at ASC LIMIT 5"
+    "SELECT t.id, t.title, t.assignee, t.updated_at FROM tasks t WHERE t.status = 'in_progress' AND t.updated_at < datetime('now', '-6 hours') ORDER BY t.updated_at ASC LIMIT 5"
   ).all();
   for (var t of staleTasks) {
     attention.push({ type: 'stale_task', id: t.id, assignee: t.assignee, title: t.title, action: 'reassign_or_unblock', age: timeSince(t.updated_at) });
@@ -2579,7 +2644,7 @@ export function getSlimOverview() {
 
   // Unassigned bugs
   var unassignedBugs = db.prepare(
-    "SELECT id, title, severity, created_at FROM dv_bugs WHERE status = 'open' AND (assignee IS NULL OR assignee = '') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, created_at ASC LIMIT 5"
+    "SELECT id, title, severity, created_at FROM bugs WHERE status = 'open' AND (assignee IS NULL OR assignee = '') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, created_at ASC LIMIT 5"
   ).all();
   for (var b of unassignedBugs) {
     attention.push({ type: 'unassigned_bug', id: b.id, title: b.title, severity: b.severity, action: 'assign', age: timeSince(b.created_at) });
@@ -2587,7 +2652,7 @@ export function getSlimOverview() {
 
   // Recent activity — 5 one-liners
   var recentEvents = db.prepare(
-    "SELECT summary, created_at FROM dv_events ORDER BY created_at DESC LIMIT 5"
+    "SELECT summary, created_at FROM events ORDER BY created_at DESC LIMIT 5"
   ).all();
   var recent_activity = recentEvents.map(function (e) {
     return e.summary + ' (' + timeSince(e.created_at) + ')';
@@ -2601,66 +2666,66 @@ export function getSlimOverview() {
 export function getDB() { return db; }
 
 export function ensurePluginRecord(manifest) {
-  var existing = stmt('dvGetPlugin', 'SELECT * FROM dv_plugins WHERE name = ?').get(manifest.name);
+  var existing = stmt('dvGetPlugin', 'SELECT * FROM plugins WHERE name = ?').get(manifest.name);
   if (existing) {
-    stmt('dvUpdatePlugin', `UPDATE dv_plugins SET display_name = ?, description = ?, version = ?, author = ?, route_prefix = ?, mcp_tool_count = ?, updated_at = datetime('now')
+    stmt('dvUpdatePlugin', `UPDATE plugins SET display_name = ?, description = ?, version = ?, author = ?, route_prefix = ?, mcp_tool_count = ?, updated_at = datetime('now')
       WHERE name = ?`).run(manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.routePrefix || '', manifest.mcpToolCount || 0, manifest.name);
     return { ...existing, updated: true };
   }
-  stmt('dvInsertPlugin', `INSERT INTO dv_plugins (name, display_name, description, version, author, enabled, route_prefix, mcp_tool_count)
+  stmt('dvInsertPlugin', `INSERT INTO plugins (name, display_name, description, version, author, enabled, route_prefix, mcp_tool_count)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
   return { name: manifest.name, created: true };
 }
 
 export function getPluginRecord(name) {
-  return stmt('dvGetPlugin', 'SELECT * FROM dv_plugins WHERE name = ?').get(name);
+  return stmt('dvGetPlugin', 'SELECT * FROM plugins WHERE name = ?').get(name);
 }
 
 export function listPluginRecords() {
-  return db.prepare('SELECT * FROM dv_plugins ORDER BY name').all();
+  return db.prepare('SELECT * FROM plugins ORDER BY name').all();
 }
 
 export function updatePluginEnabled(name, enabled) {
-  return db.prepare("UPDATE dv_plugins SET enabled = ?, updated_at = datetime('now') WHERE name = ?").run(enabled ? 1 : 0, name);
+  return db.prepare("UPDATE plugins SET enabled = ?, updated_at = datetime('now') WHERE name = ?").run(enabled ? 1 : 0, name);
 }
 
 export function getPluginMigrationVersion(pluginName) {
-  var row = db.prepare('SELECT MAX(version) as v FROM dv_plugin_migrations WHERE plugin_name = ?').get(pluginName);
+  var row = db.prepare('SELECT MAX(version) as v FROM plugin_migrations WHERE plugin_name = ?').get(pluginName);
   return row ? (row.v || 0) : 0;
 }
 
 export function recordPluginMigration(pluginName, version, description) {
-  db.prepare('INSERT INTO dv_plugin_migrations (plugin_name, version, description) VALUES (?, ?, ?)').run(pluginName, version, description || '');
+  db.prepare('INSERT INTO plugin_migrations (plugin_name, version, description) VALUES (?, ?, ?)').run(pluginName, version, description || '');
 }
 
 // ======== PLUGIN CONFIG ========
 
 export function getPluginConfig(pluginName) {
-  var rows = db.prepare('SELECT key, value, is_secret FROM dv_plugin_config WHERE plugin_name = ?').all(pluginName);
+  var rows = db.prepare('SELECT key, value, is_secret FROM plugin_config WHERE plugin_name = ?').all(pluginName);
   return rows;
 }
 
 export function getPluginConfigValue(pluginName, key) {
-  var row = db.prepare('SELECT value FROM dv_plugin_config WHERE plugin_name = ? AND key = ?').get(pluginName, key);
+  var row = db.prepare('SELECT value FROM plugin_config WHERE plugin_name = ? AND key = ?').get(pluginName, key);
   return row ? row.value : null;
 }
 
 export function setPluginConfig(pluginName, key, value, isSecret) {
   db.prepare(
-    `INSERT INTO dv_plugin_config (plugin_name, key, value, is_secret, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
+    `INSERT INTO plugin_config (plugin_name, key, value, is_secret, updated_at) VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT(plugin_name, key) DO UPDATE SET value = excluded.value, is_secret = excluded.is_secret, updated_at = excluded.updated_at`
   ).run(pluginName, key, String(value), isSecret ? 1 : 0);
 }
 
 export function deletePluginConfig(pluginName, key) {
-  db.prepare('DELETE FROM dv_plugin_config WHERE plugin_name = ? AND key = ?').run(pluginName, key);
+  db.prepare('DELETE FROM plugin_config WHERE plugin_name = ? AND key = ?').run(pluginName, key);
 }
 
 // ======== AGENT SAVEPOINTS ========
 
 export function createSavepoint(agentId, data) {
   return db.prepare(
-    `INSERT INTO dv_agent_savepoints (agent_id, session_id, heartbeat_at, working_on, state_snapshot, messages_acked, context_versions, notes)
+    `INSERT INTO agent_savepoints (agent_id, session_id, heartbeat_at, working_on, state_snapshot, messages_acked, context_versions, notes)
      VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?)`
   ).run(
     agentId,
@@ -2675,20 +2740,20 @@ export function createSavepoint(agentId, data) {
 
 export function getLatestSavepoint(agentId) {
   return db.prepare(
-    'SELECT * FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1'
+    'SELECT * FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1'
   ).get(agentId);
 }
 
 export function getSavepointHistory(agentId, limit) {
   return db.prepare(
-    'SELECT id, agent_id, session_id, heartbeat_at, working_on, notes, created_at FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT ?'
+    'SELECT id, agent_id, session_id, heartbeat_at, working_on, notes, created_at FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT ?'
   ).all(agentId, limit || 10);
 }
 
 export function updateSavepointNotes(agentId, notes) {
   var latest = getLatestSavepoint(agentId);
   if (!latest) return null;
-  db.prepare('UPDATE dv_agent_savepoints SET notes = ? WHERE id = ?').run(notes, latest.id);
+  db.prepare('UPDATE agent_savepoints SET notes = ? WHERE id = ?').run(notes, latest.id);
   return latest.id;
 }
 
@@ -2707,37 +2772,37 @@ export function computeSavepointDiff(agentId) {
 
   // Messages the agent hasn't seen (not in acked list, sent after savepoint)
   var newMessages = db.prepare(
-    "SELECT * FROM dv_messages WHERE (to_agent = ? OR to_agent IS NULL) AND id NOT IN (SELECT value FROM json_each(?)) AND created_at > ? ORDER BY created_at ASC LIMIT 100"
+    "SELECT * FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND id NOT IN (SELECT value FROM json_each(?)) AND created_at > ? ORDER BY created_at ASC LIMIT 100"
   ).all(agentId, JSON.stringify(ackedIds), savepoint.heartbeat_at);
 
   // Tasks that changed since savepoint
   var tasksChanged = db.prepare(
-    "SELECT * FROM dv_tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ? ORDER BY updated_at DESC LIMIT 50"
+    "SELECT * FROM tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ? ORDER BY updated_at DESC LIMIT 50"
   ).all(agentId, savepoint.heartbeat_at);
 
   // Context keys that changed since savepoint
   var contextChanged = db.prepare(
-    "SELECT * FROM dv_context_keys WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 50"
+    "SELECT * FROM context_keys WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 50"
   ).all(savepoint.heartbeat_at);
 
   // Plans that changed since savepoint
   var plansChanged = db.prepare(
-    "SELECT p.* FROM dv_plans p WHERE p.updated_at > ? ORDER BY p.updated_at DESC LIMIT 20"
+    "SELECT p.* FROM plans p WHERE p.updated_at > ? ORDER BY p.updated_at DESC LIMIT 20"
   ).all(savepoint.heartbeat_at);
 
   // Bugs that changed since savepoint
   var bugsChanged = db.prepare(
-    "SELECT * FROM dv_bugs WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 20"
+    "SELECT * FROM bugs WHERE updated_at > ? ORDER BY updated_at DESC LIMIT 20"
   ).all(savepoint.heartbeat_at);
 
   // Drone jobs that changed since savepoint
   var droneJobsChanged = db.prepare(
-    "SELECT * FROM dv_drone_jobs WHERE (started_at > ? OR completed_at > ? OR created_at > ?) ORDER BY created_at DESC LIMIT 20"
+    "SELECT * FROM drone_jobs WHERE (started_at > ? OR completed_at > ? OR created_at > ?) ORDER BY created_at DESC LIMIT 20"
   ).all(savepoint.heartbeat_at, savepoint.heartbeat_at, savepoint.heartbeat_at);
 
   // Events since savepoint
   var eventsSince = db.prepare(
-    "SELECT * FROM dv_events WHERE created_at > ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT * FROM events WHERE created_at > ? ORDER BY created_at DESC LIMIT 50"
   ).all(savepoint.heartbeat_at);
 
   return {
@@ -2774,10 +2839,10 @@ export function pruneSavepoints(agentId, keepCount) {
   // Keep only the most recent N savepoints per agent
   var count = keepCount || 50;
   var cutoff = db.prepare(
-    'SELECT heartbeat_at FROM dv_agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1 OFFSET ?'
+    'SELECT heartbeat_at FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1 OFFSET ?'
   ).get(agentId, count);
   if (cutoff) {
-    db.prepare('DELETE FROM dv_agent_savepoints WHERE agent_id = ? AND heartbeat_at < ?').run(agentId, cutoff.heartbeat_at);
+    db.prepare('DELETE FROM agent_savepoints WHERE agent_id = ? AND heartbeat_at < ?').run(agentId, cutoff.heartbeat_at);
   }
 }
 
@@ -2786,13 +2851,13 @@ export function pruneSavepoints(agentId, keepCount) {
 export function createFeedback(entityType, entityId, subject, rating, comment, submittedBy, agentId) {
   var r = Math.max(1, Math.min(5, parseInt(rating) || 3));
   var result = db.prepare(
-    'INSERT INTO dv_feedback (entity_type, entity_id, subject, rating, comment, submitted_by, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+    'INSERT INTO feedback (entity_type, entity_id, subject, rating, comment, submitted_by, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
   ).get(entityType || 'general', entityId || '', subject || '', r, comment || '', submittedBy || 'operator', agentId || '');
   return result.id;
 }
 
 export function getFeedback(id) {
-  return db.prepare('SELECT * FROM dv_feedback WHERE id = ?').get(id);
+  return db.prepare('SELECT * FROM feedback WHERE id = ?').get(id);
 }
 
 export function listFeedback(filters) {
@@ -2805,29 +2870,29 @@ export function listFeedback(filters) {
   if (filters.min_rating) { where.push('rating >= ?'); params.push(parseInt(filters.min_rating)); }
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
-  var sql = 'SELECT * FROM dv_feedback WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  var sql = 'SELECT * FROM feedback WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   return db.prepare(sql).all(...params);
 }
 
 export function deleteFeedback(id) {
-  db.prepare('DELETE FROM dv_feedback WHERE id = ?').run(id);
+  db.prepare('DELETE FROM feedback WHERE id = ?').run(id);
 }
 
 // -- Operator Inbox --
 
 export function createInboxItem(operatorId, type, entityType, entityId, title, summary, data, priority) {
   var result = db.prepare(
-    'INSERT INTO dv_operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+    'INSERT INTO operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
   ).get(operatorId, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
   return result.id;
 }
 
 export function createInboxItemForAllOperators(type, entityType, entityId, title, summary, data, priority) {
-  var ops = db.prepare("SELECT id FROM dv_operators WHERE status = 'active'").all();
+  var ops = db.prepare("SELECT id FROM operators WHERE status = 'active'").all();
   var ids = [];
   var insertStmt = db.prepare(
-    'INSERT INTO dv_operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+    'INSERT INTO operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
   );
   for (var op of ops) {
     var row = insertStmt.get(op.id, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
@@ -2837,7 +2902,7 @@ export function createInboxItemForAllOperators(type, entityType, entityId, title
 }
 
 export function getInboxItem(id) {
-  return db.prepare('SELECT * FROM dv_operator_inbox WHERE id = ?').get(id);
+  return db.prepare('SELECT * FROM operator_inbox WHERE id = ?').get(id);
 }
 
 export function listInboxItems(filters) {
@@ -2850,51 +2915,51 @@ export function listInboxItems(filters) {
   if (filters.entity_type) { where.push('entity_type = ?'); params.push(filters.entity_type); }
   var limit = Math.min(filters.limit || 50, 200);
   var offset = filters.offset || 0;
-  var sql = 'SELECT * FROM dv_operator_inbox WHERE ' + where.join(' AND ') + ' ORDER BY CASE priority WHEN \'urgent\' THEN 0 WHEN \'normal\' THEN 1 ELSE 2 END, created_at DESC LIMIT ? OFFSET ?';
+  var sql = 'SELECT * FROM operator_inbox WHERE ' + where.join(' AND ') + ' ORDER BY CASE priority WHEN \'urgent\' THEN 0 WHEN \'normal\' THEN 1 ELSE 2 END, created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   return db.prepare(sql).all(...params);
 }
 
 export function markInboxItemRead(id) {
-  db.prepare("UPDATE dv_operator_inbox SET status = 'read', read_at = datetime('now') WHERE id = ? AND status = 'unread'").run(id);
+  db.prepare("UPDATE operator_inbox SET status = 'read', read_at = datetime('now') WHERE id = ? AND status = 'unread'").run(id);
 }
 
 export function markInboxItemActioned(id) {
-  db.prepare("UPDATE dv_operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE id = ?").run(id);
+  db.prepare("UPDATE operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE id = ?").run(id);
 }
 
 export function dismissInboxItem(id) {
-  db.prepare("UPDATE dv_operator_inbox SET status = 'dismissed' WHERE id = ?").run(id);
+  db.prepare("UPDATE operator_inbox SET status = 'dismissed' WHERE id = ?").run(id);
 }
 
 export function countUnreadInbox(operatorId) {
-  var row = db.prepare("SELECT COUNT(*) as c FROM dv_operator_inbox WHERE operator_id = ? AND status = 'unread'").get(operatorId);
+  var row = db.prepare("SELECT COUNT(*) as c FROM operator_inbox WHERE operator_id = ? AND status = 'unread'").get(operatorId);
   return row ? row.c : 0;
 }
 
 export function countAllUnreadInbox() {
-  return db.prepare("SELECT operator_id, COUNT(*) as count FROM dv_operator_inbox WHERE status = 'unread' GROUP BY operator_id").all();
+  return db.prepare("SELECT operator_id, COUNT(*) as count FROM operator_inbox WHERE status = 'unread' GROUP BY operator_id").all();
 }
 
 // ======== RUNNER SPAWNS (dynamic agent swarm) ========
 
 export function createRunnerSpawn(tier, model, cwd, maxTurns, title, workContext, requestedBy) {
   var result = db.prepare(
-    'INSERT INTO dv_runner_spawns (tier, model, cwd, max_turns, title, work_context, requested_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+    'INSERT INTO runner_spawns (tier, model, cwd, max_turns, title, work_context, requested_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
   ).get(tier || 'agent', model || '', cwd || '', maxTurns || 50, title || '', JSON.stringify(workContext || {}), requestedBy || '');
   return result.id;
 }
 
 export function getRunnerSpawn(id) {
-  var row = db.prepare('SELECT * FROM dv_runner_spawns WHERE id = ?').get(id);
+  var row = db.prepare('SELECT * FROM runner_spawns WHERE id = ?').get(id);
   if (row) { try { row.work_context = JSON.parse(row.work_context); } catch (e) { row.work_context = {}; } }
   return row;
 }
 
 export function listRunnerSpawns(status) {
   var rows = status
-    ? db.prepare("SELECT * FROM dv_runner_spawns WHERE status = ? ORDER BY created_at DESC LIMIT 100").all(status)
-    : db.prepare("SELECT * FROM dv_runner_spawns ORDER BY created_at DESC LIMIT 100").all();
+    ? db.prepare("SELECT * FROM runner_spawns WHERE status = ? ORDER BY created_at DESC LIMIT 100").all(status)
+    : db.prepare("SELECT * FROM runner_spawns ORDER BY created_at DESC LIMIT 100").all();
   return rows.map(function (r) {
     try { r.work_context = JSON.parse(r.work_context); } catch (e) { r.work_context = {}; }
     return r;
@@ -2902,39 +2967,39 @@ export function listRunnerSpawns(status) {
 }
 
 export function claimRunnerSpawn(id, runnerId) {
-  db.prepare("UPDATE dv_runner_spawns SET status = 'claimed', runner_id = ?, claimed_at = datetime('now') WHERE id = ? AND status = 'pending'").run(runnerId || 'runner', id);
+  db.prepare("UPDATE runner_spawns SET status = 'claimed', runner_id = ?, claimed_at = datetime('now') WHERE id = ? AND status = 'pending'").run(runnerId || 'runner', id);
 }
 
 export function doneRunnerSpawn(id, result, status) {
-  db.prepare("UPDATE dv_runner_spawns SET status = ?, result = ?, done_at = datetime('now') WHERE id = ?").run(status || 'done', result || '', id);
+  db.prepare("UPDATE runner_spawns SET status = ?, result = ?, done_at = datetime('now') WHERE id = ?").run(status || 'done', result || '', id);
 }
 
 export function getFeedbackSummary() {
-  var total = db.prepare('SELECT COUNT(*) as count FROM dv_feedback').get().count;
-  var avgRating = db.prepare('SELECT ROUND(AVG(rating), 2) as avg FROM dv_feedback').get().avg || 0;
+  var total = db.prepare('SELECT COUNT(*) as count FROM feedback').get().count;
+  var avgRating = db.prepare('SELECT ROUND(AVG(rating), 2) as avg FROM feedback').get().avg || 0;
   var byAgent = db.prepare(
-    "SELECT agent_id, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM dv_feedback WHERE agent_id != '' GROUP BY agent_id ORDER BY count DESC LIMIT 20"
+    "SELECT agent_id, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM feedback WHERE agent_id != '' GROUP BY agent_id ORDER BY count DESC LIMIT 20"
   ).all();
   var byType = db.prepare(
-    'SELECT entity_type, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM dv_feedback GROUP BY entity_type ORDER BY count DESC'
+    'SELECT entity_type, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM feedback GROUP BY entity_type ORDER BY count DESC'
   ).all();
   var ratingDist = db.prepare(
-    'SELECT rating, COUNT(*) as count FROM dv_feedback GROUP BY rating ORDER BY rating'
+    'SELECT rating, COUNT(*) as count FROM feedback GROUP BY rating ORDER BY rating'
   ).all();
-  var recent = db.prepare('SELECT * FROM dv_feedback ORDER BY created_at DESC LIMIT 5').all();
+  var recent = db.prepare('SELECT * FROM feedback ORDER BY created_at DESC LIMIT 5').all();
   return { total, avg_rating: avgRating, by_agent: byAgent, by_type: byType, rating_dist: ratingDist, recent };
 }
 
 // ---- Support Tickets ----
 export function createSupportTicket(data) {
   var result = db.prepare(
-    'INSERT INTO dv_support_tickets (instance_id, subject, description, category, priority, reporter_email, reporter_name) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *'
+    'INSERT INTO support_tickets (instance_id, subject, description, category, priority, reporter_email, reporter_name) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *'
   ).get(data.instance_id || '', data.subject, data.description || '', data.category || 'general', data.priority || 'normal', data.reporter_email || '', data.reporter_name || '');
   return result;
 }
 
 export function getSupportTicket(id) {
-  return db.prepare('SELECT * FROM dv_support_tickets WHERE id = ?').get(id);
+  return db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(id);
 }
 
 export function listSupportTickets(filters) {
@@ -2945,7 +3010,7 @@ export function listSupportTickets(filters) {
   if (filters && filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
   var limit = parseInt((filters && filters.limit) || 100) || 100;
   params.push(limit);
-  var sql = 'SELECT * FROM dv_support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
+  var sql = 'SELECT * FROM support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
   return db.prepare(sql).all.apply(db.prepare(sql), params);
 }
 
@@ -2959,12 +3024,12 @@ export function updateSupportTicket(id, updates) {
   if (sets.length === 0) return getSupportTicket(id);
   sets.push("updated_at = datetime('now')");
   params.push(id);
-  db.prepare('UPDATE dv_support_tickets SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE dv_support_tickets SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  db.prepare('UPDATE support_tickets SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE support_tickets SET ' + sets.join(', ') + ' WHERE id = ?'), params);
   return getSupportTicket(id);
 }
 
 export function deleteSupportTicket(id) {
-  return db.prepare('DELETE FROM dv_support_tickets WHERE id = ?').run(id);
+  return db.prepare('DELETE FROM support_tickets WHERE id = ?').run(id);
 }
 
 // =============== NODE PROFILES — Stand Up Calibration ===============
@@ -2990,7 +3055,7 @@ function parseProfileRow(row) {
 export function createNodeProfile(id, data) {
   var d = data || {};
   db.prepare(
-    'INSERT INTO dv_node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
+    'INSERT INTO node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
@@ -3009,7 +3074,7 @@ export function createNodeProfile(id, data) {
 }
 
 export function getNodeProfile(id) {
-  var row = db.prepare('SELECT * FROM dv_node_profiles WHERE id = ?').get(id);
+  var row = db.prepare('SELECT * FROM node_profiles WHERE id = ?').get(id);
   return parseProfileRow(row);
 }
 
@@ -3018,7 +3083,7 @@ export function listNodeProfiles(filter) {
   var params = [];
   if (filter && filter.node_type) { where.push('node_type = ?'); params.push(filter.node_type); }
   if (filter && filter.layer) { where.push('layer = ?'); params.push(filter.layer); }
-  var sql = 'SELECT * FROM dv_node_profiles' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY layer, node_type, id';
+  var sql = 'SELECT * FROM node_profiles' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY layer, node_type, id';
   var rows = db.prepare(sql).all.apply(db.prepare(sql), params);
   return rows.map(parseProfileRow);
 }
@@ -3038,8 +3103,8 @@ export function updateNodeProfile(id, data) {
   }
   if (values.length === 0) return existing;
   values.push(id);
-  db.prepare('UPDATE dv_node_profiles SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(
-    db.prepare('UPDATE dv_node_profiles SET ' + sets.join(', ') + ' WHERE id = ?'), values
+  db.prepare('UPDATE node_profiles SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(
+    db.prepare('UPDATE node_profiles SET ' + sets.join(', ') + ' WHERE id = ?'), values
   );
   return getNodeProfile(id);
 }
@@ -3048,7 +3113,7 @@ export function deleteNodeProfile(id) {
   var existing = getNodeProfile(id);
   if (!existing) return null;
   if (existing.layer === 'platform') return null;
-  db.prepare('DELETE FROM dv_node_profiles WHERE id = ?').run(id);
+  db.prepare('DELETE FROM node_profiles WHERE id = ?').run(id);
   return existing;
 }
 
@@ -3127,12 +3192,12 @@ export function resolveProfileChain(agentId) {
 
 export function seedPlatformProfiles() {
   // Only seed if default-agent doesn't exist yet
-  var existing = db.prepare('SELECT id FROM dv_node_profiles WHERE id = ?').get('default-agent');
+  var existing = db.prepare('SELECT id FROM node_profiles WHERE id = ?').get('default-agent');
   if (existing) return;
 
   // default-agent: base rules for all agents
   db.prepare(
-    'INSERT INTO dv_node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
+    'INSERT INTO node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     'default-agent',
@@ -3159,7 +3224,7 @@ export function seedPlatformProfiles() {
 
   // default-drone: minimal rules for GPU/CPU workers
   db.prepare(
-    'INSERT INTO dv_node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
+    'INSERT INTO node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     'default-drone',
@@ -3180,7 +3245,7 @@ export function seedPlatformProfiles() {
 
   // default-admin: inherits agent rules + coordination emphasis
   db.prepare(
-    'INSERT INTO dv_node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
+    'INSERT INTO node_profiles (id, node_type, layer, parent_id, rules, required_concepts, mcp_config, tool_whitelist, repo_list, md_checkpoints, md_blocklist) ' +
     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     'default-admin',
@@ -3286,20 +3351,20 @@ export function buildCalibrationBlock(agentId) {
 
 export function listTeamSettings(section) {
   if (section) {
-    return db.prepare('SELECT * FROM dv_team_settings WHERE section = ? ORDER BY key').all(section);
+    return db.prepare('SELECT * FROM team_settings WHERE section = ? ORDER BY key').all(section);
   }
-  return db.prepare('SELECT * FROM dv_team_settings ORDER BY section, key').all();
+  return db.prepare('SELECT * FROM team_settings ORDER BY section, key').all();
 }
 
 export function getTeamSetting(section, key) {
-  return db.prepare('SELECT * FROM dv_team_settings WHERE section = ? AND key = ?').get(section, key);
+  return db.prepare('SELECT * FROM team_settings WHERE section = ? AND key = ?').get(section, key);
 }
 
 export function upsertTeamSetting(section, key, value, updatedBy) {
   var now = new Date().toISOString();
   var valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
   db.prepare(
-    "INSERT INTO dv_team_settings (section, key, value, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) " +
+    "INSERT INTO team_settings (section, key, value, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) " +
     "ON CONFLICT(section, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by"
   ).run(section, key, valueStr, now, updatedBy || '');
   syncTeamSettingsToProfile();
@@ -3307,7 +3372,7 @@ export function upsertTeamSetting(section, key, value, updatedBy) {
 }
 
 export function deleteTeamSetting(section, key) {
-  var result = db.prepare('DELETE FROM dv_team_settings WHERE section = ? AND key = ?').run(section, key);
+  var result = db.prepare('DELETE FROM team_settings WHERE section = ? AND key = ?').run(section, key);
   syncTeamSettingsToProfile();
   return result;
 }
@@ -3406,11 +3471,119 @@ export function syncTeamSettingsToProfile() {
   }
 }
 
+// =============== TEAMS ===============
+
+export function createTeam(id, orgId, name, description, createdBy) {
+  db.prepare(
+    'INSERT INTO teams (id, org_id, name, description, created_by) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, orgId, name, description || '', createdBy || '');
+  return getTeam(id);
+}
+
+export function getTeam(id) {
+  var team = db.prepare('SELECT * FROM teams WHERE id = ?').get(id);
+  if (team) {
+    team.members = db.prepare(
+      'SELECT * FROM team_members WHERE team_id = ? ORDER BY role, joined_at'
+    ).all(id);
+  }
+  return team;
+}
+
+export function listTeams(orgId) {
+  var sql = orgId
+    ? 'SELECT t.*, (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) as member_count FROM teams t WHERE t.org_id = ? ORDER BY t.name'
+    : 'SELECT t.*, (SELECT COUNT(*) FROM team_members WHERE team_id = t.id) as member_count FROM teams t ORDER BY t.name';
+  return orgId ? db.prepare(sql).all(orgId) : db.prepare(sql).all();
+}
+
+export function updateTeam(id, fields) {
+  var sets = [];
+  var values = [];
+  for (var key of Object.keys(fields)) {
+    if (['name', 'description', 'org_id'].includes(key)) {
+      sets.push(key + ' = ?');
+      values.push(fields[key]);
+    }
+  }
+  if (sets.length === 0) return getTeam(id);
+  sets.push("updated_at = datetime('now')");
+  values.push(id);
+  db.prepare('UPDATE teams SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  return getTeam(id);
+}
+
+export function deleteTeam(id) {
+  var memberCount = db.prepare('SELECT COUNT(*) as c FROM team_members WHERE team_id = ?').get(id).c;
+  if (memberCount > 0) throw new Error('Team has members — remove them first');
+  db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+}
+
+export function addTeamMember(teamId, userId, userType, role, isPrimary) {
+  if (isPrimary) {
+    db.prepare('UPDATE team_members SET is_primary = 0 WHERE user_id = ? AND is_primary = 1').run(userId);
+  }
+  db.prepare(
+    'INSERT INTO team_members (team_id, user_id, user_type, role, is_primary) VALUES (?, ?, ?, ?, ?)'
+  ).run(teamId, userId, userType || 'operator', role || 'member', isPrimary ? 1 : 0);
+
+  if (isPrimary) {
+    var table = userType === 'agent' ? 'agents' : 'operators';
+    db.prepare('UPDATE ' + table + ' SET primary_team_id = ? WHERE id = ?').run(teamId, userId);
+  }
+  return db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+}
+
+export function updateTeamMember(teamId, userId, fields) {
+  var sets = [];
+  var values = [];
+  if (fields.role) { sets.push('role = ?'); values.push(fields.role); }
+  if (fields.is_primary !== undefined) {
+    if (fields.is_primary) {
+      db.prepare('UPDATE team_members SET is_primary = 0 WHERE user_id = ? AND is_primary = 1').run(userId);
+    }
+    sets.push('is_primary = ?');
+    values.push(fields.is_primary ? 1 : 0);
+  }
+  if (sets.length === 0) return;
+  values.push(teamId, userId);
+  db.prepare('UPDATE team_members SET ' + sets.join(', ') + ' WHERE team_id = ? AND user_id = ?').run(...values);
+
+  if (fields.is_primary) {
+    var member = db.prepare('SELECT user_type FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+    if (member) {
+      var table = member.user_type === 'agent' ? 'agents' : 'operators';
+      db.prepare('UPDATE ' + table + ' SET primary_team_id = ? WHERE id = ?').run(teamId, userId);
+    }
+  }
+}
+
+export function removeTeamMember(teamId, userId) {
+  var member = db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
+  if (!member) return;
+  db.prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ?').run(teamId, userId);
+
+  if (member.is_primary) {
+    var table = member.user_type === 'agent' ? 'agents' : 'operators';
+    db.prepare('UPDATE ' + table + ' SET primary_team_id = NULL WHERE id = ?').run(userId);
+  }
+}
+
+export function getTeamsForUser(userId) {
+  return db.prepare(
+    'SELECT t.*, tm.role, tm.is_primary FROM teams t JOIN team_members tm ON t.id = tm.team_id WHERE tm.user_id = ? ORDER BY tm.is_primary DESC, t.name'
+  ).all(userId);
+}
+
+export function getTeamProjects(teamId) {
+  return db.prepare('SELECT * FROM projects WHERE team_id = ?').all(teamId);
+}
+
 // =============== CUSTOMER INSTANCES ===============
 
 export function createInstance(data) {
   var result = db.prepare(
-    'INSERT INTO dv_customer_instances (org_id, railway_project_id, railway_service_id, railway_environment_id, domain, cloudflare_record_id, status, admin_username, customer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
+    'INSERT INTO customer_instances (org_id, railway_project_id, railway_service_id, railway_environment_id, domain, cloudflare_record_id, status, admin_username, customer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
   ).get(
     data.org_id,
     data.railway_project_id || null,
@@ -3426,15 +3599,15 @@ export function createInstance(data) {
 }
 
 export function getInstance(id) {
-  return db.prepare('SELECT * FROM dv_customer_instances WHERE id = ?').get(id);
+  return db.prepare('SELECT * FROM customer_instances WHERE id = ?').get(id);
 }
 
 export function getInstanceByOrg(orgId) {
-  return db.prepare('SELECT * FROM dv_customer_instances WHERE org_id = ? ORDER BY created_at DESC LIMIT 1').get(orgId);
+  return db.prepare('SELECT * FROM customer_instances WHERE org_id = ? ORDER BY created_at DESC LIMIT 1').get(orgId);
 }
 
 export function getInstanceByDomain(domain) {
-  return db.prepare('SELECT * FROM dv_customer_instances WHERE domain = ?').get(domain);
+  return db.prepare('SELECT * FROM customer_instances WHERE domain = ?').get(domain);
 }
 
 export function listInstances(filters) {
@@ -3442,7 +3615,7 @@ export function listInstances(filters) {
   var params = [];
   if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters && filters.org_id) { where.push('org_id = ?'); params.push(filters.org_id); }
-  var sql = 'SELECT * FROM dv_customer_instances' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
+  var sql = 'SELECT * FROM customer_instances' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
   return db.prepare(sql).all.apply(db.prepare(sql), params);
 }
 
@@ -3456,6 +3629,6 @@ export function updateInstance(id, updates) {
   if (sets.length === 0) return getInstance(id);
   sets.push("updated_at = datetime('now')");
   params.push(id);
-  db.prepare('UPDATE dv_customer_instances SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE dv_customer_instances SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?'), params);
   return getInstance(id);
 }

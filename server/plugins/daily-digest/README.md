@@ -49,7 +49,7 @@ All routes are prefixed with `/digest`.
 
 ## Database Tables
 
-### `dv_digest_reports`
+### `digest_reports`
 Stored digest reports.
 
 | Column | Type | Description |
@@ -63,7 +63,7 @@ Stored digest reports.
 | delivered_to | TEXT (JSON) | Array of delivery targets (e.g. `["inbox", "slack"]`) |
 | created_at | TEXT | Creation timestamp |
 
-### `dv_digest_metrics`
+### `digest_metrics`
 Time-series metric snapshots for trend tracking.
 
 | Column | Type | Description |

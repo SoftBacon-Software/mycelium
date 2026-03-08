@@ -115,7 +115,7 @@ export default function (core) {
     var replyTo = null;
     if (post.thread_id && post.thread_position > 0) {
       var prev = core.db.prepare(
-        "SELECT tweet_id FROM dv_x_posts WHERE thread_id = ? AND thread_position = ? AND status = 'published'"
+        "SELECT tweet_id FROM x_posts WHERE thread_id = ? AND thread_position = ? AND status = 'published'"
       ).get(post.thread_id, post.thread_position - 1);
       if (prev) replyTo = prev.tweet_id;
     }

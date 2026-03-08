@@ -1,7 +1,7 @@
 -- Plugin: _template
--- Rename table prefix from dv_template_ to dv_YOURPLUGIN_
+-- Rename table prefix from template_ to YOURPLUGIN_
 
-CREATE TABLE IF NOT EXISTS dv_template_items (
+CREATE TABLE IF NOT EXISTS template_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   title       TEXT NOT NULL DEFAULT '',
   status      TEXT NOT NULL DEFAULT 'active',
@@ -11,4 +11,4 @@ CREATE TABLE IF NOT EXISTS dv_template_items (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_template_items_status ON dv_template_items(status);
+CREATE INDEX IF NOT EXISTS idx_template_items_status ON template_items(status);

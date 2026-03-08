@@ -10,18 +10,18 @@ export default function createErrorDB(db) {
   return {
     logError(provider, errorKey, title, message, stackTrace, url, payload) {
       var existing = stmt('emGetByKey',
-        'SELECT id, occurrences FROM dv_error_events WHERE error_key = ?'
+        'SELECT id, occurrences FROM error_events WHERE error_key = ?'
       ).get(errorKey);
 
       if (existing) {
         stmt('emBump',
-          "UPDATE dv_error_events SET occurrences = occurrences + 1, last_seen = datetime('now'), payload = ?, updated_at = datetime('now') WHERE id = ?"
+          "UPDATE error_events SET occurrences = occurrences + 1, last_seen = datetime('now'), payload = ?, updated_at = datetime('now') WHERE id = ?"
         ).run(JSON.stringify(payload || {}), existing.id);
         return { id: existing.id, is_new: false, occurrences: existing.occurrences + 1 };
       }
 
       var r = stmt('emInsert',
-        'INSERT INTO dv_error_events (provider, error_key, title, message, stack_trace, url, payload) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO error_events (provider, error_key, title, message, stack_trace, url, payload) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         provider || '', errorKey || '', title || '', message || '',
         stackTrace || '', url || '', JSON.stringify(payload || {})
@@ -30,7 +30,7 @@ export default function createErrorDB(db) {
     },
 
     getError(id) {
-      var row = stmt('emGet', 'SELECT * FROM dv_error_events WHERE id = ?').get(id);
+      var row = stmt('emGet', 'SELECT * FROM error_events WHERE id = ?').get(id);
       if (row) {
         try { row.payload = JSON.parse(row.payload); } catch (e) { row.payload = {}; }
       }
@@ -38,7 +38,7 @@ export default function createErrorDB(db) {
     },
 
     getErrorByKey(errorKey) {
-      var row = stmt('emGetByKey2', 'SELECT * FROM dv_error_events WHERE error_key = ?').get(errorKey);
+      var row = stmt('emGetByKey2', 'SELECT * FROM error_events WHERE error_key = ?').get(errorKey);
       if (row) {
         try { row.payload = JSON.parse(row.payload); } catch (e) { row.payload = {}; }
       }
@@ -54,7 +54,7 @@ export default function createErrorDB(db) {
       var offset = filters.offset || 0;
       params.push(limit, offset);
       var rows = db.prepare(
-        'SELECT * FROM dv_error_events WHERE ' + where.join(' AND ') +
+        'SELECT * FROM error_events WHERE ' + where.join(' AND ') +
         ' ORDER BY last_seen DESC LIMIT ? OFFSET ?'
       ).all(...params);
       return rows.map(function (row) {
@@ -75,30 +75,30 @@ export default function createErrorDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_error_events SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE error_events SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     muteError(id) {
       stmt('emMute',
-        "UPDATE dv_error_events SET status = 'muted', updated_at = datetime('now') WHERE id = ?"
+        "UPDATE error_events SET status = 'muted', updated_at = datetime('now') WHERE id = ?"
       ).run(id);
     },
 
     resolveError(id) {
       stmt('emResolve',
-        "UPDATE dv_error_events SET status = 'resolved', updated_at = datetime('now') WHERE id = ?"
+        "UPDATE error_events SET status = 'resolved', updated_at = datetime('now') WHERE id = ?"
       ).run(id);
     },
 
     getStats() {
       var byProvider = db.prepare(
-        'SELECT provider, COUNT(*) as count FROM dv_error_events GROUP BY provider'
+        'SELECT provider, COUNT(*) as count FROM error_events GROUP BY provider'
       ).all();
       var byStatus = db.prepare(
-        'SELECT status, COUNT(*) as count FROM dv_error_events GROUP BY status'
+        'SELECT status, COUNT(*) as count FROM error_events GROUP BY status'
       ).all();
       var last24h = db.prepare(
-        "SELECT COUNT(*) as count FROM dv_error_events WHERE last_seen >= datetime('now', '-1 day')"
+        "SELECT COUNT(*) as count FROM error_events WHERE last_seen >= datetime('now', '-1 day')"
       ).get();
       return {
         by_provider: byProvider,
@@ -109,7 +109,7 @@ export default function createErrorDB(db) {
 
     getTopErrors(limit) {
       var rows = db.prepare(
-        'SELECT * FROM dv_error_events ORDER BY occurrences DESC LIMIT ?'
+        'SELECT * FROM error_events ORDER BY occurrences DESC LIMIT ?'
       ).all(limit || 10);
       return rows.map(function (row) {
         try { row.payload = JSON.parse(row.payload); } catch (e) { row.payload = {}; }

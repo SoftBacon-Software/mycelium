@@ -301,7 +301,7 @@ function handleIssue(core, db, payload, action, repo, eventId) {
     // Auto-create a Mycelium bug from the GitHub issue
     try {
       var bugResult = core.db.prepare(
-        "INSERT INTO dv_bugs (title, description, project_id, category, severity, status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
+        "INSERT INTO bugs (title, description, project_id, category, severity, status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
       ).get(
         '[GH] ' + title,
         body + '\n\n---\nSource: ' + repo + '#' + number + (issue.html_url ? '\n' + issue.html_url : ''),
@@ -408,7 +408,7 @@ function handleIssueComment(core, db, payload, action, repo, eventId) {
 }
 
 function getConfig(db, key) {
-  var row = db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'github-sync' AND key = ?").get(key);
+  var row = db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'github-sync' AND key = ?").get(key);
   return row ? row.value : null;
 }
 

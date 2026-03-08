@@ -37,7 +37,7 @@ export function registerHooks(core) {
             { rule_id: rule.id, agent: agentId });
         }
 
-        var notifyConfig = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'guardrails' AND key = 'notify_on_violation'").get();
+        var notifyConfig = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'guardrails' AND key = 'notify_on_violation'").get();
         if (!notifyConfig || notifyConfig.value !== 'false') {
           core.inbox.createInboxItemForAllOperators(
             'guardrail_violation', 'guardrail_rule', String(rule.id),

@@ -8,7 +8,7 @@ var WORKER_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
 // No defaults — keeps the plugin project-agnostic.
 function getGameFacts(core) {
   try {
-    var row = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'steam-assets' AND key = 'game_facts'").get();
+    var row = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'steam-assets' AND key = 'game_facts'").get();
     return row ? JSON.parse(row.value) : null;
   } catch (e) { return null; }
 }

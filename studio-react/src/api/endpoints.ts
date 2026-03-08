@@ -33,6 +33,8 @@ import type {
   InboxItem,
   InboxCountResponse,
   TeamSettingsGrouped,
+  Team,
+  TeamMember,
 } from './types';
 
 // Auth
@@ -688,4 +690,39 @@ export function deleteTeamSetting(section: string, key: string): Promise<{ ok: b
 
 export function syncTeamSettings(): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>('/team-settings/sync', {});
+}
+
+// Teams
+
+export function fetchTeams(orgId?: string): Promise<Team[]> {
+  const params = orgId ? `?org_id=${orgId}` : '';
+  return apiGet<{ teams: Team[] }>(`/teams${params}`).then(r => r.teams);
+}
+
+export function fetchTeam(id: string): Promise<Team> {
+  return apiGet<Team>(`/teams/${id}`);
+}
+
+export function createTeam(data: { id: string; name: string; org_id: string; description?: string }): Promise<Team> {
+  return apiPost<Team>('/teams', data);
+}
+
+export function updateTeam(id: string, data: Partial<Team>): Promise<Team> {
+  return apiPut<Team>(`/teams/${id}`, data);
+}
+
+export function deleteTeam(id: string): Promise<void> {
+  return apiDelete<void>(`/teams/${id}`);
+}
+
+export function addTeamMember(teamId: string, data: { user_id: string; user_type: string; role?: string; is_primary?: boolean }): Promise<TeamMember> {
+  return apiPost<TeamMember>(`/teams/${teamId}/members`, data);
+}
+
+export function updateTeamMember(teamId: string, userId: string, data: { role?: string; is_primary?: boolean }): Promise<TeamMember> {
+  return apiPut<TeamMember>(`/teams/${teamId}/members/${userId}`, data);
+}
+
+export function removeTeamMember(teamId: string, userId: string): Promise<void> {
+  return apiDelete<void>(`/teams/${teamId}/members/${userId}`);
 }

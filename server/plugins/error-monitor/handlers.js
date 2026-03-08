@@ -13,7 +13,7 @@ export function registerHooks(core) {
       if (!bugId) return;
 
       var errors = core.db.prepare(
-        "SELECT id FROM dv_error_events WHERE bug_id = ? AND status = 'open'"
+        "SELECT id FROM error_events WHERE bug_id = ? AND status = 'open'"
       ).all(bugId);
 
       for (var err of errors) {

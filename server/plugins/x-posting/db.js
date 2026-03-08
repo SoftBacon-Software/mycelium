@@ -9,7 +9,7 @@ export default function createXDB(db) {
   return {
     createPost(fields) {
       var result = stmt('xCreate',
-        "INSERT INTO dv_x_posts (project_id, tweet_text, thread_id, thread_position, source, source_id, status, posted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
+        "INSERT INTO x_posts (project_id, tweet_text, thread_id, thread_position, source, source_id, status, posted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
       ).get(
         fields.project_id || '',
         fields.tweet_text || '',
@@ -24,7 +24,7 @@ export default function createXDB(db) {
     },
 
     getPost(id) {
-      return stmt('xGet', 'SELECT * FROM dv_x_posts WHERE id = ?').get(id);
+      return stmt('xGet', 'SELECT * FROM x_posts WHERE id = ?').get(id);
     },
 
     listPosts(filters) {
@@ -34,8 +34,8 @@ export default function createXDB(db) {
       if (filters.thread_id) { where.push('thread_id = ?'); params.push(filters.thread_id); }
       if (filters.source) { where.push('source = ?'); params.push(filters.source); }
       params.push(filters.limit || 50);
-      return db.prepare('SELECT * FROM dv_x_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all.apply(
-        db.prepare('SELECT * FROM dv_x_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'),
+      return db.prepare('SELECT * FROM x_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all.apply(
+        db.prepare('SELECT * FROM x_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'),
         params
       );
     },
@@ -51,21 +51,21 @@ export default function createXDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_x_posts SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(
-        db.prepare('UPDATE dv_x_posts SET ' + sets.join(', ') + ' WHERE id = ?'),
+      return db.prepare('UPDATE x_posts SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(
+        db.prepare('UPDATE x_posts SET ' + sets.join(', ') + ' WHERE id = ?'),
         values
       );
     },
 
     deletePost(id) {
-      return db.prepare('DELETE FROM dv_x_posts WHERE id = ?').run(id);
+      return db.prepare('DELETE FROM x_posts WHERE id = ?').run(id);
     },
 
     getStats(projectId) {
       var where = projectId ? 'WHERE project_id = ?' : '';
       var params = projectId ? [projectId] : [];
-      var rows = db.prepare('SELECT status, COUNT(*) as count FROM dv_x_posts ' + where + ' GROUP BY status').all.apply(
-        db.prepare('SELECT status, COUNT(*) as count FROM dv_x_posts ' + where + ' GROUP BY status'),
+      var rows = db.prepare('SELECT status, COUNT(*) as count FROM x_posts ' + where + ' GROUP BY status').all.apply(
+        db.prepare('SELECT status, COUNT(*) as count FROM x_posts ' + where + ' GROUP BY status'),
         params
       );
       var stats = {};
@@ -76,7 +76,7 @@ export default function createXDB(db) {
     },
 
     getThread(threadId) {
-      return db.prepare('SELECT * FROM dv_x_posts WHERE thread_id = ? ORDER BY thread_position ASC').all(threadId);
+      return db.prepare('SELECT * FROM x_posts WHERE thread_id = ? ORDER BY thread_position ASC').all(threadId);
     }
   };
 }
