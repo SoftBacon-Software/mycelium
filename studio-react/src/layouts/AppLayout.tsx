@@ -1,5 +1,5 @@
 import { Outlet, useLocation, useSearchParams } from 'react-router-dom'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Menu } from 'lucide-react'
 import SideNav from './SideNav'
 import DirectiveBanner from '../components/directives/DirectiveBanner'
@@ -56,6 +56,9 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
+  useEffect(() => {
+    document.title = pageTitle === 'Dashboard' ? 'Mycelium' : pageTitle + ' — Mycelium'
+  }, [pageTitle])
   const isChannels = location.pathname === '/channels'
   const rec = searchParams.has('rec')
 
