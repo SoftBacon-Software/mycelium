@@ -68,11 +68,18 @@ var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(im
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
 if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
 
+// Allowed file extensions for uploads (block executables, scripts, HTML)
+var BLOCKED_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.sh', '.ps1', '.msi', '.dll', '.com', '.scr', '.pif', '.vbs', '.js', '.wsh', '.wsf', '.html', '.htm', '.xhtml', '.svg', '.php', '.jsp', '.asp', '.aspx', '.cgi']);
+function sanitizeExtension(ext) {
+  var lower = (ext || '').toLowerCase();
+  if (BLOCKED_EXTENSIONS.has(lower)) return '.blocked';
+  return lower;
+}
 var storage = multer.diskStorage({
   destination: function (req, file, cb) { cb(null, FILES_DIR); },
   filename: function (req, file, cb) {
-    var ext = nodePath.extname(file.originalname) || '';
-    var base = nodePath.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    var ext = sanitizeExtension(nodePath.extname(file.originalname));
+    var base = nodePath.basename(file.originalname, nodePath.extname(file.originalname)).replace(/[^a-zA-Z0-9_-]/g, '_');
     var name = base + '_' + Date.now() + ext;
     cb(null, name);
   }
@@ -416,7 +423,7 @@ function checkAdmin(req, res) {
     res.status(401).json({ error: 'Authentication required' });
     return false;
   }
-  if (key === ADMIN_KEY) { req._authIsAdmin = true; return true; }
+  if (key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
   return false;
 }
@@ -446,7 +453,7 @@ function checkAgentOrAdmin(req, res) {
   if (user) { req._authIsAdmin = true; return user.displayName || user.username; }
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey === ADMIN_KEY) {
+  if (adminKey && adminKey.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(adminKey), Buffer.from(ADMIN_KEY))) {
     req._authIsAdmin = true;
     var actingAs = req.headers['x-acting-as'];
     return actingAs || '__system__';
@@ -986,7 +993,7 @@ router.post('/agents/heartbeat', function (req, res) {
   var agentId;
   // Admin can heartbeat on behalf of any agent via agent_id body field
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey && adminKey === ADMIN_KEY && req.body.agent_id) {
+  if (adminKey && adminKey.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(adminKey), Buffer.from(ADMIN_KEY)) && req.body.agent_id) {
     agentId = req.body.agent_id;
   } else {
     agentId = checkAgent(req, res);
@@ -3123,7 +3130,7 @@ router.get('/admin/api-usage', asyncHandler(async function (req, res) {
     res.json({ cached: false, data });
   } catch (err) {
     console.error('[mycelium] API usage error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch API usage: ' + err.message });
+    res.status(500).json({ error: 'Failed to fetch API usage' });
   }
 }));
 
@@ -3197,7 +3204,7 @@ router.put('/instances/:id', function (req, res) {
   res.json(updated);
 });
 
-router.post('/instances/:id/health-check', async function (req, res) {
+router.post('/instances/:id/health-check', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instance = getInstance(req.params.id);
   if (!instance) return apiError(res, 404, 'Instance not found');
@@ -3220,12 +3227,13 @@ router.post('/instances/:id/health-check', async function (req, res) {
       health_status: 'error',
       last_health_check: new Date().toISOString()
     });
-    res.json({ ok: false, error: err.message });
+    console.error('[mycelium] health-check error for instance ' + req.params.id + ':', err.message);
+    res.json({ ok: false, error: 'Health check failed' });
   }
-});
+}));
 
 // POST /admin/churn-check — daily lifecycle check for suspended/archived instances
-router.post('/admin/churn-check', async function (req, res) {
+router.post('/admin/churn-check', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var now = new Date();
   var results = { archived: [], deleted: [], errors: [] };
@@ -3275,12 +3283,12 @@ router.post('/admin/churn-check', async function (req, res) {
   }
 
   res.json({ ok: true, results: results });
-});
+}));
 
 // =============== DEPLOY WORKFLOW ===============
 
 // POST /admin/deploy/health-check-all — health check all active instances
-router.post('/admin/deploy/health-check-all', async function (req, res) {
+router.post('/admin/deploy/health-check-all', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instances = listInstances({ status: 'active' });
   var results = [];
@@ -3306,7 +3314,7 @@ router.post('/admin/deploy/health-check-all', async function (req, res) {
   }
 
   res.json({ ok: true, results: results });
-});
+}));
 
 // GET /admin/deploy/status — current deploy status for all active instances
 router.get('/admin/deploy/status', function (req, res) {
@@ -3530,7 +3538,7 @@ router.get('/files/:filename', function (req, res) {
   var filename = req.params.filename.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(FILES_DIR, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found or expired' });
-  res.sendFile(filePath);
+  res.download(filePath, filename);
 });
 
 // GET /files — list available files
@@ -4384,7 +4392,7 @@ router.get('/drones/artifacts/:name', function (req, res) {
   var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(ARTIFACTS_DIR, name);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
-  res.sendFile(filePath);
+  res.download(filePath, name);
 });
 
 // Delete a drone artifact (admin only)
@@ -4654,7 +4662,7 @@ router.get('/plugins/registry', function (req, res) {
     })
     .catch(function (err) {
       if (registryCache.data) return res.json(registryCache.data);
-      res.status(502).json({ error: 'Failed to fetch plugin registry: ' + err.message });
+      res.status(502).json({ error: 'Failed to fetch plugin registry' });
     });
 });
 
@@ -4827,7 +4835,8 @@ router.get('/admin/backups', function (req, res) {
       });
     res.json({ backups: files, count: files.length });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to list backups: ' + e.message });
+    console.error('[mycelium] backup list error:', e.message);
+    res.status(500).json({ error: 'Failed to list backups' });
   }
 });
 
@@ -5163,7 +5172,8 @@ router.post('/profiles', function (req, res) {
     emitEvent('profile_created', getAdminDisplayName(req), null, 'Profile created: ' + id);
     res.status(201).json(profile);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[mycelium] profile creation error:', e.message);
+    res.status(500).json({ error: 'Failed to create profile' });
   }
 });
 
