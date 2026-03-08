@@ -24,6 +24,7 @@ const ContextPage = lazy(() => import('./pages/ContextPage'))
 const WebhooksPage = lazy(() => import('./pages/WebhooksPage'))
 const AdminOpsPage = lazy(() => import('./pages/AdminOpsPage'))
 const NetworkHealthPage = lazy(() => import('./pages/NetworkHealthPage'))
+const AgentHealthPage = lazy(() => import('./pages/AgentHealthPage'))
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
 const PluginsPage = lazy(() => import('./pages/PluginsPage'))
 const SpawnsPage = lazy(() => import('./pages/SpawnsPage'))
@@ -80,6 +81,7 @@ export default function App() {
             <Route path="webhooks" element={<WebhooksPage />} />
             <Route path="ops" element={<AdminOpsPage />} />
             <Route path="health" element={<NetworkHealthPage />} />
+            <Route path="agent-health" element={<AgentHealthPage />} />
             <Route path="onboarding" element={<OnboardingPage />} />
             <Route path="plugins" element={<PluginsPage />} />
             <Route path="spawns" element={<SpawnsPage />} />

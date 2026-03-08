@@ -10,7 +10,7 @@ import {
   MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database, Server,
   Settings, Settings2, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
-  ChevronRight, PanelLeftClose, PanelLeftOpen, X,
+  ChevronRight, PanelLeftClose, PanelLeftOpen, X, HeartPulse,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -63,6 +63,7 @@ const staticNavSections: NavSection[] = [
     label: 'Observe',
     items: [
       { to: '/health', label: 'Network Health', icon: Activity },
+      { to: '/agent-health', label: 'Agent Health', icon: HeartPulse },
       { to: '/analytics', label: 'Analytics', icon: BarChart3 },
       { to: '/feedback', label: 'Feedback', icon: MessageCircle },
     ],

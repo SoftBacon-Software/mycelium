@@ -28,6 +28,7 @@ const routeTitles: Record<string, string> = {
   '/webhooks': 'Webhooks',
   '/ops': 'Admin Ops',
   '/health': 'Network Health',
+  '/agent-health': 'Agent Health',
   '/onboarding': 'Onboarding',
   '/plugins': 'Plugins',
   '/analytics': 'Analytics',
