@@ -707,7 +707,7 @@ function checkEnforcementRules(toolName, args, agentId) {
 
       // Log enforcement event
       try {
-        createEvent('enforcement_violation', agentId, null, (rule.severity === 'block' ? 'BLOCKED' : 'WARNING') + ': ' + (rule.message || rule.id), { rule_id: rule.id, tool: toolName, severity: rule.severity });
+        emitEvent('enforcement_violation', agentId, null, (rule.severity === 'block' ? 'BLOCKED' : 'WARNING') + ': ' + (rule.message || rule.id), { rule_id: rule.id, tool: toolName, severity: rule.severity });
       } catch {}
     }
   }
@@ -1775,7 +1775,7 @@ router.post('/widgets', function (req, res) {
   if (!b.title) return res.status(400).json({ error: 'title required' });
   var agentId = who || b.agent_id || 'admin';
   var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
-  createEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
+  emitEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
   res.status(201).json(result);
 });
 
@@ -1809,7 +1809,7 @@ router.post('/voice/command', function (req, res) {
 
   // Parse intent
   var result = parseVoiceCommand(text, who);
-  createEvent('voice_command', who || 'operator', '', text, { action: result.action });
+  emitEvent('voice_command', who || 'operator', '', text, { action: result.action });
   res.json(result);
 });
 
@@ -1915,7 +1915,7 @@ router.post('/skills', function (req, res) {
   try {
     var result = createSkill(b.id, b.name, b.description, b.category, b.version, b.author,
       b.install_type, b.install_data, b.required_capabilities, b.tags);
-    createEvent('skill_created', who || 'admin', '', b.name, { skill_id: b.id });
+    emitEvent('skill_created', who || 'admin', '', b.name, { skill_id: b.id });
     res.status(201).json(result);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'skill already exists' });
@@ -1940,7 +1940,7 @@ router.post('/skills/:id/install', function (req, res) {
   var skill = getSkill(req.params.id);
   if (!skill) return res.status(404).json({ error: 'skill not found' });
   installSkill(agentId, req.params.id, req.body.config);
-  createEvent('skill_installed', agentId, '', skill.name, { skill_id: req.params.id });
+  emitEvent('skill_installed', agentId, '', skill.name, { skill_id: req.params.id });
   res.json({ ok: true, skill_id: req.params.id, agent_id: agentId });
 });
 
