@@ -437,7 +437,7 @@ check "T33.2 List widgets" "$R" "QA Widget"
 
 if [ -n "$WIDGET_ID" ] && [ "$WIDGET_ID" != "" ]; then
   R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/widgets/$WIDGET_ID" -d '{"title":"QA Widget Updated","data":{"status":"warning"}}')
-  check "T33.3 Update widget" "$R" '"ok":true'
+  check "T33.3 Update widget" "$R" "QA Widget Updated"
 
   R=$(curl -s -X DELETE -H "$AH" "$BASE/widgets/$WIDGET_ID")
   check "T33.4 Delete widget" "$R" '"ok":true'
@@ -451,22 +451,21 @@ fi
 # Phase 34: Skills Registry
 echo ""
 echo "--- Phase 34: Skills ---"
-# Clean up any leftover from previous run
-curl -s -X DELETE -H "$AH" "$BASE/skills/qa-skill" > /dev/null 2>&1
-R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills" -d '{"id":"qa-skill","name":"QA Skill","description":"Test skill","category":"testing","version":"1.0.0","author":"dev-claude","install_type":"npm","install_data":"qa-skill-pkg"}')
+QA_SKILL_ID="qa-skill-$(date +%s)"
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills" -d "{\"id\":\"$QA_SKILL_ID\",\"name\":\"QA Skill\",\"description\":\"Test skill\",\"category\":\"testing\",\"version\":\"1.0.0\",\"author\":\"dev-claude\",\"install_type\":\"npm\",\"install_data\":\"qa-skill-pkg\"}")
 check "T34.1 Create skill" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/skills")
 check "T34.2 List skills" "$R" "QA Skill"
 
-R=$(curl -s -H "$AH" "$BASE/skills/qa-skill")
+R=$(curl -s -H "$AH" "$BASE/skills/$QA_SKILL_ID")
 check "T34.3 Get skill detail" "$R" '"name":"QA Skill"'
 
-R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill" -d '{"description":"Updated QA skill","version":"1.0.1"}')
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/skills/$QA_SKILL_ID" -d '{"description":"Updated QA skill","version":"1.0.1"}')
 check "T34.4 Update skill" "$R" "Updated QA skill"
 
 # Install skill on agent
-R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill/install" -d '{"agent_id":"dev-claude"}')
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/$QA_SKILL_ID/install" -d '{"agent_id":"dev-claude"}')
 check "T34.5 Install skill" "$R" '"ok":true'
 
 # List agent skills
@@ -474,7 +473,7 @@ R=$(curl -s -H "$AH" "$BASE/agents/dev-claude/skills")
 check "T34.6 Agent skills" "$R" "qa-skill"
 
 # Uninstall
-R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill/uninstall" -d '{"agent_id":"dev-claude"}')
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/$QA_SKILL_ID/uninstall" -d '{"agent_id":"dev-claude"}')
 check "T34.7 Uninstall skill" "$R" '"ok":true'
 
 # Phase 35: Voice Command
@@ -536,7 +535,7 @@ echo "--- Phase 40: Admin Overview ---"
 R=$(curl -s -H "$AH" "$BASE/admin/overview")
 check "T40.1 Overview has agents" "$R" "agents"
 check "T40.2 Overview has tasks" "$R" "tasks"
-check "T40.3 Overview has messages" "$R" "messages"
+check "T40.3 Overview has plans" "$R" "plans"
 
 # Phase 41: Cleanup QA Artifacts
 echo ""
@@ -552,7 +551,7 @@ else
 fi
 
 # Delete QA skill
-curl -s -X DELETE -H "$AH" "$BASE/skills/qa-skill" > /dev/null 2>&1
+curl -s -X DELETE -H "$AH" "$BASE/skills/$QA_SKILL_ID" > /dev/null 2>&1
 echo "PASS: T41.1b Cleaned QA skill"
 PASS=$((PASS+1))
 
