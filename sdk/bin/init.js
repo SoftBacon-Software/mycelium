@@ -2,7 +2,7 @@
 // mycelium init — one-command agent setup
 //
 // Usage:
-//   npx @mycelium/sdk init
+//   npx mycelium-agent-sdk init
 //   mycelium-init
 //
 // Prompts for agent name, runtime, LLM, projects, then:

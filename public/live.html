@@ -650,40 +650,84 @@ function renderDrones(drones) {
 
 function renderPlans(plans) {
   var el = document.getElementById('plans');
-  if (!plans.length) { el.innerHTML = '<div class="loading">No active plans</div>'; return; }
-  var html = '';
+  el.textContent = '';
+  if (!plans.length) {
+    var empty = document.createElement('div');
+    empty.className = 'loading';
+    empty.textContent = 'No active plans';
+    el.appendChild(empty);
+    return;
+  }
   for (var i = 0; i < plans.length; i++) {
     var p = plans[i];
-    html += '<div class="plan-card">' +
-      '<div class="plan-title">' + escapeHtml(p.title) + '</div>' +
-      '<div class="progress-bar"><div class="progress-fill" style="width:' + p.progress + '%"></div></div>' +
-      '<div class="plan-pct">' + p.progress + '%</div></div>';
+    var card = document.createElement('div');
+    card.className = 'plan-card';
+    var title = document.createElement('div');
+    title.className = 'plan-title';
+    title.textContent = p.title;
+    card.appendChild(title);
+    var bar = document.createElement('div');
+    bar.className = 'progress-bar';
+    var fill = document.createElement('div');
+    fill.className = 'progress-fill';
+    fill.style.width = p.progress + '%';
+    bar.appendChild(fill);
+    card.appendChild(bar);
+    var pct = document.createElement('div');
+    pct.className = 'plan-pct';
+    pct.textContent = p.steps_done + '/' + p.steps_total + ' steps \u2014 ' + p.progress + '%';
+    card.appendChild(pct);
+    el.appendChild(card);
   }
-  el.innerHTML = html;
 }
 
 function renderEvents(events) {
   var el = document.getElementById('events');
-  if (!events.length) { el.innerHTML = '<div class="loading">No recent activity</div>'; return; }
-  var html = '';
+  el.textContent = '';
   // Skip heartbeats — too noisy for public view
   var filtered = [];
   for (var i = 0; i < events.length; i++) {
     if (events[i].type !== 'agent_heartbeat') filtered.push(events[i]);
   }
-  if (!filtered.length) { el.innerHTML = '<div class="loading">No recent activity</div>'; return; }
+  if (!filtered.length) {
+    var empty = document.createElement('div');
+    empty.className = 'loading';
+    empty.textContent = 'No recent activity';
+    el.appendChild(empty);
+    return;
+  }
   for (var j = 0; j < filtered.length && j < 20; j++) {
     var e = filtered[j];
-    var icon = EVENT_ICONS[e.type] || '&#8226;';
+    var iconChar = EVENT_ICONS[e.type] || '\u2022';
     var label = EVENT_LABELS[e.type] || e.type.replace(/_/g, ' ');
-    html += '<div class="event-row">' +
-      '<div class="event-icon">' + icon + '</div>' +
-      '<div class="event-type">' + escapeHtml(label) + '</div>' +
-      '<div class="event-agent">' + escapeHtml(e.agent) + '</div>' +
-      '<div class="event-time">' + timeAgo(e.time) + '</div></div>';
+
+    var row = document.createElement('div');
+    row.className = 'event-row';
+
+    var iconEl = document.createElement('div');
+    iconEl.className = 'event-icon';
+    iconEl.innerHTML = iconChar;
+
+    var typeEl = document.createElement('div');
+    typeEl.className = 'event-type';
+    typeEl.textContent = label;
+
+    var agentEl = document.createElement('div');
+    agentEl.className = 'event-agent';
+    agentEl.textContent = e.agent;
+
+    var timeEl = document.createElement('div');
+    timeEl.className = 'event-time';
+    timeEl.textContent = timeAgo(e.time);
+
+    row.appendChild(iconEl);
+    row.appendChild(typeEl);
+    row.appendChild(agentEl);
+    row.appendChild(timeEl);
+    el.appendChild(row);
   }
-  el.innerHTML = html;
 }
+
 
 function renderAlignment(alignment) {
   var section = document.getElementById('alignment-section');
