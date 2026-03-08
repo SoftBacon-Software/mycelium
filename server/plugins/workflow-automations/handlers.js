@@ -55,7 +55,7 @@ function executeAction(action, eventData, core) {
   switch (action.type) {
     case 'create_task': {
       var result = core.db.prepare(
-        "INSERT INTO dv_tasks (title, description, project_id, assignee, status) VALUES (?, ?, ?, ?, 'open') RETURNING id"
+        "INSERT INTO tasks (title, description, project_id, assignee, status) VALUES (?, ?, ?, ?, 'open') RETURNING id"
       ).get(interpolate(action.title), interpolate(action.description || ''), action.project_id || eventData.project_id || '', action.assignee || '');
       core.emitEvent('task_created', '__system__', action.project_id || eventData.project_id || '',
         'Automation created task: ' + interpolate(action.title), { task_id: result.id });
@@ -63,13 +63,13 @@ function executeAction(action, eventData, core) {
     }
     case 'send_message': {
       core.db.prepare(
-        "INSERT INTO dv_messages (from_agent, to_agent, content, msg_type, project_id) VALUES ('__system__', ?, ?, 'message', ?)"
+        "INSERT INTO messages (from_agent, to_agent, content, msg_type, project_id) VALUES ('__system__', ?, ?, 'message', ?)"
       ).run(action.to || '', interpolate(action.content), action.project_id || eventData.project_id || '');
       return { type: 'send_message', to: action.to };
     }
     case 'file_bug': {
       var bugResult = core.db.prepare(
-        "INSERT INTO dv_bugs (title, description, project_id, severity, status, reporter) VALUES (?, ?, ?, ?, 'open', '__system__') RETURNING id"
+        "INSERT INTO bugs (title, description, project_id, severity, status, reporter) VALUES (?, ?, ?, ?, 'open', '__system__') RETURNING id"
       ).get(interpolate(action.title), interpolate(action.description || ''), action.project_id || eventData.project_id || '', action.severity || 'normal');
       core.emitEvent('bug_filed', '__system__', action.project_id || eventData.project_id || '',
         'Automation filed bug: ' + interpolate(action.title), { bug_id: bugResult.id });
@@ -77,7 +77,7 @@ function executeAction(action, eventData, core) {
     }
     case 'assign_agent': {
       if (data.task_id || data.id) {
-        core.db.prepare("UPDATE dv_tasks SET assignee = ? WHERE id = ?").run(action.agent_id, data.task_id || data.id);
+        core.db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(action.agent_id, data.task_id || data.id);
         return { type: 'assign_agent', agent: action.agent_id, task_id: data.task_id || data.id };
       }
       return { type: 'assign_agent', skipped: true };
@@ -129,7 +129,7 @@ export function registerHooks(core) {
   var actionCounts = {}; // minute -> count
 
   function getConfig(key, fallback) {
-    var row = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'workflow-automations' AND key = ?").get(key);
+    var row = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'workflow-automations' AND key = ?").get(key);
     return row ? row.value : (fallback || '');
   }
 

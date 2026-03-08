@@ -48,7 +48,7 @@
   },
   {
     "name": "mycelium_errors_file_bug",
-    "description": "Manually file a Mycelium bug from an error event. Creates a bug in dv_bugs and links it to the error.",
+    "description": "Manually file a Mycelium bug from an error event. Creates a bug in bugs and links it to the error.",
     "inputSchema": {
       "type": "object",
       "required": ["error_id"],

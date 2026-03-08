@@ -9,7 +9,7 @@ export default function createSteamDB(db) {
   return {
     createAsset(projectId, assetType, title, config, createdBy) {
       var result = stmt('saCreate',
-        `INSERT INTO dv_steam_assets (project_id, asset_type, title, config, created_by)
+        `INSERT INTO steam_assets (project_id, asset_type, title, config, created_by)
          VALUES (?, ?, ?, ?, ?) RETURNING id`
       ).get(projectId, assetType, title,
         typeof config === 'string' ? config : JSON.stringify(config || {}), createdBy);
@@ -17,7 +17,7 @@ export default function createSteamDB(db) {
     },
 
     getAsset(id) {
-      return stmt('saGet', 'SELECT * FROM dv_steam_assets WHERE id = ?').get(id);
+      return stmt('saGet', 'SELECT * FROM steam_assets WHERE id = ?').get(id);
     },
 
     listAssets(filters) {
@@ -26,7 +26,7 @@ export default function createSteamDB(db) {
       if (filters.asset_type) { where.push('asset_type = ?'); params.push(filters.asset_type); }
       if (filters.status) { where.push('status = ?'); params.push(filters.status); }
       params.push(filters.limit || 50);
-      return db.prepare('SELECT * FROM dv_steam_assets WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+      return db.prepare('SELECT * FROM steam_assets WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
     },
 
     updateAsset(id, fields) {
@@ -39,11 +39,11 @@ export default function createSteamDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_steam_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      return db.prepare('UPDATE steam_assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deleteAsset(id) {
-      return db.prepare('DELETE FROM dv_steam_assets WHERE id = ?').run(id);
+      return db.prepare('DELETE FROM steam_assets WHERE id = ?').run(id);
     }
   };
 }

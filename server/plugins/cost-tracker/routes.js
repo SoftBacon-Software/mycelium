@@ -13,7 +13,7 @@ function getWeekStart() {
 
 function getConfigValue(coreDb, key, fallback) {
   var row = coreDb.prepare(
-    "SELECT value FROM dv_plugin_config WHERE plugin_name = 'cost-tracker' AND key = ?"
+    "SELECT value FROM plugin_config WHERE plugin_name = 'cost-tracker' AND key = ?"
   ).get(key);
   return row ? parseFloat(row.value) : fallback;
 }
@@ -21,7 +21,7 @@ function getConfigValue(coreDb, key, fallback) {
 function getAllConfig(coreDb) {
   var config = {};
   var rows = coreDb.prepare(
-    "SELECT key, value FROM dv_plugin_config WHERE plugin_name = 'cost-tracker'"
+    "SELECT key, value FROM plugin_config WHERE plugin_name = 'cost-tracker'"
   ).all();
   for (var r of rows) config[r.key] = r.value;
   return config;
@@ -38,7 +38,7 @@ function checkBudgetAlerts(db, core, config) {
     if (pct >= alertThreshold) {
       var today = new Date().toISOString().split('T')[0];
       var existing = core.db.prepare(
-        "SELECT id FROM dv_cost_alerts WHERE alert_type = 'daily_budget' AND triggered_at >= ?"
+        "SELECT id FROM cost_alerts WHERE alert_type = 'daily_budget' AND triggered_at >= ?"
       ).get(today);
       if (!existing) {
         db.logAlert('daily_budget', pct * 100, todaySpend, dailyBudget);
@@ -61,7 +61,7 @@ function checkBudgetAlerts(db, core, config) {
     if (weekPct >= alertThreshold) {
       var weekStart = getWeekStart();
       var existingWeek = core.db.prepare(
-        "SELECT id FROM dv_cost_alerts WHERE alert_type = 'weekly_budget' AND triggered_at >= ?"
+        "SELECT id FROM cost_alerts WHERE alert_type = 'weekly_budget' AND triggered_at >= ?"
       ).get(weekStart);
       if (!existingWeek) {
         db.logAlert('weekly_budget', weekPct * 100, weekSpend, weeklyBudget);
@@ -169,11 +169,11 @@ export default function (core) {
     var projects = core.db.prepare(
       'SELECT project_id, SUM(total_input) as total_input, SUM(total_output) as total_output, ' +
       'SUM(total_cache) as total_cache, SUM(total_cost) as total_cost, SUM(entry_count) as entry_count ' +
-      'FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY project_id ORDER BY total_cost DESC'
+      'FROM cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY project_id ORDER BY total_cost DESC'
     ).all.apply(
       core.db.prepare('SELECT project_id, SUM(total_input) as total_input, SUM(total_output) as total_output, ' +
         'SUM(total_cache) as total_cache, SUM(total_cost) as total_cost, SUM(entry_count) as entry_count ' +
-        'FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY project_id ORDER BY total_cost DESC'),
+        'FROM cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY project_id ORDER BY total_cost DESC'),
       params
     );
     res.json({ date_from: dateFrom, date_to: dateTo, projects: projects });

@@ -21,7 +21,7 @@ function checkBudgetAlerts(db, core, config) {
     if (pct >= alertThreshold) {
       var today = new Date().toISOString().split('T')[0];
       var existing = core.db.prepare(
-        "SELECT id FROM dv_cost_alerts WHERE alert_type = 'daily_budget' AND triggered_at >= ?"
+        "SELECT id FROM cost_alerts WHERE alert_type = 'daily_budget' AND triggered_at >= ?"
       ).get(today);
       if (!existing) {
         db.logAlert('daily_budget', pct * 100, todaySpend, dailyBudget);
@@ -44,7 +44,7 @@ function checkBudgetAlerts(db, core, config) {
     if (weekPct >= alertThreshold) {
       var weekStart = getWeekStart();
       var existingWeek = core.db.prepare(
-        "SELECT id FROM dv_cost_alerts WHERE alert_type = 'weekly_budget' AND triggered_at >= ?"
+        "SELECT id FROM cost_alerts WHERE alert_type = 'weekly_budget' AND triggered_at >= ?"
       ).get(weekStart);
       if (!existingWeek) {
         db.logAlert('weekly_budget', weekPct * 100, weekSpend, weeklyBudget);
@@ -73,7 +73,7 @@ export function registerHooks(core) {
       // Get pricing config
       var getConfig = function (key, fallback) {
         var row = core.db.prepare(
-          "SELECT value FROM dv_plugin_config WHERE plugin_name = 'cost-tracker' AND key = ?"
+          "SELECT value FROM plugin_config WHERE plugin_name = 'cost-tracker' AND key = ?"
         ).get(key);
         return row ? parseFloat(row.value) : fallback;
       };
@@ -94,7 +94,7 @@ export function registerHooks(core) {
       // Check budgets
       var config = {};
       var rows = core.db.prepare(
-        "SELECT key, value FROM dv_plugin_config WHERE plugin_name = 'cost-tracker'"
+        "SELECT key, value FROM plugin_config WHERE plugin_name = 'cost-tracker'"
       ).all();
       for (var r of rows) config[r.key] = r.value;
       checkBudgetAlerts(db, core, config);

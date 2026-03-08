@@ -58,6 +58,6 @@ Rules use a `conditions` JSON object with a `type` field:
 
 ## Database Tables
 
-**`dv_guardrail_rules`** -- Rule definitions (name, trigger_event, conditions JSON, enforcement, project_id, enabled).
+**`guardrail_rules`** -- Rule definitions (name, trigger_event, conditions JSON, enforcement, project_id, enabled).
 
-**`dv_guardrail_violations`** -- Violation log (rule_id, trigger_event, agent_id, project_id, enforcement, event_data JSON, violation_detail, overridden flag).
+**`guardrail_violations`** -- Violation log (rule_id, trigger_event, agent_id, project_id, enforcement, event_data JSON, violation_detail, overridden flag).

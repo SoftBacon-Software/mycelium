@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS dv_subscriptions (
+CREATE TABLE IF NOT EXISTS subscriptions (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
   org_id                  TEXT NOT NULL DEFAULT '',
   stripe_customer_id      TEXT NOT NULL DEFAULT '',
@@ -10,6 +10,6 @@ CREATE TABLE IF NOT EXISTS dv_subscriptions (
   updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_subscriptions_org ON dv_subscriptions(org_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_cust ON dv_subscriptions(stripe_customer_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON dv_subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_org ON subscriptions(org_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_cust ON subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);

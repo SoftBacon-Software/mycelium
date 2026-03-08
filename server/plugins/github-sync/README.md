@@ -59,7 +59,7 @@ All routes are prefixed with `/github`.
 
 ## Database Tables
 
-### `dv_github_events`
+### `github_events`
 Log of all received GitHub webhook events.
 
 | Column | Type | Description |
@@ -72,7 +72,7 @@ Log of all received GitHub webhook events.
 | processed | INTEGER | 0 = pending, 1 = processed |
 | created_at | TEXT | Timestamp |
 
-### `dv_github_links`
+### `github_links`
 Entity links between GitHub and Mycelium.
 
 | Column | Type | Description |
