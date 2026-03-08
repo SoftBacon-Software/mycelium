@@ -107,6 +107,7 @@ export class MyceliumAgent {
 
   async completeTask(taskId, notes) {
     var body = { status: 'done' }
+    if (notes) body.notes = notes
     var result = await this.api.put('/tasks/' + taskId, body)
     this.workingOn = ''
     return result
@@ -139,6 +140,7 @@ export class MyceliumAgent {
       if (opts.projectId) body.project_id = opts.projectId
       if (opts.channelId) body.channel_id = opts.channelId
       if (opts.priority) body.priority = opts.priority
+      if (opts.metadata) body.metadata = opts.metadata
     }
     return this.api.post('/messages', body)
   }
@@ -183,7 +185,9 @@ export class MyceliumAgent {
   }
 
   async fixBug(bugId, notes) {
-    var result = await this.api.put('/bugs/' + bugId, { status: 'fixed' })
+    var body = { status: 'fixed' }
+    if (notes) body.notes = notes
+    var result = await this.api.put('/bugs/' + bugId, body)
     this.workingOn = ''
     return result
   }
@@ -327,7 +331,6 @@ export class MyceliumAgent {
         session_id: this.sessionId
       })
     } catch {}
-    process.exit(0)
   }
 
   async _startWorkLoop() {

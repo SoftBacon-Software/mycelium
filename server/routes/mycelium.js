@@ -716,14 +716,6 @@ function checkEnforcementRules(toolName, args, agentId) {
 }
 
 // Wire enforcement into message sending
-function enforceOnMessage(req, res, agentId) {
-  var result = checkEnforcementRules('send_message', { content: req.body.content, to_agent: req.body.to_agent }, agentId);
-  if (!result.allowed) {
-    return res.status(403).json({ error: result.blocks[0].message, enforcement_rule: result.blocks[0].rule_id });
-  }
-  return result; // caller can attach warnings to response
-}
-
 // ---- Capability matching: check if agent can handle work ----
 function agentCanHandle(agent, workItem) {
   // Parse agent capabilities (stored as JSON array string)
@@ -1341,10 +1333,12 @@ router.put('/agents/:id', function (req, res) {
     if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);
     if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   }
-  // Self-update fields (any agent can set on themselves)
-  if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
-  if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
-  if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
+  // Self-update fields (agent can only set on themselves)
+  if (who === req.params.id || who === '__admin__' || who === '__system__') {
+    if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
+    if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
+    if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
+  }
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);
   res.json({ ok: true, id: req.params.id, updated: Object.keys(fields) });
@@ -1779,7 +1773,7 @@ router.post('/widgets', function (req, res) {
   if (!who) return;
   var b = req.body;
   if (!b.title) return res.status(400).json({ error: 'title required' });
-  var agentId = who.agentId || b.agent_id || 'admin';
+  var agentId = who || b.agent_id || 'admin';
   var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
   createEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
   res.status(201).json(result);
@@ -1815,7 +1809,7 @@ router.post('/voice/command', function (req, res) {
 
   // Parse intent
   var result = parseVoiceCommand(text, who);
-  createEvent('voice_command', who.agentId || 'operator', '', text, { action: result.action });
+  createEvent('voice_command', who || 'operator', '', text, { action: result.action });
   res.json(result);
 });
 
@@ -1921,7 +1915,7 @@ router.post('/skills', function (req, res) {
   try {
     var result = createSkill(b.id, b.name, b.description, b.category, b.version, b.author,
       b.install_type, b.install_data, b.required_capabilities, b.tags);
-    createEvent('skill_created', who.agentId || 'admin', '', b.name, { skill_id: b.id });
+    createEvent('skill_created', who || 'admin', '', b.name, { skill_id: b.id });
     res.status(201).json(result);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'skill already exists' });
@@ -1941,7 +1935,7 @@ router.put('/skills/:id', function (req, res) {
 router.post('/skills/:id/install', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var agentId = who.agentId || req.body.agent_id;
+  var agentId = who || req.body.agent_id;
   if (!agentId) return res.status(400).json({ error: 'agent_id required' });
   var skill = getSkill(req.params.id);
   if (!skill) return res.status(404).json({ error: 'skill not found' });
@@ -1953,7 +1947,7 @@ router.post('/skills/:id/install', function (req, res) {
 router.post('/skills/:id/uninstall', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
-  var agentId = who.agentId || req.body.agent_id;
+  var agentId = who || req.body.agent_id;
   if (!agentId) return res.status(400).json({ error: 'agent_id required' });
   uninstallSkill(agentId, req.params.id);
   res.json({ ok: true });

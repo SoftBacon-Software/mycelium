@@ -49,7 +49,7 @@ services:
       - MYCELIUM_API_URL=http://mycelium:3002/api/mycelium
       - MYCELIUM_DRONE_ID=${DRONE_ID:-local-drone}
       - MYCELIUM_API_KEY=${DRONE_API_KEY:-}
-    command: ["node", "tools/drone_worker_v4.py"]
+    command: ["python", "tools/drone_worker.py"]
     depends_on:
       mycelium:
         condition: service_healthy
