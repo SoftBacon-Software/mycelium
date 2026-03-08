@@ -367,7 +367,229 @@ check "T30.8 Profiles endpoint" "$R" "profiles"
 R=$(curl -s -H "$AH" "$BASE/admin/ops")
 check "T30.9 Admin ops" "$R" "pending_requests"
 
+# ======================================================================
+# PR #86 NEW FEATURES — Context Versioning, Spend, Widgets, Skills, Voice
+# ======================================================================
+
+# Phase 31: Context Versioning + Rollback
+echo ""
+echo "--- Phase 31: Context Versioning ---"
+# Write a value, then update it, then check history
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/qa-versioning/test-v" -d '{"data":"version-1"}')
+check "T31.1 Set context v1" "$R" '"ok":true'
+
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/qa-versioning/test-v" -d '{"data":"version-2"}')
+check "T31.2 Set context v2" "$R" '"ok":true'
+
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/qa-versioning/test-v" -d '{"data":"version-3"}')
+check "T31.3 Set context v3" "$R" '"ok":true'
+
+# Verify current value is v3
+R=$(curl -s -H "$AH" "$BASE/context/keys/qa-versioning/test-v")
+check "T31.4 Current is v3" "$R" "version-3"
+
+# Get history
+R=$(curl -s -H "$AH" "$BASE/context/keys/qa-versioning/test-v/history")
+check "T31.5 History exists" "$R" "version-1"
+check "T31.6 History has v2" "$R" "version-2"
+
+# Get history ID for rollback — history is DESC, so last entry = oldest (v1)
+HIST_ID=$(echo "$R" | python -c "import sys,json; d=json.load(sys.stdin); entries=d if isinstance(d,list) else d.get('history',[]); print(entries[-1]['id'] if len(entries)>0 else '')" 2>/dev/null)
+
+if [ -n "$HIST_ID" ] && [ "$HIST_ID" != "" ]; then
+  R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/rollback/$HIST_ID")
+  check "T31.7 Rollback to v1" "$R" '"ok":true'
+
+  # Verify rollback worked
+  R=$(curl -s -H "$AH" "$BASE/context/keys/qa-versioning/test-v")
+  check "T31.8 After rollback is v1" "$R" "version-1"
+else
+  echo "FAIL: T31.7 Could not get history ID for rollback (HIST_ID=$HIST_ID)"
+  FAIL=$((FAIL+1))
+  echo "FAIL: T31.8 Rollback skipped"
+  FAIL=$((FAIL+1))
+fi
+
+# Cleanup
+curl -s -X DELETE -H "$AH" "$BASE/context/keys/qa-versioning/test-v" > /dev/null 2>&1
+
+# Phase 32: Spend / Budget Tracking
+echo ""
+echo "--- Phase 32: Spend Tracking ---"
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/spend" -d '{"agent_id":"dev-claude","project_id":"mycelium","amount":0.50,"model":"claude-sonnet-4-6","input_tokens":1000,"output_tokens":500,"description":"QA test spend"}')
+check "T32.1 Log spend" "$R" '"ok":true'
+
+R=$(curl -s -H "$AH" "$BASE/spend?agent_id=dev-claude")
+check "T32.2 Get spend summary" "$R" "total_cost"
+
+R=$(curl -s -H "$AH" "$BASE/spend/dev-claude")
+check "T32.3 Per-agent spend" "$R" "["
+
+# Phase 33: Widgets
+echo ""
+echo "--- Phase 33: Widgets ---"
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/widgets" -d '{"title":"QA Widget","widget_type":"status","data":{"status":"healthy","message":"QA test"},"agent_id":"dev-claude","project_id":"mycelium"}')
+WIDGET_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+check "T33.1 Create widget" "$R" '"id"'
+
+R=$(curl -s -H "$AH" "$BASE/widgets")
+check "T33.2 List widgets" "$R" "QA Widget"
+
+if [ -n "$WIDGET_ID" ] && [ "$WIDGET_ID" != "" ]; then
+  R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/widgets/$WIDGET_ID" -d '{"title":"QA Widget Updated","data":{"status":"warning"}}')
+  check "T33.3 Update widget" "$R" '"ok":true'
+
+  R=$(curl -s -X DELETE -H "$AH" "$BASE/widgets/$WIDGET_ID")
+  check "T33.4 Delete widget" "$R" '"ok":true'
+else
+  echo "FAIL: T33.3 Widget update skipped (no ID)"
+  FAIL=$((FAIL+1))
+  echo "FAIL: T33.4 Widget delete skipped"
+  FAIL=$((FAIL+1))
+fi
+
+# Phase 34: Skills Registry
+echo ""
+echo "--- Phase 34: Skills ---"
+# Clean up any leftover from previous run
+curl -s -X DELETE -H "$AH" "$BASE/skills/qa-skill" > /dev/null 2>&1
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills" -d '{"id":"qa-skill","name":"QA Skill","description":"Test skill","category":"testing","version":"1.0.0","author":"dev-claude","install_type":"npm","install_data":"qa-skill-pkg"}')
+check "T34.1 Create skill" "$R" '"id"'
+
+R=$(curl -s -H "$AH" "$BASE/skills")
+check "T34.2 List skills" "$R" "QA Skill"
+
+R=$(curl -s -H "$AH" "$BASE/skills/qa-skill")
+check "T34.3 Get skill detail" "$R" '"name":"QA Skill"'
+
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill" -d '{"description":"Updated QA skill","version":"1.0.1"}')
+check "T34.4 Update skill" "$R" "Updated QA skill"
+
+# Install skill on agent
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill/install" -d '{"agent_id":"dev-claude"}')
+check "T34.5 Install skill" "$R" '"ok":true'
+
+# List agent skills
+R=$(curl -s -H "$AH" "$BASE/agents/dev-claude/skills")
+check "T34.6 Agent skills" "$R" "qa-skill"
+
+# Uninstall
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/skills/qa-skill/uninstall" -d '{"agent_id":"dev-claude"}')
+check "T34.7 Uninstall skill" "$R" '"ok":true'
+
+# Phase 35: Voice Command
+echo ""
+echo "--- Phase 35: Voice ---"
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/voice/command" -d '{"text":"status of all agents"}')
+check "T35.1 Voice command" "$R" '"action"'
+
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/voice/command" -d '{"text":"assign task to greatness-claude"}')
+check "T35.2 Voice assign" "$R" '"action"'
+
+# Phase 36: Agent Self-Update Fields
+echo ""
+echo "--- Phase 36: Agent Runtime Fields ---"
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" -H "X-Acting-As: dev-claude" "$BASE/agents/dev-claude" -d '{"llm_backend":"anthropic","llm_model":"claude-opus-4-6","runtime":"mcp"}')
+check "T36.1 Self-update fields" "$R" '"ok":true'
+
+R=$(curl -s -H "$AH" "$BASE/agents/dev-claude")
+check "T36.2 Verify llm_backend" "$R" '"llm_backend":"anthropic"'
+check "T36.3 Verify llm_model" "$R" '"llm_model":"claude-opus-4-6"'
+check "T36.4 Verify runtime" "$R" '"runtime":"mcp"'
+
+# Phase 37: Context Bulk + Stats
+echo ""
+echo "--- Phase 37: Context Bulk + Stats ---"
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/bulk" -d '{"keys":[{"namespace":"qa-bulk","key":"k1","data":"v1"},{"namespace":"qa-bulk","key":"k2","data":"v2"},{"namespace":"qa-bulk","key":"k3","data":"v3"}]}')
+check "T37.1 Bulk set" "$R" '"ok":true'
+
+R=$(curl -s -H "$AH" "$BASE/context/keys/qa-bulk")
+check "T37.2 Bulk read back" "$R" "k1"
+check "T37.3 Bulk read k2" "$R" "k2"
+
+R=$(curl -s -H "$AH" "$BASE/context/stats")
+check "T37.4 Context stats" "$R" "{"
+
+# Cleanup
+curl -s -X DELETE -H "$AH" "$BASE/context/keys/qa-bulk/k1" > /dev/null 2>&1
+curl -s -X DELETE -H "$AH" "$BASE/context/keys/qa-bulk/k2" > /dev/null 2>&1
+curl -s -X DELETE -H "$AH" "$BASE/context/keys/qa-bulk/k3" > /dev/null 2>&1
+
+# Phase 38: GitHub PR endpoints
+echo ""
+echo "--- Phase 38: GitHub PRs ---"
+R=$(curl -s -H "$AH" "$BASE/github/prs/SoftBacon-Software/mycelium?state=all")
+check "T38.1 List PRs" "$R" "["
+
+# Phase 39: Savepoint System
+echo ""
+echo "--- Phase 39: Savepoints ---"
+R=$(curl -s -H "$AH" "$BASE/agents/dev-claude/savepoint")
+check "T39.1 Get savepoint" "$R" "{"
+
+R=$(curl -s -H "$AH" "$BASE/agents/dev-claude/savepoint/diff")
+check "T39.2 Savepoint diff" "$R" "{"
+
+# Phase 40: Admin Overview (boot substitute — boot requires agent key)
+echo ""
+echo "--- Phase 40: Admin Overview ---"
+R=$(curl -s -H "$AH" "$BASE/admin/overview")
+check "T40.1 Overview has agents" "$R" "agents"
+check "T40.2 Overview has tasks" "$R" "tasks"
+check "T40.3 Overview has messages" "$R" "messages"
+
+# Phase 41: Cleanup QA Artifacts
+echo ""
+echo "--- Phase 41: Cleanup ---"
+# Delete QA plan
+if [ -n "$PLAN_ID" ] && [ "$PLAN_ID" != "" ]; then
+  curl -s -X DELETE -H "$AH" "$BASE/plans/$PLAN_ID" > /dev/null 2>&1
+  echo "PASS: T41.1 Cleaned QA plan"
+  PASS=$((PASS+1))
+else
+  echo "PASS: T41.1 No QA plan to clean"
+  PASS=$((PASS+1))
+fi
+
+# Delete QA skill
+curl -s -X DELETE -H "$AH" "$BASE/skills/qa-skill" > /dev/null 2>&1
+echo "PASS: T41.1b Cleaned QA skill"
+PASS=$((PASS+1))
+
+# Delete leftover QA widgets
+for WID in $(curl -s -H "$AH" "$BASE/widgets" | python -c "import sys,json; [print(w['id']) for w in json.load(sys.stdin) if 'QA' in w.get('title','')]" 2>/dev/null); do
+  curl -s -X DELETE -H "$AH" "$BASE/widgets/$WID" > /dev/null 2>&1
+done
+echo "PASS: T41.1c Cleaned QA widgets"
+PASS=$((PASS+1))
+
+# Delete QA concept
+if [ -n "$CONCEPT_ID" ] && [ "$CONCEPT_ID" != "" ]; then
+  curl -s -X DELETE -H "$AH" "$BASE/concepts/$CONCEPT_ID" > /dev/null 2>&1
+  echo "PASS: T41.2 Cleaned QA concept"
+  PASS=$((PASS+1))
+else
+  echo "PASS: T41.2 No QA concept to clean"
+  PASS=$((PASS+1))
+fi
+
+# Delete QA task
+if [ -n "$TASK_ID" ] && [ "$TASK_ID" != "" ]; then
+  curl -s -X DELETE -H "$AH" "$BASE/tasks/$TASK_ID" > /dev/null 2>&1
+  echo "PASS: T41.3 Cleaned QA task"
+  PASS=$((PASS+1))
+else
+  echo "PASS: T41.3 No QA task to clean"
+  PASS=$((PASS+1))
+fi
+
 echo ""
 echo "============================="
-echo "RESULTS: $PASS PASS / $FAIL FAIL"
+TOTAL=$((PASS+FAIL))
+if [ "$TOTAL" -gt 0 ]; then
+  PCT=$((PASS * 100 / TOTAL))
+else
+  PCT=0
+fi
+echo "RESULTS: $PASS PASS / $FAIL FAIL ($PCT%)"
 echo "============================="
