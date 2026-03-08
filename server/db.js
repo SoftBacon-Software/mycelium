@@ -1080,6 +1080,17 @@ export function getSlimBootPayload(agentId) {
   // Auto-heartbeat on boot
   updateAgentHeartbeat(agentId, 'online', agent.working_on);
 
+  // Team context
+  var agentTeams = getTeamsForUser(agentId);
+  var primaryTeam = agentTeams.find(function(t) { return t.is_primary; }) || null;
+  var guestTeams = agentTeams.filter(function(t) { return !t.is_primary; });
+  var teamMembers = [];
+  if (primaryTeam) {
+    teamMembers = db.prepare(
+      'SELECT tm.user_id, tm.user_type, tm.role FROM team_members tm WHERE tm.team_id = ?'
+    ).all(primaryTeam.id);
+  }
+
   // Fetch directives and requests first — used for both counts and content
   var pendingDirectives = db.prepare(
     "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
@@ -1156,6 +1167,9 @@ export function getSlimBootPayload(agentId) {
       return { id: a.id, status: a.status, working_on: a.working_on || '' };
     }),
     inbox: inbox.messages.length > 0 || inbox.directives.length > 0 || inbox.requests.length > 0 ? inbox : undefined,
+    team: primaryTeam || undefined,
+    guest_teams: guestTeams.length > 0 ? guestTeams : undefined,
+    team_members: teamMembers.length > 0 ? teamMembers : undefined,
     sleep_mode: sleepMode,
     autonomous_mode: autonomousMode,
     operators_available: operatorsAvailable,
@@ -1207,6 +1221,17 @@ function buildRoleContract(agent, agentId) {
   }
 
   return contract;
+}
+
+// Get project IDs scoped to an agent's teams (all teams: primary + guest)
+// Returns empty array if agent has no teams (legacy/unscoped)
+export function getTeamProjectIdsForAgent(agentId) {
+  var agentTeamIds = getTeamsForUser(agentId).map(function(t) { return t.id; });
+  if (agentTeamIds.length === 0) return [];
+  var placeholders = agentTeamIds.map(function() { return '?'; }).join(',');
+  return db.prepare(
+    'SELECT id FROM projects WHERE team_id IN (' + placeholders + ')'
+  ).all(...agentTeamIds).map(function(p) { return p.id; });
 }
 
 // Build a prioritized work queue: what should this agent do next?
@@ -1269,8 +1294,15 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     }
   }
 
-  // Priority 9: Unassigned bugs for this agent's project
-  var unassignedBugs = bugs.filter(function (b) { return !b.assignee && (b.project_id === projectId || !b.project_id); });
+  // Priority 9: Unassigned bugs for this agent's project/team
+  var teamProjIds = getTeamProjectIdsForAgent(agentId);
+  var unassignedBugs = bugs.filter(function (b) {
+    if (b.assignee) return false;
+    if (!b.project_id) return true; // unscoped bugs visible to everyone
+    if (b.project_id === projectId) return true;
+    if (teamProjIds.length > 0) return teamProjIds.indexOf(b.project_id) !== -1;
+    return true; // no team = legacy, see everything
+  });
   for (var b of unassignedBugs) {
     queue.push({ priority: 8, type: 'bug_unassigned', id: b.id, title: b.title, severity: b.severity, status: b.status, project_id: b.project_id });
   }
@@ -1295,23 +1327,34 @@ export function getIdleAgents() {
   `).all();
 }
 
-export function getNextUnassignedTask(excludeIds) {
+export function getNextUnassignedTask(excludeIds, teamProjectIds) {
   // Find highest priority open task not assigned to anyone
+  // If teamProjectIds provided, scope to those projects only
   var exclude = excludeIds && excludeIds.length > 0
     ? ' AND id NOT IN (' + excludeIds.map(() => '?').join(',') + ')'
     : '';
-  var params = excludeIds && excludeIds.length > 0 ? [...excludeIds] : [];
+  var teamScope = teamProjectIds && teamProjectIds.length > 0
+    ? ' AND project_id IN (' + teamProjectIds.map(() => '?').join(',') + ')'
+    : '';
+  var params = [];
+  if (excludeIds && excludeIds.length > 0) params = params.concat(excludeIds);
+  if (teamProjectIds && teamProjectIds.length > 0) params = params.concat(teamProjectIds);
   return db.prepare(
     `SELECT * FROM tasks
      WHERE status = 'open' AND (assignee IS NULL OR assignee = '')
-     ${exclude}
+     ${exclude}${teamScope}
      ORDER BY priority DESC, created_at ASC
      LIMIT 1`
   ).get(...params) || null;
 }
 
-export function getNextUnassignedPlanStep() {
+export function getNextUnassignedPlanStep(teamProjectIds) {
   // Find next unassigned pending plan step from an active plan
+  // If teamProjectIds provided, scope to those plan projects only
+  var teamScope = teamProjectIds && teamProjectIds.length > 0
+    ? ' AND p.project_id IN (' + teamProjectIds.map(() => '?').join(',') + ')'
+    : '';
+  var params = teamProjectIds && teamProjectIds.length > 0 ? teamProjectIds : [];
   return db.prepare(
     `SELECT s.*, p.title as plan_title
      FROM plan_steps s
@@ -1319,9 +1362,10 @@ export function getNextUnassignedPlanStep() {
      WHERE p.status = 'active'
        AND s.status = 'pending'
        AND (s.assignee IS NULL OR s.assignee = '')
+       ${teamScope}
      ORDER BY s.step_order ASC
      LIMIT 1`
-  ).get() || null;
+  ).get(...params) || null;
 }
 
 // -- Auto-task from asset request --
