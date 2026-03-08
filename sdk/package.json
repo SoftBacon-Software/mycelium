@@ -1,7 +1,7 @@
 {
-  "name": "@mycelium/sdk",
-  "version": "0.1.0",
-  "description": "Mycelium agent SDK — connect any process to the Mycelium network via HTTP polling",
+  "name": "mycelium-agent-sdk",
+  "version": "1.0.0",
+  "description": "Connect any AI agent to the Mycelium network -- multi-runtime orchestration, work queues, inter-agent messaging, and platform adapters with zero dependencies",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -9,7 +9,8 @@
     "./agent": "./src/agent.js",
     "./api": "./src/api.js",
     "./adapters/discord": "./adapters/discord.js",
-    "./adapters/slack": "./adapters/slack.js"
+    "./adapters/slack": "./adapters/slack.js",
+    "./adapters/voice": "./adapters/voice.js"
   },
   "bin": {
     "mycelium-agent": "./bin/run.js",
@@ -20,17 +21,44 @@
   },
   "keywords": [
     "mycelium",
+    "ai",
+    "agents",
     "ai-agents",
     "multi-agent",
     "orchestration",
-    "sdk"
+    "multi-runtime",
+    "sdk",
+    "llm",
+    "swarm",
+    "distributed",
+    "task-queue",
+    "inter-agent",
+    "claude",
+    "mcp"
   ],
-  "author": "SoftBacon Software",
-  "license": "AGPL-3.0-only",
+  "author": "SoftBacon Software <grbarajas@gmail.com> (https://mycelium.fyi)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SoftBacon-Software/mycelium.git",
+    "directory": "sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/SoftBacon-Software/mycelium/issues"
+  },
+  "homepage": "https://mycelium.fyi",
   "optionalDependencies": {
     "ws": "^8.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "adapters/",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ]
 }

@@ -1,7 +1,7 @@
 // MyceliumAgent — connect any process to the Mycelium network
 //
 // Usage:
-//   import { MyceliumAgent } from '@mycelium/sdk'
+//   import { MyceliumAgent } from 'mycelium-agent-sdk'
 //   var agent = new MyceliumAgent({ agentId: 'my-agent', apiKey: 'dvk_...' })
 //   await agent.boot()
 //   agent.onWork(async (item) => { /* handle work */ })

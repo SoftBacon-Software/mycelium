@@ -91,4 +91,41 @@ Discord/Slack ←→ Adapter Agent ←→ Mycelium API ←→ Other Agents
                      └── Context storage (channel maps)
 ```
 
-Each adapter is a standard Mycelium SDK agent with capabilities `['channels', 'discord']` or `['channels', 'slack']`.
+Each adapter is a standard Mycelium SDK agent with capabilities `['channels', 'discord']`, `['channels', 'slack']`, or `['voice']`.
+
+## Voice Adapter
+
+Local voice interface for operators using Whisper for speech-to-text and a TTS engine for responses. Runs as an SDK agent.
+
+### Setup
+
+1. Install [sox](https://sox.sourceforge.net/) (for audio recording) and [OpenAI Whisper](https://github.com/openai/whisper) (for transcription)
+2. Register the adapter agent on Mycelium
+3. Run:
+
+```bash
+MYCELIUM_AGENT_ID=voice-adapter \
+MYCELIUM_API_KEY=dvk_... \
+node adapters/voice.js
+```
+
+### Optional Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WHISPER_MODEL` | `base.en` | Whisper model name |
+| `WHISPER_PATH` | `whisper` | Path to whisper binary |
+| `TTS_ENGINE` | `say` (macOS) / `espeak` (Linux) | TTS engine: `say`, `espeak`, `piper`, or `none` |
+| `WAKE_WORD` | `mycelium` | Wake word to activate voice commands |
+| `MYCELIUM_API_URL` | `https://mycelium.fyi/api/mycelium` | API URL |
+
+### How It Works
+
+1. Records 5-second audio clips via `sox` (`rec` command)
+2. Transcribes audio with Whisper
+3. If the wake word is detected, sends the command to the Mycelium voice endpoint
+4. Speaks the response back using the configured TTS engine
+
+### Dependencies
+
+Requires `sox` and `whisper` installed on the system.

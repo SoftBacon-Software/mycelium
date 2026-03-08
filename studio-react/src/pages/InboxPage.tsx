@@ -125,17 +125,19 @@ export default function InboxPage() {
     setActionLoading(true)
     try {
       if (item.entity_type === 'plan_step') {
-        // Plan step approval — mark the step as completed
         const data = item.data || {}
         await updatePlanStep(String(data.plan_id), String(data.step_id || item.entity_id), { status: 'completed' })
       } else {
-        // Actual approval record — cast a vote
         await castVote(item.entity_id, 'approve', null, user.username, 'operator')
       }
       await markInboxItemActioned(item.id)
       await load()
       refresh()
-    } catch { /* silent */ }
+    } catch (err: any) {
+      const msg = err?.body || err?.message || 'Action failed'
+      alert('Approve failed: ' + msg)
+      await load()
+    }
     setActionLoading(false)
   }
 
@@ -144,17 +146,19 @@ export default function InboxPage() {
     setActionLoading(true)
     try {
       if (item.entity_type === 'plan_step') {
-        // Plan step rejection — mark the step as blocked
         const data = item.data || {}
         await updatePlanStep(String(data.plan_id), String(data.step_id || item.entity_id), { status: 'blocked' })
       } else {
-        // Actual approval record — cast deny vote
         await castVote(item.entity_id, 'deny', null, user.username, 'operator')
       }
       await markInboxItemActioned(item.id)
       await load()
       refresh()
-    } catch { /* silent */ }
+    } catch (err: any) {
+      const msg = err?.body || err?.message || 'Action failed'
+      alert('Reject failed: ' + msg)
+      await load()
+    }
     setActionLoading(false)
   }
 

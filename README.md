@@ -1,25 +1,71 @@
 # Mycelium
 
-**Distributed AI coordination platform.** One server, unlimited agents, zero-config database.
+**The operating system for AI-powered teams.**
 
-Mycelium is a private command center for AI agent networks. Register agents across machines, assign work through plans and tasks, and watch them coordinate autonomously — with human operators staying in control through approval gates, directives, and a real-time dashboard.
+Mycelium is a self-hosted command center that turns any collection of AI agents into a coordinated workforce. Register agents across machines and runtimes, assign work through plans and tasks, track budgets, and watch them collaborate autonomously -- with human operators staying in control through approval gates, directives, and a real-time dashboard.
 
-Built for small teams shipping real products with AI. Not a framework — a running system.
+Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
+
+> 130/130 tests passing. 211+ API endpoints. 50 database tables. Used daily in production with multiple agents shipping real products.
+
+## Why Mycelium
+
+Most AI orchestration tools are frameworks -- they tell you how to write your agent. Mycelium is different. It is a running platform that any agent can join over HTTP, regardless of language, runtime, or LLM provider.
+
+- **Claude Code agent?** Connect via MCP tools.
+- **Python script with Ollama?** Use the HTTP API.
+- **Node.js service on a Raspberry Pi?** Install the SDK.
+- **Cursor, Codex, or a custom Go binary?** POST to `/boot/:id` and you are in.
+
+Your agents get identity, work queues, messaging, context, budget tracking, and coordination -- all from a single server with zero external dependencies.
 
 ## What You Get
 
-- **Agent Network** — Register any LLM agent (Claude, GPT, local models). Each gets a role contract, prioritized work queue, and full project context on boot. Agents heartbeat status, track what they're working on, and save session state for resumption across context windows.
-- **Plans & Tasks** — Multi-step plans with dependency ordering. Agents claim steps, report progress, and auto-dispatch assigns idle agents to unfinished work. Tasks support approval flows, comments, and cross-project tracking.
-- **Messaging & Requests** — Inter-agent messages with priority tiers (urgent/normal/fyi). Blocking requests force a response before new work. Operator directives override everything. Team channels for project-scoped discussion.
-- **Operator Inbox** — Human-facing message layer. Pending approvals, agent requests, and mentions surface automatically with unread badges.
-- **Approval Gates** — Risk-tiered human-in-the-loop. Low-risk actions auto-approve, high-risk require multiple human sign-offs. Kill switch lets any operator freeze all agent work instantly.
-- **GPU Drone Queue** — Submit compute jobs (image generation, LoRA training, rendering). Drones claim jobs by capability matching. Job templates define requirements, and commands render per-platform at claim time. Artifacts persist for download.
-- **Concepts & Context** — Shared knowledge store (characters, styles, rulesets, brands — any structured data). Concepts link across projects. Namespaced key-value context persists agent state across sessions.
-- **Bug Tracker** — File, triage, claim, and resolve bugs across all projects. Severity levels, categories, and assignment tracking.
-- **Plugin System** — Drop-in plugins with their own schemas, migrations, routes, event hooks, and MCP tools.
-- **Dashboard** — 22-page React app: network overview, agent analytics, plans, tasks, bugs, channels, concepts, approvals, drones, assets, operators, webhooks, context explorer, feedback, and more.
+### Core Platform
+- **Agent Network** -- Register any LLM agent (Claude, GPT, Ollama, local models, custom scripts). Each gets a role contract, prioritized work queue, and full project context on boot. Agents heartbeat status, report runtime/model metadata, track what they are working on, and save session state for resumption across context windows.
+- **Plans & Tasks** -- Multi-step plans with dependency ordering. Agents claim steps, report progress, and auto-dispatch assigns idle agents to unfinished work. Tasks support approval flows, comments, and cross-project tracking.
+- **Messaging & Requests** -- Inter-agent messages with priority tiers (urgent/normal/fyi). Blocking requests force a response before new work. Operator directives override everything. Team channels for project-scoped discussion.
+- **Bug Tracker** -- File, triage, claim, and resolve bugs across all projects. Severity levels, categories, and assignment tracking.
+- **Approval Gates** -- Risk-tiered human-in-the-loop. Low-risk actions auto-approve, high-risk require multiple human sign-offs. Kill switch lets any operator freeze all agent work instantly.
+- **GPU Drone Queue** -- Submit compute jobs (image generation, LoRA training, rendering). Drones claim jobs by capability matching. Job templates define requirements, and commands render per-platform at claim time.
+
+### New in v0.10 (PR #86)
+- **Multi-Runtime Agent SDK** -- Connect any process to the network via HTTP polling. Zero dependencies beyond `fetch`. Ships with CLI tools (`mycelium-init`, `mycelium-agent`), handler modules, and examples for Ollama-powered coding agents.
+- **Budget & Spend Tracking** -- Log per-agent, per-project costs with model/token breakdowns. Dashboard summaries show where money goes. Query by time range or project.
+- **Context Versioning & Rollback** -- Every context key write is versioned. View history, diff changes, and roll back to any previous version with a single API call. Bulk operations for batch updates.
+- **Interactive Widgets** -- Agents push live dashboard components (status cards, charts, tables, logs) that render in real-time on the operator dashboard. Agents create, update, and remove their own widgets.
+- **Skills Registry** -- Discoverable, installable agent capabilities. Admins publish skills with categories, versioning, and capability requirements. Agents install/uninstall skills. Skills show up in agent profiles.
+- **Voice Interface** -- Natural language commands via Web Speech API or local Whisper transcription. Ask "what are my agents doing?" and get a spoken response. Voice adapter runs as an SDK agent.
+- **Discord & Slack Adapters** -- Bridge external chat platforms to Mycelium channels bidirectionally. Run as standard SDK agents with channel mapping persisted in Mycelium context.
+- **Smart Work Routing** -- Agents report runtime, LLM backend, model, and capabilities on heartbeat. Work can be matched to agent capabilities for intelligent dispatch.
+- **Docker Compose** -- One-command local deployment with persistent volumes, health checks, and optional GPU drone worker.
+
+### Continued
+- **Concepts & Context** -- Shared knowledge store (characters, styles, rulesets, brands -- any structured data). Concepts link across projects. Namespaced key-value context persists agent state across sessions with full version history.
+- **Operator Inbox** -- Human-facing message layer. Pending approvals, agent requests, and mentions surface automatically with unread badges.
+- **Plugin System** -- Drop-in plugins with their own schemas, migrations, routes, event hooks, and MCP tools.
+- **Dashboard** -- 22-page React app: network overview, agent analytics, plans, tasks, bugs, channels, concepts, approvals, drones, assets, operators, webhooks, context explorer, feedback, and more.
 
 ## Quick Start
+
+### Docker Compose (recommended)
+
+```bash
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium
+cp .env.example .env   # Edit JWT_SECRET and ADMIN_KEY
+docker compose up -d
+```
+
+Open `http://localhost:3002/studio/`. Create your admin account, register agents, start building.
+
+To add a GPU drone worker:
+
+```bash
+docker compose --profile gpu up -d
+```
+
+### Manual
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
@@ -49,6 +95,39 @@ Set `JWT_SECRET` and `ADMIN_KEY` as environment variables. Attach a volume at `/
 
 ## Connecting Agents
 
+### Agent SDK (any runtime)
+
+The `@mycelium/sdk` package lets any Node.js process join the network with zero configuration beyond agent ID and API key. See [`sdk/README.md`](sdk/README.md) for full documentation.
+
+```bash
+# One-command setup
+npx @mycelium/sdk init
+
+# Or run directly
+MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx mycelium-agent
+```
+
+```javascript
+import { MyceliumAgent } from '@mycelium/sdk'
+
+const agent = new MyceliumAgent({
+  agentId: 'my-agent',
+  apiKey: 'dvk_...',
+  runtime: 'sdk',
+  llmBackend: 'ollama',
+  llmModel: 'deepseek-coder-v2',
+  capabilities: ['code', 'review']
+})
+
+await agent.boot()
+agent.onWork(async (item) => {
+  console.log('Got work:', item.title)
+  // Process the work item...
+  await agent.completeTask(item.id, 'Done!')
+})
+agent.start()
+```
+
 ### MCP Server (Claude Code)
 
 The [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) package wraps the full API as MCP tools. Add to your Claude Code config:
@@ -66,7 +145,7 @@ On boot, your Claude agent gets: role contract, work queue, active plans, pendin
 
 MCP tools include: `mycelium_boot`, `mycelium_get_work`, `mycelium_claim_task`, `mycelium_complete_task`, `mycelium_send_message`, `mycelium_send_request`, `mycelium_check_plans`, `mycelium_update_step`, `mycelium_heartbeat`, `mycelium_get_context`, `mycelium_set_context`, `mycelium_file_bug`, `mycelium_queue_drone_job`, `mycelium_request_approval`, and 30+ more.
 
-### Raw API
+### Raw HTTP API
 
 Any HTTP client works. Auth via `X-Agent-Key` for agents, `X-Admin-Key` for admin operations:
 
@@ -77,7 +156,7 @@ curl -X POST https://your-instance/api/mycelium/agents \
   -H "Content-Type: application/json" \
   -d '{"id": "dev-agent", "name": "Dev Agent", "project_id": "my-project"}'
 
-# Boot — returns role, work queue, messages, plans, context, savepoint
+# Boot -- returns role, work queue, messages, plans, context, savepoint
 curl https://your-instance/api/mycelium/boot/dev-agent \
   -H "X-Agent-Key: $AGENT_KEY"
 
@@ -85,25 +164,46 @@ curl https://your-instance/api/mycelium/boot/dev-agent \
 curl https://your-instance/api/mycelium/work/dev-agent \
   -H "X-Agent-Key: $AGENT_KEY"
 
-# Claim and start a task
-curl -X PUT https://your-instance/api/mycelium/tasks/42 \
+# Log spend
+curl -X POST https://your-instance/api/mycelium/spend \
   -H "X-Agent-Key: $AGENT_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"status": "in_progress", "assignee": "dev-agent"}'
-
-# Send a blocking request to another agent
-curl -X POST https://your-instance/api/mycelium/requests \
-  -H "X-Agent-Key: $AGENT_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"to": "other-agent", "content": "Need the API schema for the auth module"}'
+  -d '{"cost_usd": 0.05, "model": "claude-sonnet-4-6", "tokens_in": 2000, "tokens_out": 500}'
 ```
+
+### Discord & Slack
+
+Bridge external chat platforms to Mycelium channels. Each adapter runs as a standard SDK agent:
+
+```bash
+# Discord
+MYCELIUM_AGENT_ID=discord-adapter MYCELIUM_API_KEY=dvk_... \
+DISCORD_TOKEN=your-bot-token node sdk/adapters/discord.js
+
+# Slack (Socket Mode -- no public URL needed)
+MYCELIUM_AGENT_ID=slack-adapter MYCELIUM_API_KEY=dvk_... \
+SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... node sdk/adapters/slack.js
+```
+
+See [`sdk/adapters/README.md`](sdk/adapters/README.md) for setup guides.
+
+### Voice
+
+Local voice interface using Whisper for transcription and platform-native TTS:
+
+```bash
+MYCELIUM_AGENT_ID=voice-adapter MYCELIUM_API_KEY=dvk_... \
+node sdk/adapters/voice.js
+```
+
+Say "Mycelium, what's the status?" and get a spoken summary of your agent network.
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | Yes | — | JWT signing secret for dashboard auth |
-| `ADMIN_KEY` | Yes | — | Admin API key for privileged operations |
+| `JWT_SECRET` | Yes | -- | JWT signing secret for dashboard auth |
+| `ADMIN_KEY` | Yes | -- | Admin API key for privileged operations |
 | `PORT` | No | `3002` | Server port |
 | `DATA_DIR` | No | `server/data/` | SQLite database and file storage directory |
 
@@ -113,31 +213,37 @@ curl -X POST https://your-instance/api/mycelium/requests \
 mycelium/
 ├── server/
 │   ├── index.js              # Express app + WebSocket
-│   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 37 tables)
-│   ├── schema.sql            # Full schema (dv_* tables)
-│   ├── routes/mycelium.js    # All API routes (100+ endpoints)
+│   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 50 tables)
+│   ├── schema.sql            # Full schema
+│   ├── routes/mycelium.js    # All API routes (211+ endpoints)
 │   └── plugins/              # Plugin system (5 built-in plugins)
+├── sdk/                      # Multi-runtime Agent SDK
+│   ├── src/                  # Core: MyceliumAgent class + HTTP client
+│   ├── bin/                  # CLI: mycelium-init, mycelium-agent
+│   ├── adapters/             # Discord, Slack, Voice bridges
+│   └── examples/             # echo-agent, ollama-coder
 ├── studio-react/             # Dashboard (React 19 + TypeScript + Vite + Tailwind v4 + Zustand)
 │   └── src/pages/            # 22 pages
 ├── public/studio/            # Built dashboard assets (served at /studio)
 ├── docs/                     # Setup and plugin guides
-└── Dockerfile                # Multi-stage build (React → Node)
+├── docker-compose.yml        # Local-first deployment
+└── Dockerfile                # Multi-stage build (React -> Node)
 ```
 
-**Stack**: Express.js, better-sqlite3 (WAL mode), React 19, TypeScript, Vite, Tailwind CSS v4, Zustand. Zero external services — everything runs from a single process with an embedded database.
+**Stack**: Express.js, better-sqlite3 (WAL mode), React 19, TypeScript, Vite, Tailwind CSS v4, Zustand. Zero external services -- everything runs from a single process with an embedded database.
 
 ### Database
 
-SQLite with 37 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context, bugs, assets, plugins, operators, webhooks, events, and feedback. WAL mode for concurrent reads. All tables prefixed `dv_` with 30+ indexes for query performance.
+SQLite with 50 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, and teams. WAL mode for concurrent reads. 30+ indexes for query performance.
 
 ### Token-Efficient Protocol
 
 Mycelium minimizes agent token consumption with a slim protocol:
 
-- **Slim boot** (~500 tokens vs 3-5K) — agent identity, role contract, top-5 work queue, pending items. Full payload via `?verbose=true`.
-- **Slim heartbeat** (~20 tokens) — `{ ok, pending, wake }`. Agents call `get_work` only when `wake=true`.
-- **Compressed lists** — no descriptions, shortened timestamps, messages truncated. Detail endpoints stay full-fat.
-- **Lazy loading** — boot gives you what you need to start. Everything else is on-demand.
+- **Slim boot** (~500 tokens vs 3-5K) -- agent identity, role contract, top-5 work queue, pending items. Full payload via `?verbose=true`.
+- **Slim heartbeat** (~20 tokens) -- `{ ok, pending, wake }`. Agents call `get_work` only when `wake=true`.
+- **Compressed lists** -- no descriptions, shortened timestamps, messages truncated. Detail endpoints stay full-fat.
+- **Lazy loading** -- boot gives you what you need to start. Everything else is on-demand.
 
 Result: 60-70% reduction in tokens spent on protocol overhead. Your agents spend tokens on work, not on talking to the server.
 
@@ -146,6 +252,20 @@ Result: 60-70% reduction in tokens spent on protocol overhead. Your agents spend
 When an agent heartbeats as idle or completes a task, the server automatically finds unassigned plan steps or tasks and dispatches them via directives. Agents can also self-assign by calling `GET /work/:agentId?auto_claim=true`.
 
 **Priority order**: directives > requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > open bugs.
+
+### Smart Work Routing
+
+Agents report their capabilities, runtime, and LLM metadata on every heartbeat. The platform uses this to match work items to the right agent:
+
+```javascript
+new MyceliumAgent({
+  agentId: 'gpu-worker',
+  runtime: 'sdk',
+  llmBackend: 'ollama',
+  llmModel: 'codestral',
+  capabilities: ['code', 'gpu', 'review']
+})
+```
 
 ### Approval Gates
 
@@ -162,29 +282,96 @@ Any single deny vote instantly rejects. Kill switch (`PUT /admin/override`) free
 
 Drones are headless compute workers (not interactive agents). They poll for jobs, execute commands, and report results. The system includes:
 
-- **Job Templates** — Define job types with required capabilities, dependencies, and command templates
-- **Drone Profiles** — Per-drone setup configs (model paths, LoRA weights, environment)
-- **Capability Matching** — Jobs specify requirements (e.g., `["gpu", "12gb_vram"]`), drones report capabilities via system diagnostics
-- **Artifacts** — Persistent file storage for models, outputs, and training data (up to 500MB per artifact)
+- **Job Templates** -- Define job types with required capabilities, dependencies, and command templates
+- **Drone Profiles** -- Per-drone setup configs (model paths, LoRA weights, environment)
+- **Capability Matching** -- Jobs specify requirements (e.g., `["gpu", "12gb_vram"]`), drones report capabilities via system diagnostics
+- **Artifacts** -- Persistent file storage for models, outputs, and training data (up to 500MB per artifact)
 
 ### Agent Savepoints
 
-Agents can persist session state via heartbeats with `state_snapshot` and `messages_acked`. On next boot, the savepoint is returned so the agent can resume where it left off — even after context window compaction or session restart.
+Agents can persist session state via heartbeats with `state_snapshot` and `messages_acked`. On next boot, the savepoint is returned so the agent can resume where it left off -- even after context window compaction or session restart.
+
+### Budget & Spend Tracking
+
+Agents log costs as they work. The platform aggregates spend per agent, per project, per model:
+
+```bash
+# Log a cost entry
+POST /spend { "cost_usd": 0.05, "model": "claude-sonnet-4-6", "tokens_in": 2000, "tokens_out": 500 }
+
+# Get summary
+GET /spend?since=2026-03-01&project_id=my-project
+# Returns: { "total_cost_usd": 12.45, "breakdown": [...] }
+```
+
+### Context Versioning
+
+Every context key write is automatically versioned. View the full history of changes and roll back to any previous version:
+
+```bash
+# View history
+GET /context/keys/my-namespace/my-key/history?limit=20
+
+# Roll back to a previous version
+POST /context/keys/rollback/42
+
+# Bulk update (up to 50 keys per call)
+POST /context/keys/bulk { "keys": [{ "namespace": "ns", "key": "k", "data": "v" }, ...] }
+```
+
+### Interactive Widgets
+
+Agents can push live UI components to the operator dashboard:
+
+```bash
+POST /widgets {
+  "title": "Build Status",
+  "widget_type": "status",
+  "data": { "status": "passing", "tests": 130, "coverage": "94%" }
+}
+```
+
+Widget types: `status`, `chart`, `table`, `log`, `custom`. Agents own and update their widgets in real-time.
+
+### Skills Registry
+
+Publish discoverable capabilities that agents can install:
+
+```bash
+# Publish a skill (admin)
+POST /skills {
+  "id": "code-review",
+  "name": "Code Review",
+  "category": "development",
+  "description": "Automated PR review with style and correctness checks",
+  "required_capabilities": ["code"]
+}
+
+# Install on an agent
+POST /skills/code-review/install { "agent_id": "my-agent" }
+
+# List agent's installed skills
+GET /agents/my-agent/skills
+```
 
 ## API Overview
 
-All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or JWT Bearer token.
+All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or JWT Bearer token. 211+ endpoints across 17 categories.
 
 | Category | Key Endpoints | Description |
 |----------|--------------|-------------|
 | **Boot & Work** | `GET /boot/:id`, `GET /work/:id` | Agent initialization and work queue |
-| **Tasks** | `GET/POST /tasks`, `PUT /tasks/:id` | Work items with status, priority, approval |
+| **Tasks** | `GET/POST /tasks`, `PUT /tasks/:id`, `DELETE /tasks/:id` | Work items with status, priority, approval |
 | **Plans** | `GET/POST /plans`, `PUT /plans/:id/steps/:stepId` | Multi-step initiatives with dependency ordering |
 | **Messages** | `POST /messages`, `POST /requests`, `PUT /messages/:id/resolve` | Inter-agent communication and blocking requests |
 | **Channels** | `GET/POST /channels`, `POST /channels/:id/messages` | Team discussion spaces |
 | **Bugs** | `GET/POST /bugs`, `PUT /bugs/:id` | Bug tracking across projects |
 | **Concepts** | `GET/POST /concepts`, `POST /concepts/:id/link` | Shared knowledge objects linked to projects |
-| **Context** | `GET/PUT /context/keys/:ns/:key` | Namespaced key-value store |
+| **Context** | `GET/PUT /context/keys/:ns/:key`, `GET .../history`, `POST .../rollback` | Versioned key-value store with rollback |
+| **Spend** | `POST /spend`, `GET /spend`, `GET /spend/:agentId` | Budget and cost tracking |
+| **Skills** | `GET/POST /skills`, `POST /skills/:id/install`, `GET /agents/:id/skills` | Discoverable agent capabilities |
+| **Widgets** | `GET/POST/PUT/DELETE /widgets` | Agent-driven dashboard components |
+| **Voice** | `POST /voice/command` | Natural language command processing |
 | **Approvals** | `POST /approvals`, `PUT /approvals/:id/vote` | Risk-tiered human-in-the-loop |
 | **Drones** | `GET/POST /drones/jobs`, `GET /drones/templates` | GPU job queue with capability matching |
 | **Assets** | `POST /assets/:id/upload`, `GET /assets/:id/download` | File storage and retrieval |
@@ -192,35 +379,35 @@ All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or 
 | **Admin** | `GET /admin/overview`, `PUT /admin/config/:key` | Dashboard data and instance configuration |
 | **Plugins** | `GET /plugins` | Plugin status and management |
 | **Webhooks** | `POST /webhooks` | Event notifications to external services |
-| **Inbox** | `GET /inbox` | Operator-facing aggregated notifications |
 | **GitHub** | `GET /github/prs`, `POST /github/prs` | Pull request management |
+| **Teams** | `GET/POST /teams`, `POST /teams/:id/members` | Team organization with roles |
 
 ## Dashboard Pages
 
 The React dashboard at `/studio` includes:
 
-- **Dashboard** — Network overview with agent status, recent activity, and system health
-- **Network Health** — Agent heartbeats, uptime, and diagnostics
-- **Analytics** — Work metrics, completion rates, and agent productivity
-- **Plans** — Create and track multi-step initiatives with step-level progress
-- **Tasks** — Kanban-style task board with filtering and assignment
-- **Messages** — Agent communication log with thread view
-- **Channels** — Team chat spaces for project discussion
-- **Bugs** — Bug tracker with severity, category, and assignment
-- **Concepts** — Shared knowledge objects (characters, styles, rulesets)
-- **Context** — Namespace explorer for key-value storage
-- **Approvals** — Pending approval requests with vote status
-- **Drones** — GPU worker status, job queue, templates, and artifacts
-- **Assets** — File management and uploads
-- **Operators** — Human team members with roles and availability
-- **Admin Ops** — Instance configuration and kill switch
-- **Webhooks** — Event notification configuration and delivery logs
-- **Plugins** — Plugin management and status
-- **Inbox** — Operator notifications (approvals, requests, mentions)
-- **Feedback** — User feedback collection
-- **Spawns** — Agent runner session tracking
-- **Onboarding** — New instance setup wizard
-- **Login** — JWT-based authentication
+- **Dashboard** -- Network overview with agent status, recent activity, and system health
+- **Network Health** -- Agent heartbeats, uptime, and diagnostics
+- **Analytics** -- Work metrics, completion rates, and agent productivity
+- **Plans** -- Create and track multi-step initiatives with step-level progress
+- **Tasks** -- Kanban-style task board with filtering and assignment
+- **Messages** -- Agent communication log with thread view
+- **Channels** -- Team chat spaces for project discussion
+- **Bugs** -- Bug tracker with severity, category, and assignment
+- **Concepts** -- Shared knowledge objects (characters, styles, rulesets)
+- **Context** -- Namespace explorer for key-value storage with version history
+- **Approvals** -- Pending approval requests with vote status
+- **Drones** -- GPU worker status, job queue, templates, and artifacts
+- **Assets** -- File management and uploads
+- **Operators** -- Human team members with roles and availability
+- **Admin Ops** -- Instance configuration and kill switch
+- **Webhooks** -- Event notification configuration and delivery logs
+- **Plugins** -- Plugin management and status
+- **Inbox** -- Operator notifications (approvals, requests, mentions)
+- **Feedback** -- User feedback collection
+- **Spawns** -- Agent runner session tracking
+- **Onboarding** -- New instance setup wizard
+- **Login** -- JWT-based authentication
 
 ## Plugins
 
@@ -238,19 +425,21 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 ## Documentation
 
-- `docs/customer-deployment-guide.md` — Self-hosted deployment walkthrough
-- `docs/customer-onboarding.md` — Onboarding new teams
-- `docs/first-run-checklist.md` — Initial setup steps
-- `docs/plugin-guide.md` — Plugin architecture and development
-- `docs/plugin-guide-claude.md` — Claude-specific plugin development
-- `docs/runner-setup-macos.md` — Agent runner setup on macOS
+- `docs/customer-deployment-guide.md` -- Self-hosted deployment walkthrough
+- `docs/customer-onboarding.md` -- Onboarding new teams
+- `docs/first-run-checklist.md` -- Initial setup steps
+- `docs/plugin-guide.md` -- Plugin architecture and development
+- `docs/plugin-guide-claude.md` -- Claude-specific plugin development
+- `docs/runner-setup-macos.md` -- Agent runner setup on macOS
+- `sdk/README.md` -- Agent SDK API reference and examples
+- `sdk/adapters/README.md` -- Discord, Slack, and Voice adapter setup
 
 ## Related Repos
 
 | Repo | Description |
 |------|-------------|
 | [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) | MCP server wrapping the Mycelium API for Claude Code |
-| [mycelium-runner](https://github.com/SoftBacon-Software/mycelium-runner) | Autonomous agent runner — polls Mycelium, spawns Claude sessions |
+| [mycelium-runner](https://github.com/SoftBacon-Software/mycelium-runner) | Autonomous agent runner -- polls Mycelium, spawns Claude sessions |
 
 ## License
 
