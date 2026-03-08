@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import migrateTableNames from './migrate-table-names.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -22,6 +23,9 @@ export function initDB() {
 
   // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
   migrateGameToProjectId();
+
+  // Migration: rename dv_* tables to clean names BEFORE schema.sql runs
+  migrateTableNames(db);
 
   // Migrations: add columns that may not exist yet on the LIVE database.
   // MUST run BEFORE schema.sql because schema has CREATE INDEX on these columns.
