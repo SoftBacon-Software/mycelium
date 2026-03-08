@@ -1021,7 +1021,26 @@ export function getBootPayload(agentId) {
     }
   }
 
-  // ---- Stand Up: calibration block (verbose boot only) ----
+  // ---- Crash detection ----
+  var crashRecovery = null;
+  if (agent.last_heartbeat && agent.working_on) {
+    var lastHb = new Date(agent.last_heartbeat + (agent.last_heartbeat.endsWith('Z') ? '' : 'Z')).getTime();
+    var staleness = Date.now() - lastHb;
+    var CRASH_THRESHOLD = 15 * 60 * 1000; // 15 minutes
+    if (staleness > CRASH_THRESHOLD) {
+      var lastSavepoint = getLatestSavepoint(agentId);
+      crashRecovery = {
+        detected: true,
+        last_heartbeat: agent.last_heartbeat,
+        stale_minutes: Math.round(staleness / 60000),
+        was_working_on: agent.working_on,
+        recovery_state: lastSavepoint && lastSavepoint.state_snapshot ? lastSavepoint.state_snapshot : null,
+        recovery_notes: lastSavepoint && lastSavepoint.notes ? lastSavepoint.notes : null
+      };
+    }
+  }
+
+  // ---- Stand Up: calibration block ----
   var calibration = null;
   try { calibration = buildCalibrationBlock(agentId); } catch (e) { console.warn('[mycelium] calibration block failed for ' + agentId + ':', e.message); }
 
@@ -1074,6 +1093,7 @@ export function getBootPayload(agentId) {
     concepts: concepts,
     plugins: listPluginRecords().filter(function (p) { return p.enabled; }),
     team_agents: otherAgents.filter(function (a) { return a.project_id === agent.project_id; }),
+    crash_recovery: crashRecovery,
     calibration: calibration,
     since_last_session: sinceLastSession,
     server_time: new Date().toISOString()
@@ -1163,6 +1183,33 @@ export function getSlimBootPayload(agentId) {
   var capabilities = [];
   try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
 
+  // --- Crash detection ---
+  // If the agent was working on something and heartbeat went stale (>15 min), flag as crashed
+  var crashRecovery = null;
+  if (agent.last_heartbeat && agent.working_on) {
+    var lastHb = new Date(agent.last_heartbeat + (agent.last_heartbeat.endsWith('Z') ? '' : 'Z')).getTime();
+    var staleness = Date.now() - lastHb;
+    var CRASH_THRESHOLD = 15 * 60 * 1000; // 15 minutes
+    if (staleness > CRASH_THRESHOLD) {
+      // Previous session likely crashed — include recovery info
+      var lastSavepoint = getLatestSavepoint(agentId);
+      crashRecovery = {
+        detected: true,
+        last_heartbeat: agent.last_heartbeat,
+        stale_minutes: Math.round(staleness / 60000),
+        was_working_on: agent.working_on,
+        recovery_state: lastSavepoint && lastSavepoint.state_snapshot ? lastSavepoint.state_snapshot : null,
+        recovery_notes: lastSavepoint && lastSavepoint.notes ? lastSavepoint.notes : null
+      };
+    }
+  }
+
+  // --- Auto drift detection on boot ---
+  var calibration = null;
+  try {
+    calibration = buildCalibrationBlock(agentId);
+  } catch (e) { /* non-critical */ }
+
   return {
     agent: { id: agent.id, role: agent.role, project: agent.project_id, capabilities: capabilities },
     role_contract: roleContract,
@@ -1174,6 +1221,8 @@ export function getSlimBootPayload(agentId) {
       return { id: a.id, status: a.status, working_on: a.working_on || '' };
     }),
     inbox: inbox.messages.length > 0 || inbox.directives.length > 0 || inbox.requests.length > 0 ? inbox : undefined,
+    crash_recovery: crashRecovery,
+    calibration: calibration,
     team: primaryTeam || undefined,
     guest_teams: guestTeams.length > 0 ? guestTeams : undefined,
     team_members: teamMembers.length > 0 ? teamMembers : undefined,
@@ -2446,6 +2495,10 @@ export function decideApproval(id, status, decidedBy, reason) {
   db.prepare(
     "UPDATE approvals SET status = ?, decided_by = ?, decided_at = datetime('now'), reason = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(status, decidedBy, reason || '', id);
+  // Auto-action related inbox items so approve/reject buttons disappear
+  db.prepare(
+    "UPDATE operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE entity_type = 'approval' AND entity_id = ? AND status != 'dismissed'"
+  ).run(String(id));
 }
 
 export function markApprovalExecuted(id) {

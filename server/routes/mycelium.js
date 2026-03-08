@@ -746,7 +746,7 @@ router.get('/public/activity', function (req, res) {
     var db = getDB();
     var today = new Date().toISOString().slice(0, 10);
 
-    // Online agents — names and status only, no working_on details
+    // Online agents — names and status only (working_on leaks project info)
     var agents = db.prepare(
       "SELECT name, status FROM agents WHERE role != 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
     ).all().map(function (a) {
@@ -780,8 +780,7 @@ router.get('/public/activity', function (req, res) {
       "SELECT COUNT(*) as c FROM bugs WHERE status IN ('fixed','closed')"
     ).get().c;
 
-    // Recent events — ONLY event type + agent + timestamp, NO descriptions or data
-    // Filter to safe event types only
+    // Recent events — type + agent + timestamp only (no titles — leak project info)
     var safeEventTypes = [
       'task_completed', 'task_created', 'bug_filed', 'bug_fixed',
       'plan_step_completed', 'plan_created',
@@ -799,17 +798,19 @@ router.get('/public/activity', function (req, res) {
       };
     });
 
-    // Active plans — progress only, titles genericized for public view
-    var genericLabels = ['Initiative A', 'Initiative B', 'Initiative C', 'Initiative D', 'Initiative E'];
-    var plans = db.prepare(
+    // Active plans — generic labels, progress only (titles leak project info)
+    var planRows = db.prepare(
       "SELECT id FROM plans WHERE status = 'active' ORDER BY updated_at DESC LIMIT 5"
-    ).all().map(function (p, i) {
+    ).all();
+    var plans = planRows.map(function (p, idx) {
       var steps = db.prepare(
         'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM plan_steps WHERE plan_id = ?'
       ).get(p.id);
       return {
-        title: genericLabels[i] || 'Initiative ' + (i + 1),
-        progress: steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0
+        title: 'Initiative ' + String.fromCharCode(65 + idx),
+        progress: steps.total > 0 ? Math.round((steps.done / steps.total) * 100) : 0,
+        steps_done: steps.done || 0,
+        steps_total: steps.total || 0
       };
     });
 
@@ -935,7 +936,18 @@ router.get('/work/:agentId', function (req, res) {
     "SELECT * FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
   ).all(agentId);
   var openBugs = listBugs({ status: 'open', limit: 20 });
+  // Get plans for agent's project + any plans with steps assigned to this agent
   var myPlans = listPlans({ project_id: agent.project_id, limit: 20 });
+  var myPlanIds = new Set(myPlans.map(function (p) { return p.id; }));
+  var assignedStepPlans = db.prepare(
+    "SELECT DISTINCT plan_id FROM plan_steps WHERE assignee = ? AND status IN ('pending', 'in_progress')"
+  ).all(agentId);
+  for (var sp of assignedStepPlans) {
+    if (!myPlanIds.has(sp.plan_id)) {
+      var extra = getPlan(sp.plan_id);
+      if (extra) myPlans.push(extra);
+    }
+  }
   var queue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
 
   // Auto-claim top item
@@ -1465,6 +1477,39 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
+});
+
+// Bulk context key operations — set multiple keys in one call
+router.post('/context/keys/bulk', function (req, res) {
+  var agentId = checkAgentOrAdmin(req, res);
+  if (!agentId) return;
+  var keys = req.body.keys;
+  if (!Array.isArray(keys) || keys.length === 0) {
+    return res.status(400).json({ error: 'keys array is required' });
+  }
+  if (keys.length > 50) {
+    return res.status(400).json({ error: 'Maximum 50 keys per batch' });
+  }
+  var results = [];
+  for (var entry of keys) {
+    if (!entry.namespace || !entry.key || entry.data === undefined) {
+      results.push({ namespace: entry.namespace, key: entry.key, error: 'namespace, key, and data are required' });
+      continue;
+    }
+    var dataStr = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data);
+    var opts = {};
+    if (entry.category) opts.category = entry.category;
+    if (entry.ttl) opts.ttl = parseInt(entry.ttl, 10);
+    if (entry.expires_at) opts.expires_at = entry.expires_at;
+    try {
+      upsertContextKey(entry.namespace, entry.key, dataStr, agentId, opts);
+      results.push({ namespace: entry.namespace, key: entry.key, ok: true });
+    } catch (e) {
+      results.push({ namespace: entry.namespace, key: entry.key, error: e.message });
+    }
+  }
+  emitEvent('context_keys_bulk', agentId, null, agentId + ' bulk-updated ' + results.filter(function (r) { return r.ok; }).length + ' context keys');
+  res.json({ ok: true, results: results });
 });
 
 router.get('/context/stats', function (req, res) {
