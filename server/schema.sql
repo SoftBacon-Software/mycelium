@@ -383,6 +383,35 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status)
 CREATE INDEX IF NOT EXISTS idx_bugs_severity ON bugs(severity);
 CREATE INDEX IF NOT EXISTS idx_bugs_assignee ON bugs(assignee);
 CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id);
+-- Skills registry (discoverable, installable agent capabilities)
+CREATE TABLE IF NOT EXISTS skills (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  category        TEXT NOT NULL DEFAULT 'general',
+  version         TEXT NOT NULL DEFAULT '1.0.0',
+  author          TEXT NOT NULL DEFAULT '',
+  install_type    TEXT NOT NULL DEFAULT 'concept',
+  install_data    TEXT NOT NULL DEFAULT '{}',
+  required_capabilities TEXT NOT NULL DEFAULT '[]',
+  tags            TEXT NOT NULL DEFAULT '[]',
+  status          TEXT NOT NULL DEFAULT 'published',
+  install_count   INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
+
+-- Track which agents have installed which skills
+CREATE TABLE IF NOT EXISTS agent_skills (
+  agent_id        TEXT NOT NULL,
+  skill_id        TEXT NOT NULL,
+  installed_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  config          TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (agent_id, skill_id)
+);
+
 -- Plugins (installable capability modules with routes, DB, MCP tools)
 CREATE TABLE IF NOT EXISTS plugins (
   name            TEXT PRIMARY KEY,

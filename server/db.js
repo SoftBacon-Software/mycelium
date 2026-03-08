@@ -972,6 +972,65 @@ export function contextKeyStats() {
   return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
+// -- Skills Registry --
+
+export function createSkill(id, name, description, category, version, author, installType, installData, requiredCapabilities, tags) {
+  db.prepare(
+    "INSERT INTO skills (id, name, description, category, version, author, install_type, install_data, required_capabilities, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(id, name, description || '', category || 'general', version || '1.0.0', author || '',
+    installType || 'concept', typeof installData === 'string' ? installData : JSON.stringify(installData || {}),
+    typeof requiredCapabilities === 'string' ? requiredCapabilities : JSON.stringify(requiredCapabilities || []),
+    typeof tags === 'string' ? tags : JSON.stringify(tags || []));
+  return { id: id };
+}
+
+export function getSkill(id) {
+  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
+}
+
+export function listSkills(filters) {
+  var where = ["status = 'published'"];
+  var params = [];
+  if (filters && filters.category) { where.push('category = ?'); params.push(filters.category); }
+  if (filters && filters.search) { where.push('(name LIKE ? OR description LIKE ? OR tags LIKE ?)'); var s = '%' + filters.search + '%'; params.push(s, s, s); }
+  return db.prepare('SELECT * FROM skills WHERE ' + where.join(' AND ') + ' ORDER BY install_count DESC, name ASC').all(...params);
+}
+
+export function updateSkill(id, updates) {
+  var fields = [];
+  var params = [];
+  if (updates.name !== undefined) { fields.push('name = ?'); params.push(updates.name); }
+  if (updates.description !== undefined) { fields.push('description = ?'); params.push(updates.description); }
+  if (updates.category !== undefined) { fields.push('category = ?'); params.push(updates.category); }
+  if (updates.version !== undefined) { fields.push('version = ?'); params.push(updates.version); }
+  if (updates.install_data !== undefined) { fields.push('install_data = ?'); params.push(typeof updates.install_data === 'string' ? updates.install_data : JSON.stringify(updates.install_data)); }
+  if (updates.required_capabilities !== undefined) { fields.push('required_capabilities = ?'); params.push(typeof updates.required_capabilities === 'string' ? updates.required_capabilities : JSON.stringify(updates.required_capabilities)); }
+  if (updates.tags !== undefined) { fields.push('tags = ?'); params.push(typeof updates.tags === 'string' ? updates.tags : JSON.stringify(updates.tags)); }
+  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
+  if (fields.length === 0) return null;
+  fields.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE skills SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
+}
+
+export function installSkill(agentId, skillId, config) {
+  db.prepare(
+    "INSERT OR REPLACE INTO agent_skills (agent_id, skill_id, config) VALUES (?, ?, ?)"
+  ).run(agentId, skillId, typeof config === 'string' ? config : JSON.stringify(config || {}));
+  db.prepare('UPDATE skills SET install_count = install_count + 1 WHERE id = ?').run(skillId);
+}
+
+export function uninstallSkill(agentId, skillId) {
+  db.prepare('DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?').run(agentId, skillId);
+}
+
+export function getAgentSkills(agentId) {
+  return db.prepare(
+    'SELECT s.*, as2.installed_at, as2.config FROM skills s JOIN agent_skills as2 ON s.id = as2.skill_id WHERE as2.agent_id = ? ORDER BY s.name'
+  ).all(agentId);
+}
+
 // -- Widgets --
 
 export function createWidget(agentId, projectId, title, widgetType, data) {

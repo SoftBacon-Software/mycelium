@@ -914,6 +914,61 @@ export function registerTools(server) {
     }
   );
 
+  // ===== SKILLS REGISTRY =====
+
+  registerDual(server,
+    'studio_list_skills',
+    'Browse the skills registry. Skills are installable agent capabilities.',
+    {
+      category: z.string().optional().describe('Filter by category: github, code-review, art, notifications, project'),
+      search: z.string().optional().describe('Search skills by name or description')
+    },
+    async (args) => {
+      var params = [];
+      if (args.category) params.push('category=' + encodeURIComponent(args.category));
+      if (args.search) params.push('search=' + encodeURIComponent(args.search));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var skills = await apiGet('/skills' + qs);
+      if (!skills.length) return text('No skills found.');
+      var lines = skills.map(function(s) {
+        var caps = [];
+        try { caps = JSON.parse(s.required_capabilities || '[]'); } catch {}
+        return s.id + ' — ' + s.name + ' [' + s.category + '] v' + s.version + (caps.length ? ' (requires: ' + caps.join(', ') + ')' : '') + '\n  ' + (s.description || 'No description');
+      });
+      return text(lines.join('\n\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_install_skill',
+    'Install a skill for this agent. Adds the capability to your agent profile.',
+    {
+      skill_id: z.string().describe('Skill ID to install'),
+      config: z.string().optional().describe('JSON config for the skill')
+    },
+    async (args) => {
+      var body = {};
+      if (args.config) { try { body.config = JSON.parse(args.config); } catch { body.config = args.config; } }
+      await apiPost('/skills/' + encodeURIComponent(args.skill_id) + '/install', body);
+      return text('Skill "' + args.skill_id + '" installed.');
+    }
+  );
+
+  registerDual(server,
+    'studio_my_skills',
+    'List skills installed for this agent.',
+    {},
+    async () => {
+      var agentId = getAgentId();
+      var skills = await apiGet('/agents/' + encodeURIComponent(agentId) + '/skills');
+      if (!skills.length) return text('No skills installed.');
+      var lines = skills.map(function(s) {
+        return s.id + ' — ' + s.name + ' [' + s.category + '] installed ' + (s.installed_at || '');
+      });
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== BUGS =====
 
   registerDual(server,
