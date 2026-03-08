@@ -37,7 +37,7 @@ var DEFAULT_WINDOWS = {
 
 function getConfigValue(core, key) {
   try {
-    var row = core.db.prepare("SELECT value FROM dv_plugin_config WHERE plugin_name = 'social-posting' AND key = ?").get(key);
+    var row = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'social-posting' AND key = ?").get(key);
     return row ? row.value : null;
   } catch (e) { return null; }
 }

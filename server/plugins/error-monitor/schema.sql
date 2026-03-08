@@ -1,7 +1,7 @@
 -- Plugin: error-monitor
 -- Stores raw error events from Sentry, Bugsnag, and Datadog webhooks
 
-CREATE TABLE IF NOT EXISTS dv_error_events (
+CREATE TABLE IF NOT EXISTS error_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   provider    TEXT NOT NULL DEFAULT '',
   error_key   TEXT NOT NULL DEFAULT '',
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS dv_error_events (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_error_events_error_key ON dv_error_events(error_key);
-CREATE INDEX IF NOT EXISTS idx_error_events_provider ON dv_error_events(provider);
-CREATE INDEX IF NOT EXISTS idx_error_events_status ON dv_error_events(status);
-CREATE INDEX IF NOT EXISTS idx_error_events_bug_id ON dv_error_events(bug_id);
+CREATE INDEX IF NOT EXISTS idx_error_events_error_key ON error_events(error_key);
+CREATE INDEX IF NOT EXISTS idx_error_events_provider ON error_events(provider);
+CREATE INDEX IF NOT EXISTS idx_error_events_status ON error_events(status);
+CREATE INDEX IF NOT EXISTS idx_error_events_bug_id ON error_events(bug_id);

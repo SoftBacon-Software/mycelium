@@ -82,8 +82,8 @@ Action string fields support template variables: `{{agent}}`, `{{event_type}}`, 
 
 ## Database Tables
 
-**`dv_automation_rules`** -- Rule definitions (name, trigger_event, conditions JSON, actions JSON, project_id, enabled, run_count, last_run).
+**`automation_rules`** -- Rule definitions (name, trigger_event, conditions JSON, actions JSON, project_id, enabled, run_count, last_run).
 
-**`dv_automation_log`** -- Execution log (rule_id, trigger_event, matched, actions_taken JSON, event_data JSON, status, error, dry_run).
+**`automation_log`** -- Execution log (rule_id, trigger_event, matched, actions_taken JSON, event_data JSON, status, error, dry_run).
 
-**`dv_automation_templates`** -- Built-in templates (name, trigger_event, conditions, actions, category). Seeded with 4 default templates.
+**`automation_templates`** -- Built-in templates (name, trigger_event, conditions, actions, category). Seeded with 4 default templates.

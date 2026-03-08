@@ -5,7 +5,7 @@ export default function createGuardrailsDB(db) {
     createRule(name, description, triggerEvent, conditions, enforcement, projectId, createdBy) {
       var conditionsJson = typeof conditions === 'string' ? conditions : JSON.stringify(conditions);
       var r = db.prepare(
-        'INSERT INTO dv_guardrail_rules (name, description, trigger_event, conditions, enforcement, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO guardrail_rules (name, description, trigger_event, conditions, enforcement, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         name, description || '', triggerEvent, conditionsJson,
         enforcement || 'warn', projectId || null, createdBy || ''
@@ -14,7 +14,7 @@ export default function createGuardrailsDB(db) {
     },
 
     getRule(id) {
-      var row = db.prepare('SELECT * FROM dv_guardrail_rules WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM guardrail_rules WHERE id = ?').get(id);
       if (row && row.conditions) {
         try { row.conditions = JSON.parse(row.conditions); } catch (e) { /* keep as string */ }
       }
@@ -28,7 +28,7 @@ export default function createGuardrailsDB(db) {
       if (filters.trigger_event) { where.push('trigger_event = ?'); params.push(filters.trigger_event); }
       if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
 
-      var sql = 'SELECT * FROM dv_guardrail_rules WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC';
+      var sql = 'SELECT * FROM guardrail_rules WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC';
       var stmt = db.prepare(sql);
       var rows = params.length > 0 ? stmt.all.apply(stmt, params) : stmt.all();
 
@@ -58,19 +58,19 @@ export default function createGuardrailsDB(db) {
 
       sets.push("updated_at = datetime('now')");
       params.push(id);
-      var sql = 'UPDATE dv_guardrail_rules SET ' + sets.join(', ') + ' WHERE id = ?';
+      var sql = 'UPDATE guardrail_rules SET ' + sets.join(', ') + ' WHERE id = ?';
       var stmt = db.prepare(sql);
       stmt.run.apply(stmt, params);
     },
 
     deleteRule(id) {
-      db.prepare('DELETE FROM dv_guardrail_rules WHERE id = ?').run(id);
+      db.prepare('DELETE FROM guardrail_rules WHERE id = ?').run(id);
     },
 
     logViolation(ruleId, ruleName, triggerEvent, agentId, projectId, enforcement, eventData, violationDetail) {
       var eventDataJson = typeof eventData === 'string' ? eventData : JSON.stringify(eventData);
       var r = db.prepare(
-        'INSERT INTO dv_guardrail_violations (rule_id, rule_name, trigger_event, agent_id, project_id, enforcement, event_data, violation_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO guardrail_violations (rule_id, rule_name, trigger_event, agent_id, project_id, enforcement, event_data, violation_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         ruleId, ruleName, triggerEvent, agentId || '', projectId || '',
         enforcement, eventDataJson, violationDetail || ''
@@ -79,7 +79,7 @@ export default function createGuardrailsDB(db) {
     },
 
     getViolation(id) {
-      var row = db.prepare('SELECT * FROM dv_guardrail_violations WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM guardrail_violations WHERE id = ?').get(id);
       if (row && row.event_data) {
         try { row.event_data = JSON.parse(row.event_data); } catch (e) { /* keep as string */ }
       }
@@ -97,7 +97,7 @@ export default function createGuardrailsDB(db) {
       var offset = filters.offset || 0;
       params.push(limit, offset);
 
-      var sql = 'SELECT * FROM dv_guardrail_violations WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+      var sql = 'SELECT * FROM guardrail_violations WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
       var stmt = db.prepare(sql);
       var rows = stmt.all.apply(stmt, params);
 
@@ -111,21 +111,21 @@ export default function createGuardrailsDB(db) {
 
     overrideViolation(id, overriddenBy) {
       db.prepare(
-        'UPDATE dv_guardrail_violations SET overridden = 1, overridden_by = ? WHERE id = ?'
+        'UPDATE guardrail_violations SET overridden = 1, overridden_by = ? WHERE id = ?'
       ).run(overriddenBy || '', id);
     },
 
     getStats() {
       var byEnforcement = db.prepare(
-        'SELECT enforcement, COUNT(*) as count FROM dv_guardrail_violations GROUP BY enforcement'
+        'SELECT enforcement, COUNT(*) as count FROM guardrail_violations GROUP BY enforcement'
       ).all();
 
       var byRule = db.prepare(
-        'SELECT rule_id, rule_name, enforcement, COUNT(*) as count FROM dv_guardrail_violations GROUP BY rule_id, rule_name, enforcement ORDER BY count DESC'
+        'SELECT rule_id, rule_name, enforcement, COUNT(*) as count FROM guardrail_violations GROUP BY rule_id, rule_name, enforcement ORDER BY count DESC'
       ).all();
 
       var last24h = db.prepare(
-        "SELECT COUNT(*) as count FROM dv_guardrail_violations WHERE created_at >= datetime('now', '-1 day')"
+        "SELECT COUNT(*) as count FROM guardrail_violations WHERE created_at >= datetime('now', '-1 day')"
       ).get();
 
       return {
@@ -138,7 +138,7 @@ export default function createGuardrailsDB(db) {
     getTopViolators(limit) {
       var lim = limit || 10;
       return db.prepare(
-        'SELECT agent_id, COUNT(*) as violation_count FROM dv_guardrail_violations WHERE agent_id != \'\' GROUP BY agent_id ORDER BY violation_count DESC LIMIT ?'
+        'SELECT agent_id, COUNT(*) as violation_count FROM guardrail_violations WHERE agent_id != \'\' GROUP BY agent_id ORDER BY violation_count DESC LIMIT ?'
       ).all(lim);
     }
   };

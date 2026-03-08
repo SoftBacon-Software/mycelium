@@ -1,7 +1,7 @@
 -- Plugin: cost-tracker
 -- Tracks AI API token usage and costs per agent, project, and task.
 
-CREATE TABLE IF NOT EXISTS dv_cost_entries (
+CREATE TABLE IF NOT EXISTS cost_entries (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   agent_id          TEXT NOT NULL DEFAULT '',
   project_id        TEXT NOT NULL DEFAULT '',
@@ -14,11 +14,11 @@ CREATE TABLE IF NOT EXISTS dv_cost_entries (
   recorded_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_cost_entries_agent ON dv_cost_entries(agent_id);
-CREATE INDEX IF NOT EXISTS idx_cost_entries_project ON dv_cost_entries(project_id);
-CREATE INDEX IF NOT EXISTS idx_cost_entries_recorded ON dv_cost_entries(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_agent ON cost_entries(agent_id);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_project ON cost_entries(project_id);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_recorded ON cost_entries(recorded_at);
 
-CREATE TABLE IF NOT EXISTS dv_cost_daily (
+CREATE TABLE IF NOT EXISTS cost_daily (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   date              TEXT NOT NULL DEFAULT '',
   agent_id          TEXT NOT NULL DEFAULT '',
@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS dv_cost_daily (
   UNIQUE(date, agent_id, project_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cost_daily_date ON dv_cost_daily(date);
-CREATE INDEX IF NOT EXISTS idx_cost_daily_agent ON dv_cost_daily(agent_id);
-CREATE INDEX IF NOT EXISTS idx_cost_daily_project ON dv_cost_daily(project_id);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_date ON cost_daily(date);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_agent ON cost_daily(agent_id);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_project ON cost_daily(project_id);
 
-CREATE TABLE IF NOT EXISTS dv_cost_alerts (
+CREATE TABLE IF NOT EXISTS cost_alerts (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   alert_type        TEXT NOT NULL DEFAULT '',
   threshold_pct     REAL NOT NULL DEFAULT 0,

@@ -1,7 +1,7 @@
 -- Plugin: guardrails
 -- Pre-action quality checks and rule enforcement.
 
-CREATE TABLE IF NOT EXISTS dv_guardrail_rules (
+CREATE TABLE IF NOT EXISTS guardrail_rules (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   name            TEXT NOT NULL,
   description     TEXT DEFAULT '',
@@ -15,9 +15,9 @@ CREATE TABLE IF NOT EXISTS dv_guardrail_rules (
   updated_at      TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_guardrail_rules_trigger ON dv_guardrail_rules(trigger_event);
+CREATE INDEX IF NOT EXISTS idx_guardrail_rules_trigger ON guardrail_rules(trigger_event);
 
-CREATE TABLE IF NOT EXISTS dv_guardrail_violations (
+CREATE TABLE IF NOT EXISTS guardrail_violations (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   rule_id           INTEGER NOT NULL,
   rule_name         TEXT NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS dv_guardrail_violations (
   created_at        TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_guardrail_violations_rule ON dv_guardrail_violations(rule_id);
-CREATE INDEX IF NOT EXISTS idx_guardrail_violations_agent ON dv_guardrail_violations(agent_id);
-CREATE INDEX IF NOT EXISTS idx_guardrail_violations_project ON dv_guardrail_violations(project_id);
-CREATE INDEX IF NOT EXISTS idx_guardrail_violations_created ON dv_guardrail_violations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_guardrail_violations_rule ON guardrail_violations(rule_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_violations_agent ON guardrail_violations(agent_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_violations_project ON guardrail_violations(project_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_violations_created ON guardrail_violations(created_at DESC);

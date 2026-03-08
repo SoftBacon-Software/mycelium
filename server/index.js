@@ -36,7 +36,7 @@ function checkVoiceAuth(req, res) {
   if (agentKey) {
     var keyHash = crypto.createHash('sha256').update(agentKey).digest('hex');
     var db = getDB();
-    var match = db.prepare("SELECT id FROM dv_agents WHERE api_key_hash = ?").get(keyHash);
+    var match = db.prepare("SELECT id FROM agents WHERE api_key_hash = ?").get(keyHash);
     if (match) return true;
   }
   res.status(401).json({ error: 'Authentication required' });
@@ -65,17 +65,17 @@ if (!process.env.TURN_SECRET) {
 process.stdout.write('[boot] initializing DB...\n');
 initDB();
 
-// Migrate: add category + expires_at columns to dv_context_keys if missing
+// Migrate: add category + expires_at columns to context_keys if missing
 try {
   var _db = getDB();
-  var cols = _db.pragma('table_info(dv_context_keys)').map(function(c) { return c.name; });
+  var cols = _db.pragma('table_info(context_keys)').map(function(c) { return c.name; });
   if (!cols.includes('category')) {
-    _db.prepare("ALTER TABLE dv_context_keys ADD COLUMN category TEXT NOT NULL DEFAULT 'durable'").run();
-    process.stdout.write('[boot] migrated dv_context_keys: added category column\n');
+    _db.prepare("ALTER TABLE context_keys ADD COLUMN category TEXT NOT NULL DEFAULT 'durable'").run();
+    process.stdout.write('[boot] migrated context_keys: added category column\n');
   }
   if (!cols.includes('expires_at')) {
-    _db.prepare("ALTER TABLE dv_context_keys ADD COLUMN expires_at TEXT").run();
-    process.stdout.write('[boot] migrated dv_context_keys: added expires_at column\n');
+    _db.prepare("ALTER TABLE context_keys ADD COLUMN expires_at TEXT").run();
+    process.stdout.write('[boot] migrated context_keys: added expires_at column\n');
   }
 } catch (e) {
   process.stdout.write('[boot] context_keys migration note: ' + e.message + '\n');
@@ -205,7 +205,7 @@ app.get('/health', function (req, res) {
   var dbOk = false;
   try { getDB().prepare('SELECT 1').get(); dbOk = true; } catch (e) { /* */ }
   var agentsOnline = 0;
-  try { agentsOnline = getDB().prepare("SELECT COUNT(*) as c FROM dv_agents WHERE status = 'online'").get().c; } catch (e) { /* */ }
+  try { agentsOnline = getDB().prepare("SELECT COUNT(*) as c FROM agents WHERE status = 'online'").get().c; } catch (e) { /* */ }
   var mem = process.memoryUsage();
   res.json({
     status: dbOk ? 'ok' : 'degraded',
@@ -354,7 +354,7 @@ setInterval(function () {
     if (ctxPurged > 0) console.log('[daily] Purged ' + ctxPurged + ' expired context keys');
     // Clean expired password reset tokens (older than 1 day)
     try {
-      var tokensPurged = getDB().prepare("DELETE FROM dv_password_resets WHERE expires_at < datetime('now', '-1 day')").run().changes;
+      var tokensPurged = getDB().prepare("DELETE FROM password_resets WHERE expires_at < datetime('now', '-1 day')").run().changes;
       if (tokensPurged > 0) console.log('[daily] Purged ' + tokensPurged + ' expired password reset tokens');
     } catch (e) { /* table may not exist yet — non-fatal */ }
   } catch (e) {

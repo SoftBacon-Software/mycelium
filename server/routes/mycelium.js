@@ -158,7 +158,10 @@ import {
   resolveProfileChain, buildCalibrationBlock,
   createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance,
   listTeamSettings, getTeamSetting, upsertTeamSetting, deleteTeamSetting,
-  getAllTeamSettingsGrouped, syncTeamSettingsToProfile
+  getAllTeamSettingsGrouped, syncTeamSettingsToProfile,
+  createTeam, getTeam, listTeams, updateTeam, deleteTeam,
+  addTeamMember, updateTeamMember, removeTeamMember,
+  getTeamsForUser, getTeamProjects
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -370,7 +373,7 @@ function checkAgent(req, res) {
     return cached.id;
   }
   // DB lookup: O(1) SHA-256 direct lookup first, then bcrypt fallback for legacy hashes
-  var directMatch = getDB().prepare("SELECT id, project_id FROM dv_agents WHERE api_key_hash = ?").get(keyHash);
+  var directMatch = getDB().prepare("SELECT id, project_id FROM agents WHERE api_key_hash = ?").get(keyHash);
   if (directMatch) {
     agentKeyCache.set(keyHash, { id: directMatch.id, project_id: directMatch.project_id || null });
     req._authAgentId = directMatch.id;
@@ -460,12 +463,12 @@ function checkBillingEnforcement(req, res, next) {
 
   try {
     var db = getDB();
-    var org = db.prepare('SELECT * FROM dv_organizations WHERE id = ?').get(orgId);
+    var org = db.prepare('SELECT * FROM organizations WHERE id = ?').get(orgId);
     if (!org) return next();
     if (org.plan === 'free') return next();
 
     var sub = db.prepare(
-      'SELECT * FROM dv_subscriptions WHERE org_id = ? ORDER BY created_at DESC LIMIT 1'
+      'SELECT * FROM subscriptions WHERE org_id = ? ORDER BY created_at DESC LIMIT 1'
     ).get(orgId);
 
     if (!sub) {
@@ -478,7 +481,7 @@ function checkBillingEnforcement(req, res, next) {
       var graceDays = 7;
       try {
         var row = db.prepare(
-          "SELECT value FROM dv_plugin_config WHERE plugin_name = 'billing' AND key = 'grace_period_days'"
+          "SELECT value FROM plugin_config WHERE plugin_name = 'billing' AND key = 'grace_period_days'"
         ).get();
         if (row) graceDays = parseInt(row.value) || 7;
       } catch (e) { /* use default */ }
@@ -514,7 +517,7 @@ function checkOrgPlanEnforcement(req, res, next) {
   if (!orgId) return next(); // No org context, skip
 
   var db = getDB();
-  var org = db.prepare('SELECT plan FROM dv_organizations WHERE id = ?').get(orgId);
+  var org = db.prepare('SELECT plan FROM organizations WHERE id = ?').get(orgId);
   if (!org) return next(); // Unknown org, skip
 
   var plan = org.plan || 'free';
@@ -678,7 +681,7 @@ router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res)
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return apiError(res, 400, 'Valid email is required');
   var db = getDB();
   // Ensure table exists (created on first use if migration hasn't run yet)
-  db.prepare(`CREATE TABLE IF NOT EXISTS dv_waitlist (
+  db.prepare(`CREATE TABLE IF NOT EXISTS waitlist (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL DEFAULT '',
     email       TEXT NOT NULL,
@@ -688,7 +691,7 @@ router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res)
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   )`).run();
   var result = db.prepare(
-    'INSERT INTO dv_waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
+    'INSERT INTO waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
   ).run(name || '', email, subdomain || '', use_case || '');
   var waitlistId = result.lastInsertRowid;
   // Create inbox item for all operators
@@ -714,13 +717,13 @@ router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res)
 router.get('/stats/public', function (req, res) {
   try {
     var db = getDB();
-    var agents = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) as online FROM dv_agents WHERE role != 'drone'").get();
-    var tasks = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed FROM dv_tasks").get();
-    var plans = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed FROM dv_plans").get();
-    var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM dv_bugs").get();
-    var messages = db.prepare("SELECT COUNT(*) as total FROM dv_messages").get();
-    var projects = db.prepare("SELECT COUNT(*) as total FROM dv_projects").get();
-    var recentActivity = db.prepare("SELECT type, agent FROM dv_events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.type.replace(/_/g, ' '); });
+    var agents = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) as online FROM agents WHERE role != 'drone'").get();
+    var tasks = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed FROM tasks").get();
+    var plans = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed FROM plans").get();
+    var bugs = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('fixed','closed') THEN 1 ELSE 0 END) as resolved FROM bugs").get();
+    var messages = db.prepare("SELECT COUNT(*) as total FROM messages").get();
+    var projects = db.prepare("SELECT COUNT(*) as total FROM projects").get();
+    var recentActivity = db.prepare("SELECT type, agent FROM events ORDER BY created_at DESC LIMIT 5").all().map(function (e) { return e.type.replace(/_/g, ' '); });
     res.json({
       agents: { total: agents.total, online: agents.online },
       tasks: { total: tasks.total, completed: tasks.completed },
@@ -745,36 +748,36 @@ router.get('/public/activity', function (req, res) {
 
     // Online agents — names and status only, no working_on details
     var agents = db.prepare(
-      "SELECT name, status FROM dv_agents WHERE role != 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
+      "SELECT name, status FROM agents WHERE role != 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
     ).all().map(function (a) {
       return { name: a.name, online: a.status === 'online' };
     });
 
     // Drones — separate from agents
     var drones = db.prepare(
-      "SELECT name, status FROM dv_agents WHERE role = 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
+      "SELECT name, status FROM agents WHERE role = 'drone' ORDER BY CASE WHEN status='online' THEN 0 ELSE 1 END, name"
     ).all().map(function (d) {
       return { name: d.name, online: d.status === 'online' };
     });
 
     // Aggregate stats — counts only, no details
     var tasksToday = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done' AND updated_at >= ?"
+      "SELECT COUNT(*) as c FROM tasks WHERE status = 'done' AND updated_at >= ?"
     ).get(today).c;
     var bugsToday = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_bugs WHERE status IN ('fixed','closed') AND updated_at >= ?"
+      "SELECT COUNT(*) as c FROM bugs WHERE status IN ('fixed','closed') AND updated_at >= ?"
     ).get(today).c;
     var plansActive = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_plans WHERE status = 'active'"
+      "SELECT COUNT(*) as c FROM plans WHERE status = 'active'"
     ).get().c;
     var agentsOnline = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_agents WHERE status = 'online' AND role != 'drone'"
+      "SELECT COUNT(*) as c FROM agents WHERE status = 'online' AND role != 'drone'"
     ).get().c;
     var totalTasksDone = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_tasks WHERE status = 'done'"
+      "SELECT COUNT(*) as c FROM tasks WHERE status = 'done'"
     ).get().c;
     var totalBugsFixed = db.prepare(
-      "SELECT COUNT(*) as c FROM dv_bugs WHERE status IN ('fixed','closed')"
+      "SELECT COUNT(*) as c FROM bugs WHERE status IN ('fixed','closed')"
     ).get().c;
 
     // Recent events — ONLY event type + agent + timestamp, NO descriptions or data
@@ -786,7 +789,7 @@ router.get('/public/activity', function (req, res) {
     ];
     var placeholders = safeEventTypes.map(function () { return '?'; }).join(',');
     var evtStmt = db.prepare(
-      'SELECT type, agent, created_at FROM dv_events WHERE type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
+      'SELECT type, agent, created_at FROM events WHERE type IN (' + placeholders + ') ORDER BY created_at DESC LIMIT 30'
     );
     var events = evtStmt.all.apply(evtStmt, safeEventTypes).map(function (e) {
       return {
@@ -799,10 +802,10 @@ router.get('/public/activity', function (req, res) {
     // Active plans — progress only, titles genericized for public view
     var genericLabels = ['Initiative A', 'Initiative B', 'Initiative C', 'Initiative D', 'Initiative E'];
     var plans = db.prepare(
-      "SELECT id FROM dv_plans WHERE status = 'active' ORDER BY updated_at DESC LIMIT 5"
+      "SELECT id FROM plans WHERE status = 'active' ORDER BY updated_at DESC LIMIT 5"
     ).all().map(function (p, i) {
       var steps = db.prepare(
-        'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM dv_plan_steps WHERE plan_id = ?'
+        'SELECT COUNT(*) as total, SUM(CASE WHEN status = \'completed\' THEN 1 ELSE 0 END) as done FROM plan_steps WHERE plan_id = ?'
       ).get(p.id);
       return {
         title: genericLabels[i] || 'Initiative ' + (i + 1),
@@ -811,13 +814,13 @@ router.get('/public/activity', function (req, res) {
     });
 
     // Calibration / alignment — sanitized: status only, no rules or CLAUDE.md content
-    var profileCount = db.prepare('SELECT COUNT(*) as c FROM dv_node_profiles').get().c;
+    var profileCount = db.prepare('SELECT COUNT(*) as c FROM node_profiles').get().c;
     var agentRows = db.prepare(
-      "SELECT id, name, status FROM dv_agents WHERE role != 'drone' ORDER BY name"
+      "SELECT id, name, status FROM agents WHERE role != 'drone' ORDER BY name"
     ).all();
     var alignmentAgents = agentRows.map(function (a) {
       var entry = db.prepare(
-        "SELECT data FROM dv_context_keys WHERE namespace = ? AND key = 'standup'"
+        "SELECT data FROM context_keys WHERE namespace = ? AND key = 'standup'"
       ).get(a.id);
       var status = 'unknown';
       var driftCount = 0;
@@ -870,7 +873,7 @@ router.get('/public/activity', function (req, res) {
 router.get('/waitlist', function (req, res) {
   if (!checkAdmin(req, res)) return;
   try {
-    var items = getDB().prepare('SELECT * FROM dv_waitlist ORDER BY created_at DESC').all();
+    var items = getDB().prepare('SELECT * FROM waitlist ORDER BY created_at DESC').all();
     res.json(items);
   } catch (e) {
     res.json([]);
@@ -925,11 +928,11 @@ router.get('/work/:agentId', function (req, res) {
   // Build work queue directly — no full boot payload needed
   var db = getDB();
   var pendingDirectives = db.prepare(
-    "SELECT * FROM dv_messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
+    "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('sent', 'pending') ORDER BY created_at ASC"
   ).all(agentId);
   var pendingRequests = listPendingRequests(agentId);
   var myTasks = db.prepare(
-    "SELECT * FROM dv_tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
+    "SELECT * FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') ORDER BY priority DESC, updated_at DESC"
   ).all(agentId);
   var openBugs = listBugs({ status: 'open', limit: 20 });
   var myPlans = listPlans({ project_id: agent.project_id, limit: 20 });
@@ -2255,9 +2258,9 @@ router.delete('/studio/users/:id', function (req, res) {
 
 // ======== PASSWORD RESET (public, rate-limited) ========
 
-// Ensure dv_password_resets table exists (inline migration pattern, same as dv_waitlist)
+// Ensure password_resets table exists (inline migration pattern, same as waitlist)
 try {
-  getDB().prepare(`CREATE TABLE IF NOT EXISTS dv_password_resets (
+  getDB().prepare(`CREATE TABLE IF NOT EXISTS password_resets (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     email       TEXT NOT NULL,
     token_hash  TEXT NOT NULL,
@@ -2278,7 +2281,7 @@ router.post('/studio/forgot-password', forgotPasswordLimiter, asyncHandler(async
   var GENERIC = { ok: true, message: 'If that email is associated with an account, a reset link has been sent.' };
   // Find operator by email → get their studio_user_id
   var db = getDB();
-  var operator = db.prepare('SELECT * FROM dv_operators WHERE LOWER(email) = ? AND status = ?').get(email, 'active');
+  var operator = db.prepare('SELECT * FROM operators WHERE LOWER(email) = ? AND status = ?').get(email, 'active');
   if (!operator || !operator.studio_user_id) return res.json(GENERIC);
   var studioUser = getStudioUserById(operator.studio_user_id);
   if (!studioUser) return res.json(GENERIC);
@@ -2287,7 +2290,7 @@ router.post('/studio/forgot-password', forgotPasswordLimiter, asyncHandler(async
   var tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   var expiresMinutes = 30;
   var expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000).toISOString();
-  db.prepare('INSERT INTO dv_password_resets (email, token_hash, expires_at) VALUES (?, ?, ?)').run(email, tokenHash, expiresAt);
+  db.prepare('INSERT INTO password_resets (email, token_hash, expires_at) VALUES (?, ?, ?)').run(email, tokenHash, expiresAt);
   // Build reset URL (dashboard handles the UI)
   var resetUrl = 'https://mycelium.fyi/studio/#/reset-password?token=' + token;
   sendEmail(templatePasswordReset(email, studioUser.display_name, resetUrl, expiresMinutes));
@@ -2302,10 +2305,10 @@ router.post('/studio/reset-password', resetPasswordLimiter, asyncHandler(async f
   if (newPassword.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
   var tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   var db = getDB();
-  var row = db.prepare("SELECT * FROM dv_password_resets WHERE token_hash = ? AND used = 0 AND expires_at > datetime('now')").get(tokenHash);
+  var row = db.prepare("SELECT * FROM password_resets WHERE token_hash = ? AND used = 0 AND expires_at > datetime('now')").get(tokenHash);
   if (!row) return res.status(400).json({ error: 'Invalid or expired reset token' });
   // Find operator → studio user
-  var operator = db.prepare('SELECT * FROM dv_operators WHERE LOWER(email) = ?').get(row.email);
+  var operator = db.prepare('SELECT * FROM operators WHERE LOWER(email) = ?').get(row.email);
   if (!operator || !operator.studio_user_id) return res.status(400).json({ error: 'Account not found' });
   var studioUser = getStudioUserById(operator.studio_user_id);
   if (!studioUser) return res.status(400).json({ error: 'Account not found' });
@@ -2313,7 +2316,7 @@ router.post('/studio/reset-password', resetPasswordLimiter, asyncHandler(async f
   var hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS_PASSWORD);
   updateStudioUser(studioUser.id, { password_hash: hash });
   // Mark token as used
-  db.prepare('UPDATE dv_password_resets SET used = 1 WHERE id = ?').run(row.id);
+  db.prepare('UPDATE password_resets SET used = 1 WHERE id = ?').run(row.id);
   emitEvent('password_reset', '__system__', null, 'Password reset for ' + studioUser.display_name + ' (' + studioUser.username + ')');
   res.json({ ok: true, message: 'Password has been reset. You can now log in.' });
 }));
@@ -3204,7 +3207,7 @@ router.post('/admin/churn-check', async function (req, res) {
       try {
         // TODO: delete S3/R2 snapshot
         updateInstance(inst.id, { status: 'deleted', snapshot_url: null });
-        getDB().prepare("UPDATE dv_organizations SET plan = 'deleted' WHERE id = ?").run(inst.org_id);
+        getDB().prepare("UPDATE organizations SET plan = 'deleted' WHERE id = ?").run(inst.org_id);
         var { sendEmail: sendDeleteEmail, templateDataDeleted } = await import('../email.js');
         if (inst.customer_email) {
           await sendDeleteEmail(templateDataDeleted(null, inst.customer_email));
@@ -3884,7 +3887,7 @@ router.post('/drones/claim', function (req, res) {
       // Incompatible — unclaim and skip
       updateDroneJob(job.id, { status: 'pending' });
       // Remove drone_id by updating the raw record
-      try { var db2 = getDB(); db2.prepare("UPDATE dv_drone_jobs SET status = 'pending', drone_id = NULL, started_at = NULL WHERE id = ?").run(job.id); } catch (e) { /* fallback already set status */ }
+      try { var db2 = getDB(); db2.prepare("UPDATE drone_jobs SET status = 'pending', drone_id = NULL, started_at = NULL WHERE id = ?").run(job.id); } catch (e) { /* fallback already set status */ }
       return res.json({ job: null, skipped: { job_id: job.id, reason: rendered.error } });
     }
     // Write rendered command back to the job
@@ -3928,7 +3931,7 @@ router.post('/drones/jobs', function (req, res) {
   }
   var id = createDroneJob(title, command, inputData, requires, who, priority, workspaceRepo, workspaceBranch, profileId);
   if (jobType) {
-    try { getDB().prepare("UPDATE dv_drone_jobs SET job_type = ? WHERE id = ?").run(jobType, id); } catch (e) { /* col may not exist */ }
+    try { getDB().prepare("UPDATE drone_jobs SET job_type = ? WHERE id = ?").run(jobType, id); } catch (e) { /* col may not exist */ }
   }
   emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id, job_type: jobType });
   dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: jobType });
@@ -3950,7 +3953,7 @@ router.post('/drones/jobs/from-template', function (req, res) {
   var title = template.name;
   if (inputData.batch) title += ' (batch ' + inputData.batch + ')';
   var id = createDroneJob(title, '', inputData, requires, who, priority, null, 'main', null);
-  try { getDB().prepare("UPDATE dv_drone_jobs SET job_type = ? WHERE id = ?").run(templateId, id); } catch (e) { /* col may not exist */ }
+  try { getDB().prepare("UPDATE drone_jobs SET job_type = ? WHERE id = ?").run(templateId, id); } catch (e) { /* col may not exist */ }
   emitEvent('drone_job_created', who, 'drone', who + ' submitted ' + templateId + ' job: ' + title, { job_id: id, job_type: templateId });
   dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: templateId });
   res.json({ ok: true, id: id, title: title, job_type: templateId });
@@ -4858,7 +4861,7 @@ router.get('/inbox', function (req, res) {
   if (!operatorId) {
     if (!user) return apiError(res, 400, 'operator_id is required');
     // Resolve operator from studio_user_id
-    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
+    var op = getDB().prepare('SELECT id FROM operators WHERE studio_user_id = ?').get(user.userId);
     if (!op) return apiError(res, 404, 'No operator linked to this account');
     operatorId = op.id;
   }
@@ -4884,7 +4887,7 @@ router.get('/inbox/count', function (req, res) {
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
   var operatorId = req.query.operator_id;
   if (!operatorId && user) {
-    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
+    var op = getDB().prepare('SELECT id FROM operators WHERE studio_user_id = ?').get(user.userId);
     if (op) operatorId = op.id;
   }
   if (operatorId) {
@@ -4962,13 +4965,13 @@ router.post('/inbox/bulk-dismiss', function (req, res) {
   var all = req.body.all;
   var operatorId = req.body.operator_id;
   if (!operatorId && user) {
-    var op = getDB().prepare('SELECT id FROM dv_operators WHERE studio_user_id = ?').get(user.userId);
+    var op = getDB().prepare('SELECT id FROM operators WHERE studio_user_id = ?').get(user.userId);
     if (op) operatorId = op.id;
   }
   var dismissed = 0;
   if (all && operatorId) {
     // Dismiss all non-dismissed items for this operator
-    var result = getDB().prepare("UPDATE dv_operator_inbox SET status = 'dismissed' WHERE operator_id = ? AND status != 'dismissed'").run(operatorId);
+    var result = getDB().prepare("UPDATE operator_inbox SET status = 'dismissed' WHERE operator_id = ? AND status != 'dismissed'").run(operatorId);
     dismissed = result.changes;
   } else if (Array.isArray(ids) && ids.length > 0) {
     for (var i = 0; i < ids.length; i++) {
@@ -5184,6 +5187,102 @@ router.post('/team-settings/sync', function (req, res) {
   res.json({ ok: true, message: 'Profile sync complete' });
 });
 
+// ======== TEAMS ========
+
+// GET /teams — list teams
+router.get('/teams', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json({ teams: listTeams(req.query.org_id || null) });
+});
+
+// GET /teams/:id — team detail with members and projects
+router.get('/teams/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var team = getTeam(req.params.id);
+  if (!team) return apiError(res, 404, 'Team not found');
+  team.projects = getTeamProjects(req.params.id);
+  res.json(team);
+});
+
+// POST /teams — create team (admin only)
+router.post('/teams', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { id, org_id, name, description } = req.body;
+  if (!id || !org_id || !name) return apiError(res, 400, 'id, org_id, and name required');
+  try {
+    var who = getAdminDisplayName(req);
+    var team = createTeam(id, org_id, name, description, who);
+    // Auto-create team channel
+    try {
+      var channelSlug = 'team-' + id;
+      createChannel('#team-' + id, channelSlug, 'team', 'team', id, 'Team channel for ' + name, who);
+    } catch (chErr) { console.log('[teams] Auto-channel creation failed:', chErr.message); }
+    res.json(team);
+  } catch (err) {
+    return apiError(res, 400, err.message);
+  }
+});
+
+// PUT /teams/:id — update team (admin only)
+router.put('/teams/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var team = updateTeam(req.params.id, req.body);
+  if (!team) return apiError(res, 404, 'Team not found');
+  res.json(team);
+});
+
+// DELETE /teams/:id — delete empty team (admin only)
+router.delete('/teams/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  try {
+    deleteTeam(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    return apiError(res, 400, err.message);
+  }
+});
+
+// POST /teams/:id/members — add member
+router.post('/teams/:id/members', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var { user_id, user_type, role, is_primary } = req.body;
+  if (!user_id) return apiError(res, 400, 'user_id required');
+  try {
+    var member = addTeamMember(req.params.id, user_id, user_type, role, is_primary);
+    // Auto-join team channel
+    try {
+      var ch = getChannelBySlug('team-' + req.params.id);
+      if (ch) addChannelMember(ch.id, user_id, user_type || 'operator', 'member');
+    } catch (_) {}
+    res.json(member);
+  } catch (err) {
+    return apiError(res, 400, err.message);
+  }
+});
+
+// PUT /teams/:id/members/:userId — update member role/primary
+router.put('/teams/:id/members/:userId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  updateTeamMember(req.params.id, req.params.userId, req.body);
+  res.json({ ok: true });
+});
+
+// DELETE /teams/:id/members/:userId — remove member
+router.delete('/teams/:id/members/:userId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  removeTeamMember(req.params.id, req.params.userId);
+  res.json({ ok: true });
+});
+
+// GET /teams/:id/projects — team's projects
+router.get('/teams/:id/projects', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json({ projects: getTeamProjects(req.params.id) });
+});
+
 // ======== SUPPORT TICKETS ========
 
 // Classify support ticket into L1 (auto-handleable) or L2 (requires human triage)
@@ -5215,15 +5314,15 @@ function classifyTicket(subject, description) {
 // ---- Ticket ↔ Bug bridge: migrations ----
 try {
   var db = getDB();
-  var bugCols = db.pragma('table_info(dv_bugs)').map(function(c) { return c.name; });
+  var bugCols = db.pragma('table_info(bugs)').map(function(c) { return c.name; });
   if (!bugCols.includes('linked_ticket_id')) {
-    db.prepare("ALTER TABLE dv_bugs ADD COLUMN linked_ticket_id INTEGER").run();
-    process.stdout.write('[boot] migrated dv_bugs: added linked_ticket_id\n');
+    db.prepare("ALTER TABLE bugs ADD COLUMN linked_ticket_id INTEGER").run();
+    process.stdout.write('[boot] migrated bugs: added linked_ticket_id\n');
   }
-  var ticketCols = db.pragma('table_info(dv_support_tickets)').map(function(c) { return c.name; });
+  var ticketCols = db.pragma('table_info(support_tickets)').map(function(c) { return c.name; });
   if (!ticketCols.includes('linked_bug_id')) {
-    db.prepare("ALTER TABLE dv_support_tickets ADD COLUMN linked_bug_id INTEGER").run();
-    process.stdout.write('[boot] migrated dv_support_tickets: added linked_bug_id\n');
+    db.prepare("ALTER TABLE support_tickets ADD COLUMN linked_bug_id INTEGER").run();
+    process.stdout.write('[boot] migrated support_tickets: added linked_bug_id\n');
   }
 } catch (e) { /* already exists or table not yet created */ }
 
@@ -5259,8 +5358,8 @@ router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
     );
     // Link ticket ↔ bug
     var db = getDB();
-    db.prepare('UPDATE dv_support_tickets SET linked_bug_id = ? WHERE id = ?').run(bugId, ticket.id);
-    db.prepare('UPDATE dv_bugs SET linked_ticket_id = ? WHERE id = ?').run(ticket.id, bugId);
+    db.prepare('UPDATE support_tickets SET linked_bug_id = ? WHERE id = ?').run(bugId, ticket.id);
+    db.prepare('UPDATE bugs SET linked_ticket_id = ? WHERE id = ?').run(ticket.id, bugId);
     ticket.linked_bug_id = bugId;
     emitEvent('bug_created', '__customer__', req.body.instance_id || '', 'Customer filed support ticket → bug #' + bugId + ': ' + subject, { bug_id: bugId, ticket_id: ticket.id });
   } catch (e) {

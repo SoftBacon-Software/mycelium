@@ -543,6 +543,31 @@ export interface TeamSetting {
 
 export type TeamSettingsGrouped = Record<string, Record<string, unknown>>;
 
+// ── Teams ──
+
+export interface Team {
+  id: string;
+  org_id: string;
+  name: string;
+  description: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  members?: TeamMember[];
+  projects?: Project[];
+  member_count?: number;
+}
+
+export interface TeamMember {
+  id: number;
+  team_id: string;
+  user_id: string;
+  user_type: 'operator' | 'agent';
+  role: 'lead' | 'member' | 'guest';
+  is_primary: number;
+  joined_at: string;
+}
+
 // Customer Instances
 
 export interface CustomerInstance {

@@ -4,13 +4,13 @@ export default function createTemplateDB(db) {
   return {
     create(title, data, createdBy) {
       var r = db.prepare(
-        'INSERT INTO dv_template_items (title, data, created_by) VALUES (?, ?, ?) RETURNING id'
+        'INSERT INTO template_items (title, data, created_by) VALUES (?, ?, ?) RETURNING id'
       ).get(title || '', JSON.stringify(data || {}), createdBy || '');
       return r.id;
     },
 
     get(id) {
-      var row = db.prepare('SELECT * FROM dv_template_items WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM template_items WHERE id = ?').get(id);
       if (row) {
         try { row.data = JSON.parse(row.data); } catch (e) { row.data = {}; }
       }
@@ -25,7 +25,7 @@ export default function createTemplateDB(db) {
       var offset = filters.offset || 0;
       params.push(limit, offset);
       var rows = db.prepare(
-        'SELECT * FROM dv_template_items WHERE ' + where.join(' AND ') +
+        'SELECT * FROM template_items WHERE ' + where.join(' AND ') +
         ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
       ).all(...params);
       return rows.map(function (row) {
@@ -43,11 +43,11 @@ export default function createTemplateDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_template_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE template_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     delete(id) {
-      db.prepare('DELETE FROM dv_template_items WHERE id = ?').run(id);
+      db.prepare('DELETE FROM template_items WHERE id = ?').run(id);
     }
   };
 }

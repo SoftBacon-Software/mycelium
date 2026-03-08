@@ -4,7 +4,7 @@ export default function createCostDB(db) {
   return {
     recordUsage(agentId, projectId, taskId, inputTokens, outputTokens, cacheReadTokens, costUsd, sessionId) {
       var r = db.prepare(
-        'INSERT INTO dv_cost_entries (agent_id, project_id, task_id, input_tokens, output_tokens, cache_read_tokens, cost_usd, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO cost_entries (agent_id, project_id, task_id, input_tokens, output_tokens, cache_read_tokens, cost_usd, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         agentId || '', projectId || '', taskId || null,
         inputTokens || 0, outputTokens || 0, cacheReadTokens || 0,
@@ -14,7 +14,7 @@ export default function createCostDB(db) {
       // Upsert daily aggregate
       var today = new Date().toISOString().split('T')[0];
       db.prepare(
-        "INSERT INTO dv_cost_daily (date, agent_id, project_id, total_input, total_output, total_cache, total_cost, entry_count) " +
+        "INSERT INTO cost_daily (date, agent_id, project_id, total_input, total_output, total_cache, total_cost, entry_count) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, 1) " +
         "ON CONFLICT(date, agent_id, project_id) DO UPDATE SET " +
         "total_input = total_input + excluded.total_input, " +
@@ -29,7 +29,7 @@ export default function createCostDB(db) {
     },
 
     getEntry(id) {
-      return db.prepare('SELECT * FROM dv_cost_entries WHERE id = ?').get(id);
+      return db.prepare('SELECT * FROM cost_entries WHERE id = ?').get(id);
     },
 
     listEntries(filters) {
@@ -43,16 +43,16 @@ export default function createCostDB(db) {
       var offset = filters.offset || 0;
       params.push(limit, offset);
       return db.prepare(
-        'SELECT * FROM dv_cost_entries WHERE ' + where.join(' AND ') +
+        'SELECT * FROM cost_entries WHERE ' + where.join(' AND ') +
         ' ORDER BY recorded_at DESC LIMIT ? OFFSET ?'
       ).all.apply(
-        db.prepare('SELECT * FROM dv_cost_entries WHERE ' + where.join(' AND ') + ' ORDER BY recorded_at DESC LIMIT ? OFFSET ?'),
+        db.prepare('SELECT * FROM cost_entries WHERE ' + where.join(' AND ') + ' ORDER BY recorded_at DESC LIMIT ? OFFSET ?'),
         params
       );
     },
 
     getDailySummary(date) {
-      return db.prepare('SELECT * FROM dv_cost_daily WHERE date = ?').all(date);
+      return db.prepare('SELECT * FROM cost_daily WHERE date = ?').all(date);
     },
 
     getAgentCosts(agentId, dateFrom, dateTo) {
@@ -61,9 +61,9 @@ export default function createCostDB(db) {
       if (dateFrom) { where.push('date >= ?'); params.push(dateFrom); }
       if (dateTo) { where.push('date <= ?'); params.push(dateTo); }
       return db.prepare(
-        'SELECT * FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'
+        'SELECT * FROM cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'
       ).all.apply(
-        db.prepare('SELECT * FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'),
+        db.prepare('SELECT * FROM cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'),
         params
       );
     },
@@ -74,9 +74,9 @@ export default function createCostDB(db) {
       if (dateFrom) { where.push('date >= ?'); params.push(dateFrom); }
       if (dateTo) { where.push('date <= ?'); params.push(dateTo); }
       return db.prepare(
-        'SELECT * FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'
+        'SELECT * FROM cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'
       ).all.apply(
-        db.prepare('SELECT * FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'),
+        db.prepare('SELECT * FROM cost_daily WHERE ' + where.join(' AND ') + ' ORDER BY date DESC'),
         params
       );
     },
@@ -89,11 +89,11 @@ export default function createCostDB(db) {
       var row = db.prepare(
         'SELECT COALESCE(SUM(total_input), 0) as total_input, COALESCE(SUM(total_output), 0) as total_output, ' +
         'COALESCE(SUM(total_cache), 0) as total_cache, COALESCE(SUM(total_cost), 0) as total_cost, ' +
-        'COALESCE(SUM(entry_count), 0) as entry_count FROM dv_cost_daily WHERE ' + where.join(' AND ')
+        'COALESCE(SUM(entry_count), 0) as entry_count FROM cost_daily WHERE ' + where.join(' AND ')
       ).get.apply(
         db.prepare('SELECT COALESCE(SUM(total_input), 0) as total_input, COALESCE(SUM(total_output), 0) as total_output, ' +
           'COALESCE(SUM(total_cache), 0) as total_cache, COALESCE(SUM(total_cost), 0) as total_cost, ' +
-          'COALESCE(SUM(entry_count), 0) as entry_count FROM dv_cost_daily WHERE ' + where.join(' AND ')),
+          'COALESCE(SUM(entry_count), 0) as entry_count FROM cost_daily WHERE ' + where.join(' AND ')),
         params
       );
       return row;
@@ -102,7 +102,7 @@ export default function createCostDB(db) {
     getSpendToday() {
       var today = new Date().toISOString().split('T')[0];
       var row = db.prepare(
-        'SELECT COALESCE(SUM(total_cost), 0) as spend FROM dv_cost_daily WHERE date = ?'
+        'SELECT COALESCE(SUM(total_cost), 0) as spend FROM cost_daily WHERE date = ?'
       ).get(today);
       return row.spend;
     },
@@ -110,7 +110,7 @@ export default function createCostDB(db) {
     getSpendThisWeek() {
       var weekStart = getWeekStart();
       var row = db.prepare(
-        'SELECT COALESCE(SUM(total_cost), 0) as spend FROM dv_cost_daily WHERE date >= ?'
+        'SELECT COALESCE(SUM(total_cost), 0) as spend FROM cost_daily WHERE date >= ?'
       ).get(weekStart);
       return row.spend;
     },
@@ -120,7 +120,7 @@ export default function createCostDB(db) {
       return db.prepare(
         'SELECT date, SUM(total_input) as total_input, SUM(total_output) as total_output, ' +
         'SUM(total_cache) as total_cache, SUM(total_cost) as total_cost, SUM(entry_count) as entry_count ' +
-        'FROM dv_cost_daily WHERE date >= date("now", "-" || ? || " days") ' +
+        'FROM cost_daily WHERE date >= date("now", "-" || ? || " days") ' +
         'GROUP BY date ORDER BY date ASC'
       ).all(d);
     },
@@ -135,25 +135,25 @@ export default function createCostDB(db) {
       return db.prepare(
         'SELECT agent_id, SUM(total_input) as total_input, SUM(total_output) as total_output, ' +
         'SUM(total_cache) as total_cache, SUM(total_cost) as total_cost, SUM(entry_count) as entry_count ' +
-        'FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY agent_id ORDER BY total_cost DESC LIMIT ?'
+        'FROM cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY agent_id ORDER BY total_cost DESC LIMIT ?'
       ).all.apply(
         db.prepare('SELECT agent_id, SUM(total_input) as total_input, SUM(total_output) as total_output, ' +
           'SUM(total_cache) as total_cache, SUM(total_cost) as total_cost, SUM(entry_count) as entry_count ' +
-          'FROM dv_cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY agent_id ORDER BY total_cost DESC LIMIT ?'),
+          'FROM cost_daily WHERE ' + where.join(' AND ') + ' GROUP BY agent_id ORDER BY total_cost DESC LIMIT ?'),
         params
       );
     },
 
     logAlert(alertType, thresholdPct, currentSpend, budgetLimit) {
       db.prepare(
-        'INSERT INTO dv_cost_alerts (alert_type, threshold_pct, current_spend, budget_limit) VALUES (?, ?, ?, ?)'
+        'INSERT INTO cost_alerts (alert_type, threshold_pct, current_spend, budget_limit) VALUES (?, ?, ?, ?)'
       ).run(alertType, thresholdPct, currentSpend, budgetLimit);
     },
 
     getAlerts(limit) {
       var lim = limit || 20;
       return db.prepare(
-        'SELECT * FROM dv_cost_alerts ORDER BY triggered_at DESC LIMIT ?'
+        'SELECT * FROM cost_alerts ORDER BY triggered_at DESC LIMIT ?'
       ).all(lim);
     }
   };

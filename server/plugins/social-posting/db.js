@@ -10,7 +10,7 @@ export default function createSocialDB(db) {
     // ── Accounts ──
     createAccount(projectId, platform, accountName, credentials, config) {
       var result = stmt('spCreateAcct',
-        `INSERT INTO dv_social_accounts (project_id, platform, account_name, credentials, config)
+        `INSERT INTO social_accounts (project_id, platform, account_name, credentials, config)
          VALUES (?, ?, ?, ?, ?) RETURNING id`
       ).get(projectId, platform, accountName || '',
         typeof credentials === 'string' ? credentials : JSON.stringify(credentials || {}),
@@ -19,14 +19,14 @@ export default function createSocialDB(db) {
     },
 
     getAccount(id) {
-      return stmt('spGetAcct', 'SELECT * FROM dv_social_accounts WHERE id = ?').get(id);
+      return stmt('spGetAcct', 'SELECT * FROM social_accounts WHERE id = ?').get(id);
     },
 
     listAccounts(projectId) {
       if (projectId) {
-        return stmt('spListAcctP', 'SELECT * FROM dv_social_accounts WHERE project_id = ? ORDER BY platform').all(projectId);
+        return stmt('spListAcctP', 'SELECT * FROM social_accounts WHERE project_id = ? ORDER BY platform').all(projectId);
       }
-      return db.prepare('SELECT * FROM dv_social_accounts ORDER BY project_id, platform').all();
+      return db.prepare('SELECT * FROM social_accounts ORDER BY project_id, platform').all();
     },
 
     updateAccount(id, fields) {
@@ -39,17 +39,17 @@ export default function createSocialDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_social_accounts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      return db.prepare('UPDATE social_accounts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deleteAccount(id) {
-      return db.prepare('DELETE FROM dv_social_accounts WHERE id = ?').run(id);
+      return db.prepare('DELETE FROM social_accounts WHERE id = ?').run(id);
     },
 
     // ── Posts ──
     createPost(fields) {
       var result = db.prepare(
-        `INSERT INTO dv_social_posts (project_id, account_id, platform, clip_id, video_session_id,
+        `INSERT INTO social_posts (project_id, account_id, platform, clip_id, video_session_id,
          event_type, tier, caption, media_url, status, scheduled_at, created_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
       ).get(
@@ -64,7 +64,7 @@ export default function createSocialDB(db) {
     },
 
     getPost(id) {
-      return stmt('spGetPost', 'SELECT * FROM dv_social_posts WHERE id = ?').get(id);
+      return stmt('spGetPost', 'SELECT * FROM social_posts WHERE id = ?').get(id);
     },
 
     listPosts(filters) {
@@ -74,7 +74,7 @@ export default function createSocialDB(db) {
       if (filters.status) { where.push('status = ?'); params.push(filters.status); }
       if (filters.video_session_id) { where.push('video_session_id = ?'); params.push(filters.video_session_id); }
       params.push(filters.limit || 50);
-      return db.prepare('SELECT * FROM dv_social_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
+      return db.prepare('SELECT * FROM social_posts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
     },
 
     updatePost(id, fields) {
@@ -88,30 +88,30 @@ export default function createSocialDB(db) {
         }
       }
       values.push(id);
-      return db.prepare('UPDATE dv_social_posts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      return db.prepare('UPDATE social_posts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deletePost(id) {
-      return db.prepare('DELETE FROM dv_social_posts WHERE id = ?').run(id);
+      return db.prepare('DELETE FROM social_posts WHERE id = ?').run(id);
     },
 
     // ── Scheduling ──
     getScheduledPosts(platform) {
       var where = ["status = 'scheduled'"]; var params = [];
       if (platform) { where.push('platform = ?'); params.push(platform); }
-      return db.prepare('SELECT * FROM dv_social_posts WHERE ' + where.join(' AND ') + ' ORDER BY scheduled_at ASC').all(...params);
+      return db.prepare('SELECT * FROM social_posts WHERE ' + where.join(' AND ') + ' ORDER BY scheduled_at ASC').all(...params);
     },
 
     getPostHistory(projectId, platform, days) {
       var since = new Date(Date.now() - (days || 7) * 86400000).toISOString().slice(0, 10);
       var where = ['project_id = ?', "posted_at >= ?"]; var params = [projectId, since];
       if (platform) { where.push('platform = ?'); params.push(platform); }
-      return db.prepare('SELECT * FROM dv_social_posts WHERE ' + where.join(' AND ') + " AND status = 'posted' ORDER BY posted_at DESC").all(...params);
+      return db.prepare('SELECT * FROM social_posts WHERE ' + where.join(' AND ') + " AND status = 'posted' ORDER BY posted_at DESC").all(...params);
     },
 
     getPostStats(projectId) {
       var rows = db.prepare(
-        'SELECT platform, status, COUNT(*) as count FROM dv_social_posts WHERE project_id = ? GROUP BY platform, status'
+        'SELECT platform, status, COUNT(*) as count FROM social_posts WHERE project_id = ? GROUP BY platform, status'
       ).all(projectId);
       var stats = {};
       for (var r of rows) {

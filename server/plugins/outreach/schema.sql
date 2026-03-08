@@ -1,5 +1,5 @@
 -- Outreach campaigns (per-project config for press/creator outreach)
-CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (
+CREATE TABLE IF NOT EXISTS outreach_campaigns (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
   name            TEXT NOT NULL,
@@ -14,10 +14,10 @@ CREATE TABLE IF NOT EXISTS dv_outreach_campaigns (
 );
 
 -- Outreach contacts (press, creators, influencers)
-CREATE TABLE IF NOT EXISTS dv_outreach_contacts (
+CREATE TABLE IF NOT EXISTS outreach_contacts (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
-  campaign_id     INTEGER REFERENCES dv_outreach_campaigns(id),
+  campaign_id     INTEGER REFERENCES outreach_campaigns(id),
   type            TEXT NOT NULL DEFAULT 'creator',
   name            TEXT NOT NULL,
   email           TEXT NOT NULL DEFAULT '',
@@ -42,11 +42,11 @@ CREATE TABLE IF NOT EXISTS dv_outreach_contacts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_project ON dv_outreach_campaigns(project_id);
-CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_status ON dv_outreach_campaigns(status);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_project ON dv_outreach_contacts(project_id);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON dv_outreach_contacts(status);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_campaign ON dv_outreach_contacts(campaign_id);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON dv_outreach_contacts(email);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_outlet ON dv_outreach_contacts(outlet);
-CREATE INDEX IF NOT EXISTS idx_outreach_contacts_tier ON dv_outreach_contacts(tier);
+CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_project ON outreach_campaigns(project_id);
+CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_status ON outreach_campaigns(status);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_project ON outreach_contacts(project_id);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON outreach_contacts(status);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_campaign ON outreach_contacts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON outreach_contacts(email);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_outlet ON outreach_contacts(outlet);
+CREATE INDEX IF NOT EXISTS idx_outreach_contacts_tier ON outreach_contacts(tier);

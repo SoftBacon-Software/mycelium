@@ -5,14 +5,14 @@ import createErrorDB from './db.js';
 
 function getConfig(db, key) {
   var row = db.prepare(
-    "SELECT value FROM dv_plugin_config WHERE plugin_name = 'error-monitor' AND key = ?"
+    "SELECT value FROM plugin_config WHERE plugin_name = 'error-monitor' AND key = ?"
   ).get(key);
   return row ? row.value : null;
 }
 
 function getAllConfig(db) {
   var rows = db.prepare(
-    "SELECT key, value FROM dv_plugin_config WHERE plugin_name = 'error-monitor'"
+    "SELECT key, value FROM plugin_config WHERE plugin_name = 'error-monitor'"
   ).all();
   var config = {};
   for (var row of rows) {
@@ -26,7 +26,7 @@ function autoFileBug(core, db, errorRecord, config) {
   var severity = config.default_severity || 'normal';
 
   var result = core.db.prepare(
-    "INSERT INTO dv_bugs (title, description, project_id, severity, status, reporter) VALUES (?, ?, ?, ?, 'open', '__system__') RETURNING id"
+    "INSERT INTO bugs (title, description, project_id, severity, status, reporter) VALUES (?, ?, ?, ?, 'open', '__system__') RETURNING id"
   ).get(
     '[' + errorRecord.provider + '] ' + errorRecord.title,
     'Auto-filed from error monitor.\n\nMessage: ' + errorRecord.message + '\n\nStack trace:\n' + (errorRecord.stack_trace || 'N/A') + '\n\nLink: ' + (errorRecord.url || 'N/A') + '\n\nOccurrences: ' + errorRecord.occurrences,
@@ -54,10 +54,10 @@ function autoFileBug(core, db, errorRecord, config) {
 function autoAssignBug(core, bugId, projectId) {
   // Find most recently active agent on the project
   var agent = core.db.prepare(
-    "SELECT agent_id FROM dv_agents WHERE last_heartbeat >= datetime('now', '-1 hour') ORDER BY last_heartbeat DESC LIMIT 1"
+    "SELECT agent_id FROM agents WHERE last_heartbeat >= datetime('now', '-1 hour') ORDER BY last_heartbeat DESC LIMIT 1"
   ).get();
   if (agent) {
-    core.db.prepare('UPDATE dv_bugs SET assignee = ? WHERE id = ?').run(agent.agent_id, bugId);
+    core.db.prepare('UPDATE bugs SET assignee = ? WHERE id = ?').run(agent.agent_id, bugId);
   }
   return agent ? agent.agent_id : null;
 }
