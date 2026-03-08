@@ -207,7 +207,8 @@ app.get('/health', function (req, res) {
   var agentsOnline = 0;
   try { agentsOnline = getDB().prepare("SELECT COUNT(*) as c FROM agents WHERE status = 'online'").get().c; } catch (e) { /* */ }
   var mem = process.memoryUsage();
-  res.json({
+  var statusCode = dbOk ? 200 : 503;
+  res.status(statusCode).json({
     status: dbOk ? 'ok' : 'degraded',
     uptime_seconds: Math.floor((Date.now() - serverStartTime) / 1000),
     db_ok: dbOk,
@@ -288,18 +289,24 @@ var server = app.listen(PORT, function () {
   }
 });
 
-// ---- Graceful shutdown: stop worker plugins ----
+// ---- Graceful shutdown: stop worker plugins, close DB ----
 import { stopAllWorkers } from './plugins.js';
-process.on('SIGTERM', function () {
-  console.log('[shutdown] SIGTERM received, stopping workers...');
+function gracefulShutdown(signal) {
+  console.log('[shutdown] ' + signal + ' received, stopping workers...');
   stopAllWorkers();
-  server.close(function () { process.exit(0); });
-});
-process.on('SIGINT', function () {
-  console.log('[shutdown] SIGINT received, stopping workers...');
-  stopAllWorkers();
-  server.close(function () { process.exit(0); });
-});
+  server.close(function () {
+    try { getDB().close(); console.log('[shutdown] DB closed'); } catch (e) { /* */ }
+    process.exit(0);
+  });
+  // Force exit after 10s if server.close hangs (e.g. long-lived SSE/WS connections)
+  setTimeout(function () {
+    console.warn('[shutdown] Forced exit after 10s timeout');
+    try { getDB().close(); } catch (e) { /* */ }
+    process.exit(1);
+  }, 10000).unref();
+}
+process.on('SIGTERM', function () { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', function () { gracefulShutdown('SIGINT'); });
 
 // ---- SQLite backup system ----
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');

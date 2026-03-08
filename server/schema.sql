@@ -324,6 +324,14 @@ CREATE INDEX IF NOT EXISTS idx_projects_org ON projects(org_id);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_type ON projects(type);
 
+-- Critical auth index (every API request hits this)
+CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash);
+CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+CREATE INDEX IF NOT EXISTS idx_agents_agent_type ON agents(agent_type);
+
+-- Password reset token lookup
+CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token_hash);
+
 -- Additional performance indexes
 CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_requester ON tasks(requester);

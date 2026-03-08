@@ -230,7 +230,15 @@ export function updateAgentKey(id, apiKeyHash) {
 }
 
 export function deleteAgent(id) {
-  stmt('dvDeleteAgent', 'DELETE FROM agents WHERE id = ?').run(id);
+  db.prepare('DELETE FROM tasks WHERE assignee = ?').run(id);
+  db.prepare('DELETE FROM messages WHERE from_agent = ? OR to_agent = ?').run(id, id);
+  db.prepare('DELETE FROM bugs WHERE assignee = ?').run(id);
+  db.prepare('DELETE FROM drone_jobs WHERE requester = ? OR drone_id = ?').run(id, id);
+  db.prepare('DELETE FROM agent_savepoints WHERE agent_id = ?').run(id);
+  db.prepare('DELETE FROM webhooks WHERE agent_id = ?').run(id);
+  db.prepare('DELETE FROM message_reads WHERE agent_id = ?').run(id);
+  db.prepare('DELETE FROM channel_members WHERE user_id = ? AND user_type = ?').run(id, 'agent');
+  db.prepare('DELETE FROM agents WHERE id = ?').run(id);
 }
 
 export function updateAgent(id, fields) {
@@ -1497,16 +1505,25 @@ export function listPlans(filters) {
   var offset = filters.offset || 0;
   params.push(limit, offset);
   var plans = db.prepare('SELECT * FROM plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
-  for (var p of plans) {
-    var steps = db.prepare("SELECT id, status, title, assignee FROM plan_steps WHERE plan_id = ? ORDER BY step_order ASC").all(p.id);
-    var total = steps.length;
-    var completed = steps.filter(function (s) { return s.status === 'completed'; }).length;
-    p.step_count = total;
-    p.progress = { total: total, completed: completed, percent: total > 0 ? Math.round(completed / total * 100) : 0 };
-    // Current step: first in_progress, or first pending if none in_progress
-    var current = steps.find(function (s) { return s.status === 'in_progress'; }) ||
-                  steps.find(function (s) { return s.status === 'pending'; });
-    p.current_step = current ? current.title : null;
+  if (plans.length > 0) {
+    var planIds = plans.map(function (p) { return p.id; });
+    var placeholders = planIds.map(function () { return '?'; }).join(',');
+    var allSteps = db.prepare("SELECT plan_id, id, status, title, assignee FROM plan_steps WHERE plan_id IN (" + placeholders + ") ORDER BY step_order ASC").all(...planIds);
+    var stepsByPlan = {};
+    for (var s of allSteps) {
+      if (!stepsByPlan[s.plan_id]) stepsByPlan[s.plan_id] = [];
+      stepsByPlan[s.plan_id].push(s);
+    }
+    for (var p of plans) {
+      var steps = stepsByPlan[p.id] || [];
+      var total = steps.length;
+      var completed = steps.filter(function (st) { return st.status === 'completed'; }).length;
+      p.step_count = total;
+      p.progress = { total: total, completed: completed, percent: total > 0 ? Math.round(completed / total * 100) : 0 };
+      var current = steps.find(function (st) { return st.status === 'in_progress'; }) ||
+                    steps.find(function (st) { return st.status === 'pending'; });
+      p.current_step = current ? current.title : null;
+    }
   }
   return plans;
 }
