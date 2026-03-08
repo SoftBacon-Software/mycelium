@@ -108,6 +108,8 @@ import {
   approveTask, listTasksNeedingApproval,
   getContext, getAllContext, upsertContext,
   upsertContextKey, getContextKey, listContextKeys, deleteContextKey,
+  getContextHistory, rollbackContextKey,
+  logAgentSpend, getAgentSpend, getSpendSummary,
   createAsset, getAsset, listAssets, updateAsset, deleteAsset,
   autoTaskFromAsset,
   createEvent, listEvents,
@@ -619,6 +621,140 @@ function checkApprovalGate(req, who, actionType) {
   return { ok: true, approval: approval };
 }
 
+// ---- Enforcement rules: runtime convention enforcement on tool calls ----
+var _enforcementRulesCache = null;
+var _enforcementRulesCacheTime = 0;
+var ENFORCEMENT_CACHE_TTL = 60000; // 60s
+
+function getEnforcementRules() {
+  var now = Date.now();
+  if (_enforcementRulesCache && (now - _enforcementRulesCacheTime) < ENFORCEMENT_CACHE_TTL) {
+    return _enforcementRulesCache;
+  }
+  try {
+    var ctx = getContextKey('mycelium', 'enforcement_rules');
+    if (ctx && ctx.data) {
+      var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+      _enforcementRulesCache = Array.isArray(data) ? data : (data.rules || []);
+    } else {
+      _enforcementRulesCache = [];
+    }
+  } catch {
+    _enforcementRulesCache = [];
+  }
+  _enforcementRulesCacheTime = now;
+  return _enforcementRulesCache;
+}
+
+function checkEnforcementRules(toolName, args, agentId) {
+  var rules = getEnforcementRules();
+  if (!rules.length) return { allowed: true, warnings: [], blocks: [] };
+
+  var warnings = [];
+  var blocks = [];
+  var argsStr = typeof args === 'string' ? args : JSON.stringify(args || {});
+
+  for (var rule of rules) {
+    // Check if rule matches this tool
+    if (rule.tool !== '*' && rule.tool !== toolName) continue;
+
+    // Check match conditions
+    if (rule.match && rule.match.content_pattern) {
+      var re;
+      try { re = new RegExp(rule.match.content_pattern, 'i'); } catch { continue; }
+      if (!re.test(argsStr)) continue;
+    }
+
+    // Rule matched — check enforcement conditions
+    var violated = false;
+
+    if (rule.enforce) {
+      // Check expected_tool — agent used wrong tool
+      if (rule.enforce.expected_tool && rule.enforce.expected_tool !== toolName) {
+        violated = true;
+      }
+      // Check expected_args
+      if (rule.enforce.expected_args) {
+        for (var key in rule.enforce.expected_args) {
+          if (args && args[key] !== rule.enforce.expected_args[key]) {
+            violated = true;
+          }
+        }
+      }
+      // Check required_role
+      if (rule.enforce.required_role) {
+        try {
+          var agent = getAgent(agentId);
+          if (agent && agent.role !== rule.enforce.required_role && agentId !== '__admin__' && agentId !== '__system__') {
+            violated = true;
+          }
+        } catch {}
+      }
+    } else {
+      // No enforce conditions — match alone triggers violation (block patterns)
+      violated = true;
+    }
+
+    if (violated) {
+      var entry = { rule_id: rule.id, message: rule.message || 'Enforcement rule violated', severity: rule.severity || 'warn' };
+      if (rule.severity === 'block') {
+        blocks.push(entry);
+      } else {
+        warnings.push(entry);
+      }
+
+      // Log enforcement event
+      try {
+        createEvent('enforcement_violation', agentId, null, (rule.severity === 'block' ? 'BLOCKED' : 'WARNING') + ': ' + (rule.message || rule.id), { rule_id: rule.id, tool: toolName, severity: rule.severity });
+      } catch {}
+    }
+  }
+
+  return { allowed: blocks.length === 0, warnings: warnings, blocks: blocks };
+}
+
+// Wire enforcement into message sending
+function enforceOnMessage(req, res, agentId) {
+  var result = checkEnforcementRules('send_message', { content: req.body.content, to_agent: req.body.to_agent }, agentId);
+  if (!result.allowed) {
+    return res.status(403).json({ error: result.blocks[0].message, enforcement_rule: result.blocks[0].rule_id });
+  }
+  return result; // caller can attach warnings to response
+}
+
+// ---- Capability matching: check if agent can handle work ----
+function agentCanHandle(agent, workItem) {
+  // Parse agent capabilities (stored as JSON array string)
+  var caps = [];
+  try { caps = JSON.parse(agent.capabilities || '[]'); } catch {}
+  if (!Array.isArray(caps) || caps.length === 0) return true; // no caps declared = can do anything (legacy)
+
+  // Check task tags for required capabilities (convention: tag like "requires:gpu", "requires:review")
+  var tags = [];
+  if (workItem.tags) {
+    try { tags = typeof workItem.tags === 'string' ? JSON.parse(workItem.tags) : workItem.tags; } catch {}
+  }
+  for (var tag of tags) {
+    if (typeof tag === 'string' && tag.startsWith('requires:')) {
+      var required = tag.substring(9);
+      if (caps.indexOf(required) === -1) return false;
+    }
+  }
+
+  // Check title keywords as heuristic routing
+  var title = ((workItem.title || '') + ' ' + (workItem.plan_title || '')).toLowerCase();
+  // GPU/art work should go to agents with gpu capability
+  if ((title.includes('sprite') || title.includes('art gen') || title.includes('lora') || title.includes('gpu')) && caps.indexOf('gpu') === -1 && caps.indexOf('assets') === -1) {
+    return false;
+  }
+  // Code review should go to agents with review capability
+  if ((title.includes('review') || title.includes('pr review')) && caps.indexOf('review') === -1 && caps.indexOf('admin') === -1 && caps.indexOf('code') === -1) {
+    return false;
+  }
+
+  return true;
+}
+
 // ---- Auto-dispatch: push work to idle agents ----
 function dispatchWorkToIdleAgents(triggerContext) {
   var idleAgents = getIdleAgents();
@@ -636,6 +772,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
 
     // Try to find work: plan steps first, then unassigned tasks
     var step = getNextUnassignedPlanStep();
+    // Capability check — skip if agent can't handle this step
+    if (step && !agentCanHandle(agent, step)) step = null;
     if (step) {
       // Assign plan step
       updatePlanStep(step.id, { assignee: agent.id, status: 'pending' });
@@ -647,6 +785,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
     }
 
     var task = getNextUnassignedTask(claimedTaskIds);
+    // Capability check — skip if agent can't handle this task
+    if (task && !agentCanHandle(agent, task)) task = null;
     if (task) {
       // Assign task
       updateTask(task.id, { assignee: agent.id });
@@ -1008,6 +1148,7 @@ router.post('/agents/heartbeat', function (req, res) {
   if (req.body.llm_backend !== undefined) agentUpdates.llm_backend = req.body.llm_backend;
   if (req.body.llm_model !== undefined) agentUpdates.llm_model = req.body.llm_model;
   if (req.body.agent_type !== undefined) agentUpdates.agent_type = req.body.agent_type;
+  if (req.body.runtime !== undefined) agentUpdates.runtime = req.body.runtime;
   if (Object.keys(agentUpdates).length > 0) updateAgent(agentId, agentUpdates);
   // Read previous state to craft a meaningful event summary
   var prev = getAgent(agentId);
@@ -1196,7 +1337,12 @@ router.put('/agents/:id', function (req, res) {
     if (req.body.project !== undefined) fields.project = req.body.project;
     if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
     if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);
+    if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   }
+  // Self-update fields (any agent can set on themselves)
+  if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
+  if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
+  if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);
   res.json({ ok: true, id: req.params.id, updated: Object.keys(fields) });
@@ -1486,6 +1632,28 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
 });
 
+// Context key history — view previous versions
+router.get('/context/keys/:namespace/:key/history', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 20;
+  if (limit > 100) limit = 100;
+  var history = getContextHistory(req.params.namespace, req.params.key, limit);
+  res.json(history);
+});
+
+// Context key rollback — restore a previous version by history ID
+router.post('/context/keys/rollback/:historyId', function (req, res) {
+  var agentId = checkAgentOrAdmin(req, res);
+  if (!agentId) return;
+  var historyId = parseInt(req.params.historyId);
+  if (!historyId) return res.status(400).json({ error: 'Invalid history ID' });
+  var restored = rollbackContextKey(historyId, agentId);
+  if (!restored) return res.status(404).json({ error: 'History entry not found' });
+  emitEvent('context_key_rollback', agentId, restored.namespace, agentId + ' rolled back ' + restored.namespace + ':' + restored.key + ' to version #' + historyId);
+  res.json({ ok: true, namespace: restored.namespace, key: restored.key, restored_from: historyId });
+});
+
 // Bulk context key operations — set multiple keys in one call
 router.post('/context/keys/bulk', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
@@ -1548,6 +1716,48 @@ router.put('/context/:projectId', function (req, res) {
   upsertContext(req.params.projectId, dataStr, agentId);
   emitEvent('context_updated', agentId, req.params.projectId, agentId + ' updated context for ' + req.params.projectId);
   res.json({ ok: true, project_id: req.params.projectId });
+});
+
+// ======== SPEND TRACKING ========
+
+router.post('/spend', function (req, res) {
+  var agentId = checkAgentOrAdmin(req, res);
+  if (!agentId) return;
+  var costUsd = parseFloat(req.body.cost_usd) || 0;
+  if (costUsd < 0) return res.status(400).json({ error: 'cost_usd must be non-negative' });
+  logAgentSpend(
+    agentId,
+    req.body.project_id || '',
+    costUsd,
+    req.body.source || '',
+    req.body.description || '',
+    req.body.model || '',
+    parseInt(req.body.tokens_in) || 0,
+    parseInt(req.body.tokens_out) || 0
+  );
+  res.json({ ok: true });
+});
+
+router.get('/spend/:agentId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var entries = getAgentSpend(req.params.agentId, {
+    since: req.query.since,
+    project_id: req.query.project_id,
+    limit: parseInt(req.query.limit) || 50
+  });
+  res.json(entries);
+});
+
+router.get('/spend', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var summary = getSpendSummary({
+    since: req.query.since,
+    project_id: req.query.project_id
+  });
+  var total = summary.reduce(function (acc, r) { return acc + (r.total_cost || 0); }, 0);
+  res.json({ total_cost_usd: Math.round(total * 10000) / 10000, breakdown: summary });
 });
 
 // ======== ASSETS ========
@@ -1892,6 +2102,12 @@ router.post('/messages', function (req, res) {
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   if (!validateStringLength(res, content, MAX_CONTENT, 'content')) return;
+
+  // Enforcement rules check
+  var enforcement = checkEnforcementRules('send_message', { content: content, to_agent: req.body.to_agent || req.body.to }, agentId);
+  if (!enforcement.allowed) {
+    return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
+  }
 
   // Only admin and operators can send directives
   var msgType = req.body.msg_type || 'message';
@@ -2779,11 +2995,12 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, projectId, hash, capabilities);
   // Set optional LLM metadata
-  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type) {
+  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type || req.body.runtime) {
     updateAgent(id, {
       llm_backend: req.body.llm_backend || '',
       llm_model: req.body.llm_model || '',
-      agent_type: req.body.agent_type || 'agent'
+      agent_type: req.body.agent_type || 'agent',
+      runtime: req.body.runtime || ''
     });
   }
   // Auto-add new agent to #general
@@ -5106,6 +5323,12 @@ router.get('/github/prs/:owner/:repo', function (req, res) {
 // Merge PR
 router.post('/github/prs/:owner/:repo/:number/merge', function (req, res) {
   if (!checkAdmin(req, res)) return;
+  // Enforcement rules check
+  var who = resolveAgentId(req);
+  var enforcement = checkEnforcementRules('merge_pr', { owner: req.params.owner, repo: req.params.repo, number: req.params.number }, who);
+  if (!enforcement.allowed) {
+    return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
+  }
   if (!GITHUB_TOKEN) return res.status(503).json({ error: 'GITHUB_TOKEN not configured on server' });
   var body = { merge_method: req.body.merge_method || 'squash' };
   if (req.body.commit_title) body.commit_title = req.body.commit_title;

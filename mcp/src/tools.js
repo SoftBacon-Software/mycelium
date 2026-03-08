@@ -766,6 +766,88 @@ export function registerTools(server) {
     }
   );
 
+  // ===== CONTEXT HISTORY & ROLLBACK =====
+
+  registerDual(server,
+    'studio_context_history',
+    'View version history for a context key. Shows previous values with timestamps and who changed them.',
+    {
+      namespace: z.string().describe('Namespace (e.g. agent name, project name)'),
+      key: z.string().describe('Key name'),
+      limit: z.number().optional().describe('Max entries to return (default 10)')
+    },
+    async (args) => {
+      var limit = args.limit || 10;
+      var history = await apiGet('/context/keys/' + encodeURIComponent(args.namespace) + '/' + encodeURIComponent(args.key) + '/history?limit=' + limit);
+      if (!history.length) return text('No history found for ' + args.namespace + ':' + args.key);
+      var lines = ['=== History: ' + args.namespace + ':' + args.key + ' (' + history.length + ' versions) ==='];
+      for (var h of history) {
+        var preview = (h.data || '').substring(0, 200);
+        if (h.data && h.data.length > 200) preview += '...';
+        lines.push('#' + h.id + ' | ' + h.changed_at + ' | by ' + (h.changed_by || 'unknown'));
+        lines.push('  ' + preview);
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_rollback_context',
+    'Rollback a context key to a previous version. Use context_history to find the version ID.',
+    {
+      history_id: z.number().describe('History entry ID to restore (from context_history)')
+    },
+    async (args) => {
+      var result = await apiPost('/context/keys/rollback/' + args.history_id, {});
+      return text('Rolled back ' + result.namespace + ':' + result.key + ' to version #' + result.restored_from);
+    }
+  );
+
+  // ===== SPEND TRACKING =====
+
+  registerDual(server,
+    'studio_log_spend',
+    'Log API/compute spend for budget tracking. Call after expensive operations (LLM calls, drone jobs).',
+    {
+      cost_usd: z.number().describe('Cost in USD'),
+      source: z.string().optional().describe('Source: llm_api, drone, tool, other'),
+      description: z.string().optional().describe('What the spend was for'),
+      model: z.string().optional().describe('Model used (e.g. claude-opus-4-6)'),
+      tokens_in: z.number().optional().describe('Input tokens'),
+      tokens_out: z.number().optional().describe('Output tokens'),
+      project_id: z.string().optional().describe('Project context')
+    },
+    async (args) => {
+      await apiPost('/spend', args);
+      return text('Logged spend: $' + (args.cost_usd || 0).toFixed(4) + ' (' + (args.source || 'unknown') + ')');
+    }
+  );
+
+  registerDual(server,
+    'studio_spend_summary',
+    'View spend summary — total costs per agent and project. Use to monitor budget.',
+    {
+      since: z.string().optional().describe('ISO timestamp — only show spend after this date'),
+      project_id: z.string().optional().describe('Filter by project')
+    },
+    async (args) => {
+      var params = [];
+      if (args.since) params.push('since=' + encodeURIComponent(args.since));
+      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var result = await apiGet('/spend' + qs);
+      var lines = ['=== Spend Summary ===', 'Total: $' + (result.total_cost_usd || 0).toFixed(4), ''];
+      if (result.breakdown && result.breakdown.length) {
+        for (var r of result.breakdown) {
+          lines.push(r.agent_id + ' | ' + (r.project_id || 'unscoped') + ' | $' + (r.total_cost || 0).toFixed(4) + ' | ' + r.entry_count + ' entries | ' + (r.total_tokens_in || 0) + ' in / ' + (r.total_tokens_out || 0) + ' out');
+        }
+      } else {
+        lines.push('No spend recorded.');
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== BUGS =====
 
   registerDual(server,

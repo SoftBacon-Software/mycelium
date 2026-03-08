@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS agents (
   agent_type      TEXT NOT NULL DEFAULT 'agent',
   llm_backend     TEXT NOT NULL DEFAULT '',
   llm_model       TEXT NOT NULL DEFAULT '',
+  runtime         TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -118,6 +119,33 @@ CREATE TABLE IF NOT EXISTS context_keys (
   updated_by  TEXT NOT NULL DEFAULT '',
   UNIQUE(namespace, key)
 );
+
+-- Context version history (for rollback)
+CREATE TABLE IF NOT EXISTS context_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  namespace   TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  data        TEXT NOT NULL,
+  changed_by  TEXT NOT NULL DEFAULT '',
+  changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_context_history_ns_key ON context_history(namespace, key);
+
+-- Agent spend tracking (budget monitoring)
+CREATE TABLE IF NOT EXISTS agent_spend (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id    TEXT NOT NULL,
+  project_id  TEXT NOT NULL DEFAULT '',
+  cost_usd    REAL NOT NULL DEFAULT 0,
+  source      TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  model       TEXT NOT NULL DEFAULT '',
+  tokens_in   INTEGER NOT NULL DEFAULT 0,
+  tokens_out  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_spend_agent ON agent_spend(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_spend_project ON agent_spend(project_id);
 
 -- Bug tracking
 CREATE TABLE IF NOT EXISTS bugs (

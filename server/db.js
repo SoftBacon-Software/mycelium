@@ -85,6 +85,8 @@ export function initDB() {
     ["support_tickets", "assigned_agent", "TEXT"],
     ["support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
     ["support_tickets", "draft_response", "TEXT"],
+    // Plan #62 — multi-runtime agent support
+    ["agents", "runtime", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -254,6 +256,7 @@ export function updateAgent(id, fields) {
   if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
   if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); values.push(fields.capabilities); }
   if (fields.system_diagnostics !== undefined) { sets.push('system_diagnostics = ?'); values.push(typeof fields.system_diagnostics === 'string' ? fields.system_diagnostics : JSON.stringify(fields.system_diagnostics)); }
+  if (fields.runtime !== undefined) { sets.push('runtime = ?'); values.push(fields.runtime); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
@@ -833,6 +836,12 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
   var existing = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
+    // Save previous value to history before overwriting
+    try {
+      db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(namespace, key, existing.data, agentId || '');
+      // Keep only last 50 versions per key
+      db.prepare("DELETE FROM context_history WHERE namespace = ? AND key = ? AND id NOT IN (SELECT id FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 50)").run(namespace, key, namespace, key);
+    } catch (e) { /* non-critical — history table may not exist yet */ }
     try {
       var existingData = JSON.parse(existing.data);
       var newData = typeof data === 'string' ? JSON.parse(data) : data;
@@ -884,7 +893,69 @@ export function deleteContextKey(namespace, key) {
   db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
 }
 
+// Context history — view previous versions of a key
+export function getContextHistory(namespace, key, limit) {
+  return db.prepare(
+    "SELECT * FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT ?"
+  ).all(namespace, key, limit || 20);
+}
+
+// Rollback — restore a previous version by history ID
+export function rollbackContextKey(historyId, agentId) {
+  var row = db.prepare("SELECT * FROM context_history WHERE id = ?").get(historyId);
+  if (!row) return null;
+  // Save current value to history before rollback
+  var current = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(row.namespace, row.key);
+  if (current) {
+    db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(row.namespace, row.key, current.data, agentId || '');
+  }
+  // Restore the historical value
+  db.prepare(
+    "UPDATE context_keys SET data = ?, updated_by = ?, updated_at = datetime('now') WHERE namespace = ? AND key = ?"
+  ).run(row.data, agentId || '', row.namespace, row.key);
+  return row;
+}
+
 // Purge all expired context keys (called on server boot and periodically)
+// ---- Agent Spend Tracking ----
+
+export function logAgentSpend(agentId, projectId, costUsd, source, description, model, tokensIn, tokensOut) {
+  db.prepare(
+    "INSERT INTO agent_spend (agent_id, project_id, cost_usd, source, description, model, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(agentId, projectId || '', costUsd || 0, source || '', description || '', model || '', tokensIn || 0, tokensOut || 0);
+}
+
+export function getAgentSpend(agentId, opts) {
+  var since = (opts && opts.since) || null;
+  var projectId = (opts && opts.project_id) || null;
+  var limit = (opts && opts.limit) || 50;
+
+  var where = ['agent_id = ?'];
+  var params = [agentId];
+  if (since) { where.push('created_at >= ?'); params.push(since); }
+  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
+  params.push(limit);
+
+  return db.prepare(
+    'SELECT * FROM agent_spend WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+  ).all(...params);
+}
+
+export function getSpendSummary(opts) {
+  var since = (opts && opts.since) || null;
+  var projectId = (opts && opts.project_id) || null;
+
+  var where = ['1=1'];
+  var params = [];
+  if (since) { where.push('created_at >= ?'); params.push(since); }
+  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
+
+  var rows = db.prepare(
+    'SELECT agent_id, project_id, SUM(cost_usd) as total_cost, COUNT(*) as entry_count, SUM(tokens_in) as total_tokens_in, SUM(tokens_out) as total_tokens_out FROM agent_spend WHERE ' + where.join(' AND ') + ' GROUP BY agent_id, project_id ORDER BY total_cost DESC'
+  ).all(...params);
+  return rows;
+}
+
 export function purgeExpiredContextKeys() {
   var result = db.prepare("DELETE FROM context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
   return result.changes;
@@ -1237,6 +1308,17 @@ export function getSlimBootPayload(agentId) {
     sleep_mode: sleepMode,
     autonomous_mode: autonomousMode,
     operators_available: operatorsAvailable,
+    enforcement_rules_active: (function() {
+      try {
+        var ctx = getContextKey('mycelium', 'enforcement_rules');
+        if (ctx && ctx.data) {
+          var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+          var rules = Array.isArray(data) ? data : (data.rules || []);
+          return rules.map(function(r) { return r.id + ': ' + (r.message || '').substring(0, 80) + ' (' + (r.severity || 'warn').toUpperCase() + ')'; });
+        }
+      } catch {}
+      return [];
+    })(),
     server_time: new Date().toISOString()
   };
 }
@@ -1382,7 +1464,7 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
 export function getIdleAgents() {
   // Agents that are online/idle, not drones, heartbeat within last 30 minutes
   return db.prepare(`
-    SELECT id, name, project_id, status, working_on, capabilities, role
+    SELECT id, name, project_id, status, working_on, capabilities, role, runtime, llm_backend, llm_model
     FROM agents
     WHERE status IN ('online', 'idle')
       AND role != 'drone'

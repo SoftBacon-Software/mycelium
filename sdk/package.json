@@ -1,0 +1,30 @@
+{
+  "name": "@mycelium/sdk",
+  "version": "0.1.0",
+  "description": "Mycelium agent SDK — connect any process to the Mycelium network via HTTP polling",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./agent": "./src/agent.js",
+    "./api": "./src/api.js"
+  },
+  "bin": {
+    "mycelium-agent": "./bin/run.js"
+  },
+  "scripts": {
+    "start": "node bin/run.js"
+  },
+  "keywords": [
+    "mycelium",
+    "ai-agents",
+    "multi-agent",
+    "orchestration",
+    "sdk"
+  ],
+  "author": "SoftBacon Software",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
