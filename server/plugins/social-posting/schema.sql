@@ -1,6 +1,6 @@
 -- Social Posting plugin tables
 
-CREATE TABLE IF NOT EXISTS dv_social_accounts (
+CREATE TABLE IF NOT EXISTS social_accounts (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
   platform        TEXT NOT NULL,
@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS dv_social_accounts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS dv_social_posts (
+CREATE TABLE IF NOT EXISTS social_posts (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
-  account_id      INTEGER REFERENCES dv_social_accounts(id),
+  account_id      INTEGER REFERENCES social_accounts(id),
   platform        TEXT NOT NULL,
   clip_id         TEXT,
   video_session_id INTEGER,
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS dv_social_posts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_dv_social_accounts_project ON dv_social_accounts(project_id);
-CREATE INDEX IF NOT EXISTS idx_dv_social_posts_project ON dv_social_posts(project_id);
-CREATE INDEX IF NOT EXISTS idx_dv_social_posts_status ON dv_social_posts(status);
-CREATE INDEX IF NOT EXISTS idx_dv_social_posts_platform ON dv_social_posts(platform);
-CREATE INDEX IF NOT EXISTS idx_dv_social_posts_scheduled ON dv_social_posts(scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_social_accounts_project ON social_accounts(project_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_project ON social_posts(project_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
+CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts(platform);
+CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled ON social_posts(scheduled_at);

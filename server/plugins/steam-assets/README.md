@@ -41,7 +41,7 @@ All routes are prefixed with `/api/mycelium/steam`.
 
 ## Database Tables
 
-**`dv_steam_assets`** -- Steam asset generation tracking.
+**`steam_assets`** -- Steam asset generation tracking.
 
 | Column | Type | Description |
 |--------|------|-------------|

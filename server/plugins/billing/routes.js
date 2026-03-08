@@ -21,7 +21,7 @@ export default function (core) {
 
   function getConfig(key, fallback) {
     var row = core.db.prepare(
-      "SELECT value FROM dv_plugin_config WHERE plugin_name = 'billing' AND key = ?"
+      "SELECT value FROM plugin_config WHERE plugin_name = 'billing' AND key = ?"
     ).get(key);
     return row ? row.value : fallback;
   }
@@ -175,7 +175,7 @@ export default function (core) {
           var org = db.getOrg(orgId);
           if (!org) {
             core.db.prepare(
-              "INSERT INTO dv_organizations (id, name, description, plan) VALUES (?, ?, ?, 'managed')"
+              "INSERT INTO organizations (id, name, description, plan) VALUES (?, ?, ?, 'managed')"
             ).run(orgId, customerEmail || 'Customer ' + customerId, customerEmail ? 'email:' + customerEmail : '');
           } else {
             db.updateOrgPlan(orgId, 'managed');

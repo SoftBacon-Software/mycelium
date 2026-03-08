@@ -1,6 +1,6 @@
 -- Video Pipeline plugin tables
 
-CREATE TABLE IF NOT EXISTS dv_video_sessions (
+CREATE TABLE IF NOT EXISTS video_sessions (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
   title           TEXT NOT NULL,
@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS dv_video_sessions (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS dv_video_clips (
+CREATE TABLE IF NOT EXISTS video_clips (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      INTEGER NOT NULL REFERENCES dv_video_sessions(id),
+  session_id      INTEGER NOT NULL REFERENCES video_sessions(id),
   clip_id         TEXT NOT NULL,
   tier            TEXT NOT NULL DEFAULT 'C',
   event_type      TEXT NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS dv_video_clips (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_dv_video_sessions_project ON dv_video_sessions(project_id);
-CREATE INDEX IF NOT EXISTS idx_dv_video_sessions_status ON dv_video_sessions(status);
-CREATE INDEX IF NOT EXISTS idx_dv_video_clips_session ON dv_video_clips(session_id);
-CREATE INDEX IF NOT EXISTS idx_dv_video_clips_tier ON dv_video_clips(tier);
+CREATE INDEX IF NOT EXISTS idx_video_sessions_project ON video_sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_video_sessions_status ON video_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_video_clips_session ON video_clips(session_id);
+CREATE INDEX IF NOT EXISTS idx_video_clips_tier ON video_clips(tier);

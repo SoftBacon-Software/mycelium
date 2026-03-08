@@ -4,7 +4,7 @@ export default function createBipDB(db) {
   return {
     createDraft(triggerEvent, triggerData, title, content, platforms) {
       var r = db.prepare(
-        'INSERT INTO dv_bip_drafts (trigger_event, trigger_data, title, content, platforms) VALUES (?, ?, ?, ?, ?) RETURNING id'
+        'INSERT INTO bip_drafts (trigger_event, trigger_data, title, content, platforms) VALUES (?, ?, ?, ?, ?) RETURNING id'
       ).get(
         triggerEvent || '',
         JSON.stringify(triggerData || {}),
@@ -16,7 +16,7 @@ export default function createBipDB(db) {
     },
 
     getDraft(id) {
-      var row = db.prepare('SELECT * FROM dv_bip_drafts WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM bip_drafts WHERE id = ?').get(id);
       if (!row) return null;
       try { row.trigger_data = JSON.parse(row.trigger_data); } catch (e) { row.trigger_data = {}; }
       try { row.platforms = JSON.parse(row.platforms); } catch (e) { row.platforms = ['twitter']; }
@@ -33,7 +33,7 @@ export default function createBipDB(db) {
       var limit = Math.min(filters.limit || 50, 200);
       var offset = filters.offset || 0;
       var rows = db.prepare(
-        'SELECT * FROM dv_bip_drafts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        'SELECT * FROM bip_drafts WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
       ).all(...params, limit, offset);
       return rows.map(function (row) {
         try { row.trigger_data = JSON.parse(row.trigger_data); } catch (e) { row.trigger_data = {}; }
@@ -59,15 +59,15 @@ export default function createBipDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_bip_drafts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE bip_drafts SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     deleteDraft(id) {
-      db.prepare('DELETE FROM dv_bip_drafts WHERE id = ?').run(id);
+      db.prepare('DELETE FROM bip_drafts WHERE id = ?').run(id);
     },
 
     countByStatus() {
-      return db.prepare('SELECT status, COUNT(*) as count FROM dv_bip_drafts GROUP BY status').all();
+      return db.prepare('SELECT status, COUNT(*) as count FROM bip_drafts GROUP BY status').all();
     }
   };
 }

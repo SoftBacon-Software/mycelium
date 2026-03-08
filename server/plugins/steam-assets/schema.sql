@@ -1,6 +1,6 @@
 -- Steam Assets plugin tables
 
-CREATE TABLE IF NOT EXISTS dv_steam_assets (
+CREATE TABLE IF NOT EXISTS steam_assets (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id      TEXT NOT NULL,
   asset_type      TEXT NOT NULL,
@@ -15,6 +15,6 @@ CREATE TABLE IF NOT EXISTS dv_steam_assets (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_dv_steam_assets_project ON dv_steam_assets(project_id);
-CREATE INDEX IF NOT EXISTS idx_dv_steam_assets_type ON dv_steam_assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_dv_steam_assets_status ON dv_steam_assets(status);
+CREATE INDEX IF NOT EXISTS idx_steam_assets_project ON steam_assets(project_id);
+CREATE INDEX IF NOT EXISTS idx_steam_assets_type ON steam_assets(asset_type);
+CREATE INDEX IF NOT EXISTS idx_steam_assets_status ON steam_assets(status);
