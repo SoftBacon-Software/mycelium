@@ -405,6 +405,7 @@ export function updateProject(id, fields) {
   if (fields.type !== undefined) { sets.push('type = ?'); values.push(fields.type); }
   if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
   if (fields.bug_categories !== undefined) { sets.push('bug_categories = ?'); values.push(typeof fields.bug_categories === 'string' ? fields.bug_categories : JSON.stringify(fields.bug_categories)); }
+  if (fields.team_id !== undefined) { sets.push('team_id = ?'); values.push(fields.team_id); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
