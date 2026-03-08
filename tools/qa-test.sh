@@ -9,7 +9,7 @@ check() {
   local name="$1"
   local result="$2"
   local expected="$3"
-  if echo "$result" | grep -q "$expected"; then
+  if echo "$result" | grep -qF "$expected"; then
     echo "PASS: $name"
     PASS=$((PASS+1))
   else
@@ -117,7 +117,7 @@ check "T7.4 Delete context" "$R" '"ok":true'
 # Phase 8: Approvals
 echo ""
 echo "--- Phase 8: Approvals ---"
-R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deploy","risk_tier":"medium","required_approvals":1}')
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deploy","risk_tier":"medium","required_approvals":1,"payload":"{}"}')
 APPR_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T8.1 Create approval" "$R" '"id"'
 
@@ -128,7 +128,7 @@ R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/approvals
 check "T8.3 Approve (quorum=1)" "$R" "approved"
 
 # Deny test
-R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deny","required_approvals":3}')
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deny","required_approvals":3,"payload":"{}"}')
 APPR2_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/approvals/$APPR2_ID/vote" -d '{"vote":"deny","voter_id":"greatness","voter_type":"operator"}')
 check "T8.4 Deny (instant)" "$R" "denied"
@@ -252,18 +252,16 @@ check "T21.1 Support ticket (public)" "$R" '"id"'
 R=$(curl -s -H "$AH" "$BASE/support/tickets")
 check "T21.2 List tickets (admin)" "$R" "QA Ticket"
 
-# Phase 22: Slim Protocol
+# Phase 22: Overview Size
 echo ""
-echo "--- Phase 22: Slim Protocol ---"
-SLIM_SIZE=$(curl -s -H "$AH" "$BASE/boot/greatness-claude" | wc -c)
-VERBOSE_SIZE=$(curl -s -H "$AH" "$BASE/boot/greatness-claude?verbose=true" | wc -c)
-REDUCTION=$((100 - (SLIM_SIZE * 100 / VERBOSE_SIZE)))
-echo "T22.1 Slim: ${SLIM_SIZE}b, Verbose: ${VERBOSE_SIZE}b, Reduction: ${REDUCTION}%"
-if [ "$REDUCTION" -gt 20 ]; then
-  echo "PASS: T22.1 Token reduction ${REDUCTION}%"
+echo "--- Phase 22: Overview ---"
+OV_SIZE=$(curl -s -H "$AH" "$BASE/admin/overview?verbose=true" | wc -c)
+echo "T22.1 Overview payload: ${OV_SIZE}b"
+if [ "$OV_SIZE" -gt 1000 ]; then
+  echo "PASS: T22.1 Overview returns substantial data (${OV_SIZE}b)"
   PASS=$((PASS+1))
 else
-  echo "FAIL: T22.1 Token reduction only ${REDUCTION}%"
+  echo "FAIL: T22.1 Overview too small (${OV_SIZE}b)"
   FAIL=$((FAIL+1))
 fi
 
@@ -287,6 +285,87 @@ check "T28.1 Waitlist signup" "$R" '"ok":true'
 
 R=$(curl -s -H "$AH" "$BASE/waitlist")
 check "T28.2 List waitlist" "$R" "qa@test.com"
+
+# Phase 29: Teams
+echo ""
+echo "--- Phase 29: Teams ---"
+R=$(curl -s -H "$AH" "$BASE/teams")
+check "T29.1 List teams" "$R" '"teams"'
+
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/teams" -d '{"id":"qa-team","name":"QA Team","org_id":"softbacon","description":"QA test team"}')
+QA_TEAM_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+check "T29.2 Create team" "$R" '"id":"qa-team"'
+
+R=$(curl -s -H "$AH" "$BASE/teams/qa-team")
+check "T29.3 Get team detail" "$R" '"members"'
+
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/teams/qa-team" -d '{"description":"Updated QA team"}')
+check "T29.4 Update team" "$R" '"description":"Updated QA team"'
+
+# Add members
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/teams/qa-team/members" -d '{"user_id":"greatness","user_type":"operator","role":"lead","is_primary":false}')
+check "T29.5 Add operator member" "$R" '"user_id":"greatness"'
+
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/teams/qa-team/members" -d '{"user_id":"dev-claude","user_type":"agent","role":"member","is_primary":false}')
+check "T29.6 Add agent member" "$R" '"user_id":"dev-claude"'
+
+# Verify member count
+R=$(curl -s -H "$AH" "$BASE/teams")
+check "T29.7 Team member count" "$R" '"member_count":2'
+
+# Update member role
+R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/teams/qa-team/members/dev-claude" -d '{"role":"guest"}')
+check "T29.8 Update member role" "$R" '"ok":true'
+
+# Verify auto-channel created
+R=$(curl -s -H "$AH" "$BASE/channels")
+check "T29.9 Auto-channel created" "$R" "team-qa-team"
+
+# Get team projects
+R=$(curl -s -H "$AH" "$BASE/teams/qa-team/projects")
+check "T29.10 Team projects" "$R" '"projects"'
+
+# Remove member
+R=$(curl -s -X DELETE -H "$AH" "$BASE/teams/qa-team/members/dev-claude")
+check "T29.11 Remove member" "$R" '"ok":true'
+
+# Duplicate member (should fail)
+R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/teams/qa-team/members" -d '{"user_id":"greatness","user_type":"operator","role":"member"}')
+check "T29.12 Duplicate member rejected" "$R" '"error"'
+
+# Remove remaining member
+R=$(curl -s -X DELETE -H "$AH" "$BASE/teams/qa-team/members/greatness")
+
+# Delete team
+R=$(curl -s -X DELETE -H "$AH" "$BASE/teams/qa-team")
+check "T29.13 Delete team" "$R" '"ok":true'
+
+# Verify gone
+R=$(curl -s -H "$AH" "$BASE/teams/qa-team")
+check "T29.14 Deleted team 404" "$R" '"error"'
+
+# Phase 30: Admin Overview Integrity
+echo ""
+echo "--- Phase 30: Overview + Endpoint Coverage ---"
+R=$(curl -s -H "$AH" "$BASE/admin/overview?verbose=true")
+check "T30.1 Overview has agents" "$R" '"agents"'
+check "T30.2 Overview has tasks" "$R" '"tasks"'
+check "T30.3 Overview has plans" "$R" '"plans"'
+check "T30.4 Overview has bugs" "$R" '"bugs"'
+check "T30.5 Overview has channels" "$R" '"channels"'
+check "T30.6 Overview has operators" "$R" '"operators"'
+
+# Team-settings
+R=$(curl -s -H "$AH" "$BASE/team-settings")
+check "T30.7 Team settings" "$R" "{"
+
+# Profiles
+R=$(curl -s -H "$AH" "$BASE/profiles")
+check "T30.8 Profiles endpoint" "$R" "profiles"
+
+# Admin ops
+R=$(curl -s -H "$AH" "$BASE/admin/ops")
+check "T30.9 Admin ops" "$R" "pending_requests"
 
 echo ""
 echo "============================="

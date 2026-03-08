@@ -803,7 +803,7 @@ export function bulkDeleteMessages(filters) {
 // Context key categories:
 //   'durable'   - persistent config, guidelines, gen profiles (no auto-expiry)
 //   'ephemeral' - session state, recovery instructions (auto-expire via TTL)
-var CONTEXT_MAX_KEYS_PER_NAMESPACE = 50;
+var CONTEXT_MAX_KEYS_PER_NAMESPACE = 200;
 
 export function upsertContextKey(namespace, key, data, agentId, opts) {
   var category = (opts && opts.category) || 'durable';
