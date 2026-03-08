@@ -126,7 +126,7 @@ import {
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
   assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
-  addTaskComment, getTaskComments, getTaskComment, deleteTaskComment,
+  addTaskComment, getTaskComments, getTaskComment, deleteTaskComment, deleteTask,
   addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
@@ -1394,6 +1394,16 @@ router.post('/tasks/:id/comments', function (req, res) {
   var comment = addTaskComment(task.id, author, content);
   emitEvent('task_comment', who, task.project_id, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
   res.json(comment);
+});
+
+router.delete('/tasks/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var id = parseIntParam(req.params.id);
+  var task = getTask(id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  deleteTask(id);
+  emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title);
+  res.json({ ok: true, id: id });
 });
 
 router.delete('/tasks/:id/comments/:commentId', function (req, res) {
