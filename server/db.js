@@ -972,6 +972,42 @@ export function contextKeyStats() {
   return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
+// -- Widgets --
+
+export function createWidget(agentId, projectId, title, widgetType, data) {
+  var result = db.prepare(
+    "INSERT INTO widgets (agent_id, project_id, title, widget_type, data) VALUES (?, ?, ?, ?, ?)"
+  ).run(agentId, projectId || '', title, widgetType || 'status', typeof data === 'string' ? data : JSON.stringify(data || {}));
+  return { id: result.lastInsertRowid };
+}
+
+export function updateWidget(id, updates) {
+  var fields = [];
+  var params = [];
+  if (updates.title !== undefined) { fields.push('title = ?'); params.push(updates.title); }
+  if (updates.widget_type !== undefined) { fields.push('widget_type = ?'); params.push(updates.widget_type); }
+  if (updates.data !== undefined) { fields.push('data = ?'); params.push(typeof updates.data === 'string' ? updates.data : JSON.stringify(updates.data)); }
+  if (updates.position !== undefined) { fields.push('position = ?'); params.push(updates.position); }
+  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
+  if (fields.length === 0) return null;
+  fields.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE widgets SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
+}
+
+export function listWidgets(filters) {
+  var where = ["status = 'active'"];
+  var params = [];
+  if (filters && filters.agent_id) { where.push('agent_id = ?'); params.push(filters.agent_id); }
+  if (filters && filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
+  return db.prepare('SELECT * FROM widgets WHERE ' + where.join(' AND ') + ' ORDER BY position ASC, updated_at DESC').all(...params);
+}
+
+export function deleteWidget(id) {
+  db.prepare("UPDATE widgets SET status = 'archived' WHERE id = ?").run(id);
+}
+
 // -- Bugs --
 
 export function createBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {

@@ -110,6 +110,7 @@ import {
   upsertContextKey, getContextKey, listContextKeys, deleteContextKey,
   getContextHistory, rollbackContextKey,
   logAgentSpend, getAgentSpend, getSpendSummary,
+  createWidget, updateWidget, listWidgets, deleteWidget,
   createAsset, getAsset, listAssets, updateAsset, deleteAsset,
   autoTaskFromAsset,
   createEvent, listEvents,
@@ -1758,6 +1759,44 @@ router.get('/spend', function (req, res) {
   });
   var total = summary.reduce(function (acc, r) { return acc + (r.total_cost || 0); }, 0);
   res.json({ total_cost_usd: Math.round(total * 10000) / 10000, breakdown: summary });
+});
+
+// ======== WIDGETS ========
+
+router.get('/widgets', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var widgets = listWidgets({
+    agent_id: req.query.agent_id,
+    project_id: req.query.project_id
+  });
+  res.json(widgets);
+});
+
+router.post('/widgets', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body;
+  if (!b.title) return res.status(400).json({ error: 'title required' });
+  var agentId = who.agentId || b.agent_id || 'admin';
+  var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
+  createEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
+  res.status(201).json(result);
+});
+
+router.put('/widgets/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var updated = updateWidget(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: 'widget not found' });
+  res.json(updated);
+});
+
+router.delete('/widgets/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  deleteWidget(req.params.id);
+  res.json({ ok: true });
 });
 
 // ======== ASSETS ========

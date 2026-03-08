@@ -848,6 +848,72 @@ export function registerTools(server) {
     }
   );
 
+  // ===== WIDGETS =====
+
+  registerDual(server,
+    'studio_create_widget',
+    'Create a dashboard widget. Agents can generate interactive widgets visible in the Mycelium dashboard. Types: status (key-value display), progress (progress bar), list (item list), chart (data visualization), custom (raw HTML).',
+    {
+      title: z.string().describe('Widget title'),
+      widget_type: z.string().optional().describe('Widget type: status, progress, list, chart, custom'),
+      data: z.string().describe('JSON string of widget data. Format depends on type.'),
+      project_id: z.string().optional().describe('Project ID')
+    },
+    async (args) => {
+      var data = args.data;
+      try { data = JSON.parse(data); } catch {}
+      var result = await apiPost('/widgets', {
+        title: args.title,
+        widget_type: args.widget_type || 'status',
+        data: data,
+        project_id: args.project_id || ''
+      });
+      return text('Widget created: #' + result.id);
+    }
+  );
+
+  registerDual(server,
+    'studio_update_widget',
+    'Update an existing dashboard widget. Use to refresh data in real-time.',
+    {
+      widget_id: z.number().describe('Widget ID to update'),
+      title: z.string().optional().describe('New title'),
+      data: z.string().optional().describe('Updated JSON data'),
+      status: z.string().optional().describe('active or archived')
+    },
+    async (args) => {
+      var updates = {};
+      if (args.title) updates.title = args.title;
+      if (args.status) updates.status = args.status;
+      if (args.data) {
+        try { updates.data = JSON.parse(args.data); } catch { updates.data = args.data; }
+      }
+      var result = await apiPut('/widgets/' + args.widget_id, updates);
+      return text('Widget #' + args.widget_id + ' updated');
+    }
+  );
+
+  registerDual(server,
+    'studio_list_widgets',
+    'List active dashboard widgets.',
+    {
+      agent_id: z.string().optional().describe('Filter by agent'),
+      project_id: z.string().optional().describe('Filter by project')
+    },
+    async (args) => {
+      var params = [];
+      if (args.agent_id) params.push('agent_id=' + encodeURIComponent(args.agent_id));
+      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var widgets = await apiGet('/widgets' + qs);
+      if (!widgets.length) return text('No active widgets.');
+      var lines = widgets.map(function(w) {
+        return '#' + w.id + ' [' + w.widget_type + '] ' + w.title + ' — by ' + w.agent_id + ' (' + (w.updated_at || w.created_at) + ')';
+      });
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== BUGS =====
 
   registerDual(server,

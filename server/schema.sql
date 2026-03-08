@@ -147,6 +147,22 @@ CREATE TABLE IF NOT EXISTS agent_spend (
 CREATE INDEX IF NOT EXISTS idx_agent_spend_agent ON agent_spend(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_spend_project ON agent_spend(project_id);
 
+-- Agent-generated dashboard widgets
+CREATE TABLE IF NOT EXISTS widgets (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id    TEXT NOT NULL,
+  project_id  TEXT NOT NULL DEFAULT '',
+  title       TEXT NOT NULL,
+  widget_type TEXT NOT NULL DEFAULT 'status',
+  data        TEXT NOT NULL DEFAULT '{}',
+  position    INTEGER NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_widgets_agent ON widgets(agent_id);
+CREATE INDEX IF NOT EXISTS idx_widgets_status ON widgets(status);
+
 -- Bug tracking
 CREATE TABLE IF NOT EXISTS bugs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
