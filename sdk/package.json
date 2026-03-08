@@ -10,7 +10,8 @@
     "./api": "./src/api.js"
   },
   "bin": {
-    "mycelium-agent": "./bin/run.js"
+    "mycelium-agent": "./bin/run.js",
+    "mycelium-init": "./bin/init.js"
   },
   "scripts": {
     "start": "node bin/run.js"
