@@ -282,7 +282,7 @@ function AgentCard({ health, isSelected, onClick }: {
   isSelected: boolean
   onClick: () => void
 }) {
-  const { agent, isStale, minutesSinceHeartbeat, uptimePercent, totalSessions } = health
+  const { agent, isStale, uptimePercent } = health
   const caps = parseCaps(agent.capabilities)
 
   return (
