@@ -103,7 +103,8 @@ export async function sendHeartbeat() {
       working_on: state.workingOn,
       session_id: state.sessionId,
       messages_acked: JSON.stringify(state.messagesAcked),
-      state_snapshot: JSON.stringify(getAutoSnapshot())
+      state_snapshot: JSON.stringify(getAutoSnapshot()),
+      runtime: 'claude-code'
     });
     // Alert agent if there are pending messages/requests/directives (granular)
     if (result && result.pending) {

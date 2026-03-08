@@ -85,6 +85,8 @@ export function initDB() {
     ["support_tickets", "assigned_agent", "TEXT"],
     ["support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
     ["support_tickets", "draft_response", "TEXT"],
+    // Plan #62 — multi-runtime agent support
+    ["agents", "runtime", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -254,6 +256,7 @@ export function updateAgent(id, fields) {
   if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
   if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); values.push(fields.capabilities); }
   if (fields.system_diagnostics !== undefined) { sets.push('system_diagnostics = ?'); values.push(typeof fields.system_diagnostics === 'string' ? fields.system_diagnostics : JSON.stringify(fields.system_diagnostics)); }
+  if (fields.runtime !== undefined) { sets.push('runtime = ?'); values.push(fields.runtime); }
   if (sets.length === 0) return;
   values.push(id);
   db.prepare('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
@@ -833,6 +836,12 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
   var existing = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
+    // Save previous value to history before overwriting
+    try {
+      db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(namespace, key, existing.data, agentId || '');
+      // Keep only last 50 versions per key
+      db.prepare("DELETE FROM context_history WHERE namespace = ? AND key = ? AND id NOT IN (SELECT id FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 50)").run(namespace, key, namespace, key);
+    } catch (e) { /* non-critical — history table may not exist yet */ }
     try {
       var existingData = JSON.parse(existing.data);
       var newData = typeof data === 'string' ? JSON.parse(data) : data;
@@ -884,7 +893,69 @@ export function deleteContextKey(namespace, key) {
   db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
 }
 
+// Context history — view previous versions of a key
+export function getContextHistory(namespace, key, limit) {
+  return db.prepare(
+    "SELECT * FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT ?"
+  ).all(namespace, key, limit || 20);
+}
+
+// Rollback — restore a previous version by history ID
+export function rollbackContextKey(historyId, agentId) {
+  var row = db.prepare("SELECT * FROM context_history WHERE id = ?").get(historyId);
+  if (!row) return null;
+  // Save current value to history before rollback
+  var current = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(row.namespace, row.key);
+  if (current) {
+    db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(row.namespace, row.key, current.data, agentId || '');
+  }
+  // Restore the historical value
+  db.prepare(
+    "UPDATE context_keys SET data = ?, updated_by = ?, updated_at = datetime('now') WHERE namespace = ? AND key = ?"
+  ).run(row.data, agentId || '', row.namespace, row.key);
+  return row;
+}
+
 // Purge all expired context keys (called on server boot and periodically)
+// ---- Agent Spend Tracking ----
+
+export function logAgentSpend(agentId, projectId, costUsd, source, description, model, tokensIn, tokensOut) {
+  db.prepare(
+    "INSERT INTO agent_spend (agent_id, project_id, cost_usd, source, description, model, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(agentId, projectId || '', costUsd || 0, source || '', description || '', model || '', tokensIn || 0, tokensOut || 0);
+}
+
+export function getAgentSpend(agentId, opts) {
+  var since = (opts && opts.since) || null;
+  var projectId = (opts && opts.project_id) || null;
+  var limit = (opts && opts.limit) || 50;
+
+  var where = ['agent_id = ?'];
+  var params = [agentId];
+  if (since) { where.push('created_at >= ?'); params.push(since); }
+  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
+  params.push(limit);
+
+  return db.prepare(
+    'SELECT * FROM agent_spend WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+  ).all(...params);
+}
+
+export function getSpendSummary(opts) {
+  var since = (opts && opts.since) || null;
+  var projectId = (opts && opts.project_id) || null;
+
+  var where = ['1=1'];
+  var params = [];
+  if (since) { where.push('created_at >= ?'); params.push(since); }
+  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
+
+  var rows = db.prepare(
+    'SELECT agent_id, project_id, SUM(cost_usd) as total_cost, COUNT(*) as entry_count, SUM(tokens_in) as total_tokens_in, SUM(tokens_out) as total_tokens_out FROM agent_spend WHERE ' + where.join(' AND ') + ' GROUP BY agent_id, project_id ORDER BY total_cost DESC'
+  ).all(...params);
+  return rows;
+}
+
 export function purgeExpiredContextKeys() {
   var result = db.prepare("DELETE FROM context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
   return result.changes;
@@ -899,6 +970,101 @@ export function cleanupAgentSessionKeys(agentId) {
 // Get context stats per namespace
 export function contextKeyStats() {
   return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
+}
+
+// -- Skills Registry --
+
+export function createSkill(id, name, description, category, version, author, installType, installData, requiredCapabilities, tags) {
+  db.prepare(
+    "INSERT INTO skills (id, name, description, category, version, author, install_type, install_data, required_capabilities, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(id, name, description || '', category || 'general', version || '1.0.0', author || '',
+    installType || 'concept', typeof installData === 'string' ? installData : JSON.stringify(installData || {}),
+    typeof requiredCapabilities === 'string' ? requiredCapabilities : JSON.stringify(requiredCapabilities || []),
+    typeof tags === 'string' ? tags : JSON.stringify(tags || []));
+  return { id: id };
+}
+
+export function getSkill(id) {
+  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
+}
+
+export function listSkills(filters) {
+  var where = ["status = 'published'"];
+  var params = [];
+  if (filters && filters.category) { where.push('category = ?'); params.push(filters.category); }
+  if (filters && filters.search) { where.push('(name LIKE ? OR description LIKE ? OR tags LIKE ?)'); var s = '%' + filters.search + '%'; params.push(s, s, s); }
+  return db.prepare('SELECT * FROM skills WHERE ' + where.join(' AND ') + ' ORDER BY install_count DESC, name ASC').all(...params);
+}
+
+export function updateSkill(id, updates) {
+  var fields = [];
+  var params = [];
+  if (updates.name !== undefined) { fields.push('name = ?'); params.push(updates.name); }
+  if (updates.description !== undefined) { fields.push('description = ?'); params.push(updates.description); }
+  if (updates.category !== undefined) { fields.push('category = ?'); params.push(updates.category); }
+  if (updates.version !== undefined) { fields.push('version = ?'); params.push(updates.version); }
+  if (updates.install_data !== undefined) { fields.push('install_data = ?'); params.push(typeof updates.install_data === 'string' ? updates.install_data : JSON.stringify(updates.install_data)); }
+  if (updates.required_capabilities !== undefined) { fields.push('required_capabilities = ?'); params.push(typeof updates.required_capabilities === 'string' ? updates.required_capabilities : JSON.stringify(updates.required_capabilities)); }
+  if (updates.tags !== undefined) { fields.push('tags = ?'); params.push(typeof updates.tags === 'string' ? updates.tags : JSON.stringify(updates.tags)); }
+  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
+  if (fields.length === 0) return null;
+  fields.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE skills SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
+}
+
+export function installSkill(agentId, skillId, config) {
+  db.prepare(
+    "INSERT OR REPLACE INTO agent_skills (agent_id, skill_id, config) VALUES (?, ?, ?)"
+  ).run(agentId, skillId, typeof config === 'string' ? config : JSON.stringify(config || {}));
+  db.prepare('UPDATE skills SET install_count = install_count + 1 WHERE id = ?').run(skillId);
+}
+
+export function uninstallSkill(agentId, skillId) {
+  db.prepare('DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?').run(agentId, skillId);
+}
+
+export function getAgentSkills(agentId) {
+  return db.prepare(
+    'SELECT s.*, as2.installed_at, as2.config FROM skills s JOIN agent_skills as2 ON s.id = as2.skill_id WHERE as2.agent_id = ? ORDER BY s.name'
+  ).all(agentId);
+}
+
+// -- Widgets --
+
+export function createWidget(agentId, projectId, title, widgetType, data) {
+  var result = db.prepare(
+    "INSERT INTO widgets (agent_id, project_id, title, widget_type, data) VALUES (?, ?, ?, ?, ?)"
+  ).run(agentId, projectId || '', title, widgetType || 'status', typeof data === 'string' ? data : JSON.stringify(data || {}));
+  return { id: result.lastInsertRowid };
+}
+
+export function updateWidget(id, updates) {
+  var fields = [];
+  var params = [];
+  if (updates.title !== undefined) { fields.push('title = ?'); params.push(updates.title); }
+  if (updates.widget_type !== undefined) { fields.push('widget_type = ?'); params.push(updates.widget_type); }
+  if (updates.data !== undefined) { fields.push('data = ?'); params.push(typeof updates.data === 'string' ? updates.data : JSON.stringify(updates.data)); }
+  if (updates.position !== undefined) { fields.push('position = ?'); params.push(updates.position); }
+  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
+  if (fields.length === 0) return null;
+  fields.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE widgets SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
+}
+
+export function listWidgets(filters) {
+  var where = ["status = 'active'"];
+  var params = [];
+  if (filters && filters.agent_id) { where.push('agent_id = ?'); params.push(filters.agent_id); }
+  if (filters && filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
+  return db.prepare('SELECT * FROM widgets WHERE ' + where.join(' AND ') + ' ORDER BY position ASC, updated_at DESC').all(...params);
+}
+
+export function deleteWidget(id) {
+  db.prepare("UPDATE widgets SET status = 'archived' WHERE id = ?").run(id);
 }
 
 // -- Bugs --
@@ -1237,6 +1403,17 @@ export function getSlimBootPayload(agentId) {
     sleep_mode: sleepMode,
     autonomous_mode: autonomousMode,
     operators_available: operatorsAvailable,
+    enforcement_rules_active: (function() {
+      try {
+        var ctx = getContextKey('mycelium', 'enforcement_rules');
+        if (ctx && ctx.data) {
+          var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+          var rules = Array.isArray(data) ? data : (data.rules || []);
+          return rules.map(function(r) { return r.id + ': ' + (r.message || '').substring(0, 80) + ' (' + (r.severity || 'warn').toUpperCase() + ')'; });
+        }
+      } catch {}
+      return [];
+    })(),
     server_time: new Date().toISOString()
   };
 }
@@ -1382,7 +1559,7 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
 export function getIdleAgents() {
   // Agents that are online/idle, not drones, heartbeat within last 30 minutes
   return db.prepare(`
-    SELECT id, name, project_id, status, working_on, capabilities, role
+    SELECT id, name, project_id, status, working_on, capabilities, role, runtime, llm_backend, llm_model
     FROM agents
     WHERE status IN ('online', 'idle')
       AND role != 'drone'

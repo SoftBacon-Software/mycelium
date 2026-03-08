@@ -11,7 +11,8 @@
   "workspaces": [
     "mcp",
     "runner",
-    "printer-drone"
+    "printer-drone",
+    "sdk"
   ],
   "scripts": {
     "start": "node server/index.js",

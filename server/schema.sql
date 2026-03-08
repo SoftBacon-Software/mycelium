@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS agents (
   agent_type      TEXT NOT NULL DEFAULT 'agent',
   llm_backend     TEXT NOT NULL DEFAULT '',
   llm_model       TEXT NOT NULL DEFAULT '',
+  runtime         TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -118,6 +119,49 @@ CREATE TABLE IF NOT EXISTS context_keys (
   updated_by  TEXT NOT NULL DEFAULT '',
   UNIQUE(namespace, key)
 );
+
+-- Context version history (for rollback)
+CREATE TABLE IF NOT EXISTS context_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  namespace   TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  data        TEXT NOT NULL,
+  changed_by  TEXT NOT NULL DEFAULT '',
+  changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_context_history_ns_key ON context_history(namespace, key);
+
+-- Agent spend tracking (budget monitoring)
+CREATE TABLE IF NOT EXISTS agent_spend (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id    TEXT NOT NULL,
+  project_id  TEXT NOT NULL DEFAULT '',
+  cost_usd    REAL NOT NULL DEFAULT 0,
+  source      TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  model       TEXT NOT NULL DEFAULT '',
+  tokens_in   INTEGER NOT NULL DEFAULT 0,
+  tokens_out  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_spend_agent ON agent_spend(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_spend_project ON agent_spend(project_id);
+
+-- Agent-generated dashboard widgets
+CREATE TABLE IF NOT EXISTS widgets (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id    TEXT NOT NULL,
+  project_id  TEXT NOT NULL DEFAULT '',
+  title       TEXT NOT NULL,
+  widget_type TEXT NOT NULL DEFAULT 'status',
+  data        TEXT NOT NULL DEFAULT '{}',
+  position    INTEGER NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_widgets_agent ON widgets(agent_id);
+CREATE INDEX IF NOT EXISTS idx_widgets_status ON widgets(status);
 
 -- Bug tracking
 CREATE TABLE IF NOT EXISTS bugs (
@@ -339,6 +383,35 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status)
 CREATE INDEX IF NOT EXISTS idx_bugs_severity ON bugs(severity);
 CREATE INDEX IF NOT EXISTS idx_bugs_assignee ON bugs(assignee);
 CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id);
+-- Skills registry (discoverable, installable agent capabilities)
+CREATE TABLE IF NOT EXISTS skills (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  category        TEXT NOT NULL DEFAULT 'general',
+  version         TEXT NOT NULL DEFAULT '1.0.0',
+  author          TEXT NOT NULL DEFAULT '',
+  install_type    TEXT NOT NULL DEFAULT 'concept',
+  install_data    TEXT NOT NULL DEFAULT '{}',
+  required_capabilities TEXT NOT NULL DEFAULT '[]',
+  tags            TEXT NOT NULL DEFAULT '[]',
+  status          TEXT NOT NULL DEFAULT 'published',
+  install_count   INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
+
+-- Track which agents have installed which skills
+CREATE TABLE IF NOT EXISTS agent_skills (
+  agent_id        TEXT NOT NULL,
+  skill_id        TEXT NOT NULL,
+  installed_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  config          TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (agent_id, skill_id)
+);
+
 -- Plugins (installable capability modules with routes, DB, MCP tools)
 CREATE TABLE IF NOT EXISTS plugins (
   name            TEXT PRIMARY KEY,

@@ -1,0 +1,60 @@
+# Mycelium — Local-First Deployment
+#
+# Run the full Mycelium platform locally with no cloud dependency.
+# All data stays on your machine (SQLite).
+#
+# Usage:
+#   cp .env.example .env    # Configure your instance
+#   docker compose up -d    # Start the platform
+#   open http://localhost:3002/studio/
+#
+# First-time setup:
+#   1. Start the server: docker compose up -d mycelium
+#   2. Open http://localhost:3002/studio/ — create your admin account
+#   3. Register agents using the dashboard or mycelium-init CLI
+#
+# Optional: Add a drone worker for GPU tasks
+#   docker compose --profile gpu up -d
+
+services:
+  mycelium:
+    build: .
+    container_name: mycelium-server
+    ports:
+      - "${PORT:-3002}:3002"
+    environment:
+      - PORT=3002
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      - ADMIN_KEY=${ADMIN_KEY:-local-admin-key}
+      - DATA_DIR=/data
+      - NODE_ENV=production
+    volumes:
+      - mycelium-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/api/mycelium/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Drone worker for GPU/CPU compute tasks
+  # Activate with: docker compose --profile gpu up -d
+  drone:
+    build: .
+    container_name: mycelium-drone
+    profiles:
+      - gpu
+    environment:
+      - MYCELIUM_API_URL=http://mycelium:3002/api/mycelium
+      - MYCELIUM_DRONE_ID=${DRONE_ID:-local-drone}
+      - MYCELIUM_API_KEY=${DRONE_API_KEY:-}
+    command: ["python", "tools/drone_worker.py"]
+    depends_on:
+      mycelium:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mycelium-data:
+    driver: local

@@ -11,6 +11,7 @@ import Badge from '../components/shared/Badge'
 import StatusDot from '../components/shared/StatusDot'
 import Spinner from '../components/shared/Spinner'
 import { getSleepStatus, setSleepMode } from '../api/endpoints'
+import WidgetGrid from '../components/widgets/WidgetRenderer'
 
 // -- Event type color mapping --
 const eventBadgeVariant: Record<string, 'accent' | 'blue' | 'green' | 'muted' | 'purple' | 'red'> = {
@@ -633,6 +634,8 @@ export default function DashboardPage() {
       {/* Action Required */}
       <ActionRequired />
 
+      {/* Agent Widgets */}
+      <WidgetGrid />
 
       {/* Onboarding checklist (hidden when all done) */}
       <OnboardingChecklist checks={onboardingChecks} />
