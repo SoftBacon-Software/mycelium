@@ -470,7 +470,7 @@ ${responsibilities}
           {/* MCP config */}
           <div className="mb-4">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs font-medium text-text-dim">1. Add to <code className="font-mono bg-surface-raised px-1 py-0.5 rounded">~/.claude/settings.json</code> (MCP config)</span>
+              <span className="text-xs font-medium text-text-dim">1. Add to <code className="font-mono bg-surface-raised px-1 py-0.5 rounded">.mcp.json</code> in your project root (MCP config)</span>
               <button type="button" onClick={() => copyBlock('mcp', mcpConfig)}
                 className="text-xs text-text-muted hover:text-accent transition-colors px-2 py-0.5 rounded bg-surface-raised">
                 {copiedBlock === 'mcp' ? 'Copied!' : 'Copy'}

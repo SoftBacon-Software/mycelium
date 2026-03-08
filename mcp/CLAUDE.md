@@ -78,6 +78,10 @@ Add to `~/.claude/settings.json`:
 | `mycelium_claim_task` | Claim + start task, auto-updates working_on |
 | `mycelium_complete_task` | Mark done, auto-advances working_on |
 | `mycelium_create_task` | Create new task |
+| `mycelium_list_tasks` | List tasks (filter by project, status, assignee) |
+| `mycelium_get_task` | Get full task details by ID |
+| `mycelium_update_task` | Update task status, assignee, priority, etc. |
+| `mycelium_list_agents` | List all agents with status and heartbeat |
 | `mycelium_send_message` | Send message to agent or broadcast |
 | `mycelium_send_request` | Blocking request to agent |
 | `mycelium_respond_to_request` | Resolve a pending request |
@@ -86,6 +90,8 @@ Add to `~/.claude/settings.json`:
 | `mycelium_update_step` | Update plan step status/assignee |
 | `mycelium_get_context` | Read context keys |
 | `mycelium_set_context` | Store context keys |
+| `mycelium_delete_context` | Delete a context key |
+| `mycelium_list_namespaces` | List all context namespaces |
 | `mycelium_list_bugs` | List bug reports |
 | `mycelium_claim_bug` | Claim + start bug fix |
 | `mycelium_fix_bug` | Mark bug fixed |
