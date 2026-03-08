@@ -766,6 +766,209 @@ export function registerTools(server) {
     }
   );
 
+  // ===== CONTEXT HISTORY & ROLLBACK =====
+
+  registerDual(server,
+    'studio_context_history',
+    'View version history for a context key. Shows previous values with timestamps and who changed them.',
+    {
+      namespace: z.string().describe('Namespace (e.g. agent name, project name)'),
+      key: z.string().describe('Key name'),
+      limit: z.number().optional().describe('Max entries to return (default 10)')
+    },
+    async (args) => {
+      var limit = args.limit || 10;
+      var history = await apiGet('/context/keys/' + encodeURIComponent(args.namespace) + '/' + encodeURIComponent(args.key) + '/history?limit=' + limit);
+      if (!history.length) return text('No history found for ' + args.namespace + ':' + args.key);
+      var lines = ['=== History: ' + args.namespace + ':' + args.key + ' (' + history.length + ' versions) ==='];
+      for (var h of history) {
+        var preview = (h.data || '').substring(0, 200);
+        if (h.data && h.data.length > 200) preview += '...';
+        lines.push('#' + h.id + ' | ' + h.changed_at + ' | by ' + (h.changed_by || 'unknown'));
+        lines.push('  ' + preview);
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_rollback_context',
+    'Rollback a context key to a previous version. Use context_history to find the version ID.',
+    {
+      history_id: z.number().describe('History entry ID to restore (from context_history)')
+    },
+    async (args) => {
+      var result = await apiPost('/context/keys/rollback/' + args.history_id, {});
+      return text('Rolled back ' + result.namespace + ':' + result.key + ' to version #' + result.restored_from);
+    }
+  );
+
+  // ===== SPEND TRACKING =====
+
+  registerDual(server,
+    'studio_log_spend',
+    'Log API/compute spend for budget tracking. Call after expensive operations (LLM calls, drone jobs).',
+    {
+      cost_usd: z.number().describe('Cost in USD'),
+      source: z.string().optional().describe('Source: llm_api, drone, tool, other'),
+      description: z.string().optional().describe('What the spend was for'),
+      model: z.string().optional().describe('Model used (e.g. claude-opus-4-6)'),
+      tokens_in: z.number().optional().describe('Input tokens'),
+      tokens_out: z.number().optional().describe('Output tokens'),
+      project_id: z.string().optional().describe('Project context')
+    },
+    async (args) => {
+      await apiPost('/spend', args);
+      return text('Logged spend: $' + (args.cost_usd || 0).toFixed(4) + ' (' + (args.source || 'unknown') + ')');
+    }
+  );
+
+  registerDual(server,
+    'studio_spend_summary',
+    'View spend summary — total costs per agent and project. Use to monitor budget.',
+    {
+      since: z.string().optional().describe('ISO timestamp — only show spend after this date'),
+      project_id: z.string().optional().describe('Filter by project')
+    },
+    async (args) => {
+      var params = [];
+      if (args.since) params.push('since=' + encodeURIComponent(args.since));
+      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var result = await apiGet('/spend' + qs);
+      var lines = ['=== Spend Summary ===', 'Total: $' + (result.total_cost_usd || 0).toFixed(4), ''];
+      if (result.breakdown && result.breakdown.length) {
+        for (var r of result.breakdown) {
+          lines.push(r.agent_id + ' | ' + (r.project_id || 'unscoped') + ' | $' + (r.total_cost || 0).toFixed(4) + ' | ' + r.entry_count + ' entries | ' + (r.total_tokens_in || 0) + ' in / ' + (r.total_tokens_out || 0) + ' out');
+        }
+      } else {
+        lines.push('No spend recorded.');
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
+  // ===== WIDGETS =====
+
+  registerDual(server,
+    'studio_create_widget',
+    'Create a dashboard widget. Agents can generate interactive widgets visible in the Mycelium dashboard. Types: status (key-value display), progress (progress bar), list (item list), chart (data visualization), custom (raw HTML).',
+    {
+      title: z.string().describe('Widget title'),
+      widget_type: z.string().optional().describe('Widget type: status, progress, list, chart, custom'),
+      data: z.string().describe('JSON string of widget data. Format depends on type.'),
+      project_id: z.string().optional().describe('Project ID')
+    },
+    async (args) => {
+      var data = args.data;
+      try { data = JSON.parse(data); } catch {}
+      var result = await apiPost('/widgets', {
+        title: args.title,
+        widget_type: args.widget_type || 'status',
+        data: data,
+        project_id: args.project_id || ''
+      });
+      return text('Widget created: #' + result.id);
+    }
+  );
+
+  registerDual(server,
+    'studio_update_widget',
+    'Update an existing dashboard widget. Use to refresh data in real-time.',
+    {
+      widget_id: z.number().describe('Widget ID to update'),
+      title: z.string().optional().describe('New title'),
+      data: z.string().optional().describe('Updated JSON data'),
+      status: z.string().optional().describe('active or archived')
+    },
+    async (args) => {
+      var updates = {};
+      if (args.title) updates.title = args.title;
+      if (args.status) updates.status = args.status;
+      if (args.data) {
+        try { updates.data = JSON.parse(args.data); } catch { updates.data = args.data; }
+      }
+      var result = await apiPut('/widgets/' + args.widget_id, updates);
+      return text('Widget #' + args.widget_id + ' updated');
+    }
+  );
+
+  registerDual(server,
+    'studio_list_widgets',
+    'List active dashboard widgets.',
+    {
+      agent_id: z.string().optional().describe('Filter by agent'),
+      project_id: z.string().optional().describe('Filter by project')
+    },
+    async (args) => {
+      var params = [];
+      if (args.agent_id) params.push('agent_id=' + encodeURIComponent(args.agent_id));
+      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var widgets = await apiGet('/widgets' + qs);
+      if (!widgets.length) return text('No active widgets.');
+      var lines = widgets.map(function(w) {
+        return '#' + w.id + ' [' + w.widget_type + '] ' + w.title + ' — by ' + w.agent_id + ' (' + (w.updated_at || w.created_at) + ')';
+      });
+      return text(lines.join('\n'));
+    }
+  );
+
+  // ===== SKILLS REGISTRY =====
+
+  registerDual(server,
+    'studio_list_skills',
+    'Browse the skills registry. Skills are installable agent capabilities.',
+    {
+      category: z.string().optional().describe('Filter by category: github, code-review, art, notifications, project'),
+      search: z.string().optional().describe('Search skills by name or description')
+    },
+    async (args) => {
+      var params = [];
+      if (args.category) params.push('category=' + encodeURIComponent(args.category));
+      if (args.search) params.push('search=' + encodeURIComponent(args.search));
+      var qs = params.length ? '?' + params.join('&') : '';
+      var skills = await apiGet('/skills' + qs);
+      if (!skills.length) return text('No skills found.');
+      var lines = skills.map(function(s) {
+        var caps = [];
+        try { caps = JSON.parse(s.required_capabilities || '[]'); } catch {}
+        return s.id + ' — ' + s.name + ' [' + s.category + '] v' + s.version + (caps.length ? ' (requires: ' + caps.join(', ') + ')' : '') + '\n  ' + (s.description || 'No description');
+      });
+      return text(lines.join('\n\n'));
+    }
+  );
+
+  registerDual(server,
+    'studio_install_skill',
+    'Install a skill for this agent. Adds the capability to your agent profile.',
+    {
+      skill_id: z.string().describe('Skill ID to install'),
+      config: z.string().optional().describe('JSON config for the skill')
+    },
+    async (args) => {
+      var body = {};
+      if (args.config) { try { body.config = JSON.parse(args.config); } catch { body.config = args.config; } }
+      await apiPost('/skills/' + encodeURIComponent(args.skill_id) + '/install', body);
+      return text('Skill "' + args.skill_id + '" installed.');
+    }
+  );
+
+  registerDual(server,
+    'studio_my_skills',
+    'List skills installed for this agent.',
+    {},
+    async () => {
+      var agentId = getAgentId();
+      var skills = await apiGet('/agents/' + encodeURIComponent(agentId) + '/skills');
+      if (!skills.length) return text('No skills installed.');
+      var lines = skills.map(function(s) {
+        return s.id + ' — ' + s.name + ' [' + s.category + '] installed ' + (s.installed_at || '');
+      });
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== BUGS =====
 
   registerDual(server,

@@ -62,6 +62,29 @@ export function fetchOverview(): Promise<Overview> {
   return apiGet<Overview>('/admin/overview?verbose=true');
 }
 
+// Widgets
+
+export interface Widget {
+  id: number
+  agent_id: string
+  project_id: string
+  title: string
+  widget_type: string
+  data: string | Record<string, unknown>
+  position: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export function fetchWidgets(filters?: { agent_id?: string; project_id?: string }): Promise<Widget[]> {
+  const q = new URLSearchParams()
+  if (filters?.agent_id) q.set('agent_id', filters.agent_id)
+  if (filters?.project_id) q.set('project_id', filters.project_id)
+  const qs = q.toString()
+  return apiGet<Widget[]>(`/widgets${qs ? '?' + qs : ''}`)
+}
+
 // Events
 
 export function fetchEvents(params?: { since?: string; limit?: number; search?: string; type?: string; agent?: string }): Promise<Event[]> {

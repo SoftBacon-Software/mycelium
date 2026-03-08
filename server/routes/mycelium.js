@@ -108,6 +108,10 @@ import {
   approveTask, listTasksNeedingApproval,
   getContext, getAllContext, upsertContext,
   upsertContextKey, getContextKey, listContextKeys, deleteContextKey,
+  getContextHistory, rollbackContextKey,
+  logAgentSpend, getAgentSpend, getSpendSummary,
+  createWidget, updateWidget, listWidgets, deleteWidget,
+  createSkill, getSkill, listSkills, updateSkill, installSkill, uninstallSkill, getAgentSkills,
   createAsset, getAsset, listAssets, updateAsset, deleteAsset,
   autoTaskFromAsset,
   createEvent, listEvents,
@@ -619,6 +623,132 @@ function checkApprovalGate(req, who, actionType) {
   return { ok: true, approval: approval };
 }
 
+// ---- Enforcement rules: runtime convention enforcement on tool calls ----
+var _enforcementRulesCache = null;
+var _enforcementRulesCacheTime = 0;
+var ENFORCEMENT_CACHE_TTL = 60000; // 60s
+
+function getEnforcementRules() {
+  var now = Date.now();
+  if (_enforcementRulesCache && (now - _enforcementRulesCacheTime) < ENFORCEMENT_CACHE_TTL) {
+    return _enforcementRulesCache;
+  }
+  try {
+    var ctx = getContextKey('mycelium', 'enforcement_rules');
+    if (ctx && ctx.data) {
+      var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+      _enforcementRulesCache = Array.isArray(data) ? data : (data.rules || []);
+    } else {
+      _enforcementRulesCache = [];
+    }
+  } catch {
+    _enforcementRulesCache = [];
+  }
+  _enforcementRulesCacheTime = now;
+  return _enforcementRulesCache;
+}
+
+function checkEnforcementRules(toolName, args, agentId) {
+  var rules = getEnforcementRules();
+  if (!rules.length) return { allowed: true, warnings: [], blocks: [] };
+
+  var warnings = [];
+  var blocks = [];
+  var argsStr = typeof args === 'string' ? args : JSON.stringify(args || {});
+
+  for (var rule of rules) {
+    // Check if rule matches this tool
+    if (rule.tool !== '*' && rule.tool !== toolName) continue;
+
+    // Check match conditions
+    if (rule.match && rule.match.content_pattern) {
+      var re;
+      try { re = new RegExp(rule.match.content_pattern, 'i'); } catch { continue; }
+      if (!re.test(argsStr)) continue;
+    }
+
+    // Rule matched — check enforcement conditions
+    var violated = false;
+
+    if (rule.enforce) {
+      // Check expected_tool — agent used wrong tool
+      if (rule.enforce.expected_tool && rule.enforce.expected_tool !== toolName) {
+        violated = true;
+      }
+      // Check expected_args
+      if (rule.enforce.expected_args) {
+        for (var key in rule.enforce.expected_args) {
+          if (args && args[key] !== rule.enforce.expected_args[key]) {
+            violated = true;
+          }
+        }
+      }
+      // Check required_role
+      if (rule.enforce.required_role) {
+        try {
+          var agent = getAgent(agentId);
+          if (agent && agent.role !== rule.enforce.required_role && agentId !== '__admin__' && agentId !== '__system__') {
+            violated = true;
+          }
+        } catch {}
+      }
+    } else {
+      // No enforce conditions — match alone triggers violation (block patterns)
+      violated = true;
+    }
+
+    if (violated) {
+      var entry = { rule_id: rule.id, message: rule.message || 'Enforcement rule violated', severity: rule.severity || 'warn' };
+      if (rule.severity === 'block') {
+        blocks.push(entry);
+      } else {
+        warnings.push(entry);
+      }
+
+      // Log enforcement event
+      try {
+        createEvent('enforcement_violation', agentId, null, (rule.severity === 'block' ? 'BLOCKED' : 'WARNING') + ': ' + (rule.message || rule.id), { rule_id: rule.id, tool: toolName, severity: rule.severity });
+      } catch {}
+    }
+  }
+
+  return { allowed: blocks.length === 0, warnings: warnings, blocks: blocks };
+}
+
+// Wire enforcement into message sending
+// ---- Capability matching: check if agent can handle work ----
+function agentCanHandle(agent, workItem) {
+  // Parse agent capabilities (stored as JSON array string)
+  var caps = [];
+  try { caps = JSON.parse(agent.capabilities || '[]'); } catch {}
+  if (!Array.isArray(caps) || caps.length === 0) return true; // no caps declared = can do anything (legacy)
+
+  // Check task tags for required capabilities (convention: tag like "requires:gpu", "requires:review")
+  var tags = [];
+  if (workItem.tags) {
+    try { tags = typeof workItem.tags === 'string' ? JSON.parse(workItem.tags) : workItem.tags; } catch {}
+  }
+  for (var tag of tags) {
+    if (typeof tag === 'string' && tag.startsWith('requires:')) {
+      var required = tag.substring(9);
+      if (caps.indexOf(required) === -1) return false;
+    }
+  }
+
+  // Check title keywords as heuristic routing
+  var title = ((workItem.title || '') + ' ' + (workItem.plan_title || '')).toLowerCase();
+  // GPU/art work should go to agents with gpu capability
+  if ((title.includes('sprite') || title.includes('art gen') || title.includes('lora') || title.includes('gpu')) && caps.indexOf('gpu') === -1 && caps.indexOf('assets') === -1) {
+    return false;
+  }
+  // Code review should go to agents with review capability
+  if ((title.includes('review') || title.includes('pr review')) && caps.indexOf('review') === -1 && caps.indexOf('admin') === -1 && caps.indexOf('code') === -1) {
+    return false;
+  }
+
+  return true;
+}
+
 // ---- Auto-dispatch: push work to idle agents ----
 function dispatchWorkToIdleAgents(triggerContext) {
   var idleAgents = getIdleAgents();
@@ -636,6 +766,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
 
     // Try to find work: plan steps first, then unassigned tasks
     var step = getNextUnassignedPlanStep();
+    // Capability check — skip if agent can't handle this step
+    if (step && !agentCanHandle(agent, step)) step = null;
     if (step) {
       // Assign plan step
       updatePlanStep(step.id, { assignee: agent.id, status: 'pending' });
@@ -647,6 +779,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
     }
 
     var task = getNextUnassignedTask(claimedTaskIds);
+    // Capability check — skip if agent can't handle this task
+    if (task && !agentCanHandle(agent, task)) task = null;
     if (task) {
       // Assign task
       updateTask(task.id, { assignee: agent.id });
@@ -1008,6 +1142,7 @@ router.post('/agents/heartbeat', function (req, res) {
   if (req.body.llm_backend !== undefined) agentUpdates.llm_backend = req.body.llm_backend;
   if (req.body.llm_model !== undefined) agentUpdates.llm_model = req.body.llm_model;
   if (req.body.agent_type !== undefined) agentUpdates.agent_type = req.body.agent_type;
+  if (req.body.runtime !== undefined) agentUpdates.runtime = req.body.runtime;
   if (Object.keys(agentUpdates).length > 0) updateAgent(agentId, agentUpdates);
   // Read previous state to craft a meaningful event summary
   var prev = getAgent(agentId);
@@ -1196,6 +1331,13 @@ router.put('/agents/:id', function (req, res) {
     if (req.body.project !== undefined) fields.project = req.body.project;
     if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
     if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);
+    if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
+  }
+  // Self-update fields (agent can only set on themselves)
+  if (who === req.params.id || who === '__admin__' || who === '__system__') {
+    if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
+    if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
+    if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   }
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);
@@ -1486,6 +1628,28 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
 });
 
+// Context key history — view previous versions
+router.get('/context/keys/:namespace/:key/history', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 20;
+  if (limit > 100) limit = 100;
+  var history = getContextHistory(req.params.namespace, req.params.key, limit);
+  res.json(history);
+});
+
+// Context key rollback — restore a previous version by history ID
+router.post('/context/keys/rollback/:historyId', function (req, res) {
+  var agentId = checkAgentOrAdmin(req, res);
+  if (!agentId) return;
+  var historyId = parseInt(req.params.historyId);
+  if (!historyId) return res.status(400).json({ error: 'Invalid history ID' });
+  var restored = rollbackContextKey(historyId, agentId);
+  if (!restored) return res.status(404).json({ error: 'History entry not found' });
+  emitEvent('context_key_rollback', agentId, restored.namespace, agentId + ' rolled back ' + restored.namespace + ':' + restored.key + ' to version #' + historyId);
+  res.json({ ok: true, namespace: restored.namespace, key: restored.key, restored_from: historyId });
+});
+
 // Bulk context key operations — set multiple keys in one call
 router.post('/context/keys/bulk', function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
@@ -1548,6 +1712,252 @@ router.put('/context/:projectId', function (req, res) {
   upsertContext(req.params.projectId, dataStr, agentId);
   emitEvent('context_updated', agentId, req.params.projectId, agentId + ' updated context for ' + req.params.projectId);
   res.json({ ok: true, project_id: req.params.projectId });
+});
+
+// ======== SPEND TRACKING ========
+
+router.post('/spend', function (req, res) {
+  var agentId = checkAgentOrAdmin(req, res);
+  if (!agentId) return;
+  var costUsd = parseFloat(req.body.cost_usd) || 0;
+  if (costUsd < 0) return res.status(400).json({ error: 'cost_usd must be non-negative' });
+  logAgentSpend(
+    agentId,
+    req.body.project_id || '',
+    costUsd,
+    req.body.source || '',
+    req.body.description || '',
+    req.body.model || '',
+    parseInt(req.body.tokens_in) || 0,
+    parseInt(req.body.tokens_out) || 0
+  );
+  res.json({ ok: true });
+});
+
+router.get('/spend/:agentId', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var entries = getAgentSpend(req.params.agentId, {
+    since: req.query.since,
+    project_id: req.query.project_id,
+    limit: parseInt(req.query.limit) || 50
+  });
+  res.json(entries);
+});
+
+router.get('/spend', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var summary = getSpendSummary({
+    since: req.query.since,
+    project_id: req.query.project_id
+  });
+  var total = summary.reduce(function (acc, r) { return acc + (r.total_cost || 0); }, 0);
+  res.json({ total_cost_usd: Math.round(total * 10000) / 10000, breakdown: summary });
+});
+
+// ======== WIDGETS ========
+
+router.get('/widgets', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var widgets = listWidgets({
+    agent_id: req.query.agent_id,
+    project_id: req.query.project_id
+  });
+  res.json(widgets);
+});
+
+router.post('/widgets', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body;
+  if (!b.title) return res.status(400).json({ error: 'title required' });
+  var agentId = who || b.agent_id || 'admin';
+  var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
+  createEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
+  res.status(201).json(result);
+});
+
+router.put('/widgets/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var updated = updateWidget(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: 'widget not found' });
+  res.json(updated);
+});
+
+router.delete('/widgets/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  deleteWidget(req.params.id);
+  res.json({ ok: true });
+});
+
+// ======== VOICE COMMANDS ========
+
+// Process a voice command — parse natural language into Mycelium actions
+router.post('/voice/command', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text required' });
+
+  // Strip wake word
+  text = text.replace(/^(hey |ok |hello )?(mycelium|mycelia)[,.]?\s*/i, '').trim();
+  if (!text) return res.json({ action: 'none', response: 'How can I help?' });
+
+  // Parse intent
+  var result = parseVoiceCommand(text, who);
+  createEvent('voice_command', who || 'operator', '', text, { action: result.action });
+  res.json(result);
+});
+
+function parseVoiceCommand(text, who) {
+  var lower = text.toLowerCase();
+
+  // Status queries
+  if (lower.match(/status|how.*(things|going|look)|what.*(happening|going on)/)) {
+    var agents = listAgents ? listAgents() : [];
+    var online = agents.filter(function(a) { return a.status === 'online'; });
+    var working = online.filter(function(a) { return a.working_on; });
+    return {
+      action: 'status',
+      response: online.length + ' agents online, ' + working.length + ' working. ' +
+        (working.length > 0 ? working.map(function(a) { return a.id + ' is on ' + a.working_on; }).join('. ') : 'Everyone is idle.')
+    };
+  }
+
+  // Agent-specific status
+  var agentMatch = lower.match(/(?:status|what.* doing|where.*is|check on)\s+(\S+)/);
+  if (agentMatch) {
+    var agentId = agentMatch[1].replace(/-claude$/, '') + '-claude';
+    var agents2 = listAgents ? listAgents() : [];
+    var agent = agents2.find(function(a) { return a.id === agentId || a.id === agentMatch[1]; });
+    if (agent) {
+      return {
+        action: 'agent_status',
+        response: agent.id + ' is ' + agent.status + '. ' + (agent.working_on ? 'Working on: ' + agent.working_on : 'Currently idle.')
+      };
+    }
+  }
+
+  // Drone status
+  if (lower.match(/drone|gpu|3090|art.*drone/)) {
+    var drones = listAgents ? listAgents().filter(function(a) { return a.agent_type === 'drone'; }) : [];
+    return {
+      action: 'drone_status',
+      response: drones.length + ' drones registered. ' + drones.map(function(d) {
+        return d.id + ': ' + d.status + (d.working_on ? ' (' + d.working_on + ')' : '');
+      }).join('. ')
+    };
+  }
+
+  // Task queries
+  if (lower.match(/task|open.*task|pending.*task|what.*needs.*done/)) {
+    var tasks = listTasks ? listTasks({ status: 'open', limit: 5 }) : [];
+    return {
+      action: 'tasks',
+      response: tasks.length + ' open tasks. ' + (tasks.length > 0 ? tasks.slice(0, 3).map(function(t) { return '#' + t.id + ': ' + t.title; }).join('. ') : 'All clear.')
+    };
+  }
+
+  // Bug queries
+  if (lower.match(/bug|issue|problem/)) {
+    var bugs = listBugs ? listBugs({ status: 'open' }) : [];
+    return {
+      action: 'bugs',
+      response: bugs.length + ' open bugs. ' + (bugs.length > 0 ? bugs.slice(0, 3).map(function(b) { return '#' + b.id + ': ' + b.title; }).join('. ') : 'No open bugs.')
+    };
+  }
+
+  // Assign task
+  var assignMatch = lower.match(/assign\s+(.+?)\s+to\s+(\S+)/);
+  if (assignMatch) {
+    return {
+      action: 'assign',
+      response: 'To assign tasks, use the dashboard or send a directive. I noted your request: assign "' + assignMatch[1] + '" to ' + assignMatch[2] + '.'
+    };
+  }
+
+  // Fallback
+  return {
+    action: 'unknown',
+    response: 'I heard: "' + text + '". Try asking about agent status, tasks, bugs, or drones.'
+  };
+}
+
+// ======== SKILLS REGISTRY ========
+
+router.get('/skills', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var skills = listSkills({
+    category: req.query.category,
+    search: req.query.search
+  });
+  res.json(skills);
+});
+
+router.get('/skills/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var skill = getSkill(req.params.id);
+  if (!skill) return res.status(404).json({ error: 'skill not found' });
+  res.json(skill);
+});
+
+router.post('/skills', function (req, res) {
+  var who = checkAdmin(req, res);
+  if (!who) return;
+  var b = req.body;
+  if (!b.id || !b.name) return res.status(400).json({ error: 'id and name required' });
+  try {
+    var result = createSkill(b.id, b.name, b.description, b.category, b.version, b.author,
+      b.install_type, b.install_data, b.required_capabilities, b.tags);
+    createEvent('skill_created', who || 'admin', '', b.name, { skill_id: b.id });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'skill already exists' });
+    throw err;
+  }
+});
+
+router.put('/skills/:id', function (req, res) {
+  var who = checkAdmin(req, res);
+  if (!who) return;
+  var updated = updateSkill(req.params.id, req.body);
+  if (!updated) return res.status(404).json({ error: 'skill not found' });
+  res.json(updated);
+});
+
+// Agent skill management
+router.post('/skills/:id/install', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var agentId = who || req.body.agent_id;
+  if (!agentId) return res.status(400).json({ error: 'agent_id required' });
+  var skill = getSkill(req.params.id);
+  if (!skill) return res.status(404).json({ error: 'skill not found' });
+  installSkill(agentId, req.params.id, req.body.config);
+  createEvent('skill_installed', agentId, '', skill.name, { skill_id: req.params.id });
+  res.json({ ok: true, skill_id: req.params.id, agent_id: agentId });
+});
+
+router.post('/skills/:id/uninstall', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var agentId = who || req.body.agent_id;
+  if (!agentId) return res.status(400).json({ error: 'agent_id required' });
+  uninstallSkill(agentId, req.params.id);
+  res.json({ ok: true });
+});
+
+router.get('/agents/:agentId/skills', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var skills = getAgentSkills(req.params.agentId);
+  res.json(skills);
 });
 
 // ======== ASSETS ========
@@ -1892,6 +2302,12 @@ router.post('/messages', function (req, res) {
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   if (!validateStringLength(res, content, MAX_CONTENT, 'content')) return;
+
+  // Enforcement rules check
+  var enforcement = checkEnforcementRules('send_message', { content: content, to_agent: req.body.to_agent || req.body.to }, agentId);
+  if (!enforcement.allowed) {
+    return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
+  }
 
   // Only admin and operators can send directives
   var msgType = req.body.msg_type || 'message';
@@ -2779,11 +3195,12 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
   var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
   createAgent(id, name, projectId, hash, capabilities);
   // Set optional LLM metadata
-  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type) {
+  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type || req.body.runtime) {
     updateAgent(id, {
       llm_backend: req.body.llm_backend || '',
       llm_model: req.body.llm_model || '',
-      agent_type: req.body.agent_type || 'agent'
+      agent_type: req.body.agent_type || 'agent',
+      runtime: req.body.runtime || ''
     });
   }
   // Auto-add new agent to #general
@@ -5106,6 +5523,12 @@ router.get('/github/prs/:owner/:repo', function (req, res) {
 // Merge PR
 router.post('/github/prs/:owner/:repo/:number/merge', function (req, res) {
   if (!checkAdmin(req, res)) return;
+  // Enforcement rules check
+  var who = resolveAgentId(req);
+  var enforcement = checkEnforcementRules('merge_pr', { owner: req.params.owner, repo: req.params.repo, number: req.params.number }, who);
+  if (!enforcement.allowed) {
+    return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
+  }
   if (!GITHUB_TOKEN) return res.status(503).json({ error: 'GITHUB_TOKEN not configured on server' });
   var body = { merge_method: req.body.merge_method || 'squash' };
   if (req.body.commit_title) body.commit_title = req.body.commit_title;
