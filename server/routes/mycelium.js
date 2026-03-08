@@ -1915,7 +1915,7 @@ router.post('/skills', function (req, res) {
   try {
     var result = createSkill(b.id, b.name, b.description, b.category, b.version, b.author,
       b.install_type, b.install_data, b.required_capabilities, b.tags);
-    emitEvent('skill_created', who || 'admin', '', b.name, { skill_id: b.id });
+    emitEvent('skill_created', 'admin', '', b.name, { skill_id: b.id });
     res.status(201).json(result);
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'skill already exists' });
