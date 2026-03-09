@@ -132,7 +132,7 @@ import {
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
   createTeamChat, listTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs, releaseAllStaleClaimedJobs,
   createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
@@ -172,7 +172,7 @@ import {
   getAllTeamSettingsGrouped, syncTeamSettingsToProfile,
   createTeam, getTeam, listTeams, updateTeam, deleteTeam,
   addTeamMember, updateTeamMember, removeTeamMember,
-  getTeamsForUser, getTeamProjects
+  getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -765,7 +765,13 @@ function dispatchWorkToIdleAgents(triggerContext) {
     if (agentTasks.length > 0) continue; // has queued work
 
     // Try to find work: plan steps first, then unassigned tasks
-    var step = getNextUnassignedPlanStep();
+    // Bug #131: Scope to agent's project(s) to prevent cross-project dispatch
+    var agentProjectIds = getTeamProjectIdsForAgent(agent.id);
+    // Also include the agent's own project_id field as fallback
+    if (agent.project_id && agent.project_id !== 'drone' && agentProjectIds.indexOf(agent.project_id) === -1) {
+      agentProjectIds.push(agent.project_id);
+    }
+    var step = getNextUnassignedPlanStep(agentProjectIds.length > 0 ? agentProjectIds : null);
     // Capability check — skip if agent can't handle this step
     if (step && !agentCanHandle(agent, step)) step = null;
     if (step) {
@@ -778,7 +784,7 @@ function dispatchWorkToIdleAgents(triggerContext) {
       continue;
     }
 
-    var task = getNextUnassignedTask(claimedTaskIds);
+    var task = getNextUnassignedTask(claimedTaskIds, agentProjectIds.length > 0 ? agentProjectIds : null);
     // Capability check — skip if agent can't handle this task
     if (task && !agentCanHandle(agent, task)) task = null;
     if (task) {
@@ -3933,6 +3939,29 @@ setInterval(function () {
   } catch (e) { /* cleanup is best-effort */ }
 }, 10 * 60 * 1000);
 
+// Bug #137: Periodically auto-fail stale claimed drone jobs (every 15 minutes)
+// Bug #134/#132: Also flag drones offline if no heartbeat in 30 minutes
+setInterval(function () {
+  try {
+    var stale = releaseAllStaleClaimedJobs();
+    if (stale.length > 0) {
+      emitEvent('drone_stale_cleanup', '__system__', 'drone', 'Auto-failed ' + stale.length + ' stale claimed drone job(s): ' + stale.map(function (j) { return '#' + j.id; }).join(', '), { job_ids: stale.map(function (j) { return j.id; }) });
+    }
+    // Flag drones offline if no heartbeat in 30 minutes
+    var drones = listDrones();
+    for (var drone of drones) {
+      if (drone.status === 'online' && drone.last_heartbeat) {
+        var lastSeen = new Date(drone.last_heartbeat).getTime();
+        var minutesAgo = (Date.now() - lastSeen) / 60000;
+        if (minutesAgo > 30) {
+          updateAgentHeartbeat(drone.id, 'offline', '');
+          emitEvent('drone_offline_detected', '__system__', 'drone', 'Drone ' + drone.id + ' flagged offline — no heartbeat for ' + Math.round(minutesAgo) + ' minutes', { drone_id: drone.id, minutes_since_heartbeat: Math.round(minutesAgo) });
+        }
+      }
+    }
+  } catch (e) { /* cleanup is best-effort */ }
+}, 15 * 60 * 1000);
+
 // POST /files — upload a temp file (multipart form, field name: "file")
 // curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://mycelium.fyi/api/mycelium/files
 // Files auto-delete after 24 hours. Download with wget/curl before then.
@@ -4356,8 +4385,14 @@ router.post('/drones/claim', function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var capabilities = req.body.capabilities || [];
+
+  // Bug #137: Release stale claimed jobs before claiming new work
+  // Auto-fail jobs claimed by this drone for >1 hour with no completion
+  var staleJobs = releaseStaleClaimedJobs(agentId);
+  var staleReleased = staleJobs.length;
+
   var job = claimDroneJob(agentId, capabilities);
-  if (!job) return res.json({ job: null });
+  if (!job) return res.json({ job: null, stale_released: staleReleased });
 
   // If job has a job_type, render commands from template
   if (job.job_type) {
@@ -4371,15 +4406,26 @@ router.post('/drones/claim', function (req, res) {
       try { var db2 = getDB(); db2.prepare("UPDATE drone_jobs SET status = 'pending', drone_id = NULL, started_at = NULL WHERE id = ?").run(job.id); } catch (e) { /* fallback already set status */ }
       return res.json({ job: null, skipped: { job_id: job.id, reason: rendered.error } });
     }
-    // Write rendered command back to the job
-    updateDroneJob(job.id, { command: rendered.command });
-    // Inject setup_steps and artifacts into the job's input_data
-    inputData.setup_steps = rendered.setup_steps;
-    inputData.artifacts = rendered.artifacts;
+    // Write rendered command back to the job (only if job doesn't already have one)
+    if (!job.command) {
+      updateDroneJob(job.id, { command: rendered.command });
+    }
+    // Bug #136: Merge template setup_steps/artifacts with job's own, instead of replacing
+    // Job-specified artifacts take priority (appended after template artifacts, deduped)
+    var jobArtifacts = inputData.artifacts || [];
+    var templateArtifacts = rendered.artifacts || [];
+    var mergedArtifacts = templateArtifacts.slice();
+    for (var a of jobArtifacts) {
+      if (mergedArtifacts.indexOf(a) === -1) mergedArtifacts.push(a);
+    }
+    inputData.artifacts = mergedArtifacts;
+    // Job-specified setup_steps come after template steps
+    var jobSetupSteps = inputData.setup_steps || [];
+    inputData.setup_steps = (rendered.setup_steps || []).concat(jobSetupSteps);
     inputData.workspace_dir = rendered.workspace_name;
     updateDroneJob(job.id, { input_data: JSON.stringify(inputData) });
     // Return enriched job
-    job.command = rendered.command;
+    if (!job.command) job.command = rendered.command;
     job.input_data = JSON.stringify(inputData);
   }
 
