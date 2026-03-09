@@ -392,4 +392,65 @@ export class MyceliumAgent {
       }
     }
   }
+
+  // ---- Semantic Memory ----
+
+  async memorySearch(query, opts) {
+    opts = opts || {}
+    return this.api.post('/memory/search', {
+      query: query,
+      source_types: opts.source_types,
+      namespace: opts.namespace,
+      project_id: opts.project_id,
+      limit: opts.limit || 10,
+      mode: opts.mode || 'hybrid'
+    })
+  }
+
+  async memoryIndex(sourceType, sourceId, contentText, opts) {
+    opts = opts || {}
+    return this.api.post('/memory/index', {
+      source_type: sourceType,
+      source_id: sourceId,
+      content_text: contentText,
+      namespace: opts.namespace,
+      metadata: opts.metadata
+    })
+  }
+
+  // ---- A2A Gateway ----
+
+  async a2aDiscover(url) {
+    return this.api.post('/a2a/discover', { url: url })
+  }
+
+  async a2aSend(agentId, message) {
+    return this.api.post('/a2a/send', { agent_id: agentId, message: message })
+  }
+
+  async a2aList() {
+    return this.api.get('/a2a/agents')
+  }
+
+  // ---- Agent Profile ----
+
+  async getProfile(agentId) {
+    return this.api.get('/agents/' + (agentId || this.agentId) + '/profile')
+  }
+
+  async updateProfile(fields) {
+    return this.api.put('/agents/' + this.agentId + '/profile', fields)
+  }
+
+  // ---- Auto-Memory ----
+
+  async getAutoMemoryFacts(opts) {
+    opts = opts || {}
+    var params = []
+    if (opts.agent_id) params.push('agent_id=' + encodeURIComponent(opts.agent_id))
+    if (opts.project_id) params.push('project_id=' + encodeURIComponent(opts.project_id))
+    if (opts.category) params.push('category=' + encodeURIComponent(opts.category))
+    if (opts.limit) params.push('limit=' + opts.limit)
+    return this.api.get('/auto-memory/facts' + (params.length ? '?' + params.join('&') : ''))
+  }
 }

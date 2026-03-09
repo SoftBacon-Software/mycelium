@@ -172,7 +172,10 @@ import {
   getAllTeamSettingsGrouped, syncTeamSettingsToProfile,
   createTeam, getTeam, listTeams, updateTeam, deleteTeam,
   addTeamMember, updateTeamMember, removeTeamMember,
-  getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent
+  getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent,
+  getAgentProfile, ensureAgentProfile, updateAgentProfile, incrementProfileCounter,
+  listAgentProfiles, getAgentLeaderboard,
+  getStaleAgents, getStaleTasks, getStaleRequests, getStaleDrones, getStalePlanSteps
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -749,15 +752,66 @@ function agentCanHandle(agent, workItem) {
   return true;
 }
 
+// Score how well an agent matches a work item using profile specializations
+function agentMatchScore(agent, workItem) {
+  var score = 0;
+  try {
+    var profile = getAgentProfile(agent.id);
+    if (!profile) return 0;
+
+    // Boost for matching project preference
+    var projectId = workItem.project_id || '';
+    if (Array.isArray(profile.preferred_projects) && profile.preferred_projects.indexOf(projectId) !== -1) {
+      score += 10;
+    }
+
+    // Boost for matching specialization keywords in title
+    var title = ((workItem.title || '') + ' ' + (workItem.description || '')).toLowerCase();
+    var specs = Array.isArray(profile.specializations) ? profile.specializations : [];
+    for (var spec of specs) {
+      if (title.includes(spec.toLowerCase())) score += 5;
+    }
+
+    // Boost for higher completion count (more experienced agents)
+    score += Math.min(profile.total_tasks_completed, 50) * 0.1;
+  } catch (e) { /* non-critical */ }
+  return score;
+}
+
 // ---- Auto-dispatch: push work to idle agents ----
 function dispatchWorkToIdleAgents(triggerContext) {
+  // Capacity control: check global max_concurrent_tasks
+  try {
+    var maxConcurrentConfig = getInstanceConfig('max_concurrent_tasks');
+    if (maxConcurrentConfig) {
+      var maxConcurrent = parseInt(maxConcurrentConfig);
+      if (maxConcurrent > 0) {
+        var db = getDB();
+        var currentInProgress = db.prepare("SELECT COUNT(*) as c FROM tasks WHERE status = 'in_progress'").get().c;
+        if (currentInProgress >= maxConcurrent) {
+          return []; // at global capacity
+        }
+      }
+    }
+  } catch (e) { /* non-critical — proceed with dispatch */ }
+
   var idleAgents = getIdleAgents();
   if (idleAgents.length === 0) return [];
 
   var dispatched = [];
   var claimedTaskIds = [];
 
+  // Sort agents by profile match score (best matches first) — computed lazily per work item below
   for (var agent of idleAgents) {
+    // Per-agent capacity control via profile
+    try {
+      var profile = getAgentProfile(agent.id);
+      if (profile && profile.max_concurrent > 0) {
+        var agentInProgress = listTasks({ assignee: agent.id, status: 'in_progress' });
+        if (agentInProgress.length >= profile.max_concurrent) continue;
+      }
+    } catch (e) { /* non-critical */ }
+
     // Skip if agent already has assigned open/in_progress tasks
     var agentTasks = listTasks({ assignee: agent.id, status: 'open' });
     var inProgress = listTasks({ assignee: agent.id, status: 'in_progress' });
@@ -1048,6 +1102,7 @@ router.get('/boot/:agentId', function (req, res) {
     fullPayload.sleep_mode = getSleepMode();
     fullPayload.autonomous_mode = isNetworkAutonomous();
     fullPayload.operators_available = getAvailableOperators().length;
+    try { fullPayload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
     emitEvent('agent_boot', agentId, null, agentId + ' booted (verbose)');
     return res.json(fullPayload);
   }
@@ -1057,6 +1112,8 @@ router.get('/boot/:agentId', function (req, res) {
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
   payload.savepoint = computeSavepointDiff(agentId);
   payload.changes_since_last = formatSavepointSummary(computeSavepointDiff(agentId));
+  // Auto-create/update agent profile on boot
+  try { payload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
@@ -1450,6 +1507,8 @@ router.put('/tasks/:id', function (req, res) {
   // When task completes: resolve dependencies and update linked asset
   if (fields.status === 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
+    // Increment profile counter
+    try { incrementProfileCounter(agentId, 'total_tasks_completed'); } catch (e) { /* non-critical */ }
     var unblocked = resolveTaskDependencies(task.id);
     if (unblocked.length > 0) {
       result.unblocked = unblocked;
@@ -4085,6 +4144,9 @@ router.put('/bugs/:id', function (req, res) {
   updateBug(bug.id, updates);
   if (updates.status) {
     emitEvent('bug_updated', who, bug.project_id, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
+    if (updates.status === 'fixed' || updates.status === 'closed') {
+      try { incrementProfileCounter(bug.assignee || who, 'total_bugs_fixed'); } catch (e) { /* non-critical */ }
+    }
   }
   dispatchWebhook('bug_updated', who, { bug_id: bug.id, title: bug.title, updates: updates });
   // Webhook: notify assignee when bug is assigned
@@ -5991,6 +6053,146 @@ router.delete('/support/tickets/:id', function (req, res) {
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   deleteSupportTicket(parseInt(req.params.id));
   res.json({ ok: true, id: parseInt(req.params.id) });
+});
+
+// ======== AGENT PROFILES ========
+
+// GET /agents/:id/profile — get agent profile
+router.get('/agents/:id/profile', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var profile = getAgentProfile(req.params.id);
+  if (!profile) return apiError(res, 404, 'Profile not found');
+  res.json(profile);
+});
+
+// PUT /agents/:id/profile — update agent profile (own or admin)
+router.put('/agents/:id/profile', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  if (!req._authIsAdmin && who !== req.params.id) {
+    return apiError(res, 403, 'Can only update your own profile');
+  }
+  var profile = getAgentProfile(req.params.id);
+  if (!profile) {
+    // Auto-create if doesn't exist
+    try { ensureAgentProfile(req.params.id); } catch (e) { return apiError(res, 404, 'Agent not found'); }
+  }
+  var fields = {};
+  if (req.body.display_name !== undefined) fields.display_name = req.body.display_name;
+  if (req.body.specializations !== undefined) fields.specializations = req.body.specializations;
+  if (req.body.preferred_projects !== undefined) fields.preferred_projects = req.body.preferred_projects;
+  if (req.body.max_concurrent !== undefined) fields.max_concurrent = parseInt(req.body.max_concurrent) || 0;
+  if (req.body.profile_data !== undefined) fields.profile_data = req.body.profile_data;
+  var updated = updateAgentProfile(req.params.id, fields);
+  res.json(updated);
+});
+
+// GET /agents/profiles — list all profiles with stats (admin)
+router.get('/agents/profiles', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listAgentProfiles());
+});
+
+// GET /agents/leaderboard — top agents by stats
+router.get('/agents/leaderboard', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 20;
+  res.json(getAgentLeaderboard(limit));
+});
+
+// ======== HEALTH PATROL ========
+
+function runHealthPatrol() {
+  var db = getDB();
+  var config = {};
+  try {
+    var rows = db.prepare("SELECT key, value FROM instance_config WHERE key LIKE 'patrol_%'").all();
+    for (var r of rows) config[r.key] = r.value;
+  } catch (e) { /* use defaults */ }
+
+  var staleAgentMins = parseInt(config.patrol_stale_agent_minutes) || 15;
+  var staleTaskMins = parseInt(config.patrol_stale_task_minutes) || 30;
+  var staleRequestMins = parseInt(config.patrol_stale_request_minutes) || 60;
+  var staleDroneMins = parseInt(config.patrol_stale_drone_minutes) || 30;
+  var stalePlanStepMins = parseInt(config.patrol_stale_plan_step_minutes) || 120;
+
+  var results = { stale_agents: 0, stale_tasks: 0, stale_requests: 0, stale_drones: 0, stale_plan_steps: 0, actions: [], run_at: new Date().toISOString() };
+
+  // 1. Stale agents
+  var staleAgents = getStaleAgents(staleAgentMins);
+  for (var a of staleAgents) {
+    updateAgentHeartbeat(a.id, 'offline', '');
+    createEvent('health_patrol', '__system__', null, 'Agent ' + a.id + ' marked offline (no heartbeat in ' + staleAgentMins + ' min)', JSON.stringify({ agent_id: a.id, last_heartbeat: a.last_heartbeat }));
+    results.actions.push({ type: 'agent_offline', agent_id: a.id });
+  }
+  results.stale_agents = staleAgents.length;
+
+  // 2. Stale tasks
+  var staleTasks = getStaleTasks(staleTaskMins);
+  for (var t of staleTasks) {
+    createEvent('health_patrol', '__system__', null, 'Task #' + t.id + ' in_progress with no active assignee (>' + staleTaskMins + ' min)', JSON.stringify({ task_id: t.id, assignee: t.assignee }));
+    results.actions.push({ type: 'stale_task_warning', task_id: t.id, assignee: t.assignee });
+  }
+  results.stale_tasks = staleTasks.length;
+
+  // 3. Stale requests
+  var staleReqs = getStaleRequests(staleRequestMins);
+  for (var r of staleReqs) {
+    createEvent('health_patrol', '__system__', null, 'Request #' + r.id + ' pending for >' + staleRequestMins + ' min', JSON.stringify({ request_id: r.id, from: r.from_agent, to: r.to_agent }));
+    results.actions.push({ type: 'stale_request', request_id: r.id });
+  }
+  results.stale_requests = staleReqs.length;
+
+  // 4. Stale drones
+  var staleDrns = getStaleDrones(staleDroneMins);
+  for (var d of staleDrns) {
+    updateAgentHeartbeat(d.id, 'offline', '');
+    // Release claimed jobs from stale drones
+    try { releaseStaleClaimedJobs(d.id); } catch (e) { /* non-critical */ }
+    createEvent('health_patrol', '__system__', null, 'Drone ' + d.id + ' marked offline + jobs released', JSON.stringify({ drone_id: d.id }));
+    results.actions.push({ type: 'drone_offline', drone_id: d.id });
+  }
+  results.stale_drones = staleDrns.length;
+
+  // 5. Stale plan steps
+  var staleSteps = getStalePlanSteps(stalePlanStepMins);
+  for (var s of staleSteps) {
+    createEvent('health_patrol', '__system__', null, 'Plan step #' + s.id + ' in_progress for >' + stalePlanStepMins + ' min', JSON.stringify({ step_id: s.id, plan_id: s.plan_id, assignee: s.assignee }));
+    results.actions.push({ type: 'stale_plan_step', step_id: s.id, plan_id: s.plan_id });
+  }
+  results.stale_plan_steps = staleSteps.length;
+
+  return results;
+}
+
+// Start health patrol interval (every 5 minutes)
+var PATROL_INTERVAL = 5 * 60 * 1000;
+setInterval(function () {
+  try { runHealthPatrol(); } catch (e) { console.error('[health_patrol] Error:', e.message); }
+}, PATROL_INTERVAL);
+
+// GET /admin/health — run health patrol on-demand
+router.get('/admin/health', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  try {
+    var results = runHealthPatrol();
+    res.json(results);
+  } catch (e) {
+    return apiError(res, 500, 'Health patrol failed: ' + e.message);
+  }
+});
+
+// GET /admin/health/history — recent patrol events
+router.get('/admin/health/history', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 50;
+  var events = listEvents({ type: 'health_patrol', limit: limit });
+  res.json(events);
 });
 
 export default router;

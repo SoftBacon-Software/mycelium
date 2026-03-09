@@ -728,6 +728,24 @@ CREATE INDEX IF NOT EXISTS idx_instances_org ON customer_instances(org_id);
 CREATE INDEX IF NOT EXISTS idx_instances_status ON customer_instances(status);
 CREATE INDEX IF NOT EXISTS idx_instances_domain ON customer_instances(domain);
 
+-- Agent profiles (persistent identity that survives session lifecycle)
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  agent_id TEXT PRIMARY KEY REFERENCES agents(id),
+  display_name TEXT,
+  specializations TEXT NOT NULL DEFAULT '[]',
+  total_tasks_completed INTEGER NOT NULL DEFAULT 0,
+  total_bugs_fixed INTEGER NOT NULL DEFAULT 0,
+  total_prs_created INTEGER NOT NULL DEFAULT 0,
+  avg_task_duration_minutes REAL,
+  preferred_projects TEXT NOT NULL DEFAULT '[]',
+  capability_history TEXT NOT NULL DEFAULT '[]',
+  max_concurrent INTEGER NOT NULL DEFAULT 0,
+  session_count INTEGER NOT NULL DEFAULT 0,
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
+  profile_data TEXT NOT NULL DEFAULT '{}'
+);
+
 -- Message read tracking (agent ↔ message acknowledgment)
 CREATE TABLE IF NOT EXISTS message_reads (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

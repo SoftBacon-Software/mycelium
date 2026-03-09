@@ -199,6 +199,40 @@ if (fs.existsSync(livePage)) {
   });
 }
 
+// ---- A2A Agent Card (public, no auth) ----
+app.get('/.well-known/agent.json', function (req, res) {
+  try {
+    var agents = getDB().prepare("SELECT id, name, capabilities, role FROM agents WHERE role != 'drone' AND status != 'offline'").all();
+    var skills = agents.map(function (a) {
+      var caps = [];
+      try { caps = JSON.parse(a.capabilities || '[]'); } catch (e) {}
+      return { id: a.id, name: a.name || a.id, description: 'Agent: ' + (a.name || a.id) + (caps.length > 0 ? ' (' + caps.join(', ') + ')' : '') };
+    });
+    res.json({
+      name: 'Mycelium Platform',
+      description: 'AI coordination platform — distributed development with multi-agent teams',
+      url: 'https://mycelium.fyi',
+      version: '1.0',
+      capabilities: { streaming: true, pushNotifications: false },
+      skills: [
+        { id: 'task-management', name: 'Task Management', description: 'Create, assign, and track tasks across AI agents' },
+        { id: 'agent-coordination', name: 'Agent Coordination', description: 'Route work to specialized agents based on capabilities' }
+      ].concat(skills),
+      authentication: { schemes: ['apiKey'] }
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to generate agent card' });
+  }
+});
+
+// ---- A2A JSON-RPC endpoint (public with API key auth) ----
+app.post('/a2a', function (req, res) {
+  // Proxy to the a2a-gateway plugin's RPC handler
+  // The plugin mounts at /api/mycelium/a2a/rpc but A2A spec expects /a2a
+  req.url = '/api/mycelium/a2a/rpc';
+  app.handle(req, res);
+});
+
 // ---- Health check (public, no auth) ----
 var serverStartTime = Date.now();
 app.get('/health', function (req, res) {

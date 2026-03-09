@@ -3899,6 +3899,115 @@ export function listInstances(filters) {
   return db.prepare(sql).all.apply(db.prepare(sql), params);
 }
 
+// -- Agent Profiles --
+
+export function getAgentProfile(agentId) {
+  var row = db.prepare('SELECT * FROM agent_profiles WHERE agent_id = ?').get(agentId);
+  if (row) {
+    try { row.specializations = JSON.parse(row.specializations); } catch (e) { row.specializations = []; }
+    try { row.preferred_projects = JSON.parse(row.preferred_projects); } catch (e) { row.preferred_projects = []; }
+    try { row.capability_history = JSON.parse(row.capability_history); } catch (e) { row.capability_history = []; }
+    try { row.profile_data = JSON.parse(row.profile_data); } catch (e) { row.profile_data = {}; }
+  }
+  return row;
+}
+
+export function ensureAgentProfile(agentId) {
+  var existing = db.prepare('SELECT agent_id FROM agent_profiles WHERE agent_id = ?').get(agentId);
+  if (existing) {
+    // Bump session count + last_active
+    db.prepare("UPDATE agent_profiles SET session_count = session_count + 1, last_active_at = datetime('now') WHERE agent_id = ?").run(agentId);
+    return getAgentProfile(agentId);
+  }
+  var agent = getAgent(agentId);
+  var displayName = agent ? agent.name : agentId;
+  db.prepare(
+    "INSERT INTO agent_profiles (agent_id, display_name, session_count) VALUES (?, ?, 1)"
+  ).run(agentId, displayName);
+  return getAgentProfile(agentId);
+}
+
+export function updateAgentProfile(agentId, fields) {
+  var sets = [];
+  var values = [];
+  if (fields.display_name !== undefined) { sets.push('display_name = ?'); values.push(fields.display_name); }
+  if (fields.specializations !== undefined) { sets.push('specializations = ?'); values.push(JSON.stringify(fields.specializations)); }
+  if (fields.preferred_projects !== undefined) { sets.push('preferred_projects = ?'); values.push(JSON.stringify(fields.preferred_projects)); }
+  if (fields.max_concurrent !== undefined) { sets.push('max_concurrent = ?'); values.push(fields.max_concurrent); }
+  if (fields.profile_data !== undefined) { sets.push('profile_data = ?'); values.push(JSON.stringify(fields.profile_data)); }
+  if (fields.capability_history !== undefined) { sets.push('capability_history = ?'); values.push(JSON.stringify(fields.capability_history)); }
+  if (sets.length === 0) return getAgentProfile(agentId);
+  sets.push("last_active_at = datetime('now')");
+  values.push(agentId);
+  db.prepare('UPDATE agent_profiles SET ' + sets.join(', ') + ' WHERE agent_id = ?').run(...values);
+  return getAgentProfile(agentId);
+}
+
+export function incrementProfileCounter(agentId, counter) {
+  var allowed = ['total_tasks_completed', 'total_bugs_fixed', 'total_prs_created'];
+  if (allowed.indexOf(counter) === -1) return;
+  db.prepare('UPDATE agent_profiles SET ' + counter + ' = ' + counter + ' + 1 WHERE agent_id = ?').run(agentId);
+}
+
+export function listAgentProfiles() {
+  var rows = db.prepare('SELECT * FROM agent_profiles ORDER BY total_tasks_completed DESC').all();
+  return rows.map(function (row) {
+    try { row.specializations = JSON.parse(row.specializations); } catch (e) { row.specializations = []; }
+    try { row.preferred_projects = JSON.parse(row.preferred_projects); } catch (e) { row.preferred_projects = []; }
+    try { row.capability_history = JSON.parse(row.capability_history); } catch (e) { row.capability_history = []; }
+    try { row.profile_data = JSON.parse(row.profile_data); } catch (e) { row.profile_data = {}; }
+    return row;
+  });
+}
+
+export function getAgentLeaderboard(limit) {
+  limit = Math.min(limit || 20, 100);
+  var rows = db.prepare(
+    'SELECT agent_id, display_name, specializations, total_tasks_completed, total_bugs_fixed, total_prs_created, session_count, first_seen_at, last_active_at FROM agent_profiles ORDER BY total_tasks_completed DESC LIMIT ?'
+  ).all(limit);
+  return rows.map(function (row) {
+    try { row.specializations = JSON.parse(row.specializations); } catch (e) { row.specializations = []; }
+    return row;
+  });
+}
+
+// -- Health Patrol --
+
+export function getStaleAgents(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || 15;
+  return db.prepare(
+    "SELECT id, name, status, working_on, last_heartbeat FROM agents WHERE status IN ('online', 'idle') AND last_heartbeat < datetime('now', '-' || ? || ' minutes') AND role != 'drone'"
+  ).all(thresholdMinutes);
+}
+
+export function getStaleTasks(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || 30;
+  return db.prepare(
+    "SELECT t.id, t.title, t.assignee, t.updated_at FROM tasks t LEFT JOIN agents a ON t.assignee = a.id WHERE t.status = 'in_progress' AND (a.last_heartbeat IS NULL OR a.last_heartbeat < datetime('now', '-' || ? || ' minutes'))"
+  ).all(thresholdMinutes);
+}
+
+export function getStaleRequests(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || 60;
+  return db.prepare(
+    "SELECT id, from_agent, to_agent, content, created_at FROM messages WHERE msg_type = 'request' AND status IN ('sent', 'pending') AND created_at < datetime('now', '-' || ? || ' minutes')"
+  ).all(thresholdMinutes);
+}
+
+export function getStaleDrones(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || 30;
+  return db.prepare(
+    "SELECT id, name, status, last_heartbeat FROM agents WHERE (role = 'drone' OR project_id = 'drone') AND status IN ('online', 'idle') AND last_heartbeat < datetime('now', '-' || ? || ' minutes')"
+  ).all(thresholdMinutes);
+}
+
+export function getStalePlanSteps(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || 120;
+  return db.prepare(
+    "SELECT s.id, s.title, s.assignee, s.plan_id, s.updated_at FROM plan_steps s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'in_progress' AND p.status = 'active' AND s.updated_at < datetime('now', '-' || ? || ' minutes')"
+  ).all(thresholdMinutes);
+}
+
 export function updateInstance(id, updates) {
   var sets = [];
   var params = [];

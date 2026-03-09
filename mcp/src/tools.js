@@ -1681,6 +1681,50 @@ export function registerTools(server) {
     }
   );
 
+  // ===== AGENT PROFILES =====
+
+  registerDual(server,
+    'studio_agent_profile',
+    'View or update an agent profile. Profiles track persistent identity: specializations, task stats, preferred projects. Use action="get" to view, action="update" to modify.',
+    {
+      agent_id: z.string().optional().describe('Agent ID (default: self)'),
+      action: z.enum(['get', 'update']).optional().describe('Action: get (default) or update'),
+      specializations: z.array(z.string()).optional().describe('Set specializations (e.g. ["frontend", "godot", "art-gen"])'),
+      preferred_projects: z.array(z.string()).optional().describe('Set preferred project IDs'),
+      max_concurrent: z.number().optional().describe('Max concurrent tasks (0 = unlimited)'),
+      profile_data: z.object({}).passthrough().optional().describe('Freeform profile metadata')
+    },
+    async (args) => {
+      var agentId = args.agent_id || getState().agentId;
+      if (args.action === 'update') {
+        var body = {};
+        if (args.specializations) body.specializations = args.specializations;
+        if (args.preferred_projects) body.preferred_projects = args.preferred_projects;
+        if (args.max_concurrent !== undefined) body.max_concurrent = args.max_concurrent;
+        if (args.profile_data) body.profile_data = args.profile_data;
+        var updated = await apiPut('/agents/' + agentId + '/profile', body);
+        return text('Profile updated for ' + agentId + '.\nSpecializations: ' + JSON.stringify(updated.specializations) + '\nTasks completed: ' + updated.total_tasks_completed + '\nBugs fixed: ' + updated.total_bugs_fixed);
+      }
+      var profile = await apiGet('/agents/' + agentId + '/profile');
+      var lines = [
+        '=== Profile: ' + (profile.display_name || agentId) + ' ===',
+        'Specializations: ' + JSON.stringify(profile.specializations || []),
+        'Tasks completed: ' + (profile.total_tasks_completed || 0),
+        'Bugs fixed: ' + (profile.total_bugs_fixed || 0),
+        'PRs created: ' + (profile.total_prs_created || 0),
+        'Sessions: ' + (profile.session_count || 0),
+        'Preferred projects: ' + JSON.stringify(profile.preferred_projects || []),
+        'Max concurrent: ' + (profile.max_concurrent || 'unlimited'),
+        'First seen: ' + (profile.first_seen_at || 'unknown'),
+        'Last active: ' + (profile.last_active_at || 'unknown')
+      ];
+      if (profile.profile_data && Object.keys(profile.profile_data).length > 0) {
+        lines.push('Profile data: ' + JSON.stringify(profile.profile_data, null, 2));
+      }
+      return text(lines.join('\n'));
+    }
+  );
+
   // ===== DRONES =====
 
   registerDual(server,
