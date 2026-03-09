@@ -854,7 +854,7 @@ def execute_job(api, job, system_info, runner, allowed_commands,
     print(f"  Executing: {command[:150]}")
     try:
         r = runner.run_streaming(
-            command, shell=True, cwd=exec_dir, env=env, timeout=3600
+            command, shell=True, cwd=exec_dir, env=env, timeout=7200
         )
         stdout = r.stdout[:MAX_OUTPUT_SIZE] if r.stdout else ""
         stderr = r.stderr[:MAX_OUTPUT_SIZE] if r.stderr else ""
@@ -882,7 +882,7 @@ def execute_job(api, job, system_info, runner, allowed_commands,
     except __import__("subprocess").TimeoutExpired:
         return False, {
             "error_type": "timeout",
-            "message": "Job timed out after 3600 seconds (1 hour).",
+            "message": "Job timed out after 7200 seconds (2 hours).",
         }
     except Exception as e:
         return False, {
@@ -1163,4 +1163,29 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    # Bug #134/#132: Auto-restart on crash with backoff
+    max_restarts = 10
+    restart_count = 0
+    base_delay = 10  # seconds
+
+    while restart_count < max_restarts:
+        try:
+            main()
+            break  # Clean exit (e.g. KeyboardInterrupt handled inside)
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+            break
+        except SystemExit:
+            break
+        except Exception as e:
+            restart_count += 1
+            delay = min(base_delay * restart_count, 300)
+            print(f"\n{'!' * 60}")
+            print(f"CRASH #{restart_count}/{max_restarts}: {e}")
+            traceback.print_exc()
+            print(f"Restarting in {delay}s...")
+            print(f"{'!' * 60}\n")
+            time.sleep(delay)
+
+    if restart_count >= max_restarts:
+        print(f"Max restarts ({max_restarts}) reached. Exiting. Run again manually.")

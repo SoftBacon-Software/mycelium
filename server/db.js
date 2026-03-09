@@ -2232,6 +2232,32 @@ export function listDroneJobs(filters) {
   return db.prepare('SELECT * FROM drone_jobs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
+// Bug #137: Release stale claimed jobs for a drone (claimed >1 hour ago, not completed)
+export function releaseStaleClaimedJobs(droneId) {
+  var staleJobs = db.prepare(
+    "SELECT * FROM drone_jobs WHERE status = 'claimed' AND drone_id = ? AND started_at < datetime('now', '-1 hour')"
+  ).all(droneId);
+  for (var job of staleJobs) {
+    db.prepare(
+      "UPDATE drone_jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?"
+    ).run('[stale_timeout] Job was claimed for >1 hour with no completion. Auto-failed on drone restart.', job.id);
+  }
+  return staleJobs;
+}
+
+// Also auto-fail ALL stale claimed jobs across all drones (called periodically or on server boot)
+export function releaseAllStaleClaimedJobs() {
+  var staleJobs = db.prepare(
+    "SELECT * FROM drone_jobs WHERE status = 'claimed' AND started_at < datetime('now', '-1 hour')"
+  ).all();
+  for (var job of staleJobs) {
+    db.prepare(
+      "UPDATE drone_jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?"
+    ).run('[stale_timeout] Job was claimed for >1 hour with no progress. Auto-failed by server.', job.id);
+  }
+  return staleJobs;
+}
+
 export function listDrones() {
   return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM agents WHERE project_id = 'drone' ORDER BY created_at").all();
 }
