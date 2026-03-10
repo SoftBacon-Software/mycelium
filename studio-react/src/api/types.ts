@@ -625,3 +625,46 @@ export interface DeployInstance {
   health_status: string;
   last_health_check: string | null;
 }
+
+// ── Agent Identity ──
+
+export interface IdentityPill {
+  value: string;
+  source: string;  // 'custom' | 'platform' | 'team:<name>' | 'ruleset:<name>'
+  locked: boolean;
+}
+
+export interface AgentIdentity {
+  agent: {
+    id: string;
+    name: string;
+    agent_type: string;
+    role: string;
+    status: string;
+    avatar_url: string;
+    operator_id: string;
+    llm_backend: string;
+    llm_model: string;
+    runtime: string;
+  };
+  capabilities: string[];
+  forbidden_capabilities: string[];
+  projects: { id: string; name: string }[];
+  teams: { id: string; name: string; role: string; is_primary: number }[];
+  responsibilities: IdentityPill[];
+  guardrails: IdentityPill[];
+  profile_stats: {
+    session_count: number;
+    total_tasks_completed: number;
+    total_bugs_fixed: number;
+    total_prs_created: number;
+    specializations: string[];
+    first_seen_at: string;
+    last_active_at: string;
+  } | null;
+  calibration: {
+    layers_applied: { id: string; layer: string; node_type: string }[];
+    md_checkpoints: string[];
+    md_blocklist: string[];
+  };
+}

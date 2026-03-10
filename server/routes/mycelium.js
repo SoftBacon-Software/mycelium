@@ -2051,6 +2051,211 @@ router.put('/agents/:id/profile', function (req, res) {
   res.json(updateAgentProfile(req.params.id, fields));
 });
 
+// ======== AGENT IDENTITY ========
+
+// Forbidden capabilities by agent_type
+var DRONE_FORBIDDEN_CAPS = ['code', 'coordination', 'admin'];
+
+router.get('/agents/:id/identity', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  // Parse capabilities
+  var caps = agent.capabilities;
+  if (typeof caps === 'string') { try { caps = JSON.parse(caps); } catch (e) { caps = []; } }
+  if (!Array.isArray(caps)) caps = [];
+
+  // Agent profile (stats, profile_data)
+  var profile = getAgentProfile(req.params.id);
+
+  // Teams
+  var teams = getTeamsForUser(req.params.id);
+
+  // Resolved calibration chain (platform → customer → agent rules)
+  var resolved = resolveProfileChain(req.params.id);
+
+  // Extract platform guardrails from resolved rules
+  var platformGuardrails = [];
+  var platformRules = resolved.rules || {};
+  for (var rk in platformRules) {
+    var rule = platformRules[rk];
+    var layer = 'platform';
+    // Determine which layer this rule came from
+    for (var li = resolved.layers_applied.length - 1; li >= 0; li--) {
+      var lp = resolved.layers_applied[li];
+      if (lp.layer === 'agent') continue; // agent-level rules go to custom
+      layer = lp.layer === 'customer' ? 'team' : 'platform';
+      break;
+    }
+    platformGuardrails.push({
+      value: rk + (typeof rule === 'object' && rule.description ? ': ' + rule.description : ''),
+      source: layer,
+      locked: true
+    });
+  }
+
+  // Gather team-sourced responsibilities and guardrails from team settings
+  var teamGuardrails = [];
+  var teamResponsibilities = [];
+  for (var ti = 0; ti < teams.length; ti++) {
+    var teamId = teams[ti].id;
+    var teamName = teams[ti].name || teamId;
+    try {
+      var settings = getAllTeamSettingsGrouped();
+      if (settings.guardrails) {
+        for (var gk in settings.guardrails) {
+          teamGuardrails.push({ value: String(settings.guardrails[gk]), source: 'team:' + teamName, locked: true });
+        }
+      }
+      if (settings.team_rules) {
+        for (var trk in settings.team_rules) {
+          teamResponsibilities.push({ value: String(settings.team_rules[trk]), source: 'team:' + teamName, locked: true });
+        }
+      }
+    } catch (e) { /* no settings */ }
+  }
+
+  // Gather ruleset guardrails from linked project concepts
+  var rulesetGuardrails = [];
+  var agentProject = agent.project_id || agent.project || '';
+  if (agentProject) {
+    try {
+      var concepts = getProjectConcepts(agentProject);
+      for (var ci = 0; ci < concepts.length; ci++) {
+        var c = concepts[ci];
+        if (c.type !== 'ruleset') continue;
+        var cData = c.data;
+        if (typeof cData === 'string') { try { cData = JSON.parse(cData); } catch (e) { cData = {}; } }
+        if (cData && cData.rules && Array.isArray(cData.rules)) {
+          for (var ri = 0; ri < cData.rules.length; ri++) {
+            var r = cData.rules[ri];
+            rulesetGuardrails.push({
+              value: (r.id || r.name || 'rule') + ': ' + (r.description || r.text || ''),
+              source: 'ruleset:' + c.name,
+              locked: true
+            });
+          }
+        }
+      }
+    } catch (e) { /* no concepts */ }
+  }
+
+  // Profile-level custom responsibilities and guardrails
+  var profileData = (profile && profile.profile_data) || {};
+  var customResponsibilities = (profileData.responsibilities || []).map(function (v) {
+    return { value: v, source: 'custom', locked: false };
+  });
+  var customGuardrails = (profileData.guardrails || []).map(function (v) {
+    return { value: v, source: 'custom', locked: false };
+  });
+
+  // Build projects list
+  var projects = [];
+  if (agentProject) {
+    var proj = getProject(agentProject);
+    if (proj) projects.push({ id: proj.id, name: proj.name });
+  }
+  // Also include team projects
+  for (var tpi = 0; tpi < teams.length; tpi++) {
+    try {
+      var tp = getTeamProjects(teams[tpi].id);
+      for (var tpj = 0; tpj < tp.length; tpj++) {
+        if (!projects.some(function (p) { return p.id === tp[tpj].id; })) {
+          projects.push({ id: tp[tpj].id, name: tp[tpj].name });
+        }
+      }
+    } catch (e) { /* skip */ }
+  }
+
+  res.json({
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      agent_type: agent.agent_type || 'agent',
+      role: agent.role || 'agent',
+      status: agent.status,
+      avatar_url: agent.avatar_url || '',
+      operator_id: agent.operator_id || '',
+      llm_backend: agent.llm_backend || '',
+      llm_model: agent.llm_model || '',
+      runtime: agent.runtime || ''
+    },
+    capabilities: caps,
+    forbidden_capabilities: (agent.agent_type === 'drone') ? DRONE_FORBIDDEN_CAPS : [],
+    projects: projects,
+    teams: teams.map(function (t) { return { id: t.id, name: t.name, role: t.role, is_primary: t.is_primary }; }),
+    responsibilities: [].concat(teamResponsibilities, customResponsibilities),
+    guardrails: [].concat(platformGuardrails, teamGuardrails, rulesetGuardrails, customGuardrails),
+    profile_stats: profile ? {
+      session_count: profile.session_count || 0,
+      total_tasks_completed: profile.total_tasks_completed || 0,
+      total_bugs_fixed: profile.total_bugs_fixed || 0,
+      total_prs_created: profile.total_prs_created || 0,
+      specializations: profile.specializations || [],
+      first_seen_at: profile.first_seen_at || '',
+      last_active_at: profile.last_active_at || ''
+    } : null,
+    calibration: {
+      layers_applied: resolved.layers_applied,
+      md_checkpoints: resolved.md_checkpoints || [],
+      md_blocklist: resolved.md_blocklist || []
+    }
+  });
+});
+
+router.put('/agents/:id/identity', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+
+  var agent = getAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  var agentType = agent.agent_type || 'agent';
+  var updated = {};
+
+  // Update capabilities with validation
+  if (req.body.capabilities !== undefined) {
+    var newCaps = req.body.capabilities;
+    if (!Array.isArray(newCaps)) return res.status(400).json({ error: 'capabilities must be an array' });
+    // Validate against drone restrictions
+    if (agentType === 'drone') {
+      for (var i = 0; i < newCaps.length; i++) {
+        if (DRONE_FORBIDDEN_CAPS.indexOf(newCaps[i]) !== -1) {
+          return res.status(400).json({ error: 'Capability "' + newCaps[i] + '" is forbidden for drones' });
+        }
+      }
+    }
+    updateAgent(req.params.id, { capabilities: JSON.stringify(newCaps) });
+    updated.capabilities = newCaps;
+  }
+
+  // Update responsibilities and guardrails in profile_data
+  if (req.body.responsibilities !== undefined || req.body.guardrails !== undefined) {
+    var profile = getAgentProfile(req.params.id);
+    if (!profile) {
+      try { ensureAgentProfile(req.params.id); profile = getAgentProfile(req.params.id); } catch (e) {
+        return res.status(404).json({ error: 'Could not create agent profile' });
+      }
+    }
+    var pd = profile.profile_data || {};
+    if (req.body.responsibilities !== undefined) {
+      if (!Array.isArray(req.body.responsibilities)) return res.status(400).json({ error: 'responsibilities must be an array' });
+      pd.responsibilities = req.body.responsibilities;
+      updated.responsibilities = req.body.responsibilities;
+    }
+    if (req.body.guardrails !== undefined) {
+      if (!Array.isArray(req.body.guardrails)) return res.status(400).json({ error: 'guardrails must be an array' });
+      pd.guardrails = req.body.guardrails;
+      updated.guardrails = req.body.guardrails;
+    }
+    updateAgentProfile(req.params.id, { profile_data: pd });
+  }
+
+  res.json({ ok: true, updated: updated });
+});
+
 // ======== ASSETS ========
 
 router.get('/assets', function (req, res) {
