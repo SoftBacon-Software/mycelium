@@ -337,13 +337,6 @@ export default function ContextPage() {
     return [...ns].sort()
   }, [contextKeys])
 
-  // Available updaters
-  const updaters = useMemo(() => {
-    const u = new Set<string>()
-    for (const entry of contextKeys) if (entry.updated_by) u.add(entry.updated_by)
-    return [...u].sort()
-  }, [contextKeys])
-
   // Filter keys
   const filtered = useMemo(() => {
     return contextKeys.filter((entry) => {
