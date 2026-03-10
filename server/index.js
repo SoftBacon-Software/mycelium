@@ -224,6 +224,19 @@ app.get('/setup-admin.ps1', function (req, res) {
   res.type('text/plain').sendFile(path.join(publicRoot, 'setup-admin.ps1'));
 });
 
+// ---- A2A Agent Card (public, no auth) ----
+app.get('/.well-known/agent.json', function (req, res) {
+  // Proxy to the a2a-gateway plugin's agent card endpoint
+  req.url = '/api/mycelium/a2a/agent-card';
+  app.handle(req, res);
+});
+
+// ---- A2A JSON-RPC endpoint (public with API key auth) ----
+app.post('/a2a', function (req, res) {
+  req.url = '/api/mycelium/a2a/rpc';
+  app.handle(req, res);
+});
+
 // ---- API routes ----
 app.use('/api/mycelium', myceliumRoutes);
 

@@ -1,0 +1,12 @@
+{
+  "name": "semantic-memory",
+  "version": "1.0.0",
+  "displayName": "Semantic Memory",
+  "description": "Hybrid keyword + vector search across all platform data. FTS5 always available, optional sqlite-vec for vector similarity.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/memory",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}

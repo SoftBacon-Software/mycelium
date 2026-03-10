@@ -1148,6 +1148,39 @@ export function registerTools(server) {
     }
   );
 
+  // ===== AGENT PROFILES =====
+
+  registerDual(server,
+    'studio_agent_profile',
+    'Get or update an agent profile (persistent identity, specializations, stats). Default action is "get".',
+    {
+      action: z.enum(['get', 'update']).optional().describe('Action: get (default) or update'),
+      agent_id: z.string().optional().describe('Agent ID (defaults to self in agent mode)'),
+      specializations: z.string().optional().describe('JSON array of specializations (for update)'),
+      preferred_projects: z.string().optional().describe('JSON array of preferred project IDs (for update)'),
+      max_concurrent: z.number().optional().describe('Max concurrent tasks (0=unlimited, for update)'),
+      profile_data: z.string().optional().describe('JSON object of freeform profile metadata (for update)')
+    },
+    async (args) => {
+      var st = getState();
+      var agentId = args.agent_id || st.agentId;
+      if (!agentId) return text('No agent_id provided and not in agent mode.');
+
+      if (args.action === 'update') {
+        var body = {};
+        if (args.specializations) body.specializations = args.specializations;
+        if (args.preferred_projects) body.preferred_projects = args.preferred_projects;
+        if (args.max_concurrent !== undefined) body.max_concurrent = args.max_concurrent;
+        if (args.profile_data) body.profile_data = args.profile_data;
+        var updated = await apiPut('/agents/' + agentId + '/profile', body);
+        return text(updated);
+      }
+
+      var profile = await apiGet('/agents/' + agentId + '/profile');
+      return text(profile);
+    }
+  );
+
   // ===== ORGANIZATIONS =====
 
   registerDual(server,

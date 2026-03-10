@@ -1,0 +1,12 @@
+{
+  "name": "auto-memory",
+  "version": "1.0.0",
+  "displayName": "Auto-Memory",
+  "description": "Automated knowledge extraction from agent activity. Observer/Reflector pattern — watches activity, extracts durable facts, consolidates into semantic memory.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/auto-memory",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}
