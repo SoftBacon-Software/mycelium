@@ -215,18 +215,22 @@ When using the `mycelium-agent` CLI, you can provide a handler module that expor
 
 ```javascript
 // my-handler.js
-export async function onWork(item) {
+export async function onWork(item, agent) {
   console.log('Got work:', item.type, item.title)
-  // Process the work item
+  // Process the work item, then mark complete
+  await agent.completeTask(item.id, 'Done!')
 }
 
-export function onMessage(msg) {
+export async function onMessage(msg, agent) {
   console.log('Message from', msg.from_agent, ':', msg.content)
+  // Reply to the sender
+  await agent.sendMessage(msg.from_agent, 'Got it!')
 }
 
-export async function onRequest(req, type) {
+export async function onRequest(req, type, agent) {
   console.log(type, 'from', req.from_agent, ':', req.content)
-  // Process and respond
+  // Resolve the blocking request
+  await agent.respondToRequest(req.id, 'Here is your answer.')
 }
 ```
 
@@ -256,6 +260,18 @@ MYCELIUM_HANDLER=./examples/ollama-coder.js mycelium-agent
 ```
 
 This agent claims coding tasks from the network, sends them to Ollama for processing, and reports results. It demonstrates how to build a fully local AI agent that participates in a coordinated network.
+
+### Local LLM Agent (Full-Featured)
+
+A complete Ollama-powered agent that handles tasks, messages, and requests:
+
+```bash
+MYCELIUM_AGENT_ID=my-ollama MYCELIUM_API_KEY=dvk_xxx \
+OLLAMA_MODEL=qwen2.5-coder:14b-instruct-q4_K_M \
+MYCELIUM_HANDLER=./examples/ollama-agent.js mycelium-agent
+```
+
+This handler processes all three event types — claims and completes tasks, replies to messages, and resolves blocking requests — all via a local Ollama instance. See the [Local LLM Setup Guide](guides/local-llm-setup.md) for the full walkthrough from install to verified agent.
 
 ## Adapters
 
