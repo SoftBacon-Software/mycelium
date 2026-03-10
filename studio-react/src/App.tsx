@@ -33,6 +33,7 @@ const FeedbackPage = lazy(() => import('./pages/FeedbackPage'))
 const DeploymentsPage = lazy(() => import('./pages/DeploymentsPage'))
 const TeamsPage = lazy(() => import('./pages/TeamsPage'))
 const TeamSettingsPage = lazy(() => import('./pages/TeamSettingsPage'))
+const AgentTemplatesPage = lazy(() => import('./pages/AgentTemplatesPage'))
 const PluginPageView = lazy(() => import('./pages/PluginPageView'))
 
 export default function App() {
@@ -89,6 +90,7 @@ export default function App() {
             <Route path="feedback" element={<FeedbackPage />} />
             <Route path="deployments" element={<DeploymentsPage />} />
             <Route path="team-settings" element={<TeamSettingsPage />} />
+            <Route path="templates" element={<AgentTemplatesPage />} />
             <Route path="plugins/:pluginName/*" element={<Suspense fallback={<div className="p-8 text-text-dim">Loading...</div>}><PluginPageView /></Suspense>} />
             <Route path="*" element={
               <div className="flex flex-col items-center justify-center h-full gap-4 text-text-dim">

@@ -175,7 +175,8 @@ import {
   getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent,
   getAgentProfile, ensureAgentProfile, updateAgentProfile, incrementProfileCounter,
   listAgentProfiles, getAgentLeaderboard,
-  getStaleAgents, getStaleTasks, getStaleRequests, getStaleDrones, getStalePlanSteps
+  getStaleAgents, getStaleTasks, getStaleRequests, getStaleDrones, getStalePlanSteps,
+  createAgentTemplate, getAgentTemplate, listAgentTemplates, updateAgentTemplate, deleteAgentTemplate
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -432,6 +433,19 @@ function checkAdmin(req, res) {
   }
   if (key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
+  return false;
+}
+
+// Any studio JWT user (operator or admin) OR admin key — NOT agent keys
+function checkAdminOrOperator(req, res) {
+  var user = getStudioUser(req);
+  if (user) { req._authIsAdmin = user.role === 'admin'; return user.displayName || user.username; }
+  var key = req.headers['x-admin-key'];
+  if (key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) {
+    req._authIsAdmin = true;
+    return req.headers['x-acting-as'] || '__system__';
+  }
+  res.status(403).json({ error: 'Operator or admin access required' });
   return false;
 }
 
@@ -3494,16 +3508,27 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
   // Generate API key — store as SHA-256 (high-entropy key, bcrypt adds no security)
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
   var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
-  var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : '["code","assets"]';
+  // Resolve template defaults if provided
+  var tmpl = null;
+  if (req.body.template_id) {
+    tmpl = getAgentTemplate(req.body.template_id);
+    if (!tmpl) return res.status(400).json({ error: 'Template ' + req.body.template_id + ' not found' });
+  }
+  var capabilities = req.body.capabilities ? JSON.stringify(req.body.capabilities) : (tmpl && tmpl.capabilities ? JSON.stringify(tmpl.capabilities) : '["code","assets"]');
   createAgent(id, name, projectId, hash, capabilities);
-  // Set optional LLM metadata
-  if (req.body.llm_backend || req.body.llm_model || req.body.agent_type || req.body.runtime) {
-    updateAgent(id, {
-      llm_backend: req.body.llm_backend || '',
-      llm_model: req.body.llm_model || '',
-      agent_type: req.body.agent_type || 'agent',
-      runtime: req.body.runtime || ''
-    });
+  // Set optional LLM metadata (explicit body fields override template)
+  var llmBackend = req.body.llm_backend || (tmpl && tmpl.llm_backend) || '';
+  var llmModel = req.body.llm_model || (tmpl && tmpl.llm_model) || '';
+  var agentType = req.body.agent_type || (tmpl && tmpl.agent_type) || 'agent';
+  var runtime = req.body.runtime || (tmpl && tmpl.runtime) || '';
+  if (llmBackend || llmModel || agentType !== 'agent' || runtime) {
+    updateAgent(id, { llm_backend: llmBackend, llm_model: llmModel, agent_type: agentType, runtime: runtime });
+  }
+  // Auto-add to template teams
+  if (tmpl && tmpl.team_ids && tmpl.team_ids.length > 0) {
+    for (var tid of tmpl.team_ids) {
+      try { addTeamMember(tid, id, 'agent', 'member', false); } catch (_) {}
+    }
   }
   // Auto-add new agent to #general
   var generalChannel = getChannelBySlug('general');
@@ -6113,9 +6138,9 @@ router.delete('/teams/:id', function (req, res) {
   }
 });
 
-// POST /teams/:id/members — add member
+// POST /teams/:id/members — add member (any operator or admin)
 router.post('/teams/:id/members', function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  if (!checkAdminOrOperator(req, res)) return;
   var { user_id, user_type, role, is_primary } = req.body;
   if (!user_id) return apiError(res, 400, 'user_id required');
   try {
@@ -6131,16 +6156,16 @@ router.post('/teams/:id/members', function (req, res) {
   }
 });
 
-// PUT /teams/:id/members/:userId — update member role/primary
+// PUT /teams/:id/members/:userId — update member role/primary (any operator or admin)
 router.put('/teams/:id/members/:userId', function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  if (!checkAdminOrOperator(req, res)) return;
   updateTeamMember(req.params.id, req.params.userId, req.body);
   res.json({ ok: true });
 });
 
-// DELETE /teams/:id/members/:userId — remove member
+// DELETE /teams/:id/members/:userId — remove member (any operator or admin)
 router.delete('/teams/:id/members/:userId', function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  if (!checkAdminOrOperator(req, res)) return;
   removeTeamMember(req.params.id, req.params.userId);
   res.json({ ok: true });
 });
@@ -6150,6 +6175,77 @@ router.get('/teams/:id/projects', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json({ projects: getTeamProjects(req.params.id) });
+});
+
+// ======== AGENT TEMPLATES ========
+
+// GET /agent-templates — list all
+router.get('/agent-templates', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listAgentTemplates());
+});
+
+// GET /agent-templates/:id — get one
+router.get('/agent-templates/:id', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var t = getAgentTemplate(req.params.id);
+  if (!t) return apiError(res, 404, 'Template not found');
+  res.json(t);
+});
+
+// POST /agent-templates — create (admin only)
+router.post('/agent-templates', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var id = req.body.id;
+  var name = req.body.name;
+  if (!id || !name) return apiError(res, 400, 'id and name are required');
+  if (getAgentTemplate(id)) return apiError(res, 409, 'Template ' + id + ' already exists');
+  var template = createAgentTemplate(id, name, req.body.description || '', req.body, getAdminDisplayName(req));
+  res.status(201).json(template);
+});
+
+// PUT /agent-templates/:id — update (admin only)
+router.put('/agent-templates/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var t = getAgentTemplate(req.params.id);
+  if (!t) return apiError(res, 404, 'Template not found');
+  var updated = updateAgentTemplate(req.params.id, req.body);
+  res.json(updated);
+});
+
+// DELETE /agent-templates/:id — delete (admin only)
+router.delete('/agent-templates/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var t = getAgentTemplate(req.params.id);
+  if (!t) return apiError(res, 404, 'Template not found');
+  deleteAgentTemplate(req.params.id);
+  res.json({ ok: true, deleted: req.params.id });
+});
+
+// POST /agent-templates/:id/apply/:agentId — apply template to existing agent (admin only)
+router.post('/agent-templates/:id/apply/:agentId', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var t = getAgentTemplate(req.params.id);
+  if (!t) return apiError(res, 404, 'Template not found');
+  var agent = getAgent(req.params.agentId);
+  if (!agent) return apiError(res, 404, 'Agent not found');
+  // Apply template fields to agent
+  var agentUpdate = {};
+  if (t.runtime) agentUpdate.runtime = t.runtime;
+  if (t.llm_backend) agentUpdate.llm_backend = t.llm_backend;
+  if (t.llm_model) agentUpdate.llm_model = t.llm_model;
+  if (t.agent_type) agentUpdate.agent_type = t.agent_type;
+  if (t.capabilities && t.capabilities.length > 0) agentUpdate.capabilities = JSON.stringify(t.capabilities);
+  if (Object.keys(agentUpdate).length > 0) updateAgent(req.params.agentId, agentUpdate);
+  // Auto-add to template teams
+  if (t.team_ids && t.team_ids.length > 0) {
+    for (var teamId of t.team_ids) {
+      try { addTeamMember(teamId, req.params.agentId, 'agent', 'member', false); } catch (_) {}
+    }
+  }
+  res.json({ ok: true, agent: getAgent(req.params.agentId), template: t.id });
 });
 
 // ======== SUPPORT TICKETS ========

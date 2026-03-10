@@ -34,6 +34,7 @@ const routeTitles: Record<string, string> = {
   '/plugins': 'Plugins',
   '/analytics': 'Analytics',
   '/feedback': 'Feedback',
+  '/templates': 'Agent Templates',
 }
 
 function formatTime(date: Date | null): string {
@@ -181,6 +182,9 @@ export default function AppLayout() {
           </div>
         </header>
 
+        {/* Voice bar — always at the top, below header */}
+        <VoiceBar />
+
         {/* Content area */}
         <main className={
           isChannels
@@ -190,11 +194,6 @@ export default function AppLayout() {
           <DirectiveBanner />
           <Outlet />
         </main>
-
-        {/* Voice bar — always at the bottom, all pages */}
-        <div className="shrink-0">
-          <VoiceBar />
-        </div>
       </div>
     </div>
   )
