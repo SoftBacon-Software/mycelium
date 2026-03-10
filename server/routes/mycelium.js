@@ -761,6 +761,19 @@ function dispatchWorkToIdleAgents(triggerContext) {
   var claimedTaskIds = [];
 
   for (var agent of idleAgents) {
+    // Skip agents that are busy (working_on set means runner is active)
+    if (agent.working_on && agent.working_on.trim() !== '') continue;
+
+    // Skip agents that already have unresolved directives (prevents directive pileup/loops)
+    var pendingDirectives = listMessages({ to_agent: agent.id, msg_type: 'directive', status: 'sent', limit: 1 });
+    if (pendingDirectives.length > 0) continue;
+
+    // Skip coordination-only agents (no code capability = can't do dev work)
+    var agentCaps = [];
+    try { agentCaps = JSON.parse(agent.capabilities || '[]'); } catch {}
+    var hasCodeCap = agentCaps.some(function(c) { return c === 'code' || c === 'game-dev' || c === 'platform'; });
+    if (agentCaps.length > 0 && !hasCodeCap) continue;
+
     // Skip if agent already has assigned open/in_progress tasks
     var agentTasks = listTasks({ assignee: agent.id, status: 'open' });
     var inProgress = listTasks({ assignee: agent.id, status: 'in_progress' });

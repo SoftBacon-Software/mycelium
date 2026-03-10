@@ -1594,11 +1594,13 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
 
 export function getIdleAgents() {
   // Agents that are online/idle, not drones, heartbeat within last 30 minutes
+  // Excludes agents with working_on set (runner is active on something)
   return db.prepare(`
     SELECT id, name, project_id, status, working_on, capabilities, role, runtime, llm_backend, llm_model
     FROM agents
     WHERE status IN ('online', 'idle')
       AND role != 'drone'
+      AND (working_on IS NULL OR working_on = '')
       AND last_heartbeat > datetime('now', '-30 minutes')
     ORDER BY last_heartbeat DESC
   `).all();
