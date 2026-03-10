@@ -1,0 +1,12 @@
+{
+  "name": "a2a-gateway",
+  "version": "1.0.0",
+  "displayName": "A2A Gateway",
+  "description": "Google A2A protocol support — expose Mycelium agents to external platforms and discover/call external A2A agents.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/a2a",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}

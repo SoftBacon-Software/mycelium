@@ -1,0 +1,84 @@
+[
+  {
+    "name": "mycelium_memory_search",
+    "description": "Search platform memory — finds relevant context keys, messages, concepts, tasks by meaning. Uses hybrid keyword + vector search.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["query"],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural language search query"
+        },
+        "source_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Filter by type: context_key, message, concept, event, task, memory"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Filter by context namespace"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Filter by project"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 10,
+          "description": "Max results (default 10)"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/memory/search"
+    }
+  },
+  {
+    "name": "mycelium_memory_index",
+    "description": "Index content into semantic memory for future search.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["source_type", "source_id", "content_text"],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "description": "Type: context_key, message, concept, task, memory, custom"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "Unique ID within the source type"
+        },
+        "content_text": {
+          "type": "string",
+          "description": "Text content to index"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Optional namespace for grouping"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Optional JSON metadata"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/memory/index"
+    }
+  },
+  {
+    "name": "mycelium_memory_stats",
+    "description": "Get semantic memory index statistics — counts, coverage, source types.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/memory/stats"
+    }
+  }
+]

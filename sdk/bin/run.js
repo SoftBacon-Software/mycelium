@@ -8,9 +8,9 @@
 //   MYCELIUM_HANDLER   — path to JS module with work/message handlers (optional)
 //
 // The handler module should export:
-//   onWork(item)        — called when work is claimed
-//   onMessage(msg)      — called on incoming messages
-//   onRequest(req, type) — called on directives/requests
+//   onWork(item, agent)        — called when work is claimed
+//   onMessage(msg, agent)      — called on incoming messages
+//   onRequest(req, type, agent) — called on directives/requests
 
 import { MyceliumAgent } from '../src/agent.js'
 
@@ -42,9 +42,9 @@ var agent = new MyceliumAgent({
 if (handlerPath) {
   try {
     var handler = await import(handlerPath)
-    if (handler.onWork) agent.onWork(handler.onWork)
-    if (handler.onMessage) agent.onMessage(handler.onMessage)
-    if (handler.onRequest) agent.onRequest(handler.onRequest)
+    if (handler.onWork) agent.onWork(function(item) { return handler.onWork(item, agent) })
+    if (handler.onMessage) agent.onMessage(function(msg) { return handler.onMessage(msg, agent) })
+    if (handler.onRequest) agent.onRequest(function(req, type) { return handler.onRequest(req, type, agent) })
     console.log('[mycelium] Loaded handler from', handlerPath)
   } catch (err) {
     console.error('[mycelium] Failed to load handler:', err.message)
