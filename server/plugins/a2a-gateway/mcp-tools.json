@@ -1,0 +1,60 @@
+[
+  {
+    "name": "mycelium_a2a_discover",
+    "description": "Discover an external A2A agent by URL. Fetches their Agent Card and registers them.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Base URL of the external A2A agent"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/a2a/discover"
+    }
+  },
+  {
+    "name": "mycelium_a2a_send",
+    "description": "Send a task to an external A2A agent.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["agent_id", "message"],
+      "properties": {
+        "agent_id": {
+          "type": "integer",
+          "description": "External agent ID (from discovery)"
+        },
+        "message": {
+          "type": "string",
+          "description": "Task description to send"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/a2a/send"
+    }
+  },
+  {
+    "name": "mycelium_a2a_list",
+    "description": "List known external A2A agents.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["active", "unreachable", "removed"],
+          "description": "Filter by status"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/a2a/agents"
+    }
+  }
+]

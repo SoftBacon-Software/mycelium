@@ -1,0 +1,71 @@
+[
+  {
+    "name": "mycelium_auto_memory_facts",
+    "description": "Browse extracted knowledge facts. Facts are automatically extracted from agent activity (task completions, resolved requests, context updates).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "Filter by agent ID"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Filter by project ID"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["preference", "decision", "pattern", "architecture", "convention", "insight", "general"],
+          "description": "Filter by fact category"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 50,
+          "description": "Max facts to return"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/auto-memory/facts"
+    }
+  },
+  {
+    "name": "mycelium_auto_memory_extract",
+    "description": "Manually extract knowledge facts from text using the configured LLM.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to extract facts from"
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Agent ID to associate facts with"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Project ID to associate facts with"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/auto-memory/extract"
+    }
+  },
+  {
+    "name": "mycelium_auto_memory_stats",
+    "description": "Get auto-memory statistics — fact counts, categories, consolidation history.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/auto-memory/stats"
+    }
+  }
+]

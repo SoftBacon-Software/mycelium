@@ -283,6 +283,64 @@ export class MyceliumAgent {
     return this.api.get('/agents')
   }
 
+  // ── Profiles ─────────────────────────────────────────────────────
+
+  async getProfile(agentId) {
+    return this.api.get('/agents/' + (agentId || this.agentId) + '/profile')
+  }
+
+  async updateProfile(fields) {
+    return this.api.put('/agents/' + this.agentId + '/profile', fields)
+  }
+
+  // ── Semantic Memory ──────────────────────────────────────────────
+
+  async memorySearch(query, opts) {
+    var body = { query: query }
+    if (opts) {
+      if (opts.sourceTypes) body.source_types = opts.sourceTypes
+      if (opts.namespace) body.namespace = opts.namespace
+      if (opts.projectId) body.project_id = opts.projectId
+      if (opts.limit) body.limit = opts.limit
+      if (opts.mode) body.mode = opts.mode
+    }
+    return this.api.post('/memory/search', body)
+  }
+
+  async memoryIndex(sourceType, sourceId, contentText, opts) {
+    var body = { source_type: sourceType, source_id: sourceId, content_text: contentText }
+    if (opts) {
+      if (opts.namespace) body.namespace = opts.namespace
+      if (opts.metadata) body.metadata = opts.metadata
+    }
+    return this.api.post('/memory/index', body)
+  }
+
+  // ── A2A Gateway ──────────────────────────────────────────────────
+
+  async a2aDiscover(url) {
+    return this.api.post('/a2a/discover', { url: url })
+  }
+
+  async a2aSend(agentId, message) {
+    return this.api.post('/a2a/send', { agent_id: agentId, message: message })
+  }
+
+  async a2aList() {
+    return this.api.get('/a2a/agents')
+  }
+
+  // ── Auto Memory ──────────────────────────────────────────────────
+
+  async getAutoMemoryFacts(opts) {
+    var params = new URLSearchParams()
+    if (opts) {
+      for (var k in opts) params.set(k, String(opts[k]))
+    }
+    var qs = params.toString()
+    return this.api.get('/auto-memory/facts' + (qs ? '?' + qs : ''))
+  }
+
   // ── Event Loop ──────────────────────────────────────────────────
 
   onWork(handler) {
