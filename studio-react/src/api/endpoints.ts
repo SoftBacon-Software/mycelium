@@ -610,6 +610,20 @@ export function fetchApiUsage(days = 7): Promise<{ cached: boolean; data: ApiUsa
   return apiGet(`/admin/api-usage?days=${days}`);
 }
 
+// Agent Identity
+
+export function fetchAgentIdentity(agentId: string): Promise<import('./types').AgentIdentity> {
+  return apiGet<import('./types').AgentIdentity>(`/agents/${encodeURIComponent(agentId)}/identity`);
+}
+
+export function updateAgentIdentity(agentId: string, data: {
+  capabilities?: string[];
+  responsibilities?: string[];
+  guardrails?: string[];
+}): Promise<{ ok: boolean; updated: Record<string, unknown> }> {
+  return apiPut<{ ok: boolean; updated: Record<string, unknown> }>(`/agents/${encodeURIComponent(agentId)}/identity`, data);
+}
+
 // Profiles & Calibration
 
 export function fetchProfiles(): Promise<import('./types').NodeProfile[]> {

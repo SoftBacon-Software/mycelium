@@ -3,6 +3,7 @@ import { useDashboardStore } from '../stores/dashboardStore'
 import { fetchEvents } from '../api/endpoints'
 import Badge from '../components/shared/Badge'
 import Spinner from '../components/shared/Spinner'
+import AgentIdentityCard from '../components/shared/AgentIdentityCard'
 import { timeAgo } from '../utils/time'
 import type { Agent, Event } from '../api/types'
 
@@ -116,6 +117,7 @@ export default function AgentHealthPage() {
   const [agentEvents, setAgentEvents] = useState<Record<string, Event[]>>({})
   const [eventsLoading, setEventsLoading] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+  const [detailTab, setDetailTab] = useState<'identity' | 'health'>('identity')
   const [staleThreshold, setStaleThreshold] = useState(5) // minutes
 
   const allAgents = useMemo(() => [...agents, ...drones], [agents, drones])
@@ -256,17 +258,57 @@ export default function AgentHealthPage() {
                 key={h.agent.id}
                 health={h}
                 isSelected={selectedAgent === h.agent.id}
-                onClick={() => setSelectedAgent(
-                  selectedAgent === h.agent.id ? null : h.agent.id
-                )}
+                onClick={() => {
+                  if (selectedAgent === h.agent.id) {
+                    setSelectedAgent(null)
+                  } else {
+                    setSelectedAgent(h.agent.id)
+                    setDetailTab('identity')
+                  }
+                }}
               />
             ))}
           </div>
 
-          {/* Detail panel */}
+          {/* Detail panel with tabs */}
           {selected && (
-            <div className="flex-1 min-w-0">
-              <AgentDetail health={selected} />
+            <div className="flex-1 min-w-0 flex flex-col gap-4">
+              {/* Tab bar */}
+              <div className="flex items-center gap-1 border-b border-border">
+                <button
+                  onClick={() => setDetailTab('identity')}
+                  className={`px-3 py-2 text-xs font-medium transition-colors relative ${
+                    detailTab === 'identity'
+                      ? 'text-accent'
+                      : 'text-text-muted hover:text-text-dim'
+                  }`}
+                >
+                  Identity
+                  {detailTab === 'identity' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-t" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setDetailTab('health')}
+                  className={`px-3 py-2 text-xs font-medium transition-colors relative ${
+                    detailTab === 'health'
+                      ? 'text-accent'
+                      : 'text-text-muted hover:text-text-dim'
+                  }`}
+                >
+                  Health
+                  {detailTab === 'health' && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-t" />
+                  )}
+                </button>
+              </div>
+
+              {/* Tab content */}
+              {detailTab === 'identity' ? (
+                <AgentIdentityCard agentId={selected.agent.id} />
+              ) : (
+                <AgentDetail health={selected} />
+              )}
             </div>
           )}
         </div>
