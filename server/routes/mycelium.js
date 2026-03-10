@@ -5057,6 +5057,36 @@ router.get('/approvals/:id', function (req, res) {
   res.json(approval);
 });
 
+// Notify requesting agent when approval is decided (message + inbox)
+function notifyApprovalDecision(approval, status, decidedBy, reason) {
+  var agentId = approval.requested_by;
+  if (!agentId || agentId === '__admin__' || agentId === '__system__') return;
+  try {
+    var statusLabel = status === 'approved' ? 'APPROVED' : 'DENIED';
+    var content = statusLabel + ': [' + approval.action_type + '] ' + approval.title;
+    if (reason) content += ' — ' + reason;
+    // 1. Send message to agent
+    createMessage({
+      from_agent: '__system__',
+      to_agent: agentId,
+      content: content,
+      msg_type: 'info',
+      project_id: approval.project_id || approval.project || 'mycelium'
+    });
+    // 2. Create inbox item for agent's operator
+    var agent = getAgent(agentId);
+    if (agent && agent.operator_id) {
+      var operators = listOperators();
+      var op = operators.find(function (o) { return o.id === agent.operator_id; });
+      if (op) {
+        createInboxItem(op.id, 'approval_' + status, 'approval', String(approval.id), content, approval.project_id || approval.project || 'mycelium');
+      }
+    }
+  } catch (e) {
+    console.error('[approvals] notify failed:', e.message);
+  }
+}
+
 // Approve or deny (admin only)
 router.put('/approvals/:id', function (req, res) {
   if (!checkAdmin(req, res)) return;
@@ -5073,6 +5103,8 @@ router.put('/approvals/:id', function (req, res) {
   emitEvent('approval_' + newStatus, decidedBy, approval.project,
     decidedBy + ' ' + newStatus + ' [' + approval.action_type + '] ' + approval.title,
     JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
+  // Notify requesting agent: message + inbox item
+  notifyApprovalDecision(approval, newStatus, decidedBy, reason);
   res.json({ ok: true, id: approval.id, status: newStatus });
 });
 
@@ -5108,6 +5140,7 @@ router.put('/approvals/:id/vote', function (req, res) {
     decideApproval(approval.id, 'denied', who, notes || 'Denied by ' + who);
     emitEvent('approval_denied', who, approval.project_id, who + ' denied approval #' + approval.id + ': ' + approval.title,
       JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
+    notifyApprovalDecision(approval, 'denied', who, notes);
     return res.json({ ok: true, status: 'denied', message: 'Approval denied.' });
   }
 
@@ -5120,6 +5153,7 @@ router.put('/approvals/:id/vote', function (req, res) {
     decideApproval(approval.id, 'approved', who, 'Quorum reached (' + counts.approves + '/' + approval.required_approvals + ')');
     emitEvent('approval_approved', who, approval.project_id, who + ' approved #' + approval.id + ': ' + approval.title + ' (quorum reached)',
       JSON.stringify({ approval_id: approval.id, action_type: approval.action_type }));
+    notifyApprovalDecision(approval, 'approved', who, 'Quorum reached');
     return res.json({ ok: true, status: 'approved', votes: counts, message: 'Quorum reached. Approval granted.' });
   }
 
