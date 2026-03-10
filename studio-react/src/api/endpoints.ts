@@ -343,11 +343,14 @@ export function resolveRequest(id: string, response: string): Promise<Message> {
 
 // Context
 
-export function fetchAllContextKeys(ns?: string): Promise<ContextEntry[]> {
-  const path = ns
-    ? `/context/keys/${encodeURIComponent(ns)}`
-    : '/context/keys';
-  return apiGet<ContextEntry[]>(path);
+export function fetchAllContextKeys(ns?: string, opts?: { search?: string; category?: string; updated_by?: string }): Promise<ContextEntry[]> {
+  const params = new URLSearchParams();
+  if (ns) params.set('namespace', ns);
+  if (opts?.search) params.set('search', opts.search);
+  if (opts?.category) params.set('category', opts.category);
+  if (opts?.updated_by) params.set('updated_by', opts.updated_by);
+  const qs = params.toString();
+  return apiGet<ContextEntry[]>('/context/keys' + (qs ? '?' + qs : ''));
 }
 
 export function fetchContextKey(ns: string, key: string): Promise<ContextEntry> {
@@ -371,6 +374,10 @@ export function deleteContextKey(ns: string, key: string): Promise<void> {
   return apiDelete<void>(
     `/context/keys/${encodeURIComponent(ns)}/${encodeURIComponent(key)}`,
   );
+}
+
+export function bulkDeleteContextKeys(ids: number[]): Promise<{ ok: boolean; deleted: number }> {
+  return apiPost<{ ok: boolean; deleted: number }>('/context/keys/bulk-delete', { ids });
 }
 
 // Concepts
