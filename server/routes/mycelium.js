@@ -132,7 +132,7 @@ import {
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
   createTeamChat, listTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs, releaseAllStaleClaimedJobs,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs,
   createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
@@ -183,6 +183,9 @@ import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, regis
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
+function isAdminKey(key) {
+  return key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY));
+}
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
 
@@ -431,7 +434,7 @@ function checkAdmin(req, res) {
     res.status(401).json({ error: 'Authentication required' });
     return false;
   }
-  if (key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) { req._authIsAdmin = true; return true; }
+  if (isAdminKey(key)) { req._authIsAdmin = true; return true; }
   res.status(403).json({ error: 'Invalid admin key' });
   return false;
 }
@@ -441,7 +444,7 @@ function checkAdminOrOperator(req, res) {
   var user = getStudioUser(req);
   if (user) { req._authIsAdmin = user.role === 'admin'; return user.displayName || user.username; }
   var key = req.headers['x-admin-key'];
-  if (key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY))) {
+  if (isAdminKey(key)) {
     req._authIsAdmin = true;
     return req.headers['x-acting-as'] || '__system__';
   }
@@ -474,7 +477,7 @@ function checkAgentOrAdmin(req, res) {
   if (user) { req._authIsAdmin = true; return user.displayName || user.username; }
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey && adminKey.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(adminKey), Buffer.from(ADMIN_KEY))) {
+  if (isAdminKey(adminKey)) {
     req._authIsAdmin = true;
     var actingAs = req.headers['x-acting-as'];
     return actingAs || '__system__';
@@ -1086,8 +1089,9 @@ router.get('/boot/:agentId', function (req, res) {
   // Default: slim boot
   var payload = getSlimBootPayload(agentId);
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
-  payload.savepoint = computeSavepointDiff(agentId);
-  payload.changes_since_last = formatSavepointSummary(computeSavepointDiff(agentId));
+  var diff = computeSavepointDiff(agentId);
+  payload.savepoint = diff;
+  payload.changes_since_last = formatSavepointSummary(diff);
   try { payload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
@@ -1165,7 +1169,7 @@ router.post('/agents/heartbeat', function (req, res) {
   var agentId;
   // Admin can heartbeat on behalf of any agent via agent_id body field
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey && adminKey.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(adminKey), Buffer.from(ADMIN_KEY)) && req.body.agent_id) {
+  if (isAdminKey(adminKey) && req.body.agent_id) {
     agentId = req.body.agent_id;
   } else {
     agentId = checkAgent(req, res);
@@ -4264,7 +4268,7 @@ setInterval(function () {
 // Bug #134/#132: Also flag drones offline if no heartbeat in 30 minutes
 setInterval(function () {
   try {
-    var stale = releaseAllStaleClaimedJobs();
+    var stale = releaseStaleClaimedJobs();
     if (stale.length > 0) {
       emitEvent('drone_stale_cleanup', '__system__', 'drone', 'Auto-failed ' + stale.length + ' stale claimed drone job(s): ' + stale.map(function (j) { return '#' + j.id; }).join(', '), { job_ids: stale.map(function (j) { return j.id; }) });
     }

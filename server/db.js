@@ -1152,6 +1152,23 @@ export function countBugs() {
 
 // -- Boot payload --
 
+function buildCrashRecovery(agent, agentId) {
+  if (!agent.last_heartbeat || !agent.working_on) return null;
+  var lastHb = new Date(agent.last_heartbeat + (agent.last_heartbeat.endsWith('Z') ? '' : 'Z')).getTime();
+  var staleness = Date.now() - lastHb;
+  var CRASH_THRESHOLD = 15 * 60 * 1000;
+  if (staleness <= CRASH_THRESHOLD) return null;
+  var lastSavepoint = getLatestSavepoint(agentId);
+  return {
+    detected: true,
+    last_heartbeat: agent.last_heartbeat,
+    stale_minutes: Math.round(staleness / 60000),
+    was_working_on: agent.working_on,
+    recovery_state: lastSavepoint && lastSavepoint.state_snapshot ? lastSavepoint.state_snapshot : null,
+    recovery_notes: lastSavepoint && lastSavepoint.notes ? lastSavepoint.notes : null
+  };
+}
+
 export function getBootPayload(agentId) {
   var agent = getAgent(agentId);
   if (!agent) return null;
@@ -1231,24 +1248,7 @@ export function getBootPayload(agentId) {
     }
   }
 
-  // ---- Crash detection ----
-  var crashRecovery = null;
-  if (agent.last_heartbeat && agent.working_on) {
-    var lastHb = new Date(agent.last_heartbeat + (agent.last_heartbeat.endsWith('Z') ? '' : 'Z')).getTime();
-    var staleness = Date.now() - lastHb;
-    var CRASH_THRESHOLD = 15 * 60 * 1000; // 15 minutes
-    if (staleness > CRASH_THRESHOLD) {
-      var lastSavepoint = getLatestSavepoint(agentId);
-      crashRecovery = {
-        detected: true,
-        last_heartbeat: agent.last_heartbeat,
-        stale_minutes: Math.round(staleness / 60000),
-        was_working_on: agent.working_on,
-        recovery_state: lastSavepoint && lastSavepoint.state_snapshot ? lastSavepoint.state_snapshot : null,
-        recovery_notes: lastSavepoint && lastSavepoint.notes ? lastSavepoint.notes : null
-      };
-    }
-  }
+  var crashRecovery = buildCrashRecovery(agent, agentId);
 
   // ---- Stand Up: calibration block ----
   var calibration = null;
@@ -1393,26 +1393,7 @@ export function getSlimBootPayload(agentId) {
   var capabilities = [];
   try { capabilities = JSON.parse(agent.capabilities || '[]'); } catch (e) { /* */ }
 
-  // --- Crash detection ---
-  // If the agent was working on something and heartbeat went stale (>15 min), flag as crashed
-  var crashRecovery = null;
-  if (agent.last_heartbeat && agent.working_on) {
-    var lastHb = new Date(agent.last_heartbeat + (agent.last_heartbeat.endsWith('Z') ? '' : 'Z')).getTime();
-    var staleness = Date.now() - lastHb;
-    var CRASH_THRESHOLD = 15 * 60 * 1000; // 15 minutes
-    if (staleness > CRASH_THRESHOLD) {
-      // Previous session likely crashed — include recovery info
-      var lastSavepoint = getLatestSavepoint(agentId);
-      crashRecovery = {
-        detected: true,
-        last_heartbeat: agent.last_heartbeat,
-        stale_minutes: Math.round(staleness / 60000),
-        was_working_on: agent.working_on,
-        recovery_state: lastSavepoint && lastSavepoint.state_snapshot ? lastSavepoint.state_snapshot : null,
-        recovery_notes: lastSavepoint && lastSavepoint.notes ? lastSavepoint.notes : null
-      };
-    }
-  }
+  var crashRecovery = buildCrashRecovery(agent, agentId);
 
   // --- Auto drift detection on boot ---
   var calibration = null;
@@ -2270,28 +2251,26 @@ export function listDroneJobs(filters) {
   return db.prepare('SELECT * FROM drone_jobs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
-// Bug #137: Release stale claimed jobs for a drone (claimed >1 hour ago, not completed)
+// Bug #137: Release stale claimed jobs (claimed >1 hour ago, not completed)
+// If droneId provided, scoped to that drone. Otherwise releases ALL stale jobs.
 export function releaseStaleClaimedJobs(droneId) {
-  var staleJobs = db.prepare(
-    "SELECT * FROM drone_jobs WHERE status = 'claimed' AND drone_id = ? AND started_at < datetime('now', '-1 hour')"
-  ).all(droneId);
-  for (var job of staleJobs) {
-    db.prepare(
-      "UPDATE drone_jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?"
-    ).run('[stale_timeout] Job was claimed for >1 hour with no completion. Auto-failed on drone restart.', job.id);
+  var staleJobs;
+  if (droneId) {
+    staleJobs = db.prepare(
+      "SELECT * FROM drone_jobs WHERE status = 'claimed' AND drone_id = ? AND started_at < datetime('now', '-1 hour')"
+    ).all(droneId);
+  } else {
+    staleJobs = db.prepare(
+      "SELECT * FROM drone_jobs WHERE status = 'claimed' AND started_at < datetime('now', '-1 hour')"
+    ).all();
   }
-  return staleJobs;
-}
-
-// Also auto-fail ALL stale claimed jobs across all drones (called periodically or on server boot)
-export function releaseAllStaleClaimedJobs() {
-  var staleJobs = db.prepare(
-    "SELECT * FROM drone_jobs WHERE status = 'claimed' AND started_at < datetime('now', '-1 hour')"
-  ).all();
+  var msg = droneId
+    ? '[stale_timeout] Job was claimed for >1 hour with no completion. Auto-failed on drone restart.'
+    : '[stale_timeout] Job was claimed for >1 hour with no progress. Auto-failed by server.';
   for (var job of staleJobs) {
     db.prepare(
       "UPDATE drone_jobs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?"
-    ).run('[stale_timeout] Job was claimed for >1 hour with no progress. Auto-failed by server.', job.id);
+    ).run(msg, job.id);
   }
   return staleJobs;
 }
