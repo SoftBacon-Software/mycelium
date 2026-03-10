@@ -8,7 +8,7 @@ import type { PluginNavEntry } from '../api/endpoints'
 import {
   LayoutDashboard, CheckSquare, Map, Bug,
   MessageSquare, Radio, ShieldCheck, Inbox,
-  Users, Cpu, FolderOpen, Lightbulb, Database, Server,
+  Users, Cpu, FolderOpen, Lightbulb, Database, Server, Layers,
   Settings, Settings2, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
   ChevronRight, PanelLeftClose, PanelLeftOpen, X, HeartPulse,
 } from 'lucide-react'
@@ -73,14 +73,15 @@ const staticNavSections: NavSection[] = [
     label: 'Manage',
     items: [
       { to: '/operators', label: 'Operators', icon: Users },
-      { to: '/teams', label: 'Teams', icon: Users, adminOnly: true },
-      { to: '/team-settings', label: 'Team Settings', icon: Settings2, adminOnly: true },
+      { to: '/teams', label: 'Teams', icon: Users },
+      { to: '/team-settings', label: 'Team Settings', icon: Settings2 },
       { to: '/deployments', label: 'Deployments', icon: Server, adminOnly: true },
       { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },
       { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
       { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true },
       { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true },
       { to: '/spawns', label: 'Spawns', icon: Zap, adminOnly: true },
+      { to: '/templates', label: 'Templates', icon: Layers, adminOnly: true },
     ],
   },
   {
@@ -135,8 +136,6 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   const isAdmin = userRole === 'admin'
   const voiceConnected = useVoiceStore((s) => s.isConnected)
   const voiceChannel = useVoiceStore((s) => s.channelName)
-  const voicePeers = useVoiceStore((s) => s.peers)
-  const voiceLeave = useVoiceStore((s) => s.leave)
   const location = useLocation()
 
   // Plugin page nav entries
@@ -322,40 +321,17 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
           )}
         </div>
 
-        {/* Voice indicator */}
+        {/* Voice indicator — minimal, controls are in VoiceBar */}
         {voiceConnected && (
           <>
             <div className="my-3 border-t border-border/50 mx-2" />
             <div className="px-2.5">
-              {isNarrow ? (
-                <div
-                  className="flex flex-col items-center gap-1"
-                  title={`Voice: #${voiceChannel}`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse shrink-0" />
-                    <span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">
-                      Voice
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-green">#{voiceChannel}</span>
-                    <span className="text-xs text-text-muted">
-                      {voicePeers.length} peer{voicePeers.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  <button
-                    onClick={voiceLeave}
-                    className="mt-0.5 w-full px-2 py-1 rounded-sm text-[10px] font-medium bg-red/15 text-red hover:bg-red/25 transition-colors"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              )}
+              <div className={`flex items-center ${isNarrow ? 'justify-center' : 'gap-2'}`} title={`Voice: #${voiceChannel}`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse shrink-0" />
+                {!isNarrow && (
+                  <span className="text-xs text-green font-mono truncate">#{voiceChannel}</span>
+                )}
+              </div>
             </div>
           </>
         )}

@@ -4056,3 +4056,52 @@ export function updateInstance(id, updates) {
   db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?'), params);
   return getInstance(id);
 }
+
+// ---- Agent Templates ----
+
+export function createAgentTemplate(id, name, description, data, createdBy) {
+  db.prepare(
+    "INSERT INTO agent_templates (id, name, description, runtime, llm_backend, llm_model, agent_type, capabilities, project_id, team_ids, profile_rules, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(id, name, description || '', data.runtime || '', data.llm_backend || '', data.llm_model || '', data.agent_type || 'agent', JSON.stringify(data.capabilities || ['code', 'assets']), data.project_id || '', JSON.stringify(data.team_ids || []), JSON.stringify(data.profile_rules || {}), createdBy || '');
+  return getAgentTemplate(id);
+}
+
+export function getAgentTemplate(id) {
+  var row = db.prepare("SELECT * FROM agent_templates WHERE id = ?").get(id);
+  if (!row) return null;
+  try { row.capabilities = JSON.parse(row.capabilities); } catch (_) { row.capabilities = []; }
+  try { row.team_ids = JSON.parse(row.team_ids); } catch (_) { row.team_ids = []; }
+  try { row.profile_rules = JSON.parse(row.profile_rules); } catch (_) { row.profile_rules = {}; }
+  return row;
+}
+
+export function listAgentTemplates() {
+  var rows = db.prepare("SELECT * FROM agent_templates ORDER BY name").all();
+  for (var row of rows) {
+    try { row.capabilities = JSON.parse(row.capabilities); } catch (_) { row.capabilities = []; }
+    try { row.team_ids = JSON.parse(row.team_ids); } catch (_) { row.team_ids = []; }
+    try { row.profile_rules = JSON.parse(row.profile_rules); } catch (_) { row.profile_rules = {}; }
+  }
+  return rows;
+}
+
+export function updateAgentTemplate(id, fields) {
+  var sets = [];
+  var params = [];
+  var allowed = ['name', 'description', 'runtime', 'llm_backend', 'llm_model', 'agent_type', 'project_id'];
+  for (var key of allowed) {
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); params.push(fields[key]); }
+  }
+  if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); params.push(JSON.stringify(fields.capabilities)); }
+  if (fields.team_ids !== undefined) { sets.push('team_ids = ?'); params.push(JSON.stringify(fields.team_ids)); }
+  if (fields.profile_rules !== undefined) { sets.push('profile_rules = ?'); params.push(JSON.stringify(fields.profile_rules)); }
+  if (sets.length === 0) return getAgentTemplate(id);
+  sets.push("updated_at = datetime('now')");
+  params.push(id);
+  db.prepare('UPDATE agent_templates SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE agent_templates SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  return getAgentTemplate(id);
+}
+
+export function deleteAgentTemplate(id) {
+  db.prepare("DELETE FROM agent_templates WHERE id = ?").run(id);
+}

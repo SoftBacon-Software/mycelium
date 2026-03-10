@@ -795,3 +795,22 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
   last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 );
+
+-- Agent templates (reusable configs for agent registration)
+CREATE TABLE IF NOT EXISTS agent_templates (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  runtime         TEXT NOT NULL DEFAULT '',
+  llm_backend     TEXT NOT NULL DEFAULT '',
+  llm_model       TEXT NOT NULL DEFAULT '',
+  agent_type      TEXT NOT NULL DEFAULT 'agent',
+  capabilities    TEXT NOT NULL DEFAULT '["code","assets"]',
+  project_id      TEXT NOT NULL DEFAULT '',
+  team_ids        TEXT NOT NULL DEFAULT '[]',
+  profile_rules   TEXT NOT NULL DEFAULT '{}',
+  created_by      TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_templates_name ON agent_templates(name);

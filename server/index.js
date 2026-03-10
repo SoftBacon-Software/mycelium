@@ -245,9 +245,12 @@ var voicePeers = new Map();
 
 app.get('/api/voice/peers', function (req, res) {
   if (!checkVoiceAuth(req, res)) return;
+  var channelFilter = req.query.channel;
   var peers = [];
   voicePeers.forEach(function (p) {
-    peers.push({ id: p.id, name: p.name, muted: p.muted });
+    if (!channelFilter || p.channel === channelFilter) {
+      peers.push({ id: p.id, name: p.name, muted: p.muted, channel: p.channel || '' });
+    }
   });
   res.json({ peers: peers, count: peers.length });
 });
@@ -397,10 +400,11 @@ wss.on('connection', function (ws, req) {
 
   ws.isAlive = true;
   var peerId = 'peer_' + (++peerCounter);
-  voicePeers.set(ws, { id: peerId, name: 'User ' + peerCounter, muted: false });
+  voicePeers.set(ws, { id: peerId, name: 'User ' + peerCounter, muted: false, channel: '' });
 
-  ws.send(JSON.stringify({ type: 'welcome', id: peerId, peers: Array.from(voicePeers.values()).filter(function (p) { return p.id !== peerId; }) }));
-  broadcast({ type: 'peer_joined', peer: voicePeers.get(ws) }, ws);
+  // Send welcome with peers in same channel (empty channel = lobby)
+  ws.send(JSON.stringify({ type: 'welcome', id: peerId, peers: getPeersInChannel('').filter(function (p) { return p.id !== peerId; }) }));
+  broadcastToChannel({ type: 'peer_joined', peer: voicePeers.get(ws) }, '', ws);
 
   ws.on('pong', function () { ws.isAlive = true; });
 
@@ -413,13 +417,30 @@ wss.on('connection', function (ws, req) {
 
       if (msg.type === 'set_name') {
         me.name = String(msg.name || '').substring(0, 30) || me.name;
-        broadcast({ type: 'peer_updated', peer: me }, null);
+        broadcastToChannel({ type: 'peer_updated', peer: me }, me.channel, null);
+      } else if (msg.type === 'join_channel') {
+        var oldChannel = me.channel;
+        var newChannel = String(msg.channel || '').substring(0, 50);
+        // Leave old channel
+        if (oldChannel !== newChannel) {
+          broadcastToChannel({ type: 'peer_left', id: me.id }, oldChannel, ws);
+        }
+        me.channel = newChannel;
+        // Send welcome for new channel peers
+        ws.send(JSON.stringify({ type: 'welcome', id: peerId, channel: newChannel, peers: getPeersInChannel(newChannel).filter(function (p) { return p.id !== peerId; }) }));
+        broadcastToChannel({ type: 'peer_joined', peer: me }, newChannel, ws);
       } else if (msg.type === 'offer' || msg.type === 'answer' || msg.type === 'ice') {
+        // Only relay within same channel
         var target = findPeerWs(msg.to);
-        if (target) target.send(JSON.stringify({ type: msg.type, from: me.id, sdp: msg.sdp, candidate: msg.candidate }));
+        if (target) {
+          var targetPeer = voicePeers.get(target);
+          if (targetPeer && targetPeer.channel === me.channel) {
+            target.send(JSON.stringify({ type: msg.type, from: me.id, sdp: msg.sdp, candidate: msg.candidate }));
+          }
+        }
       } else if (msg.type === 'mute') {
         me.muted = !!msg.muted;
-        broadcast({ type: 'peer_updated', peer: me }, null);
+        broadcastToChannel({ type: 'peer_updated', peer: me }, me.channel, null);
       }
     } catch (e) { console.warn('[mycelium] WebSocket JSON parse failed (peer: ' + peerId + '):', e.message); }
   });
@@ -427,13 +448,13 @@ wss.on('connection', function (ws, req) {
   ws.on('close', function () {
     var me = voicePeers.get(ws);
     voicePeers.delete(ws);
-    if (me) broadcast({ type: 'peer_left', id: me.id }, null);
+    if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
   });
 
   ws.on('error', function () {
     var me = voicePeers.get(ws);
     voicePeers.delete(ws);
-    if (me) broadcast({ type: 'peer_left', id: me.id }, null);
+    if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
   });
 });
 
@@ -442,7 +463,7 @@ setInterval(function () {
     if (!ws.isAlive) {
       var me = voicePeers.get(ws);
       voicePeers.delete(ws);
-      if (me) broadcast({ type: 'peer_left', id: me.id }, null);
+      if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
       return ws.terminate();
     }
     ws.isAlive = false;
@@ -450,11 +471,21 @@ setInterval(function () {
   });
 }, 10000);
 
-function broadcast(msg, exclude) {
-  var data = JSON.stringify(msg);
-  wss.clients.forEach(function (client) {
-    if (client !== exclude && client.readyState === 1) client.send(data);
+function getPeersInChannel(channel) {
+  var peers = [];
+  voicePeers.forEach(function (p) {
+    if (p.channel === channel) peers.push(p);
   });
+  return peers;
+}
+
+function broadcastToChannel(msg, channel, exclude) {
+  var data = JSON.stringify(msg);
+  for (var [client, peer] of voicePeers) {
+    if (client !== exclude && peer.channel === channel && client.readyState === 1) {
+      client.send(data);
+    }
+  }
 }
 
 function findPeerWs(peerId) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { useAuthStore } from '../stores/authStore'
 import {
   fetchTeams,
   fetchTeam,
@@ -330,12 +331,13 @@ function AddMemberModal({ isOpen, onClose, teamId, onSaved }: AddMemberModalProp
 
 interface TeamCardProps {
   team: Team
+  isAdmin: boolean
   onEdit: () => void
   onDelete: () => void
   onRefresh: () => void
 }
 
-function TeamCard({ team, onEdit, onDelete, onRefresh }: TeamCardProps) {
+function TeamCard({ team, isAdmin, onEdit, onDelete, onRefresh }: TeamCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [members, setMembers] = useState<TeamMember[]>(team.members ?? [])
   const [loadingMembers, setLoadingMembers] = useState(false)
@@ -391,26 +393,28 @@ function TeamCard({ team, onEdit, onDelete, onRefresh }: TeamCardProps) {
             <span className="shrink-0 text-xs bg-accent/10 text-accent px-2 py-0.5 rounded-full font-medium font-mono">
               {team.org_id}
             </span>
-            <div className="hidden group-hover:flex items-center gap-1">
-              <button
-                onClick={onEdit}
-                className="text-text-muted hover:text-accent transition-colors p-0.5"
-                title="Edit"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M8.5 2.5l3 3M2 9l6-6 3 3-6 6H2V9z" strokeLinejoin="round" />
-                </svg>
-              </button>
-              <button
-                onClick={onDelete}
-                className="text-text-muted hover:text-red transition-colors p-0.5"
-                title="Delete"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M3 4h8M5.5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4v7.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V4" />
-                </svg>
-              </button>
-            </div>
+            {isAdmin && (
+              <div className="hidden group-hover:flex items-center gap-1">
+                <button
+                  onClick={onEdit}
+                  className="text-text-muted hover:text-accent transition-colors p-0.5"
+                  title="Edit"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M8.5 2.5l3 3M2 9l6-6 3 3-6 6H2V9z" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="text-text-muted hover:text-red transition-colors p-0.5"
+                  title="Delete"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M3 4h8M5.5 4V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1M4.5 4v7.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V4" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -517,6 +521,8 @@ function TeamCard({ team, onEdit, onDelete, onRefresh }: TeamCardProps) {
 // ---- Main Page --------------------------------------------------------------
 
 export default function TeamsPage() {
+  const user = useAuthStore((s) => s.user)
+  const isAdmin = user?.role === 'admin'
   const [teams, setTeams] = useState<Team[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -588,13 +594,15 @@ export default function TeamsPage() {
               {teams.length} team{teams.length !== 1 ? 's' : ''} registered
             </p>
           </div>
-          <button
-            onClick={() => { setEditingTeam(null); setShowForm(true) }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded text-sm font-medium bg-accent text-bg hover:bg-accent-light transition-colors"
-          >
-            <Plus size={14} />
-            Create Team
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => { setEditingTeam(null); setShowForm(true) }}
+              className="flex items-center gap-1.5 px-4 py-2 rounded text-sm font-medium bg-accent text-bg hover:bg-accent-light transition-colors"
+            >
+              <Plus size={14} />
+              Create Team
+            </button>
+          )}
         </div>
 
         {teams.length === 0 ? (
@@ -608,6 +616,7 @@ export default function TeamsPage() {
               <TeamCard
                 key={team.id}
                 team={team}
+                isAdmin={isAdmin}
                 onEdit={() => { setEditingTeam(team); setShowForm(true) }}
                 onDelete={() => handleDelete(team)}
                 onRefresh={loadTeams}

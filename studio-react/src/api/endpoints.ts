@@ -770,3 +770,46 @@ export function updateTeamMember(teamId: string, userId: string, data: { role?: 
 export function removeTeamMember(teamId: string, userId: string): Promise<void> {
   return apiDelete<void>(`/teams/${teamId}/members/${userId}`);
 }
+
+// Agent Templates
+
+export interface AgentTemplate {
+  id: string
+  name: string
+  description: string
+  runtime: string
+  llm_backend: string
+  llm_model: string
+  agent_type: string
+  capabilities: string[]
+  project_id: string
+  team_ids: string[]
+  profile_rules: Record<string, unknown>
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export function fetchAgentTemplates(): Promise<AgentTemplate[]> {
+  return apiGet<AgentTemplate[]>('/agent-templates');
+}
+
+export function fetchAgentTemplate(id: string): Promise<AgentTemplate> {
+  return apiGet<AgentTemplate>(`/agent-templates/${id}`);
+}
+
+export function createAgentTemplate(data: Partial<AgentTemplate> & { id: string; name: string }): Promise<AgentTemplate> {
+  return apiPost<AgentTemplate>('/agent-templates', data);
+}
+
+export function updateAgentTemplate(id: string, data: Partial<AgentTemplate>): Promise<AgentTemplate> {
+  return apiPut<AgentTemplate>(`/agent-templates/${id}`, data);
+}
+
+export function deleteAgentTemplate(id: string): Promise<void> {
+  return apiDelete<void>(`/agent-templates/${id}`);
+}
+
+export function applyAgentTemplate(templateId: string, agentId: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/agent-templates/${templateId}/apply/${agentId}`, {});
+}
