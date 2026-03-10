@@ -1273,6 +1273,12 @@ router.post('/agents/heartbeat', function (req, res) {
     } catch (e) { /* non-critical */ }
   }
 
+  // Attach actionable approvals (pending or approved) so agent learns about decisions
+  try {
+    var agentApprovals = listPendingApprovalsByAgent(agentId);
+    if (agentApprovals.length > 0) response.approvals = agentApprovals;
+  } catch (e) { /* non-critical */ }
+
   res.json(response);
 });
 
