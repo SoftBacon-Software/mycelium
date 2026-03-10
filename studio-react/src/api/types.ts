@@ -69,17 +69,21 @@ export interface TeamChat {
 }
 
 export interface ContextEntry {
+  id: number;
   namespace: string;
   key: string;
   data: unknown;
+  category: string;
   updated_by: string;
   updated_at: string;
 }
 
 export interface ContextKey {
+  id: number;
   namespace: string;
   key: string;
   data: unknown;
+  category: string;
   updated_by: string;
   updated_at: string;
 }

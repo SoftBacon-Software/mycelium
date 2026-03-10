@@ -164,7 +164,7 @@ import {
   getInboxItem, listInboxItems, markInboxItemRead, markInboxItemActioned,
   dismissInboxItem, countUnreadInbox, countAllUnreadInbox,
   createSupportTicket, getSupportTicket, listSupportTickets, updateSupportTicket, deleteSupportTicket,
-  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats,
+  purgeExpiredContextKeys, cleanupAgentSessionKeys, contextKeyStats, bulkDeleteContextKeys, searchContextKeys,
   createNodeProfile, getNodeProfile, listNodeProfiles, updateNodeProfile, deleteNodeProfile,
   resolveProfileChain, buildCalibrationBlock,
   createInstance, getInstance, getInstanceByOrg, getInstanceByDomain, listInstances, updateInstance,
@@ -172,7 +172,10 @@ import {
   getAllTeamSettingsGrouped, syncTeamSettingsToProfile,
   createTeam, getTeam, listTeams, updateTeam, deleteTeam,
   addTeamMember, updateTeamMember, removeTeamMember,
-  getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent
+  getTeamsForUser, getTeamProjects, getTeamProjectIdsForAgent,
+  getAgentProfile, ensureAgentProfile, updateAgentProfile, incrementProfileCounter,
+  listAgentProfiles, getAgentLeaderboard,
+  getStaleAgents, getStaleTasks, getStaleRequests, getStaleDrones, getStalePlanSteps
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
 
@@ -1048,6 +1051,7 @@ router.get('/boot/:agentId', function (req, res) {
     fullPayload.sleep_mode = getSleepMode();
     fullPayload.autonomous_mode = isNetworkAutonomous();
     fullPayload.operators_available = getAvailableOperators().length;
+    try { fullPayload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
     emitEvent('agent_boot', agentId, null, agentId + ' booted (verbose)');
     return res.json(fullPayload);
   }
@@ -1057,6 +1061,7 @@ router.get('/boot/:agentId', function (req, res) {
   if (!payload) return res.status(404).json({ error: 'Agent not found' });
   payload.savepoint = computeSavepointDiff(agentId);
   payload.changes_since_last = formatSavepointSummary(computeSavepointDiff(agentId));
+  try { payload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
 });
@@ -1307,6 +1312,20 @@ router.get('/agents', function (req, res) {
   res.json(listAgents());
 });
 
+// Agent profiles — MUST be before /agents/:id to avoid route shadowing
+router.get('/agents/profiles', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  res.json(listAgentProfiles());
+});
+
+router.get('/agents/leaderboard', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 20;
+  res.json(getAgentLeaderboard(limit));
+});
+
 router.get('/agents/:id', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
@@ -1450,6 +1469,7 @@ router.put('/tasks/:id', function (req, res) {
   // When task completes: resolve dependencies and update linked asset
   if (fields.status === 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
+    try { incrementProfileCounter(agentId, 'total_tasks_completed'); } catch (e) { /* non-critical */ }
     var unblocked = resolveTaskDependencies(task.id);
     if (unblocked.length > 0) {
       result.unblocked = unblocked;
@@ -1596,6 +1616,15 @@ router.get('/context/keys', function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var namespace = req.query.namespace;
+  // If search/filter params present, use searchContextKeys
+  if (req.query.search || req.query.category || req.query.updated_by) {
+    return res.json(searchContextKeys({
+      namespace: namespace || undefined,
+      search: req.query.search || undefined,
+      category: req.query.category || undefined,
+      updated_by: req.query.updated_by || undefined
+    }));
+  }
   res.json(listContextKeys(namespace));
 });
 
@@ -1632,6 +1661,21 @@ router.delete('/context/keys/:namespace/:key', function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
+});
+
+// Bulk delete context keys by IDs (admin only)
+router.post('/context/keys/bulk-delete', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var ids = req.body.ids;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids array is required' });
+  }
+  if (ids.length > 200) {
+    return res.status(400).json({ error: 'Maximum 200 keys per bulk delete' });
+  }
+  var deleted = bulkDeleteContextKeys(ids);
+  emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys');
+  res.json({ ok: true, deleted: deleted });
 });
 
 // Context key history — view previous versions
@@ -1964,6 +2008,34 @@ router.get('/agents/:agentId/skills', function (req, res) {
   if (!who) return;
   var skills = getAgentSkills(req.params.agentId);
   res.json(skills);
+});
+
+// Per-agent profile
+router.get('/agents/:id/profile', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var profile = getAgentProfile(req.params.id);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  res.json(profile);
+});
+
+router.put('/agents/:id/profile', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  if (!req._authIsAdmin && who !== req.params.id) {
+    return res.status(403).json({ error: 'Can only update your own profile' });
+  }
+  var profile = getAgentProfile(req.params.id);
+  if (!profile) {
+    try { ensureAgentProfile(req.params.id); } catch (e) { return res.status(404).json({ error: 'Agent not found' }); }
+  }
+  var fields = {};
+  if (req.body.display_name !== undefined) fields.display_name = req.body.display_name;
+  if (req.body.specializations !== undefined) fields.specializations = req.body.specializations;
+  if (req.body.preferred_projects !== undefined) fields.preferred_projects = req.body.preferred_projects;
+  if (req.body.max_concurrent !== undefined) fields.max_concurrent = parseInt(req.body.max_concurrent) || 0;
+  if (req.body.profile_data !== undefined) fields.profile_data = req.body.profile_data;
+  res.json(updateAgentProfile(req.params.id, fields));
 });
 
 // ======== ASSETS ========
@@ -4085,6 +4157,9 @@ router.put('/bugs/:id', function (req, res) {
   updateBug(bug.id, updates);
   if (updates.status) {
     emitEvent('bug_updated', who, bug.project_id, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
+    if (updates.status === 'fixed' || updates.status === 'closed') {
+      try { incrementProfileCounter(bug.assignee || who, 'total_bugs_fixed'); } catch (e) { /* non-critical */ }
+    }
   }
   dispatchWebhook('bug_updated', who, { bug_id: bug.id, title: bug.title, updates: updates });
   // Webhook: notify assignee when bug is assigned
@@ -5991,6 +6066,92 @@ router.delete('/support/tickets/:id', function (req, res) {
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   deleteSupportTicket(parseInt(req.params.id));
   res.json({ ok: true, id: parseInt(req.params.id) });
+});
+
+// ======== HEALTH PATROL ========
+
+function runHealthPatrol() {
+  var config = {};
+  try {
+    var rows = getDB().prepare("SELECT key, value FROM instance_config WHERE key LIKE 'patrol_%'").all();
+    for (var r of rows) config[r.key] = r.value;
+  } catch (e) { /* use defaults */ }
+
+  var staleAgentMins = parseInt(config.patrol_stale_agent_minutes) || 15;
+  var staleTaskMins = parseInt(config.patrol_stale_task_minutes) || 30;
+  var staleRequestMins = parseInt(config.patrol_stale_request_minutes) || 60;
+  var staleDroneMins = parseInt(config.patrol_stale_drone_minutes) || 30;
+  var stalePlanStepMins = parseInt(config.patrol_stale_plan_step_minutes) || 120;
+
+  var results = { stale_agents: 0, stale_tasks: 0, stale_requests: 0, stale_drones: 0, stale_plan_steps: 0, actions: [], run_at: new Date().toISOString() };
+
+  var staleAgents = getStaleAgents(staleAgentMins);
+  for (var a of staleAgents) {
+    updateAgentHeartbeat(a.id, 'offline', '');
+    createEvent('health_patrol', '__system__', null, 'Agent ' + a.id + ' marked offline (no heartbeat in ' + staleAgentMins + ' min)', JSON.stringify({ agent_id: a.id, last_heartbeat: a.last_heartbeat }));
+    results.actions.push({ type: 'agent_offline', agent_id: a.id });
+  }
+  results.stale_agents = staleAgents.length;
+
+  var staleTasks = getStaleTasks(staleTaskMins);
+  for (var t of staleTasks) {
+    createEvent('health_patrol', '__system__', null, 'Task #' + t.id + ' in_progress with no active assignee (>' + staleTaskMins + ' min)', JSON.stringify({ task_id: t.id, assignee: t.assignee }));
+    results.actions.push({ type: 'stale_task_warning', task_id: t.id, assignee: t.assignee });
+  }
+  results.stale_tasks = staleTasks.length;
+
+  var staleReqs = getStaleRequests(staleRequestMins);
+  for (var r of staleReqs) {
+    createEvent('health_patrol', '__system__', null, 'Request #' + r.id + ' pending for >' + staleRequestMins + ' min', JSON.stringify({ request_id: r.id, from: r.from_agent, to: r.to_agent }));
+    results.actions.push({ type: 'stale_request', request_id: r.id });
+  }
+  results.stale_requests = staleReqs.length;
+
+  var staleDrns = getStaleDrones(staleDroneMins);
+  for (var d of staleDrns) {
+    updateAgentHeartbeat(d.id, 'offline', '');
+    try { releaseStaleClaimedJobs(d.id); } catch (e) { /* non-critical */ }
+    createEvent('health_patrol', '__system__', null, 'Drone ' + d.id + ' marked offline + jobs released', JSON.stringify({ drone_id: d.id }));
+    results.actions.push({ type: 'drone_offline', drone_id: d.id });
+  }
+  results.stale_drones = staleDrns.length;
+
+  var staleSteps = getStalePlanSteps(stalePlanStepMins);
+  for (var s of staleSteps) {
+    createEvent('health_patrol', '__system__', null, 'Plan step #' + s.id + ' in_progress for >' + stalePlanStepMins + ' min', JSON.stringify({ step_id: s.id, plan_id: s.plan_id, assignee: s.assignee }));
+    results.actions.push({ type: 'stale_plan_step', step_id: s.id, plan_id: s.plan_id });
+  }
+  results.stale_plan_steps = staleSteps.length;
+
+  return results;
+}
+
+// Config-gated patrol timer (every 5 minutes)
+var PATROL_INTERVAL = 5 * 60 * 1000;
+setInterval(function () {
+  try {
+    var enabled = getInstanceConfig('patrol_enabled');
+    if (enabled === 'false') return; // defaults to enabled unless explicitly disabled
+    runHealthPatrol();
+  } catch (e) { console.error('[health_patrol] Error:', e.message); }
+}, PATROL_INTERVAL);
+
+router.get('/admin/health', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  try {
+    res.json(runHealthPatrol());
+  } catch (e) {
+    return res.status(500).json({ error: 'Health patrol failed: ' + e.message });
+  }
+});
+
+router.get('/admin/health/history', function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var limit = parseInt(req.query.limit) || 50;
+  var events = listEvents({ type: 'health_patrol', limit: limit });
+  res.json(events);
 });
 
 export default router;

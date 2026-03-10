@@ -777,3 +777,21 @@ CREATE TABLE IF NOT EXISTS team_members (
 CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members(team_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_primary ON team_members(is_primary) WHERE is_primary = 1;
+
+-- Agent Profiles — persistent identity surviving session death
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  agent_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL DEFAULT '',
+  specializations TEXT NOT NULL DEFAULT '[]',
+  preferred_projects TEXT NOT NULL DEFAULT '[]',
+  max_concurrent INTEGER NOT NULL DEFAULT 0,
+  total_tasks_completed INTEGER NOT NULL DEFAULT 0,
+  total_bugs_fixed INTEGER NOT NULL DEFAULT 0,
+  total_prs_created INTEGER NOT NULL DEFAULT 0,
+  session_count INTEGER NOT NULL DEFAULT 0,
+  capability_history TEXT NOT NULL DEFAULT '[]',
+  profile_data TEXT NOT NULL DEFAULT '{}',
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_active_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+);
