@@ -6,7 +6,7 @@ Mycelium is a self-hosted command center that turns any collection of AI agents 
 
 Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
 
-> 130/130 tests passing. 211+ API endpoints. 50 database tables. Used daily in production with multiple agents shipping real products.
+> 277 API endpoints. 52 database tables. 17 plugins. Used daily in production with multiple agents shipping real products.
 
 ## Why Mycelium
 
@@ -44,7 +44,7 @@ Your agents get identity, work queues, messaging, context, budget tracking, and 
 - **Concepts & Context** -- Shared knowledge store (characters, styles, rulesets, brands -- any structured data). Concepts link across projects. Namespaced key-value context persists agent state across sessions with full version history.
 - **Operator Inbox** -- Human-facing message layer. Pending approvals, agent requests, and mentions surface automatically with unread badges.
 - **Plugin System** -- Drop-in plugins with their own schemas, migrations, routes, event hooks, and MCP tools.
-- **Dashboard** -- 22-page React app: network overview, agent analytics, plans, tasks, bugs, channels, concepts, approvals, drones, assets, operators, webhooks, context explorer, feedback, and more.
+- **Dashboard** -- 28-page React app: network overview, agent analytics, plans, tasks, bugs, channels, concepts, approvals, drones, assets, operators, webhooks, context explorer, feedback, teams, plugins, deployments, and more.
 
 ## Quick Start
 
@@ -213,17 +213,17 @@ Say "Mycelium, what's the status?" and get a spoken summary of your agent networ
 mycelium/
 ├── server/
 │   ├── index.js              # Express app + WebSocket
-│   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 50 tables)
+│   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 52 tables)
 │   ├── schema.sql            # Full schema
-│   ├── routes/mycelium.js    # All API routes (211+ endpoints)
-│   └── plugins/              # Plugin system (5 built-in plugins)
+│   ├── routes/mycelium.js    # All API routes (277 endpoints)
+│   └── plugins/              # Plugin system (17 plugins)
 ├── sdk/                      # Multi-runtime Agent SDK
 │   ├── src/                  # Core: MyceliumAgent class + HTTP client
 │   ├── bin/                  # CLI: mycelium-init, mycelium-agent
 │   ├── adapters/             # Discord, Slack, Voice bridges
 │   └── examples/             # echo-agent, ollama-coder
 ├── studio-react/             # Dashboard (React 19 + TypeScript + Vite + Tailwind v4 + Zustand)
-│   └── src/pages/            # 22 pages
+│   └── src/pages/            # 28 pages
 ├── public/studio/            # Built dashboard assets (served at /studio)
 ├── docs/                     # Setup and plugin guides
 ├── docker-compose.yml        # Local-first deployment
@@ -234,7 +234,7 @@ mycelium/
 
 ### Database
 
-SQLite with 50 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, and teams. WAL mode for concurrent reads. 30+ indexes for query performance.
+SQLite with 52 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, teams, agent profiles, subscriptions, and customer instances. WAL mode for concurrent reads. 30+ indexes for query performance.
 
 ### Token-Efficient Protocol
 
@@ -356,7 +356,7 @@ GET /agents/my-agent/skills
 
 ## API Overview
 
-All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or JWT Bearer token. 211+ endpoints across 17 categories.
+All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or JWT Bearer token. 277 endpoints across 20+ categories.
 
 | Category | Key Endpoints | Description |
 |----------|--------------|-------------|
@@ -407,19 +407,36 @@ The React dashboard at `/studio` includes:
 - **Feedback** -- User feedback collection
 - **Spawns** -- Agent runner session tracking
 - **Onboarding** -- New instance setup wizard
+- **Agent Templates** -- Preconfigured agent templates for quick registration
+- **Deployments** -- Customer instance deployment status and management
+- **Agent Health** -- Per-agent health metrics and diagnostics
+- **Teams** -- Team management with roles and project assignments
+- **Team Settings** -- Team DNA configuration (conventions, preferences)
+- **Plugin Pages** -- Plugin-specific dashboard views
 - **Login** -- JWT-based authentication
 
 ## Plugins
 
-Built-in plugins with their own schemas, routes, and event hooks:
+17 built-in plugins with their own schemas, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
+| `billing` | Stripe webhook integration, subscription management, auto-provisioning |
+| `build-in-public` | Public transparency dashboard and update sharing |
+| `cost-tracker` | Automated spend tracking and budget alerts |
+| `daily-digest` | Scheduled daily summary notifications |
+| `error-monitor` | Error tracking and alerting |
+| `github-sync` | GitHub PR/issue synchronization |
+| `guardrails` | Safety checks and policy enforcement |
+| `outreach` | Outreach pipeline automation |
+| `semantic-memory` | Hybrid FTS5 keyword + vector search across platform data |
+| `auto-memory` | Automated fact extraction from platform events |
+| `a2a-gateway` | Google A2A protocol for external agent interop |
 | `social-posting` | Schedule and publish to social media |
 | `steam-assets` | Steam game asset management |
 | `video-pipeline` | Video processing workflows |
-| `build-in-public` | Public transparency and update sharing |
-| `outreach` | Outreach pipeline automation |
+| `workflow-automations` | Event-driven workflow triggers |
+| `x-posting` | X/Twitter post drafting and publishing |
 
 Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
@@ -434,15 +451,16 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 - `sdk/README.md` -- Agent SDK API reference and examples
 - `sdk/adapters/README.md` -- Discord, Slack, and Voice adapter setup
 
-## Related Repos
+## Monorepo Packages
 
-| Repo | Description |
-|------|-------------|
-| [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) | MCP server wrapping the Mycelium API for Claude Code |
-| [mycelium-runner](https://github.com/SoftBacon-Software/mycelium-runner) | Autonomous agent runner -- polls Mycelium, spawns Claude sessions |
+| Package | Path | Description |
+|---------|------|-------------|
+| `@mycelium/sdk` | `sdk/` | Multi-runtime Agent SDK (npm) |
+| `@mycelium/mcp` | `mcp/` | MCP server for Claude Code agents |
+| `@mycelium/runner` | `runner/` | Autonomous agent runner -- spawns Claude sessions |
 
 ## License
 
-Proprietary. Copyright 2026 SoftBacon Software.
+AGPL-3.0-only. See [LICENSE](LICENSE) for full terms.
 
-Source visible for evaluation. Redistribution, modification, or commercial use requires a license. Contact grbarajas@gmail.com.
+The SDK (`@mycelium/sdk`) is licensed under MIT for maximum compatibility.
