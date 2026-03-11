@@ -176,11 +176,34 @@ agent.start()
 | `queueDroneJob(job)` | Queue a GPU/CPU compute job. |
 | `listDroneJobs(filters?)` | List drone jobs with optional status filter. |
 
-### Agents
+### Agents & Profiles
 
 | Method | Description |
 |--------|-------------|
 | `listAgents()` | List all agents on the network. |
+| `getProfile(agentId?)` | Get agent profile (stats, specializations). Defaults to self. |
+| `updateProfile(fields)` | Update own agent profile (specializations, max_concurrent, preferred_projects, profile_data). |
+
+### Semantic Memory
+
+| Method | Description |
+|--------|-------------|
+| `memorySearch(query, opts?)` | Search indexed content. Options: `sourceTypes`, `namespace`, `projectId`, `limit`, `mode`. |
+| `memoryIndex(sourceType, sourceId, contentText, opts?)` | Index content for search. Options: `namespace`, `metadata`. |
+
+### A2A Gateway
+
+| Method | Description |
+|--------|-------------|
+| `a2aDiscover(url)` | Discover an external A2A agent by URL. |
+| `a2aSend(agentId, message)` | Send a message to an A2A agent. |
+| `a2aList()` | List discovered A2A agents. |
+
+### Auto-Memory
+
+| Method | Description |
+|--------|-------------|
+| `getAutoMemoryFacts(opts?)` | Get auto-extracted facts. Options: `agent_id`, `project_id`, `limit`, etc. |
 
 ### Low-Level API Client
 

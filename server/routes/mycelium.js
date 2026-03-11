@@ -1058,6 +1058,31 @@ router.get('/waitlist', function (req, res) {
   }
 });
 
+// PUT /waitlist/:id — admin only, update waitlist entry status/notes
+router.put('/waitlist/:id', function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var db = getDB();
+  // Ensure notes column exists (added after initial schema)
+  try { db.prepare('ALTER TABLE waitlist ADD COLUMN notes TEXT DEFAULT ""').run(); } catch (e) { /* already exists */ }
+  var row = db.prepare('SELECT * FROM waitlist WHERE id = ?').get(req.params.id);
+  if (!row) return apiError(res, 404, 'Waitlist entry not found');
+  var allowed = ['status', 'notes'];
+  var sets = [];
+  var vals = [];
+  for (var key of allowed) {
+    if (req.body[key] !== undefined) {
+      sets.push(key + ' = ?');
+      vals.push(req.body[key]);
+    }
+  }
+  if (sets.length === 0) return apiError(res, 400, 'No valid fields to update');
+  vals.push(req.params.id);
+  db.prepare('UPDATE waitlist SET ' + sets.join(', ') + ' WHERE id = ?').run(...vals);
+  var updated = db.prepare('SELECT * FROM waitlist WHERE id = ?').get(req.params.id);
+  emitEvent('waitlist_updated', req.headers['x-admin-key'] ? '__admin__' : '__system__', null, 'Waitlist #' + req.params.id + ' updated', { waitlist_id: req.params.id, status: updated.status });
+  res.json(updated);
+});
+
 // ======== BOOT ========
 
 router.get('/boot/:agentId', function (req, res) {
