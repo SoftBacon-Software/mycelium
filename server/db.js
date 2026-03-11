@@ -1182,7 +1182,7 @@ export function getBootPayload(agentId) {
 
   var since = agent.last_heartbeat || '2000-01-01';
   var newMessages = db.prepare(
-    "SELECT * FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND created_at > ? ORDER BY created_at DESC LIMIT 50"
+    "SELECT id, from_agent, to_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND created_at > ? ORDER BY created_at DESC LIMIT 50"
   ).all(agentId, since);
 
   var pendingDirectives = db.prepare(
@@ -1198,9 +1198,9 @@ export function getBootPayload(agentId) {
     ).all();
   }
 
-  // Only include agents active in last 7 days or in the same project
+  // Only include agents active in last 7 days or in the same project (trimmed fields for coordination)
   var otherAgents = db.prepare(
-    "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project FROM agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
+    "SELECT id, name AS display_name, status, working_on, last_heartbeat, project_id, llm_backend, runtime FROM agents WHERE id != ? AND (project_id = ? OR last_heartbeat > datetime('now', '-7 days')) ORDER BY created_at"
   ).all(agentId, agent.project_id);
 
   var projectContext = getContext(agent.project_id);
@@ -1254,26 +1254,21 @@ export function getBootPayload(agentId) {
   var calibration = null;
   try { calibration = buildCalibrationBlock(agentId); } catch (e) { console.warn('[mycelium] calibration block failed for ' + agentId + ':', e.message); }
 
-  // ---- Since last session: changes since agent's last heartbeat ----
+  // ---- Since last session: changes since agent's last heartbeat (single query) ----
   var sinceLastSession = null;
   if (since && since !== '2000-01-01') {
-    var newMsgCount = db.prepare(
-      "SELECT COUNT(*) as c FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND created_at > ?"
-    ).get(agentId, since).c;
-    var taskChangeCount = db.prepare(
-      "SELECT COUNT(*) as c FROM tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ?"
-    ).get(agentId, since).c;
-    var planStepChangeCount = db.prepare(
-      "SELECT COUNT(*) as c FROM plan_steps WHERE updated_at > ?"
-    ).get(since).c;
-    var newBugCount = db.prepare(
-      "SELECT COUNT(*) as c FROM bugs WHERE created_at > ?"
-    ).get(since).c;
+    var sessionCounts = db.prepare(
+      "SELECT " +
+      "(SELECT COUNT(*) FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND created_at > ?) as new_messages, " +
+      "(SELECT COUNT(*) FROM tasks WHERE (assignee = ? OR assignee IS NULL) AND updated_at > ?) as task_changes, " +
+      "(SELECT COUNT(*) FROM plan_steps WHERE updated_at > ?) as plan_step_changes, " +
+      "(SELECT COUNT(*) FROM bugs WHERE created_at > ?) as new_bugs"
+    ).get(agentId, since, agentId, since, since, since);
     sinceLastSession = {
-      new_messages: newMsgCount,
-      task_changes: taskChangeCount,
-      plan_step_changes: planStepChangeCount,
-      new_bugs: newBugCount,
+      new_messages: sessionCounts.new_messages,
+      task_changes: sessionCounts.task_changes,
+      plan_step_changes: sessionCounts.plan_step_changes,
+      new_bugs: sessionCounts.new_bugs,
       since: since
     };
   }
