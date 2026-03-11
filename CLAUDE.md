@@ -30,12 +30,15 @@ No tests or linting configured.
 ```
 server/
   index.js          # Express app entry point + voice chat WebSocket
-  db.js             # SQLite (better-sqlite3, WAL) + all DB functions (~900 lines)
-  schema.sql        # Full platform schema (50 tables)
+  db.js             # SQLite (better-sqlite3, WAL) + all DB functions (~4000 lines)
+  schema.sql        # Full platform schema (52 tables)
+  plugins.js        # Plugin loader — auto-discovers, schema init, event hooks, worker processes
+  provisioning.js   # Customer instance provisioning (Railway + Cloudflare + health check)
+  email.js          # Email via Resend — waitlist, welcome, payment, suspension templates
   routes/
-    mycelium.js     # All API routes (211+ endpoints, served at /api/mycelium/)
+    mycelium.js     # All API routes (277 endpoints, served at /api/mycelium/)
   data/             # SQLite DB + uploaded files (gitignored)
-  plugins/          # Plugin system (5 built-in plugins)
+  plugins/          # Plugin system (17 plugins — billing, github-sync, cost-tracker, etc.)
 sdk/
   src/
     agent.js        # MyceliumAgent class — multi-runtime SDK
@@ -53,7 +56,7 @@ sdk/
     ollama-coder.js # Local Ollama coding agent
   package.json      # @mycelium/sdk package config
 studio-react/       # Dashboard (React 19 + TypeScript + Vite + Tailwind v4 + Zustand)
-  src/pages/        # 22 dashboard pages
+  src/pages/        # 28 dashboard pages
 public/
   studio/           # Built dashboard assets (served at /studio)
 tools/              # Utility scripts
@@ -70,9 +73,9 @@ package.json        # Root workspace config
 
 ## Architecture
 
-- **Database**: SQLite via better-sqlite3, WAL mode. 50 tables. Schema in `server/schema.sql`.
+- **Database**: SQLite via better-sqlite3, WAL mode. 52 tables. Schema in `server/schema.sql`.
 - **Auth**: JWT tokens (7-day expiry). Dashboard users in `dv_studio_users`. Agents use API keys (`X-Agent-Key`). Admin uses `X-Admin-Key` or JWT Bearer token.
-- **API routes**: Served at `/api/mycelium/`. 211+ endpoints.
+- **API routes**: Served at `/api/mycelium/`. 277 endpoints.
 - **Dashboard**: Served at `/` and `/studio/` (backward compat). React 19 SPA built with Vite.
 - **Voice chat**: WebRTC signaling via WebSocket at `/voice`. REST endpoints for peers and TURN credentials.
 - **Plans system**: `dv_plans` + `dv_plan_steps`. Auto-completion cascade.
@@ -83,15 +86,21 @@ package.json        # Root workspace config
 - **Widgets**: `widgets` table. Agents push live dashboard components.
 - **Skills**: `skills` + `agent_skills` tables. Discoverable, installable agent capabilities.
 - **Teams**: Team organization with roles (lead, member, guest).
+- **Agent profiles**: `agent_profiles` table. Persistent stats (tasks, bugs, PRs, sessions). Auto-created on boot. Leaderboard endpoint.
+- **Health patrol**: Stale detection for agents, tasks, requests, drones, plan steps. Config-gated 5-minute interval.
+- **Billing**: Plugin-based Stripe integration. Webhooks for checkout, subscription changes, payment failures.
+- **Customer provisioning**: `customer_instances` + `subscriptions` tables. Auto-provisions Railway instances with Cloudflare DNS on Stripe payment. Lifecycle: provisioning → active → suspended → archived.
+- **Waitlist**: Public signup at `POST /waitlist`. Operator inbox alerts + confirmation email.
+- **Plugins**: 17 plugins auto-discovered from `server/plugins/`. Schema init, event hooks, route mounting, MCP tool registration. Worker plugins run as separate processes.
 - **SDK**: Multi-runtime agent SDK in `sdk/`. HTTP polling, handler modules, CLI tools, adapters.
 
 ## Command Structure v2
 
-Mycelium uses a command structure where Claude Admin (greatness-claude) coordinates work.
+Mycelium uses a command structure where operators coordinate work via the dashboard and agents self-organize via work queues.
 
 ### Terminology
 - **Operators** (people): greatness (owner), hijack (ui_lead), unakron (member). Table: `dv_operators`.
-- **Agents** (Claude instances): greatness-claude (admin), hijack-claude (agent), unakron-gpu (drone). Linked to operators via `operator_id`.
+- **Agents** (Claude instances): dev-claude, macbook-claude, hijack-claude, macbook-ollama, etc. Linked to operators via `operator_id`.
 - **Directives**: Blocking messages (`msg_type='directive'`). Agent MUST respond before getting new work.
 - **Instance Config**: `dv_instance_config` -- mode (developer/customer), admin status, risk tiers.
 
@@ -116,6 +125,9 @@ Multi-human voting: `dv_approval_votes` table. Any single deny = instant denial.
 | `ADMIN_KEY` | Yes | Admin API key |
 | `PORT` | No | Server port (default 3002) |
 | `DATA_DIR` | No | SQLite data directory (default `server/data/`) |
+| `RESEND_KEY` | No | Resend API key for email (graceful degradation if missing) |
+| `GITHUB_TOKEN` | No | GitHub API token for PR proxy endpoints |
+| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook signature verification |
 
 ## Key API Endpoints (under `/api/mycelium/`)
 
@@ -240,6 +252,26 @@ Agents report on heartbeat: `runtime`, `llm_backend`, `llm_model`, `capabilities
 - `GET /github/prs/:owner/:repo` -- List pull requests
 - `POST /github/prs/:owner/:repo` -- Create pull request
 - `POST /github/prs/:owner/:repo/:number/merge` -- Merge pull request
+
+### Agent Profiles
+- `GET /agents/:id/profile` -- Get agent profile (stats, specializations)
+- `PUT /agents/:id/profile` -- Update agent profile
+- `GET /agents/profiles` -- List all agent profiles
+- `GET /agents/leaderboard` -- Agent leaderboard by stats
+
+### Health Patrol (Admin)
+- `GET /admin/health` -- Run stale detection (agents, tasks, requests, drones, plan steps)
+- `GET /admin/health/history` -- Health patrol history
+
+### Customer Instances (Admin)
+- `GET /waitlist` -- List waitlist signups
+- `POST /waitlist` -- Public signup (no auth, rate-limited)
+- `GET /instances` -- List customer instances
+- `GET /instances/:id` -- Instance details
+- `PUT /instances/:id` -- Update instance
+- `POST /instances/:id/health-check` -- Trigger health check
+- `POST /admin/churn-check` -- Run churn lifecycle (suspend → archive → delete)
+- `POST /admin/deploy/health-check-all` -- Health check all active instances
 
 ### Other
 - `GET /health` -- Health check
