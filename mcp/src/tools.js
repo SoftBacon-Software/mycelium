@@ -84,6 +84,40 @@ function formatPlan(p, verbose) {
   return lines.join('\n');
 }
 
+// Shared helper: after completing a task or fixing a bug, fetch the next work item
+// and advance workingOn + heartbeat.
+async function advanceWorkQueue(st) {
+  var nextWork = '';
+  if (st.role === 'agent' && st.agentId) {
+    try {
+      var workData = await apiGet('/work/' + st.agentId);
+      var queue = workData.queue || workData.tasks || [];
+      if (queue.length) {
+        nextWork = queue[0].title;
+      }
+    } catch { /* ignore */ }
+  }
+  setWorkingOn(nextWork);
+  setClaimedItem(null);
+  if (st.role === 'agent') await sendHeartbeat();
+  return nextWork;
+}
+
+// Shared helper: claim a task or bug — GET details, PUT status, update workingOn + heartbeat.
+async function claimWorkItem(st, type, id) {
+  var endpoint = type === 'task' ? '/tasks/' : '/bugs/';
+  var item = await apiGet(endpoint + id);
+  await apiPut(endpoint + id, {
+    status: 'in_progress',
+    assignee: st.agentId || '__admin__'
+  });
+  var label = type === 'task' ? item.title : ('Bug #' + id + ': ' + item.title);
+  setWorkingOn(label);
+  setClaimedItem({ type: type, id: id, title: item.title });
+  if (st.role === 'agent') await sendHeartbeat();
+  return { item: item, label: label };
+}
+
 export function registerTools(server) {
 
   // ===== SESSION =====
@@ -344,18 +378,8 @@ export function registerTools(server) {
     { task_id: z.number().describe('Task ID to claim') },
     async (args) => {
       var st = getState();
-      var assignee = st.agentId || '__admin__';
-
-      // Get task details first
-      var task = await apiGet('/tasks/' + args.task_id);
-      await apiPut('/tasks/' + args.task_id, { assignee: assignee, status: 'in_progress' });
-
-      // Auto-update working_on and track claimed item
-      setWorkingOn(task.title);
-      setClaimedItem({ type: 'task', id: args.task_id, title: task.title });
-      if (st.role === 'agent') await sendHeartbeat();
-
-      return text('Claimed task #' + args.task_id + ': ' + task.title + '\nworking_on updated to: "' + task.title + '"');
+      var result = await claimWorkItem(st, 'task', args.task_id);
+      return text('Claimed task #' + args.task_id + ': ' + result.item.title + '\nworking_on updated to: "' + result.label + '"');
     }
   );
 
@@ -372,22 +396,8 @@ export function registerTools(server) {
       if (args.notes) update.description = args.notes;
       await apiPut('/tasks/' + args.task_id, update);
       addProgressNote('Completed task #' + args.task_id);
-      setClaimedItem(null);
 
-      // Find next task (use /work/ to avoid emitting a spurious agent_boot event)
-      var nextWork = '';
-      if (st.role === 'agent' && st.agentId) {
-        try {
-          var workData = await apiGet('/work/' + st.agentId);
-          var queue = workData.queue || workData.tasks || [];
-          if (queue.length) {
-            nextWork = queue[0].title;
-          }
-        } catch { /* ignore */ }
-      }
-
-      setWorkingOn(nextWork);
-      if (st.role === 'agent') await sendHeartbeat();
+      var nextWork = await advanceWorkQueue(st);
 
       var msg = 'Completed task #' + args.task_id + '.';
       if (nextWork) msg += '\nworking_on advanced to: "' + nextWork + '"';
@@ -781,8 +791,8 @@ export function registerTools(server) {
       if (!history.length) return text('No history found for ' + args.namespace + ':' + args.key);
       var lines = ['=== History: ' + args.namespace + ':' + args.key + ' (' + history.length + ' versions) ==='];
       for (var h of history) {
-        var preview = (h.data || '').substring(0, 200);
-        if (h.data && h.data.length > 200) preview += '...';
+        var preview = (h.data || '').substring(0, 100);
+        if (h.data && h.data.length > 100) preview += '...';
         lines.push('#' + h.id + ' | ' + h.changed_at + ' | by ' + (h.changed_by || 'unknown'));
         lines.push('  ' + preview);
       }
@@ -978,15 +988,8 @@ export function registerTools(server) {
     { bug_id: z.number().describe('Bug ID to claim') },
     async (args) => {
       var st = getState();
-      var bug = await apiGet('/bugs/' + args.bug_id);
-      await apiPut('/bugs/' + args.bug_id, {
-        status: 'in_progress',
-        assignee: st.agentId || '__admin__'
-      });
-      setWorkingOn('Bug #' + args.bug_id + ': ' + bug.title);
-      setClaimedItem({ type: 'bug', id: args.bug_id, title: bug.title });
-      if (st.role === 'agent') await sendHeartbeat();
-      return text('Claimed bug #' + args.bug_id + ': ' + bug.title);
+      var result = await claimWorkItem(st, 'bug', args.bug_id);
+      return text('Claimed bug #' + args.bug_id + ': ' + result.item.title);
     }
   );
 
@@ -1002,19 +1005,10 @@ export function registerTools(server) {
       if (args.notes) update.admin_notes = args.notes;
       await apiPut('/bugs/' + args.bug_id, update);
       addProgressNote('Fixed bug #' + args.bug_id);
-      setClaimedItem(null);
 
-      // Check for remaining work (use /work/ to avoid emitting a spurious agent_boot event)
       var st = getState();
-      var nextWork = '';
-      if (st.role === 'agent' && st.agentId) {
-        try {
-          var workData = await apiGet('/work/' + st.agentId);
-          if (workData.tasks.length) nextWork = workData.tasks[0].title;
-        } catch { /* ignore */ }
-      }
-      setWorkingOn(nextWork);
-      if (st.role === 'agent') await sendHeartbeat();
+      var nextWork = await advanceWorkQueue(st);
+
       return text('Bug #' + args.bug_id + ' marked fixed.' +
         (nextWork ? '\nworking_on: "' + nextWork + '"' : '\nworking_on cleared.'));
     }

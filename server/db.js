@@ -197,6 +197,30 @@ function stmt(key, sql) {
   return _stmts[key];
 }
 
+// Generic update helper — DRYs the repeated if/push/push pattern across update functions.
+// Returns true if a row was updated, false if no allowed fields were present.
+// Options:
+//   updatedAt: true  — prepend "updated_at = datetime('now')" to SET clause
+//   extraSets: []    — additional raw SET fragments (e.g. "version = version + 1")
+//   where: string    — override the WHERE column (default 'id')
+function buildUpdate(table, id, fields, allowed, opts) {
+  var o = opts || {};
+  var sets = [];
+  var values = [];
+  for (var j = 0; j < allowed.length; j++) {
+    var key = allowed[j];
+    if (fields[key] !== undefined) { sets.push(key + ' = ?'); values.push(fields[key]); }
+  }
+  if (!sets.length) return false;
+  // Append auto-managed columns only when there are real field changes
+  if (o.updatedAt) sets.push("updated_at = datetime('now')");
+  if (o.extraSets) { for (var i = 0; i < o.extraSets.length; i++) sets.push(o.extraSets[i]); }
+  var whereCol = o.where || 'id';
+  values.push(id);
+  db.prepare('UPDATE ' + table + ' SET ' + sets.join(', ') + ' WHERE ' + whereCol + ' = ?').run(...values);
+  return true;
+}
+
 // =============== MYCELIUM PLATFORM ===============
 
 // -- Agents --
@@ -244,22 +268,11 @@ export function deleteAgent(id) {
 }
 
 export function updateAgent(id, fields) {
-  var sets = []; var values = [];
-  if (fields.avatar_url !== undefined) { sets.push('avatar_url = ?'); values.push(fields.avatar_url); }
-  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
-  if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
-  if (fields.operator_id !== undefined) { sets.push('operator_id = ?'); values.push(fields.operator_id); }
-  if (fields.project !== undefined) { sets.push('project = ?'); values.push(fields.project); }
-  if (fields.project_id !== undefined) { sets.push('project_id = ?'); values.push(fields.project_id); }
-  if (fields.llm_backend !== undefined) { sets.push('llm_backend = ?'); values.push(fields.llm_backend); }
-  if (fields.llm_model !== undefined) { sets.push('llm_model = ?'); values.push(fields.llm_model); }
-  if (fields.agent_type !== undefined) { sets.push('agent_type = ?'); values.push(fields.agent_type); }
-  if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); values.push(fields.capabilities); }
-  if (fields.system_diagnostics !== undefined) { sets.push('system_diagnostics = ?'); values.push(typeof fields.system_diagnostics === 'string' ? fields.system_diagnostics : JSON.stringify(fields.system_diagnostics)); }
-  if (fields.runtime !== undefined) { sets.push('runtime = ?'); values.push(fields.runtime); }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare('UPDATE agents SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  // Pre-process JSON fields
+  if (fields.system_diagnostics !== undefined && typeof fields.system_diagnostics !== 'string') {
+    fields = Object.assign({}, fields, { system_diagnostics: JSON.stringify(fields.system_diagnostics) });
+  }
+  buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime']);
 }
 
 // -- Operators --
@@ -278,18 +291,7 @@ export function listOperators() {
 }
 
 export function updateOperator(id, fields) {
-  var sets = ["updated_at = datetime('now')"];
-  var values = [];
-  if (fields.display_name !== undefined) { sets.push('display_name = ?'); values.push(fields.display_name); }
-  if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
-  if (fields.responsibilities !== undefined) { sets.push('responsibilities = ?'); values.push(fields.responsibilities); }
-  if (fields.email !== undefined) { sets.push('email = ?'); values.push(fields.email); }
-  if (fields.studio_user_id !== undefined) { sets.push('studio_user_id = ?'); values.push(fields.studio_user_id); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.availability !== undefined) { sets.push('availability = ?'); values.push(fields.availability); }
-  if (fields.away_message !== undefined) { sets.push('away_message = ?'); values.push(fields.away_message); }
-  values.push(id);
-  db.prepare('UPDATE operators SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  buildUpdate('operators', id, fields, ['display_name', 'role', 'responsibilities', 'email', 'studio_user_id', 'status', 'availability', 'away_message'], { updatedAt: true });
 }
 
 export function setOperatorAvailability(id, availability, awayMessage) {
@@ -377,14 +379,7 @@ export function getOrg(id) {
 }
 
 export function updateOrg(id, fields) {
-  var sets = []; var values = [];
-  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.plan !== undefined) { sets.push('plan = ?'); values.push(fields.plan); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare('UPDATE organizations SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  buildUpdate('organizations', id, fields, ['name', 'description', 'plan', 'status']);
 }
 
 export function deleteOrg(id) {
@@ -408,18 +403,10 @@ export function getProject(id) {
 }
 
 export function updateProject(id, fields) {
-  var sets = []; var values = [];
-  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.repo_url !== undefined) { sets.push('repo_url = ?'); values.push(fields.repo_url); }
-  if (fields.org_id !== undefined) { sets.push('org_id = ?'); values.push(fields.org_id); }
-  if (fields.type !== undefined) { sets.push('type = ?'); values.push(fields.type); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.bug_categories !== undefined) { sets.push('bug_categories = ?'); values.push(typeof fields.bug_categories === 'string' ? fields.bug_categories : JSON.stringify(fields.bug_categories)); }
-  if (fields.team_id !== undefined) { sets.push('team_id = ?'); values.push(fields.team_id); }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare('UPDATE projects SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  if (fields.bug_categories !== undefined && typeof fields.bug_categories !== 'string') {
+    fields = Object.assign({}, fields, { bug_categories: JSON.stringify(fields.bug_categories) });
+  }
+  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
 }
 
 // -- Tasks --
@@ -449,22 +436,12 @@ export function listTasks(filters) {
 }
 
 export function updateTask(id, fields) {
-  var sets = ["updated_at = datetime('now')"];
-  var values = [];
-  if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.assignee !== undefined) { sets.push('assignee = ?'); values.push(fields.assignee); }
-  if (fields.priority !== undefined) { sets.push('priority = ?'); values.push(fields.priority); }
-  if (fields.tags !== undefined) { sets.push('tags = ?'); values.push(fields.tags); }
-  if (fields.needs_approval !== undefined) { sets.push('needs_approval = ?'); values.push(fields.needs_approval ? 1 : 0); }
-  if (fields.blocked_by !== undefined) { sets.push('blocked_by = ?'); values.push(JSON.stringify(fields.blocked_by)); }
-  if (fields.blocks !== undefined) { sets.push('blocks = ?'); values.push(JSON.stringify(fields.blocks)); }
-  if (fields.branch !== undefined) { sets.push('branch = ?'); values.push(fields.branch); }
-  if (fields.pr_url !== undefined) { sets.push('pr_url = ?'); values.push(fields.pr_url); }
-  if (fields.repo !== undefined) { sets.push('repo = ?'); values.push(fields.repo); }
-  values.push(id);
-  return db.prepare('UPDATE tasks SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  // Pre-process transformed fields
+  var f = Object.assign({}, fields);
+  if (f.needs_approval !== undefined) f.needs_approval = f.needs_approval ? 1 : 0;
+  if (f.blocked_by !== undefined) f.blocked_by = JSON.stringify(f.blocked_by);
+  if (f.blocks !== undefined) f.blocks = JSON.stringify(f.blocks);
+  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo'], { updatedAt: true });
 }
 
 // -- Task dependencies --
@@ -605,19 +582,9 @@ export function listAssets(filters) {
 }
 
 export function updateAsset(id, fields) {
-  var sets = ["updated_at = datetime('now')"];
-  var values = [];
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.path !== undefined) { sets.push('path = ?'); values.push(fields.path); }
-  if (fields.metadata !== undefined) { sets.push('metadata = ?'); values.push(fields.metadata); }
-  if (fields.file_path !== undefined) { sets.push('file_path = ?'); values.push(fields.file_path); }
-  if (fields.download_url !== undefined) { sets.push('download_url = ?'); values.push(fields.download_url); }
-  if (fields.requested_by !== undefined) { sets.push('requested_by = ?'); values.push(fields.requested_by); }
-  if (fields.assigned_to !== undefined) { sets.push('assigned_to = ?'); values.push(fields.assigned_to); }
-  if (fields.drone_job_id !== undefined) { sets.push('drone_job_id = ?'); values.push(fields.drone_job_id); }
-  if (fields.prompt !== undefined) { sets.push('prompt = ?'); values.push(fields.prompt); }
-  values.push(id);
-  return db.prepare('UPDATE assets SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  // Returns {changes} for callers that check result.changes
+  var changed = buildUpdate('assets', id, fields, ['status', 'path', 'metadata', 'file_path', 'download_url', 'requested_by', 'assigned_to', 'drone_job_id', 'prompt'], { updatedAt: true });
+  return { changes: changed ? 1 : 0 };
 }
 
 export function deleteAsset(id) {
@@ -1033,20 +1000,12 @@ export function listSkills(filters) {
 }
 
 export function updateSkill(id, updates) {
-  var fields = [];
-  var params = [];
-  if (updates.name !== undefined) { fields.push('name = ?'); params.push(updates.name); }
-  if (updates.description !== undefined) { fields.push('description = ?'); params.push(updates.description); }
-  if (updates.category !== undefined) { fields.push('category = ?'); params.push(updates.category); }
-  if (updates.version !== undefined) { fields.push('version = ?'); params.push(updates.version); }
-  if (updates.install_data !== undefined) { fields.push('install_data = ?'); params.push(typeof updates.install_data === 'string' ? updates.install_data : JSON.stringify(updates.install_data)); }
-  if (updates.required_capabilities !== undefined) { fields.push('required_capabilities = ?'); params.push(typeof updates.required_capabilities === 'string' ? updates.required_capabilities : JSON.stringify(updates.required_capabilities)); }
-  if (updates.tags !== undefined) { fields.push('tags = ?'); params.push(typeof updates.tags === 'string' ? updates.tags : JSON.stringify(updates.tags)); }
-  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
-  if (fields.length === 0) return null;
-  fields.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE skills SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  var f = Object.assign({}, updates);
+  if (f.install_data !== undefined && typeof f.install_data !== 'string') f.install_data = JSON.stringify(f.install_data);
+  if (f.required_capabilities !== undefined && typeof f.required_capabilities !== 'string') f.required_capabilities = JSON.stringify(f.required_capabilities);
+  if (f.tags !== undefined && typeof f.tags !== 'string') f.tags = JSON.stringify(f.tags);
+  var changed = buildUpdate('skills', id, f, ['name', 'description', 'category', 'version', 'install_data', 'required_capabilities', 'tags', 'status'], { updatedAt: true });
+  if (!changed) return null;
   return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
 }
 
@@ -1077,17 +1036,10 @@ export function createWidget(agentId, projectId, title, widgetType, data) {
 }
 
 export function updateWidget(id, updates) {
-  var fields = [];
-  var params = [];
-  if (updates.title !== undefined) { fields.push('title = ?'); params.push(updates.title); }
-  if (updates.widget_type !== undefined) { fields.push('widget_type = ?'); params.push(updates.widget_type); }
-  if (updates.data !== undefined) { fields.push('data = ?'); params.push(typeof updates.data === 'string' ? updates.data : JSON.stringify(updates.data)); }
-  if (updates.position !== undefined) { fields.push('position = ?'); params.push(updates.position); }
-  if (updates.status !== undefined) { fields.push('status = ?'); params.push(updates.status); }
-  if (fields.length === 0) return null;
-  fields.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE widgets SET ' + fields.join(', ') + ' WHERE id = ?').run(...params);
+  var f = Object.assign({}, updates);
+  if (f.data !== undefined && typeof f.data !== 'string') f.data = JSON.stringify(f.data);
+  var changed = buildUpdate('widgets', id, f, ['title', 'widget_type', 'data', 'position', 'status'], { updatedAt: true });
+  if (!changed) return null;
   return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
 }
 
@@ -1132,14 +1084,7 @@ export function listBugs(filters) {
 }
 
 export function updateBug(id, updates) {
-  var sets = ["updated_at = datetime('now')"];
-  var params = [];
-  if (updates.status !== undefined) { sets.push('status = ?'); params.push(updates.status); }
-  if (updates.assignee !== undefined) { sets.push('assignee = ?'); params.push(updates.assignee); }
-  if (updates.admin_notes !== undefined) { sets.push('admin_notes = ?'); params.push(updates.admin_notes); }
-  if (updates.severity !== undefined) { sets.push('severity = ?'); params.push(updates.severity); }
-  params.push(id);
-  db.prepare('UPDATE bugs SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
+  buildUpdate('bugs', id, updates, ['status', 'assignee', 'admin_notes', 'severity'], { updatedAt: true });
 }
 
 export function deleteBug(id) {
@@ -1720,17 +1665,9 @@ export function listPlans(filters) {
 }
 
 export function updatePlan(id, fields) {
-  var sets = ["updated_at = datetime('now')"];
-  var values = [];
-  if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.owner !== undefined) { sets.push('owner = ?'); values.push(fields.owner); }
-  if (fields.priority !== undefined) { sets.push('priority = ?'); values.push(fields.priority); }
-  if (fields.tags !== undefined) { sets.push('tags = ?'); values.push(typeof fields.tags === 'string' ? fields.tags : JSON.stringify(fields.tags)); }
-  if (fields.project_id !== undefined) { sets.push('project_id = ?'); values.push(fields.project_id); }
-  values.push(id);
-  return db.prepare('UPDATE plans SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  var f = Object.assign({}, fields);
+  if (f.tags !== undefined && typeof f.tags !== 'string') f.tags = JSON.stringify(f.tags);
+  buildUpdate('plans', id, f, ['title', 'description', 'status', 'owner', 'priority', 'tags', 'project_id'], { updatedAt: true });
 }
 
 export function deletePlan(id) {
@@ -1749,20 +1686,8 @@ export function createPlanStep(planId, title, description, assignee, phase) {
 }
 
 export function updatePlanStep(stepId, fields) {
-  var sets = ["updated_at = datetime('now')"];
-  var values = [];
-  if (fields.title !== undefined) { sets.push('title = ?'); values.push(fields.title); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.assignee !== undefined) { sets.push('assignee = ?'); values.push(fields.assignee); }
-  if (fields.linked_task_id !== undefined) { sets.push('linked_task_id = ?'); values.push(fields.linked_task_id); }
-  if (fields.linked_branch !== undefined) { sets.push('linked_branch = ?'); values.push(fields.linked_branch); }
-  if (fields.linked_pr_url !== undefined) { sets.push('linked_pr_url = ?'); values.push(fields.linked_pr_url); }
-  if (fields.phase !== undefined) { sets.push('phase = ?'); values.push(fields.phase); }
-  if (fields.step_order !== undefined) { sets.push('step_order = ?'); values.push(fields.step_order); }
-  if (fields.status === 'completed') { sets.push("completed_at = datetime('now')"); }
-  values.push(stepId);
-  db.prepare('UPDATE plan_steps SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  var extra = fields.status === 'completed' ? ["completed_at = datetime('now')"] : [];
+  buildUpdate('plan_steps', stepId, fields, ['title', 'description', 'status', 'assignee', 'linked_task_id', 'linked_branch', 'linked_pr_url', 'phase', 'step_order'], { updatedAt: true, extraSets: extra });
   // Update parent plan's updated_at
   var step = db.prepare("SELECT plan_id FROM plan_steps WHERE id = ?").get(stepId);
   if (step) db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
@@ -1842,14 +1767,7 @@ export function deleteStudioUser(id) {
 }
 
 export function updateStudioUser(id, fields) {
-  var sets = [];
-  var values = [];
-  if (fields.display_name !== undefined) { sets.push('display_name = ?'); values.push(fields.display_name); }
-  if (fields.password_hash !== undefined) { sets.push('password_hash = ?'); values.push(fields.password_hash); }
-  if (fields.role !== undefined) { sets.push('role = ?'); values.push(fields.role); }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare('UPDATE studio_users SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  buildUpdate('studio_users', id, fields, ['display_name', 'password_hash', 'role']);
 }
 
 // -- Webhooks --
@@ -2003,14 +1921,7 @@ export function listChannels(filters) {
 }
 
 export function updateChannel(id, fields) {
-  var sets = [];
-  var values = [];
-  if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name); }
-  if (fields.description !== undefined) { sets.push('description = ?'); values.push(fields.description); }
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare('UPDATE channels SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  buildUpdate('channels', id, fields, ['name', 'description', 'status']);
 }
 
 export function deleteChannel(id) {
@@ -2220,18 +2131,10 @@ export function claimDroneJob(droneId, capabilities) {
 }
 
 export function updateDroneJob(id, fields) {
-  var sets = [];
-  var values = [];
-  if (fields.status !== undefined) { sets.push('status = ?'); values.push(fields.status); }
-  if (fields.command !== undefined) { sets.push('command = ?'); values.push(fields.command); }
-  if (fields.input_data !== undefined) { sets.push('input_data = ?'); values.push(typeof fields.input_data === 'string' ? fields.input_data : JSON.stringify(fields.input_data)); }
-  if (fields.result_url !== undefined) { sets.push('result_url = ?'); values.push(fields.result_url); }
-  if (fields.result_data !== undefined) { sets.push('result_data = ?'); values.push(typeof fields.result_data === 'string' ? fields.result_data : JSON.stringify(fields.result_data)); }
-  if (fields.error !== undefined) { sets.push('error = ?'); values.push(fields.error); }
-  if (fields.completed_at !== undefined) { sets.push('completed_at = ?'); values.push(fields.completed_at); }
-  if (sets.length === 0) return;
-  values.push(id);
-  return db.prepare('UPDATE drone_jobs SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  var f = Object.assign({}, fields);
+  if (f.input_data !== undefined && typeof f.input_data !== 'string') f.input_data = JSON.stringify(f.input_data);
+  if (f.result_data !== undefined && typeof f.result_data !== 'string') f.result_data = JSON.stringify(f.result_data);
+  buildUpdate('drone_jobs', id, f, ['status', 'command', 'input_data', 'result_url', 'result_data', 'error', 'completed_at']);
 }
 
 export function listDroneJobs(filters) {
@@ -2657,16 +2560,9 @@ export function listConcepts(filters) {
 }
 
 export function updateConcept(id, fields) {
-  var sets = []; var params = [];
-  if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
-  if (fields.type !== undefined) { sets.push('type = ?'); params.push(fields.type); }
-  if (fields.description !== undefined) { sets.push('description = ?'); params.push(fields.description); }
-  if (fields.data !== undefined) { sets.push('data = ?'); params.push(typeof fields.data === 'string' ? fields.data : JSON.stringify(fields.data)); }
-  if (sets.length === 0) return;
-  sets.push("version = version + 1");
-  sets.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE concepts SET ' + sets.join(', ') + ' WHERE id = ?').run(...params);
+  var f = Object.assign({}, fields);
+  if (f.data !== undefined && typeof f.data !== 'string') f.data = JSON.stringify(f.data);
+  buildUpdate('concepts', id, f, ['name', 'type', 'description', 'data'], { updatedAt: true, extraSets: ['version = version + 1'] });
 }
 
 export function deleteConcept(id) {
@@ -3307,16 +3203,8 @@ export function listSupportTickets(filters) {
 }
 
 export function updateSupportTicket(id, updates) {
-  var sets = [];
-  var params = [];
-  var allowed = ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution', 'tier', 'assigned_agent', 'requires_approval', 'draft_response'];
-  for (var key of allowed) {
-    if (updates[key] !== undefined) { sets.push(key + ' = ?'); params.push(updates[key]); }
-  }
-  if (sets.length === 0) return getSupportTicket(id);
-  sets.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE support_tickets SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE support_tickets SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  var changed = buildUpdate('support_tickets', id, updates, ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution', 'tier', 'assigned_agent', 'requires_approval', 'draft_response'], { updatedAt: true });
+  if (!changed) return getSupportTicket(id);
   return getSupportTicket(id);
 }
 
@@ -3790,18 +3678,8 @@ export function listTeams(orgId) {
 }
 
 export function updateTeam(id, fields) {
-  var sets = [];
-  var values = [];
-  for (var key of Object.keys(fields)) {
-    if (['name', 'description', 'org_id'].includes(key)) {
-      sets.push(key + ' = ?');
-      values.push(fields[key]);
-    }
-  }
-  if (sets.length === 0) return getTeam(id);
-  sets.push("updated_at = datetime('now')");
-  values.push(id);
-  db.prepare('UPDATE teams SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+  var changed = buildUpdate('teams', id, fields, ['name', 'description', 'org_id'], { updatedAt: true });
+  if (!changed) return getTeam(id);
   return getTeam(id);
 }
 
@@ -3937,18 +3815,13 @@ export function ensureAgentProfile(agentId) {
 }
 
 export function updateAgentProfile(agentId, fields) {
-  var sets = [];
-  var values = [];
-  if (fields.display_name !== undefined) { sets.push('display_name = ?'); values.push(fields.display_name); }
-  if (fields.specializations !== undefined) { sets.push('specializations = ?'); values.push(JSON.stringify(fields.specializations)); }
-  if (fields.preferred_projects !== undefined) { sets.push('preferred_projects = ?'); values.push(JSON.stringify(fields.preferred_projects)); }
-  if (fields.max_concurrent !== undefined) { sets.push('max_concurrent = ?'); values.push(fields.max_concurrent); }
-  if (fields.profile_data !== undefined) { sets.push('profile_data = ?'); values.push(JSON.stringify(fields.profile_data)); }
-  if (fields.capability_history !== undefined) { sets.push('capability_history = ?'); values.push(JSON.stringify(fields.capability_history)); }
-  if (sets.length === 0) return getAgentProfile(agentId);
-  sets.push("last_active_at = datetime('now')");
-  values.push(agentId);
-  db.prepare('UPDATE agent_profiles SET ' + sets.join(', ') + ' WHERE agent_id = ?').run(...values);
+  var f = Object.assign({}, fields);
+  if (f.specializations !== undefined) f.specializations = JSON.stringify(f.specializations);
+  if (f.preferred_projects !== undefined) f.preferred_projects = JSON.stringify(f.preferred_projects);
+  if (f.profile_data !== undefined) f.profile_data = JSON.stringify(f.profile_data);
+  if (f.capability_history !== undefined) f.capability_history = JSON.stringify(f.capability_history);
+  var changed = buildUpdate('agent_profiles', agentId, f, ['display_name', 'specializations', 'preferred_projects', 'max_concurrent', 'profile_data', 'capability_history'], { extraSets: ["last_active_at = datetime('now')"], where: 'agent_id' });
+  if (!changed) return getAgentProfile(agentId);
   return getAgentProfile(agentId);
 }
 
@@ -4018,16 +3891,8 @@ export function getStalePlanSteps(thresholdMinutes) {
 }
 
 export function updateInstance(id, updates) {
-  var sets = [];
-  var params = [];
-  var allowed = ['railway_project_id', 'railway_service_id', 'railway_environment_id', 'domain', 'cloudflare_record_id', 'status', 'version', 'health_status', 'last_health_check', 'admin_username', 'customer_email', 'suspended_at', 'archived_at', 'snapshot_url'];
-  for (var key of allowed) {
-    if (updates[key] !== undefined) { sets.push(key + ' = ?'); params.push(updates[key]); }
-  }
-  if (sets.length === 0) return getInstance(id);
-  sets.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE customer_instances SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  var changed = buildUpdate('customer_instances', id, updates, ['railway_project_id', 'railway_service_id', 'railway_environment_id', 'domain', 'cloudflare_record_id', 'status', 'version', 'health_status', 'last_health_check', 'admin_username', 'customer_email', 'suspended_at', 'archived_at', 'snapshot_url'], { updatedAt: true });
+  if (!changed) return getInstance(id);
   return getInstance(id);
 }
 
@@ -4060,19 +3925,12 @@ export function listAgentTemplates() {
 }
 
 export function updateAgentTemplate(id, fields) {
-  var sets = [];
-  var params = [];
-  var allowed = ['name', 'description', 'runtime', 'llm_backend', 'llm_model', 'agent_type', 'project_id'];
-  for (var key of allowed) {
-    if (fields[key] !== undefined) { sets.push(key + ' = ?'); params.push(fields[key]); }
-  }
-  if (fields.capabilities !== undefined) { sets.push('capabilities = ?'); params.push(JSON.stringify(fields.capabilities)); }
-  if (fields.team_ids !== undefined) { sets.push('team_ids = ?'); params.push(JSON.stringify(fields.team_ids)); }
-  if (fields.profile_rules !== undefined) { sets.push('profile_rules = ?'); params.push(JSON.stringify(fields.profile_rules)); }
-  if (sets.length === 0) return getAgentTemplate(id);
-  sets.push("updated_at = datetime('now')");
-  params.push(id);
-  db.prepare('UPDATE agent_templates SET ' + sets.join(', ') + ' WHERE id = ?').run.apply(db.prepare('UPDATE agent_templates SET ' + sets.join(', ') + ' WHERE id = ?'), params);
+  var f = Object.assign({}, fields);
+  if (f.capabilities !== undefined) f.capabilities = JSON.stringify(f.capabilities);
+  if (f.team_ids !== undefined) f.team_ids = JSON.stringify(f.team_ids);
+  if (f.profile_rules !== undefined) f.profile_rules = JSON.stringify(f.profile_rules);
+  var changed = buildUpdate('agent_templates', id, f, ['name', 'description', 'runtime', 'llm_backend', 'llm_model', 'agent_type', 'project_id', 'capabilities', 'team_ids', 'profile_rules'], { updatedAt: true });
+  if (!changed) return getAgentTemplate(id);
   return getAgentTemplate(id);
 }
 
