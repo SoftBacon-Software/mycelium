@@ -33,6 +33,11 @@ function safeParseJSON(str, fallback) {
   }
 }
 
+function qs(args, keys) {
+  var p = keys.filter(function(k) { return args[k] != null; }).map(function(k) { return k + '=' + encodeURIComponent(args[k]); });
+  return p.length ? '?' + p.join('&') : '';
+}
+
 function timeAgo(iso) {
   if (!iso) return 'never';
   var ms = Date.now() - new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).getTime();
@@ -85,12 +90,12 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_boot',
-    'Boot agent session or get admin overview. Agent mode: starts auto-heartbeat, returns tasks/messages/plans. Admin mode: returns full dashboard.',
+    'Boot agent session or get admin overview.',
     {},
     async () => {
       var st = getState();
       if (st.role === 'agent' && st.agentId) {
-        var data = await apiGet('/boot/' + st.agentId + '?verbose=true');
+        var data = await apiGet('/boot/' + st.agentId);
         setBooted(data);
         startHeartbeat();
         var proj = data.agent.project || '';
@@ -237,7 +242,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_overview',
-    'Get full Mycelium dashboard snapshot: agents, tasks, messages, plans, bugs.',
+    'Full dashboard snapshot: agents, tasks, messages, plans, bugs.',
     {},
     async () => {
       var data = await apiGet('/admin/overview?verbose=true');
@@ -269,7 +274,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_get_work',
-    'Get prioritized work queue: directives > requests > plan steps > tasks > bugs. Set auto_claim=true to automatically claim and start the top work item.',
+    'Get prioritized work queue (directives > requests > plan steps > tasks > bugs).',
     {
       auto_claim: { type: 'boolean', description: 'Auto-claim the top work item (assign to self, set in_progress). Default: false.' }
     },
@@ -335,7 +340,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_claim_task',
-    'Claim a task: assigns it to you, sets status to in_progress, and updates your working_on status automatically.',
+    'Claim a task and set it in_progress.',
     { task_id: z.number().describe('Task ID to claim') },
     async (args) => {
       var st = getState();
@@ -356,7 +361,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_complete_task',
-    'Mark a task as done. Automatically advances working_on to next task or clears it if no more work.',
+    'Mark a task as done. Auto-advances working_on.',
     {
       task_id: z.number().describe('Task ID to complete'),
       notes: z.string().optional().describe('Optional completion notes')
@@ -427,11 +432,7 @@ export function registerTools(server) {
       assignee: z.string().optional().describe('Filter by assignee agent ID')
     },
     async (args) => {
-      var params = [];
-      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
-      if (args.status) params.push('status=' + encodeURIComponent(args.status));
-      if (args.assignee) params.push('assignee=' + encodeURIComponent(args.assignee));
-      var tasks = await apiGet('/tasks' + (params.length ? '?' + params.join('&') : ''));
+      var tasks = await apiGet('/tasks' + qs(args, ['project_id', 'status', 'assignee']));
       if (!tasks.length) return text('No tasks found.');
       var lines = ['=== Tasks (' + tasks.length + ') ==='];
       for (var t of tasks) {
@@ -563,8 +564,8 @@ export function registerTools(server) {
       if (args.limit) params.push('limit=' + args.limit);
       // Auto-filter to this agent's inbox (messages TO me + broadcasts)
       if (st.agentId && !args.from) params.push('to=' + encodeURIComponent(st.agentId));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var messages = await apiGet('/messages' + qs);
+      var queryStr = params.length ? '?' + params.join('&') : '';
+      var messages = await apiGet('/messages' + queryStr);
       // Also fetch pending requests targeted at this agent
       var pending = [];
       if (st.agentId) {
@@ -593,10 +594,8 @@ export function registerTools(server) {
       status: z.string().optional().describe('Filter by status (default: active)')
     },
     async (args) => {
-      var params = [];
-      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
-      params.push('status=' + (args.status || 'active'));
-      var plans = await apiGet('/plans?' + params.join('&'));
+      var effectiveArgs = Object.assign({}, args, { status: args.status || 'active' });
+      var plans = await apiGet('/plans' + qs(effectiveArgs, ['project_id', 'status']));
       if (!plans.length) return text('No plans found.');
 
       var lines = [];
@@ -770,7 +769,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_context_history',
-    'View version history for a context key. Shows previous values with timestamps and who changed them.',
+    'View version history for a context key.',
     {
       namespace: z.string().describe('Namespace (e.g. agent name, project name)'),
       key: z.string().describe('Key name'),
@@ -793,7 +792,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_rollback_context',
-    'Rollback a context key to a previous version. Use context_history to find the version ID.',
+    'Rollback a context key to a previous version.',
     {
       history_id: z.number().describe('History entry ID to restore (from context_history)')
     },
@@ -807,7 +806,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_log_spend',
-    'Log API/compute spend for budget tracking. Call after expensive operations (LLM calls, drone jobs).',
+    'Log API/compute spend for budget tracking.',
     {
       cost_usd: z.number().describe('Cost in USD'),
       source: z.string().optional().describe('Source: llm_api, drone, tool, other'),
@@ -825,17 +824,13 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_spend_summary',
-    'View spend summary — total costs per agent and project. Use to monitor budget.',
+    'View spend summary: costs per agent and project.',
     {
       since: z.string().optional().describe('ISO timestamp — only show spend after this date'),
       project_id: z.string().optional().describe('Filter by project')
     },
     async (args) => {
-      var params = [];
-      if (args.since) params.push('since=' + encodeURIComponent(args.since));
-      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var result = await apiGet('/spend' + qs);
+      var result = await apiGet('/spend' + qs(args, ['since', 'project_id']));
       var lines = ['=== Spend Summary ===', 'Total: $' + (result.total_cost_usd || 0).toFixed(4), ''];
       if (result.breakdown && result.breakdown.length) {
         for (var r of result.breakdown) {
@@ -852,7 +847,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_create_widget',
-    'Create a dashboard widget. Agents can generate interactive widgets visible in the Mycelium dashboard. Types: status (key-value display), progress (progress bar), list (item list), chart (data visualization), custom (raw HTML).',
+    'Create a dashboard widget.',
     {
       title: z.string().describe('Widget title'),
       widget_type: z.string().optional().describe('Widget type: status, progress, list, chart, custom'),
@@ -901,11 +896,7 @@ export function registerTools(server) {
       project_id: z.string().optional().describe('Filter by project')
     },
     async (args) => {
-      var params = [];
-      if (args.agent_id) params.push('agent_id=' + encodeURIComponent(args.agent_id));
-      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var widgets = await apiGet('/widgets' + qs);
+      var widgets = await apiGet('/widgets' + qs(args, ['agent_id', 'project_id']));
       if (!widgets.length) return text('No active widgets.');
       var lines = widgets.map(function(w) {
         return '#' + w.id + ' [' + w.widget_type + '] ' + w.title + ' — by ' + w.agent_id + ' (' + (w.updated_at || w.created_at) + ')';
@@ -918,17 +909,13 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_list_skills',
-    'Browse the skills registry. Skills are installable agent capabilities.',
+    'Browse the skills registry.',
     {
       category: z.string().optional().describe('Filter by category: github, code-review, art, notifications, project'),
       search: z.string().optional().describe('Search skills by name or description')
     },
     async (args) => {
-      var params = [];
-      if (args.category) params.push('category=' + encodeURIComponent(args.category));
-      if (args.search) params.push('search=' + encodeURIComponent(args.search));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var skills = await apiGet('/skills' + qs);
+      var skills = await apiGet('/skills' + qs(args, ['category', 'search']));
       if (!skills.length) return text('No skills found.');
       var lines = skills.map(function(s) {
         var caps = [];
@@ -941,7 +928,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_install_skill',
-    'Install a skill for this agent. Adds the capability to your agent profile.',
+    'Install a skill for this agent.',
     {
       skill_id: z.string().describe('Skill ID to install'),
       config: z.string().optional().describe('JSON config for the skill')
@@ -979,11 +966,7 @@ export function registerTools(server) {
       status: z.string().optional().describe('Filter by status: open, in_progress, fixed, closed')
     },
     async (args) => {
-      var params = [];
-      if (args.project_id) params.push('project_id=' + encodeURIComponent(args.project_id));
-      if (args.status) params.push('status=' + encodeURIComponent(args.status));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var bugs = await apiGet('/bugs' + qs);
+      var bugs = await apiGet('/bugs' + qs(args, ['project_id', 'status']));
       if (!bugs.length) return text('No bugs found.');
       return text(bugs.map(formatBug).join('\n'));
     }
@@ -991,7 +974,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_claim_bug',
-    'Claim a bug and start working on it. Updates your working_on status.',
+    'Claim a bug and start working on it.',
     { bug_id: z.number().describe('Bug ID to claim') },
     async (args) => {
       var st = getState();
@@ -1071,7 +1054,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_sleep',
-    'Turn sleep mode on or off. When on, agents receive a night directive and work autonomously. When off, you get a morning summary of what happened.',
+    'Toggle sleep mode. On: night directive to agents. Off: morning summary.',
     {
       action: z.enum(['on', 'off']).describe('on = go to sleep, off = wake up'),
       directive: z.string().optional().describe('Night directive for agents (what to work on while you sleep). Only used with action=on.'),
@@ -1118,7 +1101,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_rekey',
-    'Rotate your agent API key. Returns a new key — update your MCP config (MYCELIUM_API_KEY) with it and restart your session.',
+    'Rotate your agent API key.',
     {},
     async () => {
       var st = getState();
@@ -1134,7 +1117,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_set_avatar',
-    'Set your agent avatar to a URL. Use an image from your project assets or any public image URL.',
+    'Set your agent avatar URL.',
     {
       avatar_url: z.string().describe('URL of the avatar image (or empty string to clear)')
     },
@@ -1152,14 +1135,14 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_agent_profile',
-    'Get or update an agent profile (persistent identity, specializations, stats). Default action is "get".',
+    'Get or update an agent profile.',
     {
       action: z.enum(['get', 'update']).optional().describe('Action: get (default) or update'),
       agent_id: z.string().optional().describe('Agent ID (defaults to self in agent mode)'),
-      specializations: z.string().optional().describe('JSON array of specializations (for update)'),
-      preferred_projects: z.string().optional().describe('JSON array of preferred project IDs (for update)'),
-      max_concurrent: z.number().optional().describe('Max concurrent tasks (0=unlimited, for update)'),
-      profile_data: z.string().optional().describe('JSON object of freeform profile metadata (for update)')
+      specializations: z.string().optional().describe('JSON array of specializations'),
+      preferred_projects: z.string().optional().describe('JSON array of preferred project IDs'),
+      max_concurrent: z.number().optional().describe('Max concurrent tasks (0=unlimited)'),
+      profile_data: z.string().optional().describe('JSON object of freeform profile metadata')
     },
     async (args) => {
       var st = getState();
@@ -1222,10 +1205,7 @@ export function registerTools(server) {
       org_id: z.number().optional().describe('Filter by organization ID')
     },
     async (args) => {
-      var params = [];
-      if (args.org_id) params.push('org_id=' + args.org_id);
-      var qs = params.length ? '?' + params.join('&') : '';
-      var projects = await apiGet('/projects' + qs);
+      var projects = await apiGet('/projects' + qs(args, ['org_id']));
       if (!projects.length) return text('No projects found.');
       var lines = ['=== Projects (' + projects.length + ') ==='];
       for (var p of projects) {
@@ -1285,8 +1265,7 @@ export function registerTools(server) {
       type: z.enum(['character', 'style', 'ruleset', 'library', 'brand', 'custom']).optional().describe('Filter by concept type')
     },
     async (args) => {
-      var qs = args.type ? '?type=' + encodeURIComponent(args.type) : '';
-      var concepts = await apiGet('/concepts' + qs);
+      var concepts = await apiGet('/concepts' + qs(args, ['type']));
       if (!concepts.length) return text('No concepts found.');
       var lines = ['=== Concepts (' + concepts.length + ') ==='];
       for (var c of concepts) {
@@ -1423,10 +1402,7 @@ export function registerTools(server) {
       limit: z.number().optional().describe('Max messages to return (default 30)')
     },
     async (args) => {
-      var params = [];
-      if (args.limit) params.push('limit=' + args.limit);
-      var qs = params.length ? '?' + params.join('&') : '';
-      var messages = await apiGet('/channels/' + args.channel_id + '/messages' + qs);
+      var messages = await apiGet('/channels/' + args.channel_id + '/messages' + qs(args, ['limit']));
       if (!messages.length) return text('No messages in this channel.');
       var lines = messages.map(formatMessage);
       return text(lines.join('\n'));
@@ -1456,7 +1432,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_request_approval',
-    'Request approval for a gated action (deploy, outreach_send, git_push, plan_create, money_action, delete, external_comm). Returns approval ID to poll.',
+    'Request approval for a gated action. Returns approval ID.',
     {
       action_type: z.enum(['deploy', 'outreach_send', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm']).describe('Type of gated action'),
       title: z.string().describe('Short description of what you want to do'),
@@ -1479,7 +1455,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_check_approval',
-    'Check the status of an approval request. Returns pending, approved, denied, or executed.',
+    'Check approval request status.',
     {
       approval_id: z.number().describe('Approval ID to check')
     },
@@ -1512,7 +1488,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_mark_executed',
-    'Mark an approved action as executed. Call this after you have successfully performed the approved action.',
+    'Mark an approved action as executed.',
     {
       approval_id: z.number().describe('Approval ID to mark as executed')
     },
@@ -1524,20 +1500,15 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_list_approvals',
-    'List approval requests. Defaults to pending. Use to see what needs approval or check history.',
+    'List approval requests (default: pending).',
     {
       status: z.enum(['pending', 'approved', 'denied', 'executed']).optional().describe('Filter by status (default: pending)'),
       action_type: z.string().optional().describe('Filter by action type'),
       project: z.string().optional().describe('Filter by project')
     },
     async (args) => {
-      var params = [];
-      if (args.status) params.push('status=' + encodeURIComponent(args.status));
-      else params.push('status=pending');
-      if (args.action_type) params.push('action_type=' + encodeURIComponent(args.action_type));
-      if (args.project) params.push('project=' + encodeURIComponent(args.project));
-      var qs = params.length ? '?' + params.join('&') : '';
-      var approvals = await apiGet('/approvals' + qs);
+      var effectiveArgs = Object.assign({}, args, { status: args.status || 'pending' });
+      var approvals = await apiGet('/approvals' + qs(effectiveArgs, ['status', 'action_type', 'project']));
       if (!approvals.length) return text('No approvals found.');
       var lines = ['=== Approvals (' + approvals.length + ') ==='];
       for (var a of approvals) {
@@ -1552,7 +1523,7 @@ export function registerTools(server) {
   // ===== WORK ROUTING =====
 
   registerDual(server, 'studio_request_work',
-    'Request work assignment from Claude Admin. Types: task_request, asset_request, work_request.',
+    'Request work assignment from Claude Admin.',
     {
       type: { type: 'string', description: 'Request type: task_request, asset_request, work_request' },
       description: { type: 'string', description: 'What work is needed' },
@@ -1571,7 +1542,7 @@ export function registerTools(server) {
   );
 
   registerDual(server, 'studio_file_directive',
-    'Issue a blocking directive to an agent. Agent must respond before getting new work.',
+    'Issue a blocking directive to an agent.',
     {
       to: { type: 'string', description: 'Target agent ID' },
       content: { type: 'string', description: 'Directive content' },
@@ -1593,7 +1564,7 @@ export function registerTools(server) {
   // ===== ASSETS =====
 
   registerDual(server, 'studio_upload_asset',
-    'Mark an asset as ready and set its file path. For actual file upload, use dashboard or curl POST /assets/:id/upload.',
+    'Mark an asset ready and set its file path.',
     {
       asset_id: { type: 'number', description: 'Asset ID to update' },
       path: { type: 'string', description: 'File path or URL where asset is available' },
@@ -1648,7 +1619,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_leave_notes',
-    'Leave notes on an agent\'s latest savepoint. The agent will see these notes on their next boot. Use for handoff instructions, context, or "hey I fixed X, don\'t redo it".',
+    'Leave handoff notes on an agent\'s savepoint. Visible on their next boot.',
     {
       agent_id: z.string().describe('Agent ID to leave notes for'),
       notes: z.string().describe('Notes text — the agent will see this on next boot')
@@ -1661,7 +1632,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_view_savepoint',
-    'View an agent\'s latest savepoint — see what they were working on, their session state, and any notes.',
+    'View agent\'s latest savepoint: working_on, state, notes.',
     {
       agent_id: z.string().describe('Agent ID to view savepoint for')
     },
@@ -1685,7 +1656,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_savepoint_diff',
-    'Get what changed since an agent\'s last savepoint — new messages, task changes, context updates, etc.',
+    'Changes since agent\'s last savepoint.',
     {
       agent_id: z.string().describe('Agent ID to check diff for')
     },
@@ -1724,11 +1695,8 @@ export function registerTools(server) {
       limit: z.number().optional().describe('Max results (default 20)')
     },
     async (args) => {
-      var params = [];
-      if (args.status) params.push('status=' + encodeURIComponent(args.status));
-      if (args.limit) params.push('limit=' + args.limit);
-      else params.push('limit=20');
-      var jobs = await apiGet('/drones/jobs' + (params.length ? '?' + params.join('&') : ''));
+      var effectiveArgs = Object.assign({}, args, { limit: args.limit || 20 });
+      var jobs = await apiGet('/drones/jobs' + qs(effectiveArgs, ['status', 'limit']));
       if (!jobs.length) return text('No drone jobs found.');
       var lines = ['=== Drone Jobs (' + jobs.length + ') ==='];
       for (var j of jobs) {
@@ -1746,7 +1714,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_get_drone_job',
-    'Get full details for a specific drone job including command, input/result data, and error info.',
+    'Get full details for a drone job.',
     {
       job_id: z.number().describe('Drone job ID')
     },
@@ -1859,7 +1827,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_list_job_templates',
-    'List job templates for smart drone job routing. Templates define what each job type needs (deps, GPU, artifacts).',
+    'List drone job templates.',
     {},
     async () => {
       var templates = await apiGet('/drones/templates');
@@ -1880,7 +1848,7 @@ export function registerTools(server) {
 
   registerDual(server,
     'studio_check_drone_compatibility',
-    'Check which job templates a drone can handle based on its diagnostics (GPU, VRAM, disk, deps).',
+    'Check which job templates a drone can handle.',
     {
       drone_id: z.string().describe('Drone ID to check compatibility for')
     },
@@ -2014,8 +1982,8 @@ function formatContact(c) {
       state: z.enum(['open', 'closed', 'all']).optional().describe('PR state filter (default: open)')
     },
     async (args) => {
-      var qs = '?state=' + (args.state || 'open');
-      var result = await apiGet('/github/prs/' + args.owner + '/' + args.repo + qs);
+      var effectiveArgs = Object.assign({}, args, { state: args.state || 'open' });
+      var result = await apiGet('/github/prs/' + args.owner + '/' + args.repo + qs(effectiveArgs, ['state']));
       if (!result.prs || !result.prs.length) return text('No ' + (args.state || 'open') + ' PRs in ' + args.owner + '/' + args.repo);
       var lines = ['=== PRs: ' + args.owner + '/' + args.repo + ' (' + result.count + ') ==='];
       for (var pr of result.prs) {
