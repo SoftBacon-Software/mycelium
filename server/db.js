@@ -1517,12 +1517,12 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
 
   // Priority 1: Blocking directives (MUST respond first)
   for (var d of directives) {
-    queue.push({ priority: 0, type: 'directive', id: d.id, title: 'DIRECTIVE from ' + d.from_agent, summary: (d.content || '').substring(0, 200), status: d.status });
+    queue.push({ priority: 0, type: 'directive', id: d.id, title: 'DIRECTIVE from ' + d.from_agent, summary: (d.content || '').substring(0, 200), status: d.status, from_agent: d.from_agent, content: d.content });
   }
 
   // Priority 2: Pending requests (respond before new work)
   for (var r of requests) {
-    queue.push({ priority: 1, type: 'request', id: r.id, title: 'Request from ' + r.from_agent, summary: (r.content || '').substring(0, 200), status: r.status });
+    queue.push({ priority: 1, type: 'request', id: r.id, title: 'Request from ' + r.from_agent, summary: (r.content || '').substring(0, 200), status: r.status, from_agent: r.from_agent, content: r.content });
   }
 
   // Priority 3: In-progress plan steps assigned to this agent

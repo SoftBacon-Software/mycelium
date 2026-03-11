@@ -398,9 +398,20 @@ export class MyceliumAgent {
         if (!this.workingOn) {
           var work = await this.getWork(true)  // auto_claim
           if (work.claimed) {
-            this.workingOn = work.claimed.title || ('work #' + work.claimed.id)
+            var item = work.claimed
+            this.workingOn = item.title || ('work #' + item.id)
             try {
-              await this._workHandler(work.claimed)
+              // Route to correct handler based on work item type
+              var type = item.type || item.msg_type
+              if ((type === 'request' || type === 'directive') && this._requestHandler) {
+                // Ensure content/from_agent are present (work queue may use summary/title)
+                if (!item.content && item.summary) item.content = item.summary
+                await this._requestHandler(item, type)
+              } else if (type === 'message' && this._messageHandler) {
+                await this._messageHandler(item)
+              } else {
+                await this._workHandler(item)
+              }
             } catch (err) {
               console.error('[mycelium] work handler error:', err.message)
             }
