@@ -891,7 +891,7 @@ router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res)
 }));
 
 // GET /stats/public — no auth, anonymized aggregate stats for landing page + investor demos
-router.get('/stats/public', function (req, res) {
+router.get('/stats/public', asyncHandler(function (req, res) {
   try {
     var db = getDB();
     var agents = db.prepare("SELECT COUNT(*) as total, SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) as online FROM agents WHERE role != 'drone'").get();
@@ -913,12 +913,12 @@ router.get('/stats/public', function (req, res) {
   } catch (e) {
     res.json({ agents: { total: 0, online: 0 }, tasks: { total: 0, completed: 0 }, plans: { total: 0, completed: 0 }, bugs: { total: 0, resolved: 0 }, messages: 0, projects: 0, recent_activity: [] });
   }
-});
+}));
 
 // GET /public/activity — no auth, sanitized live activity feed for public dashboard
 // SECURITY: Strict allowlist — only expose what's explicitly safe. No project details,
 // no task/bug descriptions, no message content, no working_on specifics.
-router.get('/public/activity', function (req, res) {
+router.get('/public/activity', asyncHandler(function (req, res) {
   try {
     var db = getDB();
     var today = new Date().toISOString().slice(0, 10);
@@ -1045,10 +1045,10 @@ router.get('/public/activity', function (req, res) {
       events: [], plans: [], updated_at: new Date().toISOString()
     });
   }
-});
+}));
 
 // GET /waitlist — admin only, list all signups
-router.get('/waitlist', function (req, res) {
+router.get('/waitlist', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   try {
     var items = getDB().prepare('SELECT * FROM waitlist ORDER BY created_at DESC').all();
@@ -1056,11 +1056,11 @@ router.get('/waitlist', function (req, res) {
   } catch (e) {
     res.json([]);
   }
-});
+}));
 
 // ======== BOOT ========
 
-router.get('/boot/:agentId', function (req, res) {
+router.get('/boot/:agentId', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   if (agentId !== req.params.agentId) {
@@ -1091,11 +1091,11 @@ router.get('/boot/:agentId', function (req, res) {
   try { payload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
   emitEvent('agent_boot', agentId, null, agentId + ' booted');
   res.json(payload);
-});
+}));
 
 // ======== WORK PULL ========
 
-router.get('/work/:agentId', function (req, res) {
+router.get('/work/:agentId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = req.params.agentId;
@@ -1157,11 +1157,11 @@ router.get('/work/:agentId', function (req, res) {
   }
 
   res.json({ ok: true, queue: queue });
-});
+}));
 
 // ======== AGENTS ========
 
-router.post('/agents/heartbeat', function (req, res) {
+router.post('/agents/heartbeat', asyncHandler(function (req, res) {
   var agentId;
   // Admin can heartbeat on behalf of any agent via agent_id body field
   var adminKey = req.headers['x-admin-key'];
@@ -1294,11 +1294,11 @@ router.post('/agents/heartbeat', function (req, res) {
   } catch (e) { /* non-critical */ }
 
   res.json(response);
-});
+}));
 
 // ======== SAVEPOINTS ========
 
-router.get('/agents/:id/savepoint', function (req, res) {
+router.get('/agents/:id/savepoint', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   // Agents can only access their own savepoints
@@ -1308,9 +1308,9 @@ router.get('/agents/:id/savepoint', function (req, res) {
   var savepoint = getLatestSavepoint(req.params.id);
   if (!savepoint) return res.json({ has_savepoint: false });
   res.json(savepoint);
-});
+}));
 
-router.get('/agents/:id/savepoints', function (req, res) {
+router.get('/agents/:id/savepoints', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req._authIsAdmin && who !== req.params.id) {
@@ -1318,18 +1318,18 @@ router.get('/agents/:id/savepoints', function (req, res) {
   }
   var limit = parseLimit(req.query.limit, 10);
   res.json(getSavepointHistory(req.params.id, limit));
-});
+}));
 
-router.get('/agents/:id/savepoint/diff', function (req, res) {
+router.get('/agents/:id/savepoint/diff', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req._authIsAdmin && who !== req.params.id) {
     return res.status(403).json({ error: 'Can only access your own savepoints' });
   }
   res.json(computeSavepointDiff(req.params.id));
-});
+}));
 
-router.put('/agents/:id/savepoint/notes', function (req, res) {
+router.put('/agents/:id/savepoint/notes', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var notes = req.body.notes;
   if (!notes) return res.status(400).json({ error: 'notes required' });
@@ -1337,29 +1337,29 @@ router.put('/agents/:id/savepoint/notes', function (req, res) {
   if (!savepointId) return res.status(404).json({ error: 'No savepoint found for agent' });
   emitEvent('savepoint_notes', '__admin__', null, 'Admin left notes for ' + req.params.id + ': ' + notes.substring(0, 100));
   res.json({ ok: true, savepoint_id: savepointId });
-});
+}));
 
-router.get('/agents', function (req, res) {
+router.get('/agents', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listAgents());
-});
+}));
 
 // Agent profiles — MUST be before /agents/:id to avoid route shadowing
-router.get('/agents/profiles', function (req, res) {
+router.get('/agents/profiles', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listAgentProfiles());
-});
+}));
 
-router.get('/agents/leaderboard', function (req, res) {
+router.get('/agents/leaderboard', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var limit = parseInt(req.query.limit) || 20;
   res.json(getAgentLeaderboard(limit));
-});
+}));
 
-router.get('/agents/:id', function (req, res) {
+router.get('/agents/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agent = getAgent(req.params.id);
@@ -1367,10 +1367,10 @@ router.get('/agents/:id', function (req, res) {
   // Don't leak key hash
   var { api_key_hash, ...safe } = agent;
   res.json(safe);
-});
+}));
 
 // Update agent profile (avatar_url, name)
-router.put('/agents/:id', function (req, res) {
+router.put('/agents/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   // Agents can only update themselves, admin can update anyone
@@ -1400,16 +1400,16 @@ router.put('/agents/:id', function (req, res) {
   if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   updateAgent(req.params.id, fields);
   res.json({ ok: true, id: req.params.id, updated: Object.keys(fields) });
-});
+}));
 
 // ======== TASKS ========
 
-router.get('/tasks/approval-queue', function (req, res) {
+router.get('/tasks/approval-queue', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(listTasksNeedingApproval());
-});
+}));
 
-router.get('/tasks', function (req, res) {
+router.get('/tasks', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -1422,9 +1422,9 @@ router.get('/tasks', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listTasks(filters));
-});
+}));
 
-router.post('/tasks', function (req, res) {
+router.post('/tasks', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var title = escapeHtml(req.body.title);
@@ -1452,17 +1452,17 @@ router.post('/tasks', function (req, res) {
     dispatchWebhook('task_created', req.body.assignee, { task_id: id, title: title });
   }
   res.json({ id: id, title: title });
-});
+}));
 
-router.get('/tasks/:id', function (req, res) {
+router.get('/tasks/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
-});
+}));
 
-router.put('/tasks/:id', function (req, res) {
+router.put('/tasks/:id', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var task = getTask(parseIntParam(req.params.id));
@@ -1553,10 +1553,10 @@ router.put('/tasks/:id', function (req, res) {
     dispatchWebhook('task_assigned', targetAgent, { task_id: task.id, title: task.title, status: fields.status || task.status });
   }
   res.json(result);
-});
+}));
 
 // POST /tasks/:id/claim — claim a task (convenience route)
-router.post('/tasks/:id/claim', function (req, res) {
+router.post('/tasks/:id/claim', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
@@ -1565,10 +1565,10 @@ router.post('/tasks/:id/claim', function (req, res) {
   updateTask(task.id, { assignee: agentId, status: 'in_progress' });
   emitEvent('task_claimed', who, task.project_id, who + ' claimed task #' + task.id, { task_id: task.id, agent: agentId });
   res.json({ ok: true, id: task.id, assignee: agentId, status: 'in_progress' });
-});
+}));
 
 // Task dependencies
-router.post('/tasks/:id/dependency', function (req, res) {
+router.post('/tasks/:id/dependency', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var taskId = parseIntParam(req.params.id);
@@ -1579,10 +1579,10 @@ router.post('/tasks/:id/dependency', function (req, res) {
   if (!ok) return res.status(404).json({ error: 'One or both tasks not found' });
   emitEvent('task_dependency', agentId, null, 'Task #' + taskId + ' now blocked by #' + blockedById, { task_id: taskId, blocked_by: blockedById });
   res.json({ ok: true, task: taskId, blocked_by: blockedById });
-});
+}));
 
 // Task approval (admin only)
-router.put('/tasks/:id/approve', function (req, res) {
+router.put('/tasks/:id/approve', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -1591,19 +1591,19 @@ router.put('/tasks/:id/approve', function (req, res) {
   approveTask(task.id, '__admin__');
   emitEvent('task_approved', '__admin__', task.project_id, 'Admin approved task #' + task.id + ': ' + task.title, { task_id: task.id });
   res.json({ ok: true, id: task.id, approved: true });
-});
+}));
 
 // ======== TASK COMMENTS ========
 
-router.get('/tasks/:id/comments', function (req, res) {
+router.get('/tasks/:id/comments', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(getTaskComments(task.id));
-});
+}));
 
-router.post('/tasks/:id/comments', function (req, res) {
+router.post('/tasks/:id/comments', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
@@ -1614,9 +1614,9 @@ router.post('/tasks/:id/comments', function (req, res) {
   var comment = addTaskComment(task.id, author, content);
   emitEvent('task_comment', who, task.project_id, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
   res.json(comment);
-});
+}));
 
-router.delete('/tasks/:id', function (req, res) {
+router.delete('/tasks/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = parseIntParam(req.params.id);
   var task = getTask(id);
@@ -1624,9 +1624,9 @@ router.delete('/tasks/:id', function (req, res) {
   deleteTask(id);
   emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title);
   res.json({ ok: true, id: id });
-});
+}));
 
-router.delete('/tasks/:id/comments/:commentId', function (req, res) {
+router.delete('/tasks/:id/comments/:commentId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
@@ -1640,12 +1640,12 @@ router.delete('/tasks/:id/comments/:commentId', function (req, res) {
   }
   deleteTaskComment(comment.id);
   res.json({ ok: true, deleted: comment.id });
-});
+}));
 
 // ======== CONTEXT ========
 
 // Namespaced context (must be before :projectId param route)
-router.get('/context/keys', function (req, res) {
+router.get('/context/keys', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var namespace = req.query.namespace;
@@ -1659,23 +1659,23 @@ router.get('/context/keys', function (req, res) {
     }));
   }
   res.json(listContextKeys(namespace));
-});
+}));
 
-router.get('/context/keys/:namespace', function (req, res) {
+router.get('/context/keys/:namespace', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listContextKeys(req.params.namespace));
-});
+}));
 
-router.get('/context/keys/:namespace/:key', function (req, res) {
+router.get('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var ctx = getContextKey(req.params.namespace, req.params.key);
   if (!ctx) return res.status(404).json({ error: 'Context key not found' });
   res.json(ctx);
-});
+}));
 
-router.put('/context/keys/:namespace/:key', function (req, res) {
+router.put('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var data = req.body.data;
@@ -1688,16 +1688,16 @@ router.put('/context/keys/:namespace/:key', function (req, res) {
   upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
   emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
   res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
-});
+}));
 
-router.delete('/context/keys/:namespace/:key', function (req, res) {
+router.delete('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteContextKey(req.params.namespace, req.params.key);
   res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
-});
+}));
 
 // Bulk delete context keys by IDs (admin only)
-router.post('/context/keys/bulk-delete', function (req, res) {
+router.post('/context/keys/bulk-delete', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var ids = req.body.ids;
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -1709,20 +1709,20 @@ router.post('/context/keys/bulk-delete', function (req, res) {
   var deleted = bulkDeleteContextKeys(ids);
   emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys');
   res.json({ ok: true, deleted: deleted });
-});
+}));
 
 // Context key history — view previous versions
-router.get('/context/keys/:namespace/:key/history', function (req, res) {
+router.get('/context/keys/:namespace/:key/history', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var limit = parseInt(req.query.limit) || 20;
   if (limit > 100) limit = 100;
   var history = getContextHistory(req.params.namespace, req.params.key, limit);
   res.json(history);
-});
+}));
 
 // Context key rollback — restore a previous version by history ID
-router.post('/context/keys/rollback/:historyId', function (req, res) {
+router.post('/context/keys/rollback/:historyId', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var historyId = parseInt(req.params.historyId);
@@ -1731,10 +1731,10 @@ router.post('/context/keys/rollback/:historyId', function (req, res) {
   if (!restored) return res.status(404).json({ error: 'History entry not found' });
   emitEvent('context_key_rollback', agentId, restored.namespace, agentId + ' rolled back ' + restored.namespace + ':' + restored.key + ' to version #' + historyId);
   res.json({ ok: true, namespace: restored.namespace, key: restored.key, restored_from: historyId });
-});
+}));
 
 // Bulk context key operations — set multiple keys in one call
-router.post('/context/keys/bulk', function (req, res) {
+router.post('/context/keys/bulk', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var keys = req.body.keys;
@@ -1764,29 +1764,29 @@ router.post('/context/keys/bulk', function (req, res) {
   }
   emitEvent('context_keys_bulk', agentId, null, agentId + ' bulk-updated ' + results.filter(function (r) { return r.ok; }).length + ' context keys');
   res.json({ ok: true, results: results });
-});
+}));
 
-router.get('/context/stats', function (req, res) {
+router.get('/context/stats', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(contextKeyStats());
-});
+}));
 
 // Legacy per-project context
-router.get('/context', function (req, res) {
+router.get('/context', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(getAllContext());
-});
+}));
 
-router.get('/context/:projectId', function (req, res) {
+router.get('/context/:projectId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var ctx = getContext(req.params.projectId);
   if (!ctx) return res.json({ project_id: req.params.projectId, data: '{}', updated_at: null, updated_by: '' });
   res.json(ctx);
-});
+}));
 
-router.put('/context/:projectId', function (req, res) {
+router.put('/context/:projectId', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var data = req.body.data;
@@ -1795,11 +1795,11 @@ router.put('/context/:projectId', function (req, res) {
   upsertContext(req.params.projectId, dataStr, agentId);
   emitEvent('context_updated', agentId, req.params.projectId, agentId + ' updated context for ' + req.params.projectId);
   res.json({ ok: true, project_id: req.params.projectId });
-});
+}));
 
 // ======== SPEND TRACKING ========
 
-router.post('/spend', function (req, res) {
+router.post('/spend', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var costUsd = parseFloat(req.body.cost_usd) || 0;
@@ -1815,9 +1815,9 @@ router.post('/spend', function (req, res) {
     parseInt(req.body.tokens_out) || 0
   );
   res.json({ ok: true });
-});
+}));
 
-router.get('/spend/:agentId', function (req, res) {
+router.get('/spend/:agentId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var entries = getAgentSpend(req.params.agentId, {
@@ -1826,9 +1826,9 @@ router.get('/spend/:agentId', function (req, res) {
     limit: parseInt(req.query.limit) || 50
   });
   res.json(entries);
-});
+}));
 
-router.get('/spend', function (req, res) {
+router.get('/spend', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var summary = getSpendSummary({
@@ -1837,11 +1837,11 @@ router.get('/spend', function (req, res) {
   });
   var total = summary.reduce(function (acc, r) { return acc + (r.total_cost || 0); }, 0);
   res.json({ total_cost_usd: Math.round(total * 10000) / 10000, breakdown: summary });
-});
+}));
 
 // ======== WIDGETS ========
 
-router.get('/widgets', function (req, res) {
+router.get('/widgets', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var widgets = listWidgets({
@@ -1849,9 +1849,9 @@ router.get('/widgets', function (req, res) {
     project_id: req.query.project_id
   });
   res.json(widgets);
-});
+}));
 
-router.post('/widgets', function (req, res) {
+router.post('/widgets', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var b = req.body;
@@ -1860,27 +1860,27 @@ router.post('/widgets', function (req, res) {
   var result = createWidget(agentId, b.project_id, b.title, b.widget_type, b.data);
   emitEvent('widget_created', agentId, b.project_id || '', b.title, { widget_id: result.id, widget_type: b.widget_type || 'status' });
   res.status(201).json(result);
-});
+}));
 
-router.put('/widgets/:id', function (req, res) {
+router.put('/widgets/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var updated = updateWidget(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'widget not found' });
   res.json(updated);
-});
+}));
 
-router.delete('/widgets/:id', function (req, res) {
+router.delete('/widgets/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   deleteWidget(req.params.id);
   res.json({ ok: true });
-});
+}));
 
 // ======== VOICE COMMANDS ========
 
 // Process a voice command — parse natural language into Mycelium actions
-router.post('/voice/command', function (req, res) {
+router.post('/voice/command', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var text = (req.body.text || '').trim();
@@ -1894,7 +1894,7 @@ router.post('/voice/command', function (req, res) {
   var result = parseVoiceCommand(text, who);
   emitEvent('voice_command', who || 'operator', '', text, { action: result.action });
   res.json(result);
-});
+}));
 
 function parseVoiceCommand(text, who) {
   var lower = text.toLowerCase();
@@ -1972,7 +1972,7 @@ function parseVoiceCommand(text, who) {
 
 // ======== SKILLS REGISTRY ========
 
-router.get('/skills', function (req, res) {
+router.get('/skills', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var skills = listSkills({
@@ -1980,17 +1980,17 @@ router.get('/skills', function (req, res) {
     search: req.query.search
   });
   res.json(skills);
-});
+}));
 
-router.get('/skills/:id', function (req, res) {
+router.get('/skills/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var skill = getSkill(req.params.id);
   if (!skill) return res.status(404).json({ error: 'skill not found' });
   res.json(skill);
-});
+}));
 
-router.post('/skills', function (req, res) {
+router.post('/skills', asyncHandler(function (req, res) {
   var who = checkAdmin(req, res);
   if (!who) return;
   var b = req.body;
@@ -2004,18 +2004,18 @@ router.post('/skills', function (req, res) {
     if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'skill already exists' });
     throw err;
   }
-});
+}));
 
-router.put('/skills/:id', function (req, res) {
+router.put('/skills/:id', asyncHandler(function (req, res) {
   var who = checkAdmin(req, res);
   if (!who) return;
   var updated = updateSkill(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'skill not found' });
   res.json(updated);
-});
+}));
 
 // Agent skill management
-router.post('/skills/:id/install', function (req, res) {
+router.post('/skills/:id/install', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = (who === '__admin__' || who === '__system__') ? (req.body.agent_id || who) : who;
@@ -2025,34 +2025,34 @@ router.post('/skills/:id/install', function (req, res) {
   installSkill(agentId, req.params.id, req.body.config);
   emitEvent('skill_installed', agentId, '', skill.name, { skill_id: req.params.id });
   res.json({ ok: true, skill_id: req.params.id, agent_id: agentId });
-});
+}));
 
-router.post('/skills/:id/uninstall', function (req, res) {
+router.post('/skills/:id/uninstall', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agentId = (who === '__admin__' || who === '__system__') ? (req.body.agent_id || who) : who;
   if (!agentId) return res.status(400).json({ error: 'agent_id required' });
   uninstallSkill(agentId, req.params.id);
   res.json({ ok: true });
-});
+}));
 
-router.get('/agents/:agentId/skills', function (req, res) {
+router.get('/agents/:agentId/skills', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var skills = getAgentSkills(req.params.agentId);
   res.json(skills);
-});
+}));
 
 // Per-agent profile
-router.get('/agents/:id/profile', function (req, res) {
+router.get('/agents/:id/profile', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var profile = getAgentProfile(req.params.id);
   if (!profile) return res.status(404).json({ error: 'Profile not found' });
   res.json(profile);
-});
+}));
 
-router.put('/agents/:id/profile', function (req, res) {
+router.put('/agents/:id/profile', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req._authIsAdmin && who !== req.params.id) {
@@ -2069,14 +2069,14 @@ router.put('/agents/:id/profile', function (req, res) {
   if (req.body.max_concurrent !== undefined) fields.max_concurrent = parseInt(req.body.max_concurrent) || 0;
   if (req.body.profile_data !== undefined) fields.profile_data = req.body.profile_data;
   res.json(updateAgentProfile(req.params.id, fields));
-});
+}));
 
 // ======== AGENT IDENTITY ========
 
 // Forbidden capabilities by agent_type
 var DRONE_FORBIDDEN_CAPS = ['code', 'coordination', 'admin'];
 
-router.get('/agents/:id/identity', function (req, res) {
+router.get('/agents/:id/identity', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
 
@@ -2224,9 +2224,9 @@ router.get('/agents/:id/identity', function (req, res) {
       md_blocklist: resolved.md_blocklist || []
     }
   });
-});
+}));
 
-router.put('/agents/:id/identity', function (req, res) {
+router.put('/agents/:id/identity', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
 
   var agent = getAgent(req.params.id);
@@ -2274,11 +2274,11 @@ router.put('/agents/:id/identity', function (req, res) {
   }
 
   res.json({ ok: true, updated: updated });
-});
+}));
 
 // ======== ASSETS ========
 
-router.get('/assets', function (req, res) {
+router.get('/assets', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -2289,9 +2289,9 @@ router.get('/assets', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listAssets(filters));
-});
+}));
 
-router.post('/assets', function (req, res) {
+router.post('/assets', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var name = escapeHtml(req.body.name);
@@ -2318,17 +2318,17 @@ router.post('/assets', function (req, res) {
   }
 
   res.json(result);
-});
+}));
 
-router.get('/assets/:id', function (req, res) {
+router.get('/assets/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   res.json(asset);
-});
+}));
 
-router.put('/assets/:id', function (req, res) {
+router.put('/assets/:id', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var asset = getAsset(parseIntParam(req.params.id));
@@ -2348,9 +2348,9 @@ router.put('/assets/:id', function (req, res) {
     emitEvent('asset_' + fields.status, agentId, asset.project_id, agentId + ' set asset ' + asset.name + ' to ' + fields.status, { asset_id: asset.id });
   }
   res.json({ ok: true, id: asset.id });
-});
+}));
 
-router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
+router.post('/assets/:id/upload', upload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var asset = getAsset(parseIntParam(req.params.id));
@@ -2362,9 +2362,9 @@ router.post('/assets/:id/upload', upload.single('file'), function (req, res) {
   updateAsset(asset.id, { status: 'ready', file_path: filePath, download_url: downloadUrl, path: req.file.filename });
   emitEvent('asset_uploaded', who, asset.project_id, 'Asset #' + asset.id + ' (' + asset.name + ') uploaded');
   res.json({ ok: true, asset_id: asset.id, download_url: downloadUrl });
-});
+}));
 
-router.get('/assets/:id/download', function (req, res) {
+router.get('/assets/:id/download', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var asset = getAsset(parseIntParam(req.params.id));
@@ -2378,10 +2378,10 @@ router.get('/assets/:id/download', function (req, res) {
   }
   if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found on disk' });
   res.download(resolved);
-});
+}));
 
 // Link assets to a drone job (bulk update status + drone_job_id)
-router.put('/assets/link-job', function (req, res) {
+router.put('/assets/link-job', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var { asset_ids, drone_job_id, status } = req.body;
@@ -2403,21 +2403,21 @@ router.put('/assets/link-job', function (req, res) {
   }
   emitEvent('assets_linked_to_job', who, null, updated + ' assets linked to drone job #' + drone_job_id, { asset_ids: asset_ids, drone_job_id: drone_job_id });
   res.json({ ok: true, updated: updated });
-});
+}));
 
 // Delete asset (admin only)
-router.delete('/assets/:id', function (req, res) {
+router.delete('/assets/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var asset = getAsset(parseIntParam(req.params.id));
   if (!asset) return res.status(404).json({ error: 'Asset not found' });
   deleteAsset(asset.id);
   emitEvent('asset_deleted', getAdminDisplayName(req), asset.project_id, 'Deleted asset #' + asset.id + ': ' + asset.name, { asset_id: asset.id });
   res.json({ ok: true, id: asset.id });
-});
+}));
 
 // ======== EVENTS ========
 
-router.get('/events', function (req, res) {
+router.get('/events', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -2430,9 +2430,9 @@ router.get('/events', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listEvents(filters));
-});
+}));
 
-router.post('/events', function (req, res) {
+router.post('/events', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var type = req.body.type || 'custom';
@@ -2441,14 +2441,14 @@ router.post('/events', function (req, res) {
   var data = req.body.data ? JSON.stringify(req.body.data) : '{}';
   var id = createEvent(type, agentId, projectId, summary, data);
   res.json({ id: id });
-});
+}));
 
 // GET /events/stream — Server-Sent Events stream for live event broadcast
 // Auth: ?token=<jwt> for browser EventSource, or X-Admin-Key/X-Agent-Key headers for API clients
 // Filters (optional): ?project_id=, ?type=, ?agent=
 // On connect: replays last 20 matching events so the client isn't blank
 // Heartbeat: SSE comment every 30s to keep proxies from closing idle connections
-router.get('/events/stream', function (req, res) {
+router.get('/events/stream', asyncHandler(function (req, res) {
   // Limit SSE connections per IP to prevent resource exhaustion
   var clientIp = req.ip || req.connection.remoteAddress;
   var sseCount = 0;
@@ -2517,19 +2517,19 @@ router.get('/events/stream', function (req, res) {
     clearInterval(heartbeat);
     sseClients.delete(client);
   });
-});
+}));
 
 // ======== REQUESTS ========
 
-router.get('/requests/pending', function (req, res) {
+router.get('/requests/pending', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   // Admin can query any agent's pending requests via ?agent_id=
   var targetAgent = req.query.agent_id || agentId;
   res.json(listPendingRequests(targetAgent));
-});
+}));
 
-router.post('/requests', function (req, res) {
+router.post('/requests', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var content = req.body.content;
@@ -2558,9 +2558,9 @@ router.post('/requests', function (req, res) {
   }
 
   res.json(result);
-});
+}));
 
-router.put('/requests/:id', function (req, res) {
+router.put('/requests/:id', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var msg = getMessage(parseIntParam(req.params.id));
@@ -2590,11 +2590,11 @@ router.put('/requests/:id', function (req, res) {
   }
 
   res.status(400).json({ error: 'Invalid status. Use: acknowledged, resolved, completed' });
-});
+}));
 
 // ======== MESSAGES ========
 
-router.get('/messages', function (req, res) {
+router.get('/messages', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -2610,9 +2610,9 @@ router.get('/messages', function (req, res) {
     channel_id: req.query.channel_id ? parseIntParam(req.query.channel_id) : undefined
   };
   res.json(listMessages(filters));
-});
+}));
 
-router.post('/messages', function (req, res) {
+router.post('/messages', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var content = req.body.content;
@@ -2693,9 +2693,9 @@ router.post('/messages', function (req, res) {
     }
   }
   res.json({ id: id });
-});
+}));
 
-router.put('/messages/:id/ack', function (req, res) {
+router.put('/messages/:id/ack', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var msg = getMessage(parseIntParam(req.params.id));
@@ -2703,9 +2703,9 @@ router.put('/messages/:id/ack', function (req, res) {
   acknowledgeMessage(msg.id);
   emitEvent('request_acknowledged', agentId, msg.project_id, agentId + ' acknowledged request #' + msg.id, { message_id: msg.id });
   res.json({ ok: true, id: msg.id, status: 'acknowledged' });
-});
+}));
 
-router.put('/messages/:id/resolve', function (req, res) {
+router.put('/messages/:id/resolve', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var msg = getMessage(parseIntParam(req.params.id));
@@ -2724,16 +2724,16 @@ router.put('/messages/:id/resolve', function (req, res) {
   }
 
   res.json(result);
-});
+}));
 
-router.get('/messages/threads', function (req, res) {
+router.get('/messages/threads', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listThreads(parseLimit(req.query.limit, 20)));
-});
+}));
 
 // Admin-only bulk message cleanup
-router.delete('/messages/bulk', function (req, res) {
+router.delete('/messages/bulk', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var from = req.query.from;
   var to = req.query.to;
@@ -2741,11 +2741,11 @@ router.delete('/messages/bulk', function (req, res) {
   if (!from && !to && !content_like) return res.status(400).json({ error: 'Specify at least one filter: from, to, content_like' });
   var deleted = bulkDeleteMessages({ from: from, to: to, content_like: content_like });
   res.json({ deleted: deleted });
-});
+}));
 
 // ======== PLANS ========
 
-router.get('/plans', function (req, res) {
+router.get('/plans', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -2756,9 +2756,9 @@ router.get('/plans', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listPlans(filters));
-});
+}));
 
-router.post('/plans', function (req, res) {
+router.post('/plans', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var gate = checkApprovalGate(req, agentId, 'plan_create');
@@ -2792,18 +2792,18 @@ router.post('/plans', function (req, res) {
   if (stepIds.length) result.steps_created = stepIds.length;
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
-});
+}));
 
-router.get('/plans/:id', function (req, res) {
+router.get('/plans/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var plan = getPlan(parseIntParam(req.params.id));
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   res.json(plan);
-});
+}));
 
-router.put('/plans/:id', function (req, res) {
+router.put('/plans/:id', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2823,9 +2823,9 @@ router.put('/plans/:id', function (req, res) {
     emitEvent('plan_' + fields.status, agentId, plan.project_id, agentId + ' set plan #' + plan.id + ' to ' + fields.status, { plan_id: plan.id });
   }
   res.json({ ok: true, id: plan.id });
-});
+}));
 
-router.delete('/plans/:id', function (req, res) {
+router.delete('/plans/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var gate = checkApprovalGate(req, who, 'delete');
@@ -2838,11 +2838,11 @@ router.delete('/plans/:id', function (req, res) {
   var result = { ok: true, deleted: plan.id };
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
-});
+}));
 
 // -- Plan Steps --
 
-router.post('/plans/:id/steps', function (req, res) {
+router.post('/plans/:id/steps', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2866,9 +2866,9 @@ router.post('/plans/:id/steps', function (req, res) {
     createInboxItemForAllOperators('approval', 'plan_step', stepId, 'Operator input needed: ' + title, 'Plan #' + plan.id + ' — ' + (plan.title || '') + '. Step requires your review/approval.', { plan_id: plan.id, step_id: stepId, step_title: title }, 'high');
   }
   res.json({ id: stepId, plan_id: plan.id });
-});
+}));
 
-router.put('/plans/:id/steps/:stepId', function (req, res) {
+router.put('/plans/:id/steps/:stepId', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2911,9 +2911,9 @@ router.put('/plans/:id/steps/:stepId', function (req, res) {
     }
   }
   res.json({ ok: true, step_id: stepStepId });
-});
+}));
 
-router.delete('/plans/:id/steps/:stepId', function (req, res) {
+router.delete('/plans/:id/steps/:stepId', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2921,11 +2921,11 @@ router.delete('/plans/:id/steps/:stepId', function (req, res) {
   if (!checkProjectScope(req, res, plan.project_id)) return;
   deletePlanStep(parseIntParam(req.params.stepId));
   res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
-});
+}));
 
 // -- Plan Step Comments --
 
-router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
+router.post('/plans/:id/steps/:stepId/comments', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2940,9 +2940,9 @@ router.post('/plans/:id/steps/:stepId/comments', function (req, res) {
   var comment = addPlanStepComment(stepId, plan.id, author, content);
   emitEvent('plan_step_comment', who, plan.project_id, who + ' commented on step #' + stepId + ' of plan #' + plan.id, { plan_id: plan.id, step_id: stepId, comment_id: comment.id });
   res.json(comment);
-});
+}));
 
-router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
+router.get('/plans/:id/steps/:stepId/comments', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2950,9 +2950,9 @@ router.get('/plans/:id/steps/:stepId/comments', function (req, res) {
   if (!checkProjectScope(req, res, plan.project_id)) return;
   var stepId = parseIntParam(req.params.stepId);
   res.json(getPlanStepComments(stepId));
-});
+}));
 
-router.put('/plans/:id/reorder', function (req, res) {
+router.put('/plans/:id/reorder', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var plan = getPlan(parseIntParam(req.params.id));
@@ -2962,7 +2962,7 @@ router.put('/plans/:id/reorder', function (req, res) {
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of step IDs' });
   reorderPlanSteps(parseIntParam(req.params.id), order);
   res.json({ ok: true, plan_id: parseIntParam(req.params.id) });
-});
+}));
 
 // ======== STUDIO AUTH ========
 
@@ -2990,7 +2990,7 @@ router.post('/studio/login', loginLimiter, asyncHandler(async function (req, res
 }));
 
 // Who am I
-router.get('/studio/me', function (req, res) {
+router.get('/studio/me', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   if (!user) {
     // Check admin key
@@ -3001,7 +3001,7 @@ router.get('/studio/me', function (req, res) {
   var dbUser = getStudioUserById(user.userId);
   if (!dbUser) return res.status(401).json({ error: 'User not found' });
   res.json(dbUser);
-});
+}));
 
 // Register new studio user (admin only)
 router.post('/studio/users', asyncHandler(async function (req, res) {
@@ -3024,10 +3024,10 @@ router.post('/studio/users', asyncHandler(async function (req, res) {
 }));
 
 // List studio users (admin only)
-router.get('/studio/users', function (req, res) {
+router.get('/studio/users', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(listStudioUsers());
-});
+}));
 
 // Update studio user password (admin only)
 router.put('/studio/users/:id/password', asyncHandler(async function (req, res) {
@@ -3042,13 +3042,13 @@ router.put('/studio/users/:id/password', asyncHandler(async function (req, res) 
 }));
 
 // Delete studio user (admin only)
-router.delete('/studio/users/:id', function (req, res) {
+router.delete('/studio/users/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var user = getStudioUserById(parseIntParam(req.params.id));
   if (!user) return res.status(404).json({ error: 'User not found' });
   deleteStudioUser(user.id);
   res.json({ ok: true, deleted: user.username });
-});
+}));
 
 // ======== PASSWORD RESET (public, rate-limited) ========
 
@@ -3117,21 +3117,21 @@ router.post('/studio/reset-password', resetPasswordLimiter, asyncHandler(async f
 
 // ======== OPERATORS (people) ========
 
-router.get('/operators', function (req, res) {
+router.get('/operators', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listOperators());
-});
+}));
 
-router.get('/operators/:id', function (req, res) {
+router.get('/operators/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var op = getOperator(req.params.id);
   if (!op) return res.status(404).json({ error: 'Operator not found' });
   res.json(op);
-});
+}));
 
-router.post('/operators', function (req, res) {
+router.post('/operators', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var { id, display_name, role, responsibilities, email, studio_user_id } = req.body;
@@ -3140,9 +3140,9 @@ router.post('/operators', function (req, res) {
   createOperator(id, display_name, role, responsibilities, email, studio_user_id);
   emitEvent('operator_created', who, null, 'Operator ' + id + ' created');
   res.json(getOperator(id));
-});
+}));
 
-router.put('/operators/:id', function (req, res) {
+router.put('/operators/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var op = getOperator(req.params.id);
@@ -3150,34 +3150,34 @@ router.put('/operators/:id', function (req, res) {
   updateOperator(req.params.id, req.body);
   emitEvent('operator_updated', who, null, 'Operator ' + req.params.id + ' updated');
   res.json(getOperator(req.params.id));
-});
+}));
 
-router.delete('/operators/:id', function (req, res) {
+router.delete('/operators/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   if (!getOperator(req.params.id)) return res.status(404).json({ error: 'Operator not found' });
   deleteOperator(req.params.id);
   emitEvent('operator_deleted', who, null, 'Operator ' + req.params.id + ' deleted');
   res.json({ ok: true });
-});
+}));
 
 // ======== INSTANCE CONFIG ========
 
-router.get('/admin/config', function (req, res) {
+router.get('/admin/config', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listInstanceConfig());
-});
+}));
 
-router.get('/admin/config/:key', function (req, res) {
+router.get('/admin/config/:key', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var val = getInstanceConfig(req.params.key);
   if (val === null) return res.status(404).json({ error: 'Config key not found' });
   res.json({ key: req.params.key, value: val });
-});
+}));
 
-router.put('/admin/config/:key', adminWriteLimiter, function (req, res) {
+router.put('/admin/config/:key', adminWriteLimiter, asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var { value } = req.body;
@@ -3185,11 +3185,11 @@ router.put('/admin/config/:key', adminWriteLimiter, function (req, res) {
   setInstanceConfig(req.params.key, typeof value === 'string' ? value : JSON.stringify(value), who);
   emitEvent('config_changed', who, null, 'Config ' + req.params.key + ' updated');
   res.json({ key: req.params.key, value: getInstanceConfig(req.params.key) });
-});
+}));
 
 // ======== CLEANUP ========
 
-router.post('/admin/cleanup', function (req, res) {
+router.post('/admin/cleanup', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var messageDays = req.body.message_days || 90;
   var eventDays = req.body.event_days || 60;
@@ -3206,11 +3206,11 @@ router.post('/admin/cleanup', function (req, res) {
     webhooks_archived: webhooksArchived,
     savepoints_pruned: savepointsPruned,
   });
-});
+}));
 
 // ======== KILL SWITCH ========
 
-router.put('/admin/override', adminWriteLimiter, function (req, res) {
+router.put('/admin/override', adminWriteLimiter, asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var action = req.body.action || 'freeze';
@@ -3225,11 +3225,11 @@ router.put('/admin/override', adminWriteLimiter, function (req, res) {
   } else {
     res.status(400).json({ error: 'action must be freeze or unfreeze' });
   }
-});
+}));
 
 // ======== SLEEP MODE ========
 
-router.put('/admin/sleep', function (req, res) {
+router.put('/admin/sleep', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var action = req.body.action;
@@ -3433,9 +3433,9 @@ router.put('/admin/sleep', function (req, res) {
       morning_summary: log
     });
   }
-});
+}));
 
-router.get('/admin/sleep', function (req, res) {
+router.get('/admin/sleep', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var config = getSleepMode();
@@ -3448,9 +3448,9 @@ router.get('/admin/sleep', function (req, res) {
     available_operators: getAvailableOperators().length,
     log: log
   });
-});
+}));
 
-router.put('/operators/:id/availability', function (req, res) {
+router.put('/operators/:id/availability', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = getAdminDisplayName(req);
   var op = getOperator(req.params.id);
@@ -3492,7 +3492,7 @@ router.put('/operators/:id/availability', function (req, res) {
 
   emitEvent('operator_availability', who, null, displayName(req.params.id) + ' is now ' + availability);
   res.json(getOperator(req.params.id));
-});
+}));
 
 // ======== ADMIN ========
 
@@ -3541,7 +3541,7 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
   res.json({ id: id, api_key: apiKey, mcp_config: mcpConfig, message: 'Store this key — it will not be shown again. MCP config included for agent setup.' });
 }));
 
-router.delete('/admin/agents/:id', adminWriteLimiter, function (req, res) {
+router.delete('/admin/agents/:id', adminWriteLimiter, asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -3549,10 +3549,10 @@ router.delete('/admin/agents/:id', adminWriteLimiter, function (req, res) {
   clearAgentKeyCache();
   emitEvent('agent_removed', '__admin__', null, 'Admin removed agent: ' + req.params.id);
   res.json({ ok: true, deleted: req.params.id });
-});
+}));
 
 // Regenerate agent API key (admin only)
-router.put('/admin/agents/:id/key', adminWriteLimiter, function (req, res) {
+router.put('/admin/agents/:id/key', adminWriteLimiter, asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -3562,12 +3562,12 @@ router.put('/admin/agents/:id/key', adminWriteLimiter, function (req, res) {
   clearAgentKeyCache();
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
-});
+}));
 
 // Self-service rekey — agent calls this with their current key to rotate to a new one.
 // Useful when an agent suspects their key was leaked or wants to rotate proactively.
 // Does not require admin key — the existing valid key is proof of identity.
-router.post('/agents/rekey', function (req, res) {
+router.post('/agents/rekey', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var newKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
@@ -3576,20 +3576,20 @@ router.post('/agents/rekey', function (req, res) {
   clearAgentKeyCache();
   emitEvent('agent_key_rotated', agentId, null, agentId + ' rotated their API key');
   res.json({ id: agentId, api_key: newKey, message: 'Key rotated — update your config with this new key' });
-});
+}));
 
 // Get MCP config for an agent (admin only — key not included, just the structure)
-router.get('/agents/:id/mcp-config', function (req, res) {
+router.get('/agents/:id/mcp-config', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   var instanceUrl = getInstanceUrl(req);
   var config = buildMcpConfig(req.params.id, '<YOUR_AGENT_API_KEY>', instanceUrl);
   res.json({ agent_id: req.params.id, mcp_config: config, note: 'Replace <YOUR_AGENT_API_KEY> with the agent\'s actual API key' });
-});
+}));
 
 // Admin heartbeat for any agent
-router.put('/admin/agents/:id/heartbeat', function (req, res) {
+router.put('/admin/agents/:id/heartbeat', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -3619,10 +3619,10 @@ router.put('/admin/agents/:id/heartbeat', function (req, res) {
   pruneSavepoints(req.params.id, 100);
 
   res.json({ ok: true, agent: req.params.id, status: status });
-});
+}));
 
 // Admin create savepoint with notes (for handoffs)
-router.post('/agents/:id/savepoint', function (req, res) {
+router.post('/agents/:id/savepoint', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -3632,23 +3632,23 @@ router.post('/agents/:id/savepoint', function (req, res) {
   });
   var sp = getLatestSavepoint(req.params.id);
   res.json({ ok: true, savepoint_id: sp.id });
-});
+}));
 
 // Full studio overview (for dashboard)
-router.get('/admin/overview', function (req, res) {
+router.get('/admin/overview', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   if (req.query.verbose === 'true') {
     var who = getAdminDisplayName(req);
     return res.json(getOverview(who));
   }
   res.json(getSlimOverview());
-});
+}));
 
 // Actionable items needing decisions (admin only)
-router.get('/admin/ops', function (req, res) {
+router.get('/admin/ops', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(getAdminOps());
-});
+}));
 
 // Probe Anthropic API limits by making a minimal request and reading headers
 // Caches result in context key admin/api_limits for 5 minutes
@@ -3880,13 +3880,13 @@ router.get('/admin/api-usage', asyncHandler(async function (req, res) {
 
 // =============== ORGANIZATIONS ===============
 
-router.get('/orgs', function (req, res) {
+router.get('/orgs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listOrgs());
-});
+}));
 
-router.post('/orgs', function (req, res) {
+router.post('/orgs', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { id, name, description } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'id and name required' });
@@ -3894,36 +3894,36 @@ router.post('/orgs', function (req, res) {
   var org = getOrg(id);
   emitEvent('org_created', getAdminDisplayName(req), '', 'Organization created: ' + name);
   res.json(org);
-});
+}));
 
-router.get('/orgs/:id', function (req, res) {
+router.get('/orgs/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var org = getOrg(req.params.id);
   if (!org) return res.status(404).json({ error: 'Organization not found' });
   org.projects = listProjects(req.params.id);
   res.json(org);
-});
+}));
 
-router.put('/orgs/:id', function (req, res) {
+router.put('/orgs/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var org = getOrg(req.params.id);
   if (!org) return res.status(404).json({ error: 'Organization not found' });
   updateOrg(req.params.id, req.body);
   res.json(getOrg(req.params.id));
-});
+}));
 
-router.delete('/orgs/:id', function (req, res) {
+router.delete('/orgs/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var org = getOrg(req.params.id);
   if (!org) return res.status(404).json({ error: 'Organization not found' });
   deleteOrg(req.params.id);
   res.json({ ok: true });
-});
+}));
 
 // =============== CUSTOMER INSTANCES ===============
 
-router.get('/instances', function (req, res) {
+router.get('/instances', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instances = listInstances({
     status: req.query.status || undefined,
@@ -3931,22 +3931,22 @@ router.get('/instances', function (req, res) {
     limit: parseIntParam(req.query.limit) || 100
   });
   res.json({ instances: instances });
-});
+}));
 
-router.get('/instances/:id', function (req, res) {
+router.get('/instances/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instance = getInstance(req.params.id);
   if (!instance) return apiError(res, 404, 'Instance not found');
   res.json(instance);
-});
+}));
 
-router.put('/instances/:id', function (req, res) {
+router.put('/instances/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instance = getInstance(req.params.id);
   if (!instance) return apiError(res, 404, 'Instance not found');
   var updated = updateInstance(req.params.id, req.body);
   res.json(updated);
-});
+}));
 
 router.post('/instances/:id/health-check', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
@@ -4061,7 +4061,7 @@ router.post('/admin/deploy/health-check-all', asyncHandler(async function (req, 
 }));
 
 // GET /admin/deploy/status — current deploy status for all active instances
-router.get('/admin/deploy/status', function (req, res) {
+router.get('/admin/deploy/status', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var instances = listInstances({ status: 'active' });
   res.json({
@@ -4073,10 +4073,10 @@ router.get('/admin/deploy/status', function (req, res) {
       };
     })
   });
-});
+}));
 
 // POST /admin/deploy/record — record a deploy version across instances
-router.post('/admin/deploy/record', function (req, res) {
+router.post('/admin/deploy/record', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var version = req.body.version;
   if (!version) return apiError(res, 400, 'version required');
@@ -4089,19 +4089,19 @@ router.post('/admin/deploy/record', function (req, res) {
   }
 
   res.json({ ok: true, version: version, updated: updated });
-});
+}));
 
 // =============== PROJECTS ===============
 
 // List projects (optional ?org_id= filter)
-router.get('/projects', function (req, res) {
+router.get('/projects', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listProjects(req.query.org_id));
-});
+}));
 
 // Create project (admin only)
-router.post('/projects', function (req, res) {
+router.post('/projects', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { id, name, description, repo_url, org_id, type } = req.body;
   if (!id || !name) return res.status(400).json({ error: 'id and name required' });
@@ -4109,35 +4109,35 @@ router.post('/projects', function (req, res) {
   var project = getProject(id);
   emitEvent('project_created', getAdminDisplayName(req), id, 'Project created: ' + name);
   res.json(project);
-});
+}));
 
-router.get('/projects/:id', function (req, res) {
+router.get('/projects/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   res.json(project);
-});
+}));
 
-router.put('/projects/:id', function (req, res) {
+router.put('/projects/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   updateProject(req.params.id, req.body);
   res.json(getProject(req.params.id));
-});
+}));
 
 // GET /projects/:id/bug-categories — get bug categories for a project (dynamic or defaults)
-router.get('/projects/:id/bug-categories', function (req, res) {
+router.get('/projects/:id/bug-categories', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json({ project_id: req.params.id, categories: getBugCategories(req.params.id) });
-});
+}));
 
 // =============== SHARED CONCEPTS ===============
 
 // List all concepts (optional ?type= filter)
-router.get('/concepts', function (req, res) {
+router.get('/concepts', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {};
@@ -4149,10 +4149,10 @@ router.get('/concepts', function (req, res) {
     try { c.data = JSON.parse(c.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + c.id + '):', e.message); }
   });
   res.json(concepts);
-});
+}));
 
 // Get single concept
-router.get('/concepts/:id', function (req, res) {
+router.get('/concepts/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var concept = getConcept(parseIntParam(req.params.id));
@@ -4160,10 +4160,10 @@ router.get('/concepts/:id', function (req, res) {
   concept.projects = getConceptProjects(concept.id);
   try { concept.data = JSON.parse(concept.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + concept.id + '):', e.message); }
   res.json(concept);
-});
+}));
 
 // Create concept (admin or agent)
-router.post('/concepts', function (req, res) {
+router.post('/concepts', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var { name, type, description, data } = req.body;
@@ -4178,10 +4178,10 @@ router.post('/concepts', function (req, res) {
   try { concept.data = JSON.parse(concept.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + id + '):', e.message); }
   concept.projects = [];
   res.json(concept);
-});
+}));
 
 // Update concept
-router.put('/concepts/:id', function (req, res) {
+router.put('/concepts/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var concept = getConcept(parseIntParam(req.params.id));
@@ -4192,10 +4192,10 @@ router.put('/concepts/:id', function (req, res) {
   updated.projects = getConceptProjects(updated.id);
   emitEvent('concept_updated', who, null, 'Updated concept: ' + updated.name);
   res.json(updated);
-});
+}));
 
 // Delete concept
-router.delete('/concepts/:id', function (req, res) {
+router.delete('/concepts/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var gate = checkApprovalGate(req, who, 'delete');
@@ -4207,10 +4207,10 @@ router.delete('/concepts/:id', function (req, res) {
   var result = { ok: true };
   if (gate.warning) result.approval_warning = gate.warning;
   res.json(result);
-});
+}));
 
 // Link concept to project
-router.post('/concepts/:id/link', function (req, res) {
+router.post('/concepts/:id/link', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var concept = getConcept(parseIntParam(req.params.id));
@@ -4220,18 +4220,18 @@ router.post('/concepts/:id/link', function (req, res) {
   linkConceptToProject(projectId, concept.id, who);
   emitEvent('concept_linked', who, projectId, 'Linked concept "' + concept.name + '" to project ' + projectId);
   res.json({ ok: true, concept_id: concept.id, project: projectId });
-});
+}));
 
 // Unlink concept from project
-router.delete('/concepts/:id/link/:projectId', function (req, res) {
+router.delete('/concepts/:id/link/:projectId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   unlinkConceptFromProject(req.params.projectId, parseIntParam(req.params.id));
   res.json({ ok: true });
-});
+}));
 
 // Get concepts for a specific project
-router.get('/projects/:projectId/concepts', function (req, res) {
+router.get('/projects/:projectId/concepts', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var concepts = getProjectConcepts(req.params.projectId);
@@ -4239,7 +4239,7 @@ router.get('/projects/:projectId/concepts', function (req, res) {
     try { c.data = JSON.parse(c.data); } catch (e) { console.warn('[mycelium] JSON parse failed for concept.data (id: ' + c.id + '):', e.message); }
   });
   res.json(concepts);
-});
+}));
 
 // =============== FILES (temp — auto-expire) ===============
 
@@ -4286,7 +4286,7 @@ setInterval(function () {
 // POST /files — upload a temp file (multipart form, field name: "file")
 // curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://mycelium.fyi/api/mycelium/files
 // Files auto-delete after 24 hours. Download with wget/curl before then.
-router.post('/files', upload.single('file'), function (req, res) {
+router.post('/files', upload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
@@ -4298,19 +4298,19 @@ router.post('/files', upload.single('file'), function (req, res) {
   var expiresAt = new Date(Date.now() + FILE_TTL_MS).toISOString();
   emitEvent('file_uploaded', who, null, who + ' uploaded ' + req.file.originalname + ' (' + Math.round(req.file.size / 1024) + 'KB)', { filename: req.file.filename });
   res.json({ ok: true, filename: req.file.filename, url: fullUrl, size: req.file.size, expires_at: expiresAt });
-});
+}));
 
 // GET /files/:filename — download a file (auth required)
-router.get('/files/:filename', function (req, res) {
+router.get('/files/:filename', asyncHandler(function (req, res) {
   if (!checkAgentOrAdmin(req, res)) return;
   var filename = req.params.filename.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(FILES_DIR, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found or expired' });
   res.download(filePath, filename);
-});
+}));
 
 // GET /files — list available files
-router.get('/files', function (req, res) {
+router.get('/files', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var now = Date.now();
@@ -4325,12 +4325,12 @@ router.get('/files', function (req, res) {
     });
   } catch (e) { /* empty */ }
   res.json(files);
-});
+}));
 
 // =============== BUGS ===============
 
 // POST /bugs — create a bug report (agent or admin)
-router.post('/bugs', function (req, res) {
+router.post('/bugs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
@@ -4348,10 +4348,10 @@ router.post('/bugs', function (req, res) {
   emitEvent('bug_created', who, projectId || '', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
   dispatchWebhook('bug_created', who, { bug_id: id, title: title, project_id: projectId, severity: severity, reporter: who, assignee: assignee });
   res.json({ ok: true, id: id });
-});
+}));
 
 // GET /bugs — list bugs (agent or admin, optional filters: project_id, status, assignee)
-router.get('/bugs', function (req, res) {
+router.get('/bugs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {};
@@ -4366,19 +4366,19 @@ router.get('/bugs', function (req, res) {
   var bugs = listBugs(filters);
   var counts = countBugs();
   res.json({ bugs: bugs, counts: counts });
-});
+}));
 
 // GET /bugs/:id — get bug detail
-router.get('/bugs/:id', function (req, res) {
+router.get('/bugs/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   res.json(bug);
-});
+}));
 
 // POST /bugs/:id/claim — claim a bug (convenience route)
-router.post('/bugs/:id/claim', function (req, res) {
+router.post('/bugs/:id/claim', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var bug = getBug(parseIntParam(req.params.id));
@@ -4387,10 +4387,10 @@ router.post('/bugs/:id/claim', function (req, res) {
   updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
   emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
   res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });
-});
+}));
 
 // PUT /bugs/:id — update bug (status, assignee, admin_notes, severity)
-router.put('/bugs/:id', function (req, res) {
+router.put('/bugs/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var bug = getBug(parseIntParam(req.params.id));
@@ -4429,22 +4429,22 @@ router.put('/bugs/:id', function (req, res) {
     } catch (e) { console.error('[support] resolution email failed:', e.message); }
   }
   res.json({ ok: true, id: bug.id });
-});
+}));
 
 // Delete bug (admin only)
-router.delete('/bugs/:id', function (req, res) {
+router.delete('/bugs/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
   deleteBug(bug.id);
   emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
   res.json({ ok: true, id: bug.id });
-});
+}));
 
 // ======== TEAM CHAT (human-only) ========
 
 // GET /team-chat — list human chat messages
-router.get('/team-chat', function (req, res) {
+router.get('/team-chat', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   if (!user) {
     // Also allow admin key
@@ -4453,10 +4453,10 @@ router.get('/team-chat', function (req, res) {
   }
   var limit = parseLimit(req.query.limit, 50);
   res.json(listTeamChat(limit));
-});
+}));
 
 // POST /team-chat — send a chat message (studio users only)
-router.post('/team-chat', function (req, res) {
+router.post('/team-chat', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   if (!user) return res.status(403).json({ error: 'Studio login required' });
   var content = (req.body.content || '').trim();
@@ -4464,12 +4464,12 @@ router.post('/team-chat', function (req, res) {
   var sender = '__user:' + (user.displayName || user.username);
   var id = createTeamChat(sender, escapeHtml(content));
   res.json({ ok: true, id: id });
-});
+}));
 
 // ======== CHANNELS ========
 
 // GET /channels/unread — unread counts (MUST be before :id routes)
-router.get('/channels/unread', function (req, res) {
+router.get('/channels/unread', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var counts = getUnreadCounts(who);
@@ -4478,10 +4478,10 @@ router.get('/channels/unread', function (req, res) {
     result[c.channel_id] = { name: c.name, slug: c.slug, unread: c.unread };
   }
   res.json(result);
-});
+}));
 
 // GET /channels — list channels
-router.get('/channels', function (req, res) {
+router.get('/channels', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -4501,10 +4501,10 @@ router.get('/channels', function (req, res) {
     });
   }
   res.json(channels);
-});
+}));
 
 // POST /channels — create channel (admin only)
-router.post('/channels', function (req, res) {
+router.post('/channels', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var name = escapeHtml(req.body.name);
   var slug = escapeHtml(req.body.slug);
@@ -4522,10 +4522,10 @@ router.post('/channels', function (req, res) {
   }
   emitEvent('channel_created', createdBy, null, createdBy + ' created channel ' + name, { channel_id: id });
   res.json({ ok: true, id: id, name: name, slug: slug });
-});
+}));
 
 // GET /channels/:id — channel detail + member count
-router.get('/channels/:id', function (req, res) {
+router.get('/channels/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4534,10 +4534,10 @@ router.get('/channels/:id', function (req, res) {
   channel.members = members;
   channel.member_count = members.length;
   res.json(channel);
-});
+}));
 
 // PUT /channels/:id — update channel
-router.put('/channels/:id', function (req, res) {
+router.put('/channels/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4549,11 +4549,11 @@ router.put('/channels/:id', function (req, res) {
   if (req.body.status !== undefined) fields.status = req.body.status;
   updateChannel(channel.id, fields);
   res.json({ ok: true, id: channel.id });
-});
+}));
 
 // DELETE /channels/:id — delete channel (admin only, protected slugs cannot be deleted)
 var PROTECTED_CHANNEL_SLUGS = ['general', 'admin'];
-router.delete('/channels/:id', function (req, res) {
+router.delete('/channels/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
@@ -4561,19 +4561,19 @@ router.delete('/channels/:id', function (req, res) {
   deleteChannel(channel.id);
   emitEvent('channel_deleted', getAdminDisplayName(req), null, 'Deleted channel ' + channel.name, { channel_id: channel.id });
   res.json({ ok: true, deleted: channel.id });
-});
+}));
 
 // -- Channel Members --
 
-router.get('/channels/:id/members', function (req, res) {
+router.get('/channels/:id/members', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   res.json(listChannelMembers(channel.id));
-});
+}));
 
-router.post('/channels/:id/members', function (req, res) {
+router.post('/channels/:id/members', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4582,20 +4582,20 @@ router.post('/channels/:id/members', function (req, res) {
   if (!userId) return res.status(400).json({ error: 'user_id is required' });
   var added = addChannelMember(channel.id, userId, req.body.user_type || 'agent', req.body.role || 'member');
   res.json({ ok: true, added: added, channel_id: channel.id, user_id: userId });
-});
+}));
 
-router.delete('/channels/:id/members/:userId', function (req, res) {
+router.delete('/channels/:id/members/:userId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
   var removed = removeChannelMember(channel.id, req.params.userId);
   res.json({ ok: true, removed: removed });
-});
+}));
 
 // -- Channel Messages --
 
-router.get('/channels/:id/messages', function (req, res) {
+router.get('/channels/:id/messages', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4611,9 +4611,9 @@ router.get('/channels/:id/messages', function (req, res) {
   };
   var messages = listChannelMessages(channel.id, filters);
   res.json(messages);
-});
+}));
 
-router.post('/channels/:id/messages', function (req, res) {
+router.post('/channels/:id/messages', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4628,11 +4628,11 @@ router.post('/channels/:id/messages', function (req, res) {
   var id = createChannelMessage(channel.id, who, content, metadata);
   emitEvent('channel_message', who, null, who + ' posted in ' + channel.name, { channel_id: channel.id, message_id: id });
   res.json({ ok: true, id: id, channel_id: channel.id });
-});
+}));
 
 // -- Channel Read Tracking --
 
-router.put('/channels/:id/read', function (req, res) {
+router.put('/channels/:id/read', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var channel = getChannel(parseIntParam(req.params.id));
@@ -4640,35 +4640,35 @@ router.put('/channels/:id/read', function (req, res) {
   var messageId = req.body.message_id || getLatestChannelMessageId(channel.id);
   markChannelRead(channel.id, who, messageId);
   res.json({ ok: true, channel_id: channel.id, last_read_message_id: messageId });
-});
+}));
 
 // ======== WEBHOOKS ========
 
 // POST /webhooks — register a webhook for an agent
-router.post('/webhooks', function (req, res) {
+router.post('/webhooks', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { agent_id, url, events, secret } = req.body;
   if (!agent_id || !url) return res.status(400).json({ error: 'agent_id and url are required' });
   var id = createWebhook(agent_id, url, events, secret);
   res.json({ ok: true, id: id });
-});
+}));
 
 // GET /webhooks — list all active webhooks (admin only)
-router.get('/webhooks', function (req, res) {
+router.get('/webhooks', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agentId = req.query.agent_id || null;
   res.json(listWebhooks(agentId));
-});
+}));
 
 // DELETE /webhooks/:id — remove a webhook
-router.delete('/webhooks/:id', function (req, res) {
+router.delete('/webhooks/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteWebhook(parseIntParam(req.params.id));
   res.json({ ok: true });
-});
+}));
 
 // GET /webhooks/deliveries — delivery log for debugging (admin only)
-router.get('/webhooks/deliveries', function (req, res) {
+router.get('/webhooks/deliveries', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var filters = {
     event: req.query.event || undefined,
@@ -4678,12 +4678,12 @@ router.get('/webhooks/deliveries', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listWebhookDeliveries(filters));
-});
+}));
 
 // ======== DRONES ========
 
 // List all drones (agents with project_id='drone') with diagnostics
-router.get('/drones', function (req, res) {
+router.get('/drones', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var drones = listDrones();
@@ -4701,11 +4701,11 @@ router.get('/drones', function (req, res) {
     return d;
   });
   res.json(drones);
-});
+}));
 
 // Claim next job matching drone capabilities (drone-side)
 // If the job has a job_type, render platform-specific commands from the template
-router.post('/drones/claim', function (req, res) {
+router.post('/drones/claim', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var capabilities = req.body.capabilities || [];
@@ -4755,11 +4755,11 @@ router.post('/drones/claim', function (req, res) {
 
   emitEvent('drone_job_claimed', agentId, 'drone', agentId + ' claimed drone job #' + job.id + ': ' + job.title, { job_id: job.id });
   res.json({ job: job });
-});
+}));
 
 // Submit a drone job
 // Accepts optional job_type — when provided, auto-fills requires from template and command is rendered at claim time
-router.post('/drones/jobs', function (req, res) {
+router.post('/drones/jobs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var title = escapeHtml(req.body.title);
@@ -4787,10 +4787,10 @@ router.post('/drones/jobs', function (req, res) {
   emitEvent('drone_job_created', who, 'drone', who + ' submitted drone job: ' + title, { job_id: id, job_type: jobType });
   dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: jobType });
   res.json({ ok: true, id: id, title: title, job_type: jobType });
-});
+}));
 
 // Convenience: create a job from a template with minimal params
-router.post('/drones/jobs/from-template', function (req, res) {
+router.post('/drones/jobs/from-template', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var templateId = req.body.template_id;
@@ -4808,10 +4808,10 @@ router.post('/drones/jobs/from-template', function (req, res) {
   emitEvent('drone_job_created', who, 'drone', who + ' submitted ' + templateId + ' job: ' + title, { job_id: id, job_type: templateId });
   dispatchWebhook('drone_job_created', who, { job_id: id, title: title, requires: requires, requester: who, job_type: templateId });
   res.json({ ok: true, id: id, title: title, job_type: templateId });
-});
+}));
 
 // List drone jobs (filterable by status, drone_id, requester)
-router.get('/drones/jobs', function (req, res) {
+router.get('/drones/jobs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -4822,19 +4822,19 @@ router.get('/drones/jobs', function (req, res) {
     offset: parseInt(req.query.offset) || 0
   };
   res.json(listDroneJobs(filters));
-});
+}));
 
 // Get single drone job
-router.get('/drones/jobs/:id', function (req, res) {
+router.get('/drones/jobs/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   res.json(job);
-});
+}));
 
 // Update drone job (status, result_url, result_data, error)
-router.put('/drones/jobs/:id', function (req, res) {
+router.put('/drones/jobs/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var job = getDroneJob(parseIntParam(req.params.id));
@@ -4941,21 +4941,21 @@ router.put('/drones/jobs/:id', function (req, res) {
     }
   }
   res.json({ ok: true, id: job.id });
-});
+}));
 
 // Cancel/delete drone job (admin only — works on any status)
-router.delete('/drones/jobs/:id', function (req, res) {
+router.delete('/drones/jobs/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   updateDroneJob(job.id, { status: 'cancelled', completed_at: job.completed_at || new Date().toISOString() });
   emitEvent('drone_job_cancelled', getAdminDisplayName(req), 'drone', 'Cancelled drone job #' + job.id + ' (was: ' + job.status + ')', { job_id: job.id });
   res.json({ ok: true, id: job.id, cancelled: true });
-});
+}));
 
 // Bulk cleanup: cancel old done/failed jobs (admin only)
 // DELETE /drones/jobs?older_than_days=7&status=failed
-router.delete('/drones/jobs', function (req, res) {
+router.delete('/drones/jobs', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var days = parseInt(req.query.older_than_days) || 0; // 0 = all matching
   var statusFilter = req.query.status || 'failed'; // failed, done, or both
@@ -4966,26 +4966,26 @@ router.delete('/drones/jobs', function (req, res) {
   var jobs = bulkCancelDroneJobs(statuses, days);
   emitEvent('drone_jobs_cleanup', getAdminDisplayName(req), 'drone', 'Bulk cancelled ' + jobs.length + ' ' + statusFilter + ' drone jobs', { count: jobs.length });
   res.json({ ok: true, cancelled: jobs.length, jobs: jobs.map(function (j) { return { id: j.id, title: j.title }; }) });
-});
+}));
 
 // ======== JOB TEMPLATES (reusable job type definitions for smart routing) ========
 // Must be before /drones/:id to prevent :id from catching "templates"
 
-router.get('/drones/templates', function (req, res) {
+router.get('/drones/templates', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listJobTemplates());
-});
+}));
 
-router.get('/drones/templates/:id', function (req, res) {
+router.get('/drones/templates/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var template = getJobTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'Template not found' });
   res.json(template);
-});
+}));
 
-router.post('/drones/templates', function (req, res) {
+router.post('/drones/templates', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   if (!id) return res.status(400).json({ error: 'id is required' });
@@ -4993,42 +4993,42 @@ router.post('/drones/templates', function (req, res) {
   var template = createJobTemplate(id, req.body);
   emitEvent('job_template_created', getAdminDisplayName(req), 'drone', 'Created job template: ' + id);
   res.json(template);
-});
+}));
 
-router.put('/drones/templates/:id', function (req, res) {
+router.put('/drones/templates/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var template = getJobTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'Template not found' });
   var updated = updateJobTemplate(req.params.id, req.body);
   emitEvent('job_template_updated', getAdminDisplayName(req), 'drone', 'Updated job template: ' + req.params.id);
   res.json(updated);
-});
+}));
 
-router.delete('/drones/templates/:id', function (req, res) {
+router.delete('/drones/templates/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var template = getJobTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'Template not found' });
   deleteJobTemplate(req.params.id);
   emitEvent('job_template_deleted', getAdminDisplayName(req), 'drone', 'Deleted job template: ' + req.params.id);
   res.json({ ok: true, deleted: req.params.id });
-});
+}));
 
 // ======== DRONE COMPATIBILITY CHECK ========
 
-router.get('/drones/:id/compatibility', function (req, res) {
+router.get('/drones/:id/compatibility', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Drone not found' });
   var result = checkDroneCompatibility(req.params.id);
   res.json(result);
-});
+}));
 
 // ======== DRONE PROFILES (per-drone setup & dependency definitions) ========
 // Must be before /drones/:id to prevent :id from catching "profiles"
 
 // List all profiles
-router.get('/drones/profiles', function (req, res) {
+router.get('/drones/profiles', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var profiles = listDroneProfiles();
@@ -5040,10 +5040,10 @@ router.get('/drones/profiles', function (req, res) {
     return p;
   });
   res.json(profiles);
-});
+}));
 
 // Create a profile (admin only)
-router.post('/drones/profiles', function (req, res) {
+router.post('/drones/profiles', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   if (!id) return res.status(400).json({ error: 'id is required (slug, e.g. "kc-art-gen")' });
@@ -5056,10 +5056,10 @@ router.post('/drones/profiles', function (req, res) {
   );
   emitEvent('drone_profile_created', '__admin__', 'drone', 'Created drone profile: ' + id);
   res.json(profile);
-});
+}));
 
 // Get single profile
-router.get('/drones/profiles/:profileId', function (req, res) {
+router.get('/drones/profiles/:profileId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var profile = getDroneProfile(req.params.profileId);
@@ -5069,10 +5069,10 @@ router.get('/drones/profiles/:profileId', function (req, res) {
   profile.env = JSON.parse(profile.env || '{}');
   profile.drones = getDronesWithProfile(profile.id);
   res.json(profile);
-});
+}));
 
 // Update a profile (admin only) — invalidates setup_done for all assigned drones
-router.put('/drones/profiles/:profileId', function (req, res) {
+router.put('/drones/profiles/:profileId', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var profile = getDroneProfile(req.params.profileId);
   if (!profile) return res.status(404).json({ error: 'Profile not found' });
@@ -5082,20 +5082,20 @@ router.put('/drones/profiles/:profileId', function (req, res) {
   updated.env = JSON.parse(updated.env || '{}');
   emitEvent('drone_profile_updated', '__admin__', 'drone', 'Updated drone profile: ' + req.params.profileId + ' (all drone setups invalidated)');
   res.json(updated);
-});
+}));
 
 // Delete a profile (admin only)
-router.delete('/drones/profiles/:profileId', function (req, res) {
+router.delete('/drones/profiles/:profileId', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var profile = getDroneProfile(req.params.profileId);
   if (!profile) return res.status(404).json({ error: 'Profile not found' });
   deleteDroneProfile(req.params.profileId);
   emitEvent('drone_profile_deleted', '__admin__', 'drone', 'Deleted drone profile: ' + req.params.profileId);
   res.json({ ok: true, deleted: req.params.profileId });
-});
+}));
 
 // Assign profile to drone
-router.post('/drones/profiles/:profileId/assign', function (req, res) {
+router.post('/drones/profiles/:profileId/assign', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var profileId = req.params.profileId;
   var droneId = req.body.drone_id;
@@ -5106,17 +5106,17 @@ router.post('/drones/profiles/:profileId/assign', function (req, res) {
   assignDroneProfile(droneId, profileId);
   emitEvent('drone_profile_assigned', '__admin__', 'drone', 'Assigned profile ' + profileId + ' to drone ' + droneId);
   res.json({ ok: true, drone_id: droneId, profile_id: profileId });
-});
+}));
 
 // Unassign profile from drone
-router.delete('/drones/profiles/:profileId/assign/:droneId', function (req, res) {
+router.delete('/drones/profiles/:profileId/assign/:droneId', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   unassignDroneProfile(req.params.droneId, req.params.profileId);
   res.json({ ok: true, unassigned: true });
-});
+}));
 
 // Get profiles assigned to a drone (used by worker at boot)
-router.get('/drones/profiles/by-drone/:droneId', function (req, res) {
+router.get('/drones/profiles/by-drone/:droneId', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var assignments = getDroneProfileAssignments(req.params.droneId);
@@ -5127,10 +5127,10 @@ router.get('/drones/profiles/by-drone/:droneId', function (req, res) {
     return a;
   });
   res.json(assignments);
-});
+}));
 
 // Drone reports profile setup complete
-router.post('/drones/profiles/:profileId/setup-complete', function (req, res) {
+router.post('/drones/profiles/:profileId/setup-complete', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   var profileId = req.params.profileId;
@@ -5139,13 +5139,13 @@ router.post('/drones/profiles/:profileId/setup-complete', function (req, res) {
   markProfileSetupDone(agentId, profileId, checksum);
   emitEvent('drone_profile_setup_done', agentId, 'drone', agentId + ' completed setup for profile ' + profileId);
   res.json({ ok: true, profile_id: profileId, setup_done: true });
-});
+}));
 
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
 // Must be before /drones/:id to prevent :id from catching "artifacts"
 
 // Upload a drone artifact (persistent, no TTL) — admin or drone agents
-router.post('/drones/artifacts', artifactUpload.single('file'), function (req, res) {
+router.post('/drones/artifacts', artifactUpload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
@@ -5156,10 +5156,10 @@ router.post('/drones/artifacts', artifactUpload.single('file'), function (req, r
   var sizeStr = req.file.size > 1024 * 1024 ? Math.round(req.file.size / 1024 / 1024) + 'MB' : Math.round(req.file.size / 1024) + 'KB';
   emitEvent('artifact_uploaded', who, 'drone', 'Uploaded drone artifact: ' + req.file.filename + ' (' + sizeStr + ')');
   res.json({ ok: true, name: req.file.filename, url: url, size: req.file.size });
-});
+}));
 
 // List drone artifacts
-router.get('/drones/artifacts', function (req, res) {
+router.get('/drones/artifacts', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var protocol = req.headers['x-forwarded-proto'] || req.protocol;
@@ -5173,29 +5173,29 @@ router.get('/drones/artifacts', function (req, res) {
     });
   } catch (e) { /* empty */ }
   res.json(artifacts);
-});
+}));
 
 // Download a drone artifact (auth required)
-router.get('/drones/artifacts/:name', function (req, res) {
+router.get('/drones/artifacts/:name', asyncHandler(function (req, res) {
   if (!checkAgentOrAdmin(req, res)) return;
   var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(ARTIFACTS_DIR, name);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
   res.download(filePath, name);
-});
+}));
 
 // Delete a drone artifact (admin only)
-router.delete('/drones/artifacts/:name', function (req, res) {
+router.delete('/drones/artifacts/:name', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var name = req.params.name.replace(/[^a-zA-Z0-9_.\-]/g, '');
   var filePath = nodePath.join(ARTIFACTS_DIR, name);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Artifact not found' });
   fs.unlinkSync(filePath);
   res.json({ ok: true, deleted: name });
-});
+}));
 
 // Get single drone + recent jobs + diagnostics (must be after /drones/artifacts to prevent :id catching "artifacts")
-router.get('/drones/:id', function (req, res) {
+router.get('/drones/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var agent = getAgent(req.params.id);
@@ -5236,12 +5236,12 @@ router.get('/drones/:id', function (req, res) {
     return a;
   });
   res.json(safe);
-});
+}));
 
 // =============== APPROVALS ===============
 
 // Request approval for a gated action
-router.post('/approvals', function (req, res) {
+router.post('/approvals', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var actionType = req.body.action_type;
@@ -5278,10 +5278,10 @@ router.post('/approvals', function (req, res) {
   }
 
   res.json({ id: id, status: 'pending', approval_required: true });
-});
+}));
 
 // List approvals
-router.get('/approvals', function (req, res) {
+router.get('/approvals', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var filters = {
@@ -5294,17 +5294,17 @@ router.get('/approvals', function (req, res) {
   var approvals = listApprovals(filters);
   approvals.forEach(function (a) { try { a.payload = JSON.parse(a.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + a.id + '):', e.message); } });
   res.json(approvals);
-});
+}));
 
 // Get single approval
-router.get('/approvals/:id', function (req, res) {
+router.get('/approvals/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
   try { approval.payload = JSON.parse(approval.payload); } catch (e) { console.warn('[mycelium] JSON parse failed for approval.payload (id: ' + approval.id + '):', e.message); }
   res.json(approval);
-});
+}));
 
 // Notify requesting agent when approval is decided (message + inbox)
 function notifyApprovalDecision(approval, status, decidedBy, reason) {
@@ -5337,7 +5337,7 @@ function notifyApprovalDecision(approval, status, decidedBy, reason) {
 }
 
 // Approve or deny (admin only)
-router.put('/approvals/:id', function (req, res) {
+router.put('/approvals/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
@@ -5355,10 +5355,10 @@ router.put('/approvals/:id', function (req, res) {
   // Notify requesting agent: message + inbox item
   notifyApprovalDecision(approval, newStatus, decidedBy, reason);
   res.json({ ok: true, id: approval.id, status: newStatus });
-});
+}));
 
 // Mark approved action as executed
-router.put('/approvals/:id/executed', function (req, res) {
+router.put('/approvals/:id/executed', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var approval = getApproval(parseIntParam(req.params.id));
@@ -5369,10 +5369,10 @@ router.put('/approvals/:id/executed', function (req, res) {
     who + ' executed [' + approval.action_type + '] ' + approval.title,
     JSON.stringify({ approval_id: approval.id }));
   res.json({ ok: true, id: approval.id, status: 'executed' });
-});
+}));
 
 // Vote on an approval (quorum-based)
-router.put('/approvals/:id/vote', function (req, res) {
+router.put('/approvals/:id/vote', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var who = req.headers['x-admin-key'] ? '__admin__' : 'studio_user';
   var approval = getApproval(parseIntParam(req.params.id));
@@ -5408,17 +5408,17 @@ router.put('/approvals/:id/vote', function (req, res) {
 
   emitEvent('approval_vote', who, null, who + ' voted approve on #' + approval.id + ' (' + counts.approves + '/' + approval.required_approvals + ')');
   res.json({ ok: true, status: 'pending', votes: counts, remaining: approval.required_approvals - counts.approves });
-});
+}));
 
-router.get('/approvals/:id/votes', function (req, res) {
+router.get('/approvals/:id/votes', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(getApprovalVotes(parseIntParam(req.params.id)));
-});
+}));
 
 // ======== WORK ROUTING ========
 
-router.post('/work/request', function (req, res) {
+router.post('/work/request', asyncHandler(function (req, res) {
   var who = checkAgent(req, res);
   if (!who) return;
 
@@ -5440,26 +5440,26 @@ router.post('/work/request', function (req, res) {
 
   emitEvent('work_request', who, null, who + ' requested work: ' + type + (target ? ' \u2192 ' + target : ''));
   res.json({ ok: true, message_id: msgId, routed_to: adminAgentId });
-});
+}));
 
 // ======== PLUGINS ========
 
-router.get('/plugins', function (req, res) {
+router.get('/plugins', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(listPluginRecords());
-});
+}));
 
-router.get('/plugins/mcp-tools', function (req, res) {
+router.get('/plugins/mcp-tools', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(getPluginMcpTools());
-});
+}));
 
 // GET /plugins/workers — worker plugin process status (admin)
-router.get('/plugins/workers', function (req, res) {
+router.get('/plugins/workers', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(getWorkerStatus());
-});
+}));
 
 // ---- Marketplace ----
 
@@ -5467,7 +5467,7 @@ var registryCache = { data: null, fetched: 0 };
 var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/main/registry.json';
 var REGISTRY_TTL = 3600000; // 1 hour
 
-router.get('/plugins/registry', function (req, res) {
+router.get('/plugins/registry', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var now = Date.now();
   if (registryCache.data && (now - registryCache.fetched) < REGISTRY_TTL) {
@@ -5487,9 +5487,9 @@ router.get('/plugins/registry', function (req, res) {
       if (registryCache.data) return res.json(registryCache.data);
       res.status(502).json({ error: 'Failed to fetch plugin registry' });
     });
-});
+}));
 
-router.get('/plugins/all-widgets', function (req, res) {
+router.get('/plugins/all-widgets', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var result = [];
   var plugins = getLoadedPlugins();
@@ -5506,10 +5506,10 @@ router.get('/plugins/all-widgets', function (req, res) {
     }
   }
   res.json(result);
-});
+}));
 
 // GET /plugins/nav — lightweight page declarations for all loaded plugins
-router.get('/plugins/nav', function (req, res) {
+router.get('/plugins/nav', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var plugins = getLoadedPlugins();
   var nav = [];
@@ -5524,9 +5524,9 @@ router.get('/plugins/nav', function (req, res) {
     });
   }
   res.json(nav);
-});
+}));
 
-router.get('/plugins/:name', function (req, res) {
+router.get('/plugins/:name', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
@@ -5542,9 +5542,9 @@ router.get('/plugins/:name', function (req, res) {
     gated_actions: loaded ? (loaded.gatedActions || []) : [],
     pages: loaded ? (loaded.pages || []) : [],
   });
-});
+}));
 
-router.get('/plugins/:name/config', function (req, res) {
+router.get('/plugins/:name/config', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
@@ -5555,9 +5555,9 @@ router.get('/plugins/:name/config', function (req, res) {
     config[row.key] = row.is_secret ? '••••••••' : row.value;
   }
   res.json(config);
-});
+}));
 
-router.put('/plugins/:name/config', function (req, res) {
+router.put('/plugins/:name/config', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
@@ -5574,27 +5574,27 @@ router.put('/plugins/:name/config', function (req, res) {
   }
   emitEvent('plugin_config_updated', getAdminDisplayName(req), null, 'Updated config for plugin: ' + req.params.name);
   res.json({ ok: true });
-});
+}));
 
-router.put('/plugins/:name/enable', function (req, res) {
+router.put('/plugins/:name/enable', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
   updatePluginEnabled(req.params.name, 1);
   emitEvent('plugin_enabled', getAdminDisplayName(req), null, 'Enabled plugin: ' + req.params.name);
   res.json({ ok: true, name: req.params.name, enabled: 1 });
-});
+}));
 
-router.put('/plugins/:name/disable', function (req, res) {
+router.put('/plugins/:name/disable', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
   updatePluginEnabled(req.params.name, 0);
   emitEvent('plugin_disabled', getAdminDisplayName(req), null, 'Disabled plugin: ' + req.params.name);
   res.json({ ok: true, name: req.params.name, enabled: 0 });
-});
+}));
 
-router.post('/plugins/install', function (req, res) {
+router.post('/plugins/install', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var name = req.body.name;
   if (!name) return res.status(400).json({ error: 'Plugin name required' });
@@ -5608,9 +5608,9 @@ router.post('/plugins/install', function (req, res) {
   updatePluginEnabled(name, 1);
   emitEvent('plugin_installed', getAdminDisplayName(req), null, 'Installed plugin: ' + name, { plugin: name });
   res.json({ ok: true, name: name, message: 'Plugin enabled. Server restart required to fully load.' });
-});
+}));
 
-router.delete('/plugins/:name/uninstall', function (req, res) {
+router.delete('/plugins/:name/uninstall', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
@@ -5626,9 +5626,9 @@ router.delete('/plugins/:name/uninstall', function (req, res) {
 
   emitEvent('plugin_uninstalled', getAdminDisplayName(req), null, 'Uninstalled plugin: ' + req.params.name, { plugin: req.params.name });
   res.json({ ok: true, name: req.params.name, message: 'Plugin disabled and config cleared. Server restart required. Plugin files remain in server/plugins/ for reinstall.' });
-});
+}));
 
-router.get('/plugins/:name/widgets', function (req, res) {
+router.get('/plugins/:name/widgets', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var record = getPluginRecord(req.params.name);
   if (!record) return res.status(404).json({ error: 'Plugin not found' });
@@ -5638,10 +5638,10 @@ router.get('/plugins/:name/widgets', function (req, res) {
 
   var widgets = loaded.dashboard_widgets || loaded.dashboardWidgets || [];
   res.json({ widgets: widgets, route_prefix: loaded.routePrefix || ('/' + loaded.name) });
-});
+}));
 
 // ======== BACKUPS ========
-router.get('/admin/backups', function (req, res) {
+router.get('/admin/backups', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var routeDir = nodePath.dirname(new URL(import.meta.url).pathname);
   var dataDir = process.env.DATA_DIR || nodePath.join(routeDir, '..', 'data');
@@ -5661,10 +5661,10 @@ router.get('/admin/backups', function (req, res) {
     console.error('[mycelium] backup list error:', e.message);
     res.status(500).json({ error: 'Failed to list backups' });
   }
-});
+}));
 
 // ======== API DOCS ========
-router.get('/docs', function (req, res) {
+router.get('/docs', asyncHandler(function (req, res) {
   if (!checkAgentOrAdmin(req, res)) return;
   var routes = [];
   router.stack.forEach(function (layer) {
@@ -5682,7 +5682,7 @@ router.get('/docs', function (req, res) {
     });
   });
   res.json({ routes: routes, count: routes.length });
-});
+}));
 
 // ======== FEEDBACK ========
 
@@ -5739,7 +5739,7 @@ router.delete('/feedback/:id', asyncHandler(async function (req, res) {
 // Human-facing message layer — keeps operator traffic separate from agent chatter.
 
 // GET /inbox — list inbox items for an operator (by ?operator_id or JWT user)
-router.get('/inbox', function (req, res) {
+router.get('/inbox', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5765,10 +5765,10 @@ router.get('/inbox', function (req, res) {
     try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
   });
   res.json(items);
-});
+}));
 
 // GET /inbox/count — unread badge count per operator
-router.get('/inbox/count', function (req, res) {
+router.get('/inbox/count', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5783,10 +5783,10 @@ router.get('/inbox/count', function (req, res) {
   } else {
     res.json(countAllUnreadInbox());
   }
-});
+}));
 
 // GET /inbox/:id — get single inbox item
-router.get('/inbox/:id', function (req, res) {
+router.get('/inbox/:id', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5794,10 +5794,10 @@ router.get('/inbox/:id', function (req, res) {
   if (!item) return apiError(res, 404, 'Inbox item not found');
   try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
   res.json(item);
-});
+}));
 
 // POST /inbox — create inbox item (admin/system use)
-router.post('/inbox', function (req, res) {
+router.post('/inbox', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { operator_id, type, entity_type, entity_id, title, summary, data, priority, all_operators } = req.body;
   if (all_operators) {
@@ -5808,10 +5808,10 @@ router.post('/inbox', function (req, res) {
   var id = createInboxItem(operator_id, type, entity_type, entity_id, title, summary, data, priority);
   emitEvent('inbox_item_created', '__system__', null, 'Inbox item for ' + operator_id + ': ' + (title || ''), { inbox_id: id, operator_id: operator_id, type: type });
   res.json({ ok: true, id: id });
-});
+}));
 
 // PUT /inbox/:id/read — mark item read
-router.put('/inbox/:id/read', function (req, res) {
+router.put('/inbox/:id/read', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5819,10 +5819,10 @@ router.put('/inbox/:id/read', function (req, res) {
   if (!item) return apiError(res, 404, 'Inbox item not found');
   markInboxItemRead(item.id);
   res.json({ ok: true });
-});
+}));
 
 // PUT /inbox/:id/action — mark item actioned (e.g. after approve/reject)
-router.put('/inbox/:id/action', function (req, res) {
+router.put('/inbox/:id/action', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5830,10 +5830,10 @@ router.put('/inbox/:id/action', function (req, res) {
   if (!item) return apiError(res, 404, 'Inbox item not found');
   markInboxItemActioned(item.id);
   res.json({ ok: true });
-});
+}));
 
 // DELETE /inbox/:id — dismiss item
-router.delete('/inbox/:id', function (req, res) {
+router.delete('/inbox/:id', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5841,10 +5841,10 @@ router.delete('/inbox/:id', function (req, res) {
   if (!item) return apiError(res, 404, 'Inbox item not found');
   dismissInboxItem(item.id);
   res.json({ ok: true });
-});
+}));
 
 // POST /inbox/bulk-dismiss — dismiss multiple items at once
-router.post('/inbox/bulk-dismiss', function (req, res) {
+router.post('/inbox/bulk-dismiss', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
   if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
@@ -5869,7 +5869,7 @@ router.post('/inbox/bulk-dismiss', function (req, res) {
     return apiError(res, 400, 'ids array or all=true required');
   }
   res.json({ ok: true, dismissed: dismissed });
-});
+}));
 
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
@@ -5907,7 +5907,7 @@ function githubApi(method, path, body) {
 }
 
 // List PRs
-router.get('/github/prs/:owner/:repo', function (req, res) {
+router.get('/github/prs/:owner/:repo', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!GITHUB_TOKEN) return res.status(503).json({ error: 'GITHUB_TOKEN not configured on server' });
@@ -5922,10 +5922,10 @@ router.get('/github/prs/:owner/:repo', function (req, res) {
       res.json({ count: prs.length, prs: prs });
     })
     .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
-});
+}));
 
 // Merge PR
-router.post('/github/prs/:owner/:repo/:number/merge', function (req, res) {
+router.post('/github/prs/:owner/:repo/:number/merge', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   // Enforcement rules check
   var who = resolveAgentId(req);
@@ -5944,10 +5944,10 @@ router.post('/github/prs/:owner/:repo/:number/merge', function (req, res) {
       res.json({ number: parseInt(req.params.number), sha: r.data.sha, merged: true });
     })
     .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
-});
+}));
 
 // Create PR
-router.post('/github/prs/:owner/:repo', function (req, res) {
+router.post('/github/prs/:owner/:repo', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   if (!GITHUB_TOKEN) return res.status(503).json({ error: 'GITHUB_TOKEN not configured on server' });
   var body = { title: req.body.title, head: req.body.head, base: req.body.base, body: req.body.body || '', draft: !!req.body.draft };
@@ -5958,38 +5958,38 @@ router.post('/github/prs/:owner/:repo', function (req, res) {
       res.json({ number: r.data.number, title: r.data.title, url: r.data.html_url });
     })
     .catch(function (e) { console.error('[mycelium] GitHub API error:', e.message); res.status(500).json({ error: 'GitHub request failed' }); });
-});
+}));
 
 // ======== NODE PROFILES (Stand Up Calibration) ========
 
 // List all profiles (admin only)
-router.get('/profiles', function (req, res) {
+router.get('/profiles', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var filter = {};
   if (req.query.node_type) filter.node_type = req.query.node_type;
   if (req.query.layer) filter.layer = req.query.layer;
   var profiles = listNodeProfiles(filter);
   res.json({ count: profiles.length, profiles: profiles });
-});
+}));
 
 // Resolve profile chain for an agent (admin only)
 // NOTE: This route must be before /profiles/:id to avoid matching "resolve" as an ID
-router.get('/profiles/resolve/:agentId', function (req, res) {
+router.get('/profiles/resolve/:agentId', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var resolved = resolveProfileChain(req.params.agentId);
   res.json(resolved);
-});
+}));
 
 // Get single profile (admin only)
-router.get('/profiles/:id', function (req, res) {
+router.get('/profiles/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var profile = getNodeProfile(req.params.id);
   if (!profile) return res.status(404).json({ error: 'Profile not found' });
   res.json(profile);
-});
+}));
 
 // Create profile (admin only)
-router.post('/profiles', function (req, res) {
+router.post('/profiles', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   if (!id) return res.status(400).json({ error: 'id is required' });
@@ -6004,10 +6004,10 @@ router.post('/profiles', function (req, res) {
     console.error('[mycelium] profile creation error:', e.message);
     res.status(500).json({ error: 'Failed to create profile' });
   }
-});
+}));
 
 // Update profile (admin only, partial)
-router.put('/profiles/:id', function (req, res) {
+router.put('/profiles/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var updated = updateNodeProfile(req.params.id, req.body);
   if (!updated) {
@@ -6017,10 +6017,10 @@ router.put('/profiles/:id', function (req, res) {
   }
   emitEvent('profile_updated', getAdminDisplayName(req), null, 'Profile updated: ' + req.params.id);
   res.json(updated);
-});
+}));
 
 // Delete profile (admin only, blocked for platform layer)
-router.delete('/profiles/:id', function (req, res) {
+router.delete('/profiles/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var deleted = deleteNodeProfile(req.params.id);
   if (!deleted) {
@@ -6030,18 +6030,18 @@ router.delete('/profiles/:id', function (req, res) {
   }
   emitEvent('profile_deleted', getAdminDisplayName(req), null, 'Profile deleted: ' + req.params.id);
   res.json({ ok: true, deleted: deleted });
-});
+}));
 
 // ======== TEAM SETTINGS ========
 
 // GET /team-settings — all settings grouped by section
-router.get('/team-settings', function (req, res) {
+router.get('/team-settings', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   res.json(getAllTeamSettingsGrouped());
-});
+}));
 
 // GET /team-settings/:section — one section
-router.get('/team-settings/:section', function (req, res) {
+router.get('/team-settings/:section', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var rows = listTeamSettings(req.params.section);
   var result = {};
@@ -6049,10 +6049,10 @@ router.get('/team-settings/:section', function (req, res) {
     try { result[row.key] = JSON.parse(row.value); } catch (e) { result[row.key] = row.value; }
   }
   res.json(result);
-});
+}));
 
 // PUT /team-settings/:section/:key — upsert a setting
-router.put('/team-settings/:section/:key', function (req, res) {
+router.put('/team-settings/:section/:key', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var section = req.params.section;
   var key = req.params.key;
@@ -6065,43 +6065,43 @@ router.put('/team-settings/:section/:key', function (req, res) {
   var who = getAdminDisplayName(req);
   var result = upsertTeamSetting(section, key, value, who);
   res.json({ ok: true, setting: result });
-});
+}));
 
 // DELETE /team-settings/:section/:key — remove a setting
-router.delete('/team-settings/:section/:key', function (req, res) {
+router.delete('/team-settings/:section/:key', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   deleteTeamSetting(req.params.section, req.params.key);
   res.json({ ok: true });
-});
+}));
 
 // POST /team-settings/sync — force re-sync to profiles
-router.post('/team-settings/sync', function (req, res) {
+router.post('/team-settings/sync', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   syncTeamSettingsToProfile();
   res.json({ ok: true, message: 'Profile sync complete' });
-});
+}));
 
 // ======== TEAMS ========
 
 // GET /teams — list teams
-router.get('/teams', function (req, res) {
+router.get('/teams', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json({ teams: listTeams(req.query.org_id || null) });
-});
+}));
 
 // GET /teams/:id — team detail with members and projects
-router.get('/teams/:id', function (req, res) {
+router.get('/teams/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var team = getTeam(req.params.id);
   if (!team) return apiError(res, 404, 'Team not found');
   team.projects = getTeamProjects(req.params.id);
   res.json(team);
-});
+}));
 
 // POST /teams — create team (admin only)
-router.post('/teams', function (req, res) {
+router.post('/teams', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var { id, org_id, name, description } = req.body;
   if (!id || !org_id || !name) return apiError(res, 400, 'id, org_id, and name required');
@@ -6117,18 +6117,18 @@ router.post('/teams', function (req, res) {
   } catch (err) {
     return apiError(res, 400, err.message);
   }
-});
+}));
 
 // PUT /teams/:id — update team (admin only)
-router.put('/teams/:id', function (req, res) {
+router.put('/teams/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var team = updateTeam(req.params.id, req.body);
   if (!team) return apiError(res, 404, 'Team not found');
   res.json(team);
-});
+}));
 
 // DELETE /teams/:id — delete empty team (admin only)
-router.delete('/teams/:id', function (req, res) {
+router.delete('/teams/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   try {
     deleteTeam(req.params.id);
@@ -6136,10 +6136,10 @@ router.delete('/teams/:id', function (req, res) {
   } catch (err) {
     return apiError(res, 400, err.message);
   }
-});
+}));
 
 // POST /teams/:id/members — add member (any operator or admin)
-router.post('/teams/:id/members', function (req, res) {
+router.post('/teams/:id/members', asyncHandler(function (req, res) {
   if (!checkAdminOrOperator(req, res)) return;
   var { user_id, user_type, role, is_primary } = req.body;
   if (!user_id) return apiError(res, 400, 'user_id required');
@@ -6154,49 +6154,49 @@ router.post('/teams/:id/members', function (req, res) {
   } catch (err) {
     return apiError(res, 400, err.message);
   }
-});
+}));
 
 // PUT /teams/:id/members/:userId — update member role/primary (any operator or admin)
-router.put('/teams/:id/members/:userId', function (req, res) {
+router.put('/teams/:id/members/:userId', asyncHandler(function (req, res) {
   if (!checkAdminOrOperator(req, res)) return;
   updateTeamMember(req.params.id, req.params.userId, req.body);
   res.json({ ok: true });
-});
+}));
 
 // DELETE /teams/:id/members/:userId — remove member (any operator or admin)
-router.delete('/teams/:id/members/:userId', function (req, res) {
+router.delete('/teams/:id/members/:userId', asyncHandler(function (req, res) {
   if (!checkAdminOrOperator(req, res)) return;
   removeTeamMember(req.params.id, req.params.userId);
   res.json({ ok: true });
-});
+}));
 
 // GET /teams/:id/projects — team's projects
-router.get('/teams/:id/projects', function (req, res) {
+router.get('/teams/:id/projects', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json({ projects: getTeamProjects(req.params.id) });
-});
+}));
 
 // ======== AGENT TEMPLATES ========
 
 // GET /agent-templates — list all
-router.get('/agent-templates', function (req, res) {
+router.get('/agent-templates', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   res.json(listAgentTemplates());
-});
+}));
 
 // GET /agent-templates/:id — get one
-router.get('/agent-templates/:id', function (req, res) {
+router.get('/agent-templates/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var t = getAgentTemplate(req.params.id);
   if (!t) return apiError(res, 404, 'Template not found');
   res.json(t);
-});
+}));
 
 // POST /agent-templates — create (admin only)
-router.post('/agent-templates', function (req, res) {
+router.post('/agent-templates', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var id = req.body.id;
   var name = req.body.name;
@@ -6204,28 +6204,28 @@ router.post('/agent-templates', function (req, res) {
   if (getAgentTemplate(id)) return apiError(res, 409, 'Template ' + id + ' already exists');
   var template = createAgentTemplate(id, name, req.body.description || '', req.body, getAdminDisplayName(req));
   res.status(201).json(template);
-});
+}));
 
 // PUT /agent-templates/:id — update (admin only)
-router.put('/agent-templates/:id', function (req, res) {
+router.put('/agent-templates/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var t = getAgentTemplate(req.params.id);
   if (!t) return apiError(res, 404, 'Template not found');
   var updated = updateAgentTemplate(req.params.id, req.body);
   res.json(updated);
-});
+}));
 
 // DELETE /agent-templates/:id — delete (admin only)
-router.delete('/agent-templates/:id', function (req, res) {
+router.delete('/agent-templates/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var t = getAgentTemplate(req.params.id);
   if (!t) return apiError(res, 404, 'Template not found');
   deleteAgentTemplate(req.params.id);
   res.json({ ok: true, deleted: req.params.id });
-});
+}));
 
 // POST /agent-templates/:id/apply/:agentId — apply template to existing agent (admin only)
-router.post('/agent-templates/:id/apply/:agentId', function (req, res) {
+router.post('/agent-templates/:id/apply/:agentId', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var t = getAgentTemplate(req.params.id);
   if (!t) return apiError(res, 404, 'Template not found');
@@ -6246,7 +6246,7 @@ router.post('/agent-templates/:id/apply/:agentId', function (req, res) {
     }
   }
   res.json({ ok: true, agent: getAgent(req.params.agentId), template: t.id });
-});
+}));
 
 // ======== SUPPORT TICKETS ========
 
@@ -6293,7 +6293,7 @@ try {
 
 // Create support ticket (public — no auth required for customers)
 var ticketCreateLimiter = rateLimit(function (req) { return 'ticket:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
-router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
+router.post('/support/tickets', ticketCreateLimiter, asyncHandler(function (req, res) {
   var subject = req.body.subject;
   if (!subject) return res.status(400).json({ error: 'subject is required' });
   if (!validateStringLength(res, subject, MAX_TITLE, 'subject')) return;
@@ -6371,10 +6371,10 @@ router.post('/support/tickets', ticketCreateLimiter, function (req, res) {
     'https://mycelium.fyi/studio/support'
   );
   res.status(201).json(ticket);
-});
+}));
 
 // List support tickets (admin only)
-router.get('/support/tickets', function (req, res) {
+router.get('/support/tickets', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var tickets = listSupportTickets({
     status: req.query.status,
@@ -6383,18 +6383,18 @@ router.get('/support/tickets', function (req, res) {
     limit: parseInt(req.query.limit) || 100
   });
   res.json({ count: tickets.length, tickets: tickets });
-});
+}));
 
 // Get single ticket (admin only)
-router.get('/support/tickets/:id', function (req, res) {
+router.get('/support/tickets/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var ticket = getSupportTicket(parseInt(req.params.id));
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   res.json(ticket);
-});
+}));
 
 // Update ticket (admin only)
-router.put('/support/tickets/:id', function (req, res) {
+router.put('/support/tickets/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var ticket = getSupportTicket(parseInt(req.params.id));
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
@@ -6412,15 +6412,15 @@ router.put('/support/tickets/:id', function (req, res) {
     } catch (e) { /* non-fatal */ }
   }
   res.json(updated);
-});
+}));
 
-router.delete('/support/tickets/:id', function (req, res) {
+router.delete('/support/tickets/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var ticket = getSupportTicket(parseInt(req.params.id));
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   deleteSupportTicket(parseInt(req.params.id));
   res.json({ ok: true, id: parseInt(req.params.id) });
-});
+}));
 
 // ======== HEALTH PATROL ========
 
@@ -6490,7 +6490,7 @@ setInterval(function () {
   } catch (e) { console.error('[health_patrol] Error:', e.message); }
 }, PATROL_INTERVAL);
 
-router.get('/admin/health', function (req, res) {
+router.get('/admin/health', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   try {
@@ -6498,14 +6498,14 @@ router.get('/admin/health', function (req, res) {
   } catch (e) {
     return res.status(500).json({ error: 'Health patrol failed: ' + e.message });
   }
-});
+}));
 
-router.get('/admin/health/history', function (req, res) {
+router.get('/admin/health/history', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var limit = parseInt(req.query.limit) || 50;
   var events = listEvents({ type: 'health_patrol', limit: limit });
   res.json(events);
-});
+}));
 
 export default router;
