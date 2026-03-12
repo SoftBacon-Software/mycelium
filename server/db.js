@@ -2217,30 +2217,34 @@ export function getDroneJob(id) {
 }
 
 export function claimDroneJob(droneId, capabilities) {
-  // Atomic: find oldest pending job where requires is a subset of capabilities
-  // If job has profile_id, drone must have completed setup for that profile
   var caps = Array.isArray(capabilities) ? capabilities : [];
-  var pending = db.prepare(
-    "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
-  ).all();
-  for (var job of pending) {
-    var reqs = [];
-    try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
-    var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
-    if (!matched) continue;
-    // Check profile requirement — drone must have setup_done=1 for this profile
-    if (job.profile_id) {
-      var assignment = db.prepare(
-        "SELECT setup_done FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
-      ).get(droneId, job.profile_id);
-      if (!assignment || !assignment.setup_done) continue;
+
+  return db.transaction(function () {
+    var pending = db.prepare(
+      "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
+    ).all();
+
+    for (var i = 0; i < pending.length; i++) {
+      var job = pending[i];
+      var reqs = [];
+      try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
+      var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
+      if (!matched) continue;
+
+      if (job.profile_id) {
+        var assignment = db.prepare(
+          "SELECT setup_done FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
+        ).get(droneId, job.profile_id);
+        if (!assignment || !assignment.setup_done) continue;
+      }
+
+      var result = db.prepare(
+        "UPDATE drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
+      ).run(droneId, job.id);
+      if (result.changes > 0) return getDroneJob(job.id);
     }
-    var result = db.prepare(
-      "UPDATE drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
-    ).run(droneId, job.id);
-    if (result.changes > 0) return getDroneJob(job.id);
-  }
-  return null;
+    return null;
+  })();
 }
 
 export function updateDroneJob(id, fields) {
