@@ -338,11 +338,40 @@ function getStudioUser(req) {
   } catch (e) { return null; }
 }
 
-// Agent key cache: sha256(key) -> agentId. Avoids bcrypt on every request.
+// Bounded agent key cache: max 1000 entries, 5-min TTL
+var AGENT_KEY_CACHE_MAX = 1000;
+var AGENT_KEY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 var agentKeyCache = new Map();
 
 function clearAgentKeyCache() {
   agentKeyCache.clear();
+}
+
+function getFromAgentKeyCache(keyHash) {
+  var entry = agentKeyCache.get(keyHash);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > AGENT_KEY_CACHE_TTL) {
+    agentKeyCache.delete(keyHash);
+    return null;
+  }
+  return entry;
+}
+
+function setInAgentKeyCache(keyHash, data) {
+  if (agentKeyCache.size >= AGENT_KEY_CACHE_MAX) {
+    var oldest = agentKeyCache.keys().next().value;
+    agentKeyCache.delete(oldest);
+  }
+  agentKeyCache.set(keyHash, Object.assign({}, data, { ts: Date.now() }));
+}
+
+function invalidateAgentKeyCache(agentId) {
+  for (var entry of agentKeyCache) {
+    if (entry[1].id === agentId) {
+      agentKeyCache.delete(entry[0]);
+      break;
+    }
+  }
 }
 
 // Check if the authenticated caller has access to a resource's project.
@@ -381,8 +410,8 @@ function checkAgent(req, res) {
   }
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
   // In-memory cache: avoids DB lookup on every request
-  if (agentKeyCache.has(keyHash)) {
-    var cached = agentKeyCache.get(keyHash);
+  var cached = getFromAgentKeyCache(keyHash);
+  if (cached) {
     req._authAgentId = cached.id;
     req._authProjectId = cached.project_id;
     return cached.id;
@@ -390,7 +419,7 @@ function checkAgent(req, res) {
   // DB lookup: O(1) SHA-256 direct lookup first, then bcrypt fallback for legacy hashes
   var directMatch = getDB().prepare("SELECT id, project_id FROM agents WHERE api_key_hash = ?").get(keyHash);
   if (directMatch) {
-    agentKeyCache.set(keyHash, { id: directMatch.id, project_id: directMatch.project_id || null });
+    setInAgentKeyCache(keyHash, { id: directMatch.id, project_id: directMatch.project_id || null });
     req._authAgentId = directMatch.id;
     req._authProjectId = directMatch.project_id || null;
     return directMatch.id;
@@ -403,7 +432,7 @@ function checkAgent(req, res) {
     if ((full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) && bcrypt.compareSync(key, full.api_key_hash)) {
       updateAgentKey(a.id, keyHash);
       clearAgentKeyCache();
-      agentKeyCache.set(keyHash, { id: a.id, project_id: full.project_id || null });
+      setInAgentKeyCache(keyHash, { id: a.id, project_id: full.project_id || null });
       req._authAgentId = a.id;
       req._authProjectId = full.project_id || null;
       return a.id;
@@ -3568,7 +3597,7 @@ router.put('/admin/agents/:id/key', adminWriteLimiter, asyncHandler(function (re
   var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
   var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   updateAgentKey(req.params.id, hash);
-  clearAgentKeyCache();
+  invalidateAgentKeyCache(req.params.id);
   emitEvent('agent_key_regenerated', '__admin__', null, 'Admin regenerated key for: ' + req.params.id);
   res.json({ id: req.params.id, api_key: apiKey, message: 'Store this key — it will not be shown again' });
 }));
@@ -3582,7 +3611,7 @@ router.post('/agents/rekey', asyncHandler(function (req, res) {
   var newKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
   var newHash = crypto.createHash('sha256').update(newKey).digest('hex');
   updateAgentKey(agentId, newHash);
-  clearAgentKeyCache();
+  invalidateAgentKeyCache(agentId);
   emitEvent('agent_key_rotated', agentId, null, agentId + ' rotated their API key');
   res.json({ id: agentId, api_key: newKey, message: 'Key rotated — update your config with this new key' });
 }));
