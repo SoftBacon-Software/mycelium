@@ -3074,6 +3074,30 @@ export function deletePluginConfig(pluginName, key) {
 // ======== AGENT SAVEPOINTS ========
 
 export function createSavepoint(agentId, data) {
+  // Validate state_snapshot is valid JSON
+  var stateSnapshot = '{}';
+  if (data.state_snapshot) {
+    try {
+      stateSnapshot = typeof data.state_snapshot === 'string'
+        ? (JSON.parse(data.state_snapshot), data.state_snapshot)
+        : JSON.stringify(data.state_snapshot);
+    } catch (e) {
+      console.warn('[mycelium] Invalid state_snapshot JSON for %s, using empty object', agentId);
+      stateSnapshot = '{}';
+    }
+  }
+
+  var messagesAcked = '[]';
+  if (data.messages_acked) {
+    try {
+      messagesAcked = typeof data.messages_acked === 'string'
+        ? (JSON.parse(data.messages_acked), data.messages_acked)
+        : JSON.stringify(data.messages_acked);
+    } catch (e) {
+      messagesAcked = '[]';
+    }
+  }
+
   return db.prepare(
     `INSERT INTO agent_savepoints (agent_id, session_id, heartbeat_at, working_on, state_snapshot, messages_acked, context_versions, notes)
      VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?)`
@@ -3081,8 +3105,8 @@ export function createSavepoint(agentId, data) {
     agentId,
     data.session_id || null,
     data.working_on || '',
-    JSON.stringify(data.state_snapshot || {}),
-    JSON.stringify(data.messages_acked || []),
+    stateSnapshot,
+    messagesAcked,
     JSON.stringify(data.context_versions || {}),
     data.notes || null
   );
