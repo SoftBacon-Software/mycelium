@@ -2,6 +2,15 @@
 import { evaluateCondition } from './evaluate.js';
 
 export default function createGuardrailsDB(db) {
+  // Migrate: add new columns if missing
+  try { db.prepare("ALTER TABLE guardrail_rules ADD COLUMN version INTEGER DEFAULT 1").run(); } catch (e) { /* column exists */ }
+  try { db.prepare("ALTER TABLE guardrail_rules ADD COLUMN severity TEXT DEFAULT 'medium'").run(); } catch (e) { /* column exists */ }
+  try { db.prepare("ALTER TABLE guardrail_rules ADD COLUMN cooldown_seconds INTEGER DEFAULT 0").run(); } catch (e) { /* column exists */ }
+
+  // Create rule history table
+  db.prepare("CREATE TABLE IF NOT EXISTS guardrail_rule_history (id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL, version INTEGER NOT NULL, conditions TEXT NOT NULL, enforcement TEXT NOT NULL, changed_by TEXT DEFAULT '', changed_at TEXT DEFAULT (datetime('now')))").run();
+  try { db.prepare('CREATE INDEX IF NOT EXISTS idx_guardrail_rule_history ON guardrail_rule_history(rule_id)').run(); } catch (e) {}
+
   return {
     createRule(name, description, triggerEvent, conditions, enforcement, projectId, createdBy) {
       var conditionsJson = typeof conditions === 'string' ? conditions : JSON.stringify(conditions);
@@ -42,6 +51,14 @@ export default function createGuardrailsDB(db) {
     },
 
     updateRule(id, fields) {
+      // Save current version to history before updating
+      var current = this.getRule(id);
+      if (current) {
+        db.prepare(
+          'INSERT INTO guardrail_rule_history (rule_id, version, conditions, enforcement, changed_by) VALUES (?, ?, ?, ?, ?)'
+        ).run(id, current.version || 1, JSON.stringify(current.conditions), current.enforcement, fields.changed_by || '');
+      }
+
       var sets = [];
       var params = [];
       if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
@@ -57,6 +74,7 @@ export default function createGuardrailsDB(db) {
       if (fields.project_id !== undefined) { sets.push('project_id = ?'); params.push(fields.project_id); }
       if (sets.length === 0) return;
 
+      sets.push('version = COALESCE(version, 1) + 1');
       sets.push("updated_at = datetime('now')");
       params.push(id);
       var sql = 'UPDATE guardrail_rules SET ' + sets.join(', ') + ' WHERE id = ?';
