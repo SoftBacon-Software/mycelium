@@ -229,6 +229,20 @@ function asyncHandler(fn) {
   };
 }
 
+// Pre-action guardrail check — blocks mutations if a guardrail rule with enforcement='block' fires
+function checkGuardrails(req, res, eventType, eventData) {
+  if (!req.app._guardrailsCheck) return true;
+  var result = req.app._guardrailsCheck(eventType, eventData);
+  if (!result.allowed) {
+    res.status(403).json({
+      error: 'Blocked by guardrail: ' + result.violations.map(function (v) { return v.rule_name; }).join(', '),
+      violations: result.violations
+    });
+    return false;
+  }
+  return true;
+}
+
 // Parse an integer route/query parameter safely.
 // Returns null (not NaN) when the value is missing or non-numeric,
 // preventing NaN from propagating into DB prepared statements.
@@ -1467,6 +1481,7 @@ router.get('/tasks', asyncHandler(function (req, res) {
 router.post('/tasks', agentWriteLimiter, asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'task_created', { agent: agentId, project_id: req.body.project_id, title: req.body.title })) return;
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
@@ -1505,6 +1520,7 @@ router.get('/tasks/:id', asyncHandler(function (req, res) {
 router.put('/tasks/:id', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'task_updated', { agent: agentId, task_id: req.params.id, status: req.body.status })) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
@@ -2655,6 +2671,7 @@ router.get('/messages', asyncHandler(function (req, res) {
 router.post('/messages', agentWriteLimiter, asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'message_sent', { agent: agentId, to_agent: req.body.to, content: (req.body.content || '').substring(0, 200) })) return;
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   if (!validateStringLength(res, content, MAX_CONTENT, 'content')) return;
@@ -4802,6 +4819,7 @@ router.post('/drones/claim', asyncHandler(function (req, res) {
 router.post('/drones/jobs', agentWriteLimiter, asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!checkGuardrails(req, res, 'drone_job_queued', { agent: who, title: req.body.title })) return;
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var command = req.body.command || '';

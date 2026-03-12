@@ -7,6 +7,13 @@ import { evaluateCondition } from './evaluate.js';
 export function registerHooks(core) {
   var db = createGuardrailsDB(core.db);
 
+  // Expose checkAction for pre-mutation checks by route handlers
+  if (core.app) {
+    core.app._guardrailsCheck = function (eventType, eventData) {
+      return db.checkAction(eventType, eventData);
+    };
+  }
+
   core.onEvent('*', function (eventData) {
     try {
       var eventType = eventData.type || eventData.event_type || '';

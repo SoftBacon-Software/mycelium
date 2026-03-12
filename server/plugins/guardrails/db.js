@@ -1,4 +1,5 @@
 // Guardrails plugin DB helpers
+import { evaluateCondition } from './evaluate.js';
 
 export default function createGuardrailsDB(db) {
   return {
@@ -140,6 +141,23 @@ export default function createGuardrailsDB(db) {
       return db.prepare(
         'SELECT agent_id, COUNT(*) as violation_count FROM guardrail_violations WHERE agent_id != \'\' GROUP BY agent_id ORDER BY violation_count DESC LIMIT ?'
       ).all(lim);
+    },
+
+    checkAction(eventType, eventData) {
+      var rules = this.listRules({ enabled: 1 });
+      var blocked = [];
+      for (var i = 0; i < rules.length; i++) {
+        var rule = rules[i];
+        if (rule.trigger_event !== '*' && rule.trigger_event !== eventType) continue;
+        if (rule.project_id && rule.project_id !== (eventData.project_id || '')) continue;
+
+        var result = evaluateCondition(rule.conditions, eventData);
+        if (!result.violated) continue;
+        if (rule.enforcement === 'block') {
+          blocked.push({ rule_id: rule.id, rule_name: rule.name, detail: result.detail });
+        }
+      }
+      return { allowed: blocked.length === 0, violations: blocked };
     }
   };
 }
