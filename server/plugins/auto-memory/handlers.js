@@ -31,6 +31,7 @@ export function registerHooks(core) {
       // Fire-and-forget async extraction
       extractFacts(db, config, text, eventData.agent, data.project_id || eventData.project_id).catch(function (e) {
         console.error('[auto-memory] Observer extraction failed:', e.message);
+        try { db.logExtractionError(eventData.agent, data.project_id || eventData.project_id, 'task_completed', e.message, text.substring(0, 500)); } catch (_) {}
       });
     } catch (e) {
       console.error('[auto-memory] task_completed hook error:', e.message);
@@ -50,6 +51,7 @@ export function registerHooks(core) {
 
       extractFacts(db, config, text, eventData.agent, eventData.project_id).catch(function (e) {
         console.error('[auto-memory] Observer extraction failed:', e.message);
+        try { db.logExtractionError(eventData.agent, eventData.project_id, 'request_resolved', e.message, text.substring(0, 500)); } catch (_) {}
       });
     } catch (e) {
       console.error('[auto-memory] request_resolved hook error:', e.message);
@@ -72,6 +74,7 @@ export function registerHooks(core) {
 
       extractFacts(db, config, text, eventData.agent, eventData.project_id).catch(function (e) {
         console.error('[auto-memory] Observer extraction failed:', e.message);
+        try { db.logExtractionError(eventData.agent, eventData.project_id, 'context_key_updated', e.message, text.substring(0, 500)); } catch (_) {}
       });
     } catch (e) {
       console.error('[auto-memory] context_key_updated hook error:', e.message);
