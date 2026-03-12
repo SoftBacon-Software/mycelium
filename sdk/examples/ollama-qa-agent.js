@@ -6,8 +6,15 @@
 // Reuses ollama-agent.js for work/message/request handling.
 // Adds idle-cycle QA test rotation.
 
-import { onWork, onMessage, onRequest } from './ollama-agent.js'
-export { onWork, onMessage, onRequest }
+import { onWork, onRequest } from './ollama-agent.js'
+export { onWork, onRequest }
+
+// Override onMessage to ignore self-messages (QA test sends messages to itself)
+export async function onMessage(msg, agent) {
+  if (msg.from_agent === agent.agentId) return // ignore self-messages from QA tests
+  var { onMessage: _onMessage } = await import('./ollama-agent.js')
+  return _onMessage(msg, agent)
+}
 
 var QA_NAMESPACE = 'macbook-ollama'
 var QA_KEY = 'qa-results'
