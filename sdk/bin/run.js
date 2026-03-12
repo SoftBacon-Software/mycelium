@@ -45,6 +45,7 @@ if (handlerPath) {
     if (handler.onWork) agent.onWork(function(item) { return handler.onWork(item, agent) })
     if (handler.onMessage) agent.onMessage(function(msg) { return handler.onMessage(msg, agent) })
     if (handler.onRequest) agent.onRequest(function(req, type) { return handler.onRequest(req, type, agent) })
+    if (handler.onIdle) agent.onIdle(function() { return handler.onIdle(agent) })
     console.log('[mycelium] Loaded handler from', handlerPath)
   } catch (err) {
     console.error('[mycelium] Failed to load handler:', err.message)
