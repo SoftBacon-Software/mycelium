@@ -1130,27 +1130,36 @@ router.get('/work/:agentId', asyncHandler(function (req, res) {
   var queue = buildWorkQueue(agentId, agent.project_id, pendingDirectives, pendingRequests, myTasks, openBugs, myPlans);
 
   // Auto-claim top item
+  // Auto-claim top item (wrapped in transaction to prevent duplicate claims)
   if (req.query.auto_claim === 'true' && queue.length > 0) {
     var top = queue[0];
     var claimed = null;
 
-    if (top.type === 'directive' || top.type === 'request') {
-      claimed = top;
-    } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
-      updatePlanStep(top.id, { assignee: agentId, status: 'in_progress' });
-      emitEvent('work_claimed', agentId, null, agentId + ' auto-claimed plan step: ' + top.title, { plan_step_id: top.id, plan_id: top.plan_id });
-      claimed = top;
-      claimed.claimed = true;
-    } else if (top.type === 'task') {
-      updateTask(top.id, { assignee: agentId, status: 'in_progress' });
-      var fullTask = getTask(top.id);
-      emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed task #' + top.id + ': ' + top.title, { task_id: top.id });
-      claimed = { ...top, description: fullTask ? fullTask.description : '', claimed: true };
-    } else if (top.type === 'bug' || top.type === 'bug_unassigned') {
-      updateBug(top.id, { assignee: agentId, status: 'in_progress' });
-      emitEvent('work_claimed', agentId, top.project_id, agentId + ' auto-claimed bug #' + top.id + ': ' + top.title, { bug_id: top.id });
-      claimed = top;
-      claimed.claimed = true;
+    try {
+      claimed = getDB().transaction(function () {
+        if (top.type === 'directive' || top.type === 'request') {
+          return top;
+        } else if (top.type === 'plan_step' || top.type === 'plan_step_unassigned') {
+          updatePlanStep(top.id, { assignee: agentId, status: 'in_progress' });
+          top.claimed = true;
+          return top;
+        } else if (top.type === 'task') {
+          updateTask(top.id, { assignee: agentId, status: 'in_progress' });
+          var fullTask = getTask(top.id);
+          return Object.assign({}, top, { description: fullTask ? fullTask.description : '', claimed: true });
+        } else if (top.type === 'bug' || top.type === 'bug_unassigned') {
+          updateBug(top.id, { assignee: agentId, status: 'in_progress' });
+          top.claimed = true;
+          return top;
+        }
+        return null;
+      })();
+
+      if (claimed && claimed.type !== 'directive' && claimed.type !== 'request') {
+        emitEvent('work_claimed', agentId, top.project_id || null, agentId + ' auto-claimed ' + top.type + ' #' + top.id + ': ' + top.title, { item_type: top.type, item_id: top.id });
+      }
+    } catch (e) {
+      console.error('[work] auto-claim transaction failed:', e.message);
     }
 
     return res.json({ ok: true, queue: queue, claimed: claimed });
