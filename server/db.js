@@ -871,6 +871,34 @@ function enforceNamespaceCap(namespace) {
   }
 }
 
+export function cleanupContextHistory(retentionDays) {
+  var days = retentionDays || 90;
+  var result = db.prepare(
+    "DELETE FROM context_history WHERE changed_at < datetime('now', '-' || ? || ' days')"
+  ).run(String(days));
+  if (result.changes > 0) {
+    console.log('[mycelium] Cleaned up %d old context history entries (retention: %d days)', result.changes, days);
+  }
+  return result.changes;
+}
+
+export function cleanupSavepoints(keepPerAgent) {
+  var keep = keepPerAgent || 50;
+  var agents = db.prepare("SELECT DISTINCT agent_id FROM agent_savepoints").all();
+  var totalCleaned = 0;
+  for (var i = 0; i < agents.length; i++) {
+    var agentId = agents[i].agent_id;
+    var result = db.prepare(
+      "DELETE FROM agent_savepoints WHERE agent_id = ? AND id NOT IN (SELECT id FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT ?)"
+    ).run(agentId, agentId, keep);
+    totalCleaned += result.changes;
+  }
+  if (totalCleaned > 0) {
+    console.log('[mycelium] Cleaned up %d old savepoints (keep: %d per agent)', totalCleaned, keep);
+  }
+  return totalCleaned;
+}
+
 export function getContextKey(namespace, key) {
   var row = db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   if (row && row.expires_at && new Date(row.expires_at) < new Date()) {

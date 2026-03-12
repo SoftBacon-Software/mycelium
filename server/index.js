@@ -20,7 +20,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys } from './db.js';
+import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 
@@ -380,6 +380,13 @@ setInterval(function () {
       var tokensPurged = getDB().prepare("DELETE FROM password_resets WHERE expires_at < datetime('now', '-1 day')").run().changes;
       if (tokensPurged > 0) console.log('[daily] Purged ' + tokensPurged + ' expired password reset tokens');
     } catch (e) { /* table may not exist yet — non-fatal */ }
+    // Retention cleanup: context history + savepoints
+    try {
+      cleanupContextHistory(90);
+      cleanupSavepoints(50);
+    } catch (e) {
+      console.error('[health] Retention cleanup error:', e.message);
+    }
   } catch (e) {
     console.error('[daily] Maintenance error:', e.message);
   }
