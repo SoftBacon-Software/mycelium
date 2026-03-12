@@ -63,6 +63,8 @@ var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.c
 var adminWriteLimiter = rateLimit(function (req) { return 'admin_write:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
 // Waitlist: 5 signups per 15 minutes per IP
 var waitlistLimiter = rateLimit(function (req) { return 'waitlist:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
+// Agent write operations: 30 per minute per agent
+var agentWriteLimiter = rateLimit(function (req) { return 'agent_write:' + (req.headers['x-agent-key'] || req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
 
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
@@ -1462,7 +1464,7 @@ router.get('/tasks', asyncHandler(function (req, res) {
   res.json(listTasks(filters));
 }));
 
-router.post('/tasks', asyncHandler(function (req, res) {
+router.post('/tasks', agentWriteLimiter, asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var title = escapeHtml(req.body.title);
@@ -2650,7 +2652,7 @@ router.get('/messages', asyncHandler(function (req, res) {
   res.json(listMessages(filters));
 }));
 
-router.post('/messages', asyncHandler(function (req, res) {
+router.post('/messages', agentWriteLimiter, asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
   var content = req.body.content;
@@ -4368,7 +4370,7 @@ router.get('/files', asyncHandler(function (req, res) {
 // =============== BUGS ===============
 
 // POST /bugs — create a bug report (agent or admin)
-router.post('/bugs', asyncHandler(function (req, res) {
+router.post('/bugs', agentWriteLimiter, asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
@@ -4797,7 +4799,7 @@ router.post('/drones/claim', asyncHandler(function (req, res) {
 
 // Submit a drone job
 // Accepts optional job_type — when provided, auto-fills requires from template and command is rendered at claim time
-router.post('/drones/jobs', asyncHandler(function (req, res) {
+router.post('/drones/jobs', agentWriteLimiter, asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var title = escapeHtml(req.body.title);
