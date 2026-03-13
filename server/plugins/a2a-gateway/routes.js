@@ -5,6 +5,22 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import createA2ADB from './db.js';
 
+// SSRF protection: validate URLs before fetching
+function validateExternalUrl(urlStr) {
+  try {
+    var parsed = new URL(urlStr);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    var host = parsed.hostname.toLowerCase();
+    // Block private/internal IPs
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') return false;
+    if (host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('169.254.')) return false;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+    // Block metadata endpoints
+    if (host === 'metadata.google.internal' || host === '169.254.169.254') return false;
+    return true;
+  } catch (e) { return false; }
+}
+
 // A2A status mapping
 var A2A_TO_MYCELIUM = {
   submitted: 'open',
@@ -190,6 +206,7 @@ export default function (core) {
     if (!who) return;
     var url = req.body.url;
     if (!url) return apiError(res, 400, 'url is required');
+    if (!validateExternalUrl(url)) return apiError(res, 400, 'Invalid or blocked URL — must be public http(s)');
 
     // Normalize URL
     var agentCardUrl = url.replace(/\/$/, '') + '/.well-known/agent.json';
@@ -235,6 +252,7 @@ export default function (core) {
 
     var agent = db.getExternalAgent(parseInt(agent_id));
     if (!agent) return apiError(res, 404, 'External agent not found');
+    if (!validateExternalUrl(agent.agent_url)) return apiError(res, 400, 'Agent URL is blocked — private/internal addresses not allowed');
 
     var taskId = db.createOutboundTask(agent.id, who, 'tasks/send', message);
 
