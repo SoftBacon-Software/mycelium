@@ -39,6 +39,7 @@ export class MyceliumAgent {
     this._workHandler = null
     this._messageHandler = null
     this._requestHandler = null
+    this._idleHandler = null
 
     // HTTP client
     this.api = createClient({
@@ -355,6 +356,10 @@ export class MyceliumAgent {
     this._requestHandler = handler
   }
 
+  onIdle(fn) {
+    this._idleHandler = fn
+  }
+
   start() {
     if (this._running) return
     this._running = true
@@ -367,7 +372,7 @@ export class MyceliumAgent {
     }, this.heartbeatInterval)
 
     // Start work polling
-    if (this._workHandler) {
+    if (this._workHandler || this._idleHandler) {
       this._startWorkLoop()
     }
 
@@ -416,6 +421,12 @@ export class MyceliumAgent {
               console.error('[mycelium] work handler error:', err.message)
             }
             this.workingOn = ''
+          } else if (this._idleHandler) {
+            try {
+              await this._idleHandler()
+            } catch (err) {
+              console.error('[mycelium] idle handler error:', err.message)
+            }
           }
         }
       } catch (err) {

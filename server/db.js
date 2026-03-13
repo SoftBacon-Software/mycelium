@@ -838,6 +838,34 @@ function enforceNamespaceCap(namespace) {
   }
 }
 
+export function cleanupContextHistory(retentionDays) {
+  var days = retentionDays || 90;
+  var result = db.prepare(
+    "DELETE FROM context_history WHERE changed_at < datetime('now', '-' || ? || ' days')"
+  ).run(String(days));
+  if (result.changes > 0) {
+    console.log('[mycelium] Cleaned up %d old context history entries (retention: %d days)', result.changes, days);
+  }
+  return result.changes;
+}
+
+export function cleanupSavepoints(keepPerAgent) {
+  var keep = keepPerAgent || 50;
+  var agents = db.prepare("SELECT DISTINCT agent_id FROM agent_savepoints").all();
+  var totalCleaned = 0;
+  for (var i = 0; i < agents.length; i++) {
+    var agentId = agents[i].agent_id;
+    var result = db.prepare(
+      "DELETE FROM agent_savepoints WHERE agent_id = ? AND id NOT IN (SELECT id FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT ?)"
+    ).run(agentId, agentId, keep);
+    totalCleaned += result.changes;
+  }
+  if (totalCleaned > 0) {
+    console.log('[mycelium] Cleaned up %d old savepoints (keep: %d per agent)', totalCleaned, keep);
+  }
+  return totalCleaned;
+}
+
 export function getContextKey(namespace, key) {
   var row = db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   if (row && row.expires_at && new Date(row.expires_at) < new Date()) {
@@ -2104,30 +2132,34 @@ export function getDroneJob(id) {
 }
 
 export function claimDroneJob(droneId, capabilities) {
-  // Atomic: find oldest pending job where requires is a subset of capabilities
-  // If job has profile_id, drone must have completed setup for that profile
   var caps = Array.isArray(capabilities) ? capabilities : [];
-  var pending = db.prepare(
-    "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
-  ).all();
-  for (var job of pending) {
-    var reqs = [];
-    try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
-    var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
-    if (!matched) continue;
-    // Check profile requirement — drone must have setup_done=1 for this profile
-    if (job.profile_id) {
-      var assignment = db.prepare(
-        "SELECT setup_done FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
-      ).get(droneId, job.profile_id);
-      if (!assignment || !assignment.setup_done) continue;
+
+  return db.transaction(function () {
+    var pending = db.prepare(
+      "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
+    ).all();
+
+    for (var i = 0; i < pending.length; i++) {
+      var job = pending[i];
+      var reqs = [];
+      try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
+      var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
+      if (!matched) continue;
+
+      if (job.profile_id) {
+        var assignment = db.prepare(
+          "SELECT setup_done FROM drone_profile_assignments WHERE drone_id = ? AND profile_id = ?"
+        ).get(droneId, job.profile_id);
+        if (!assignment || !assignment.setup_done) continue;
+      }
+
+      var result = db.prepare(
+        "UPDATE drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
+      ).run(droneId, job.id);
+      if (result.changes > 0) return getDroneJob(job.id);
     }
-    var result = db.prepare(
-      "UPDATE drone_jobs SET status = 'claimed', drone_id = ?, started_at = datetime('now') WHERE id = ? AND status = 'pending'"
-    ).run(droneId, job.id);
-    if (result.changes > 0) return getDroneJob(job.id);
-  }
-  return null;
+    return null;
+  })();
 }
 
 export function updateDroneJob(id, fields) {
@@ -2912,6 +2944,30 @@ export function deletePluginConfig(pluginName, key) {
 // ======== AGENT SAVEPOINTS ========
 
 export function createSavepoint(agentId, data) {
+  // Validate state_snapshot is valid JSON
+  var stateSnapshot = '{}';
+  if (data.state_snapshot) {
+    try {
+      stateSnapshot = typeof data.state_snapshot === 'string'
+        ? (JSON.parse(data.state_snapshot), data.state_snapshot)
+        : JSON.stringify(data.state_snapshot);
+    } catch (e) {
+      console.warn('[mycelium] Invalid state_snapshot JSON for %s, using empty object', agentId);
+      stateSnapshot = '{}';
+    }
+  }
+
+  var messagesAcked = '[]';
+  if (data.messages_acked) {
+    try {
+      messagesAcked = typeof data.messages_acked === 'string'
+        ? (JSON.parse(data.messages_acked), data.messages_acked)
+        : JSON.stringify(data.messages_acked);
+    } catch (e) {
+      messagesAcked = '[]';
+    }
+  }
+
   return db.prepare(
     `INSERT INTO agent_savepoints (agent_id, session_id, heartbeat_at, working_on, state_snapshot, messages_acked, context_versions, notes)
      VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?)`
@@ -2919,8 +2975,8 @@ export function createSavepoint(agentId, data) {
     agentId,
     data.session_id || null,
     data.working_on || '',
-    JSON.stringify(data.state_snapshot || {}),
-    JSON.stringify(data.messages_acked || []),
+    stateSnapshot,
+    messagesAcked,
     JSON.stringify(data.context_versions || {}),
     data.notes || null
   );

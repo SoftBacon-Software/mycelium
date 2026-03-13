@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS messages (
   project_id      TEXT,
   content         TEXT NOT NULL,
   metadata        TEXT NOT NULL DEFAULT '{}',
+  msg_type        TEXT NOT NULL DEFAULT 'message',
+  status          TEXT NOT NULL DEFAULT 'sent',
+  channel_id      INTEGER,
   priority        TEXT NOT NULL DEFAULT 'normal',   -- 'urgent' | 'normal' | 'fyi'
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -814,3 +817,9 @@ CREATE TABLE IF NOT EXISTS agent_templates (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_templates_name ON agent_templates(name);
+
+-- Enterprise hardening: indexes for high-traffic queries
+CREATE INDEX IF NOT EXISTS idx_plan_steps_assignee ON plan_steps(assignee);
+CREATE INDEX IF NOT EXISTS idx_messages_status_type ON messages(status, msg_type);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
+CREATE INDEX IF NOT EXISTS idx_context_history_changed ON context_history(changed_at);

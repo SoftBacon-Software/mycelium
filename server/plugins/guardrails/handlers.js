@@ -7,6 +7,13 @@ import { evaluateCondition } from './evaluate.js';
 export function registerHooks(core) {
   var db = createGuardrailsDB(core.db);
 
+  // Expose checkAction for pre-mutation checks by route handlers
+  if (core.app) {
+    core.app._guardrailsCheck = function (eventType, eventData) {
+      return db.checkAction(eventType, eventData);
+    };
+  }
+
   core.onEvent('*', function (eventData) {
     try {
       var eventType = eventData.type || eventData.event_type || '';
@@ -22,10 +29,42 @@ export function registerHooks(core) {
         var result = evaluateCondition(rule.conditions, eventData);
         if (!result.violated) continue;
 
+        // Check cooldown — skip if same agent violated this rule recently
+        if (rule.cooldown_seconds && rule.cooldown_seconds > 0) {
+          var violationAgent = eventData.agent || '';
+          if (violationAgent) {
+            var recentViolation = core.db.prepare(
+              "SELECT id FROM guardrail_violations WHERE rule_id = ? AND agent_id = ? AND created_at >= datetime('now', '-' || ? || ' seconds') LIMIT 1"
+            ).get(rule.id, violationAgent, String(rule.cooldown_seconds));
+            if (recentViolation) continue;
+          }
+        }
+
         var agentId = eventData.agent || '';
         var projectId = eventData.project_id || '';
 
         db.logViolation(rule.id, rule.name, eventType, agentId, projectId, rule.enforcement, eventData, result.detail);
+
+        // Escalation: if 5+ violations in 1 hour from same agent, send urgent notification
+        var escalationAgent = eventData.agent || '';
+        if (escalationAgent) {
+          var recentCount = core.db.prepare(
+            "SELECT COUNT(*) as c FROM guardrail_violations WHERE agent_id = ? AND created_at >= datetime('now', '-1 hour')"
+          ).get(escalationAgent);
+          if (recentCount && recentCount.c >= 5 && recentCount.c % 5 === 0) {
+            try {
+              core.inbox.createInboxItemForAllOperators(
+                'guardrail_escalation', 'guardrail_rule', String(rule.id),
+                'ESCALATION: ' + escalationAgent + ' has ' + recentCount.c + ' violations in the last hour',
+                'Agent ' + escalationAgent + ' is repeatedly violating guardrails. Latest: ' + rule.name + ' — ' + result.detail,
+                { agent_id: escalationAgent, violation_count: recentCount.c, rule_id: rule.id },
+                'urgent'
+              );
+            } catch (esc) {
+              console.error('[guardrails] Escalation notification failed:', esc.message);
+            }
+          }
+        }
 
         core.emitEvent('guardrail_violation', '__system__', projectId,
           rule.enforcement.toUpperCase() + ': ' + rule.name + ' — ' + result.detail,
