@@ -1413,7 +1413,7 @@ export function getSlimBootPayload(agentId) {
 }
 
 // Smart boot: slim boot + scored context injection
-export function getSmartBootPayload(agentId, contextScorer, memoryDb) {
+export function getSmartBootPayload(agentId, contextScorer, memoryDb, queryEmbedding) {
   var slim = getSlimBootPayload(agentId);
   if (!slim) return null;
 
@@ -1473,23 +1473,27 @@ export function getSmartBootPayload(agentId, contextScorer, memoryDb) {
     try {
       var config = memoryDb.getAllConfig();
       if (config.embedding_provider && config.embedding_provider !== 'none') {
-        // Look up embeddings for context keys already indexed
+        // Batch-load embeddings for context keys (single query instead of N+1)
         var keyEmbeddings = {};
-        for (var ck of allKeys) {
-          var sourceId = ck.namespace + ':' + ck.key;
-          var row = db.prepare(
-            'SELECT embedding FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND embedding IS NOT NULL LIMIT 1'
-          ).get('context_key', sourceId);
-          if (row && row.embedding) {
-            try {
-              keyEmbeddings[sourceId] = JSON.parse(typeof row.embedding === 'string' ? row.embedding : row.embedding.toString());
-            } catch (e) { /* */ }
+        var sourceIds = allKeys.map(function (ck) { return ck.namespace + ':' + ck.key; });
+        if (sourceIds.length > 0) {
+          var placeholders = sourceIds.map(function () { return '?'; }).join(',');
+          var embRows = db.prepare(
+            'SELECT source_id, embedding FROM sm_embeddings WHERE source_type = ? AND source_id IN (' + placeholders + ') AND embedding IS NOT NULL'
+          ).all('context_key', ...sourceIds);
+          for (var embRow of embRows) {
+            if (embRow.embedding) {
+              try {
+                keyEmbeddings[embRow.source_id] = JSON.parse(typeof embRow.embedding === 'string' ? embRow.embedding : embRow.embedding.toString());
+              } catch (e) { /* */ }
+            }
           }
         }
         if (Object.keys(keyEmbeddings).length > 0) {
           scorerOpts.keyEmbeddings = keyEmbeddings;
-          // Build query embedding from work context synchronously isn't possible,
-          // so vector scoring uses pre-existing embeddings only (query embedding added at route level)
+        }
+        if (queryEmbedding) {
+          scorerOpts.queryEmbedding = queryEmbedding;
         }
       }
     } catch (e) { /* semantic-memory not available */ }
