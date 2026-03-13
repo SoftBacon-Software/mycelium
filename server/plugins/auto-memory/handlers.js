@@ -2,6 +2,7 @@
 
 import createAutoMemoryDB from './db.js';
 import { extractFacts } from './routes.js';
+import { applyDecay } from './decay.js';
 
 var _consolidationTimer = null;
 
@@ -89,6 +90,18 @@ export function registerHooks(core) {
     if (_consolidationTimer) clearInterval(_consolidationTimer);
     _consolidationTimer = setInterval(function () {
       var config = getConfig();
+
+      // Always run decay pass (doesn't require LLM)
+      try {
+        var decayed = applyDecay(db);
+        var pruned = db.pruneLowConfidence(0.15);
+        if (decayed > 0 || pruned > 0) {
+          console.log('[auto-memory] Decay pass: ' + decayed + ' facts decayed, ' + pruned + ' pruned below threshold');
+        }
+      } catch (e) {
+        console.error('[auto-memory] Decay pass failed:', e.message);
+      }
+
       if (config.consolidation_enabled === 'false') return;
       if (config.llm_provider === 'none' || !config.llm_provider) return;
 

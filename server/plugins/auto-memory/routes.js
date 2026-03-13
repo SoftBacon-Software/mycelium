@@ -106,11 +106,21 @@ export default function (core) {
     res.json({ ok: true, config: db.getAllConfig() });
   });
 
-  // GET /auto-memory/stats — stats
+  // GET /auto-memory/stats — stats (includes decay info)
   router.get('/stats', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    res.json(db.stats());
+    var stats = db.stats();
+    // Add decay-related stats
+    try {
+      var belowThreshold = core.db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE superseded_by IS NULL AND confidence < 0.15').get().c;
+      var decayPruned = core.db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE superseded_by = -1').get().c;
+      stats.decay = {
+        facts_below_threshold: belowThreshold,
+        facts_decay_pruned: decayPruned
+      };
+    } catch (e) { /* non-critical */ }
+    res.json(stats);
   });
 
   return router;
