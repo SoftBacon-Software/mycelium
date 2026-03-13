@@ -16,7 +16,7 @@ const routeTitles: Record<string, string> = {
   '/inbox': 'Inbox',
   '/channels': 'Channels',
   '/tasks': 'Tasks',
-  '/messages': 'Agent Comms',
+  '/messages': 'Activity Log',
   '/plans': 'Plans',
   '/bugs': 'Bugs',
   '/assets': 'Assets',
@@ -25,16 +25,48 @@ const routeTitles: Record<string, string> = {
   '/drones': 'Drones',
   '/spawns': 'Spawns',
   '/concepts': 'Concepts',
-  '/context': 'Context Keys',
+  '/context': 'Context Store',
   '/webhooks': 'Webhooks',
-  '/ops': 'Admin Ops',
-  '/health': 'Network Health',
+  '/ops': 'Ops Console',
+  '/health': 'Network',
   '/agent-health': 'Agent Health',
   '/onboarding': 'Onboarding',
   '/plugins': 'Plugins',
   '/analytics': 'Analytics',
   '/feedback': 'Feedback',
   '/templates': 'Agent Templates',
+  '/teams': 'Teams',
+  '/team-settings': 'Settings',
+  '/deployments': 'Instances',
+}
+
+const routeDescriptions: Record<string, string> = {
+  '/': 'Overview of your agents, tasks, and recent activity',
+  '/inbox': 'Pending approvals, mentions, and notifications',
+  '/channels': 'Persistent chat channels for agent and team communication',
+  '/tasks': 'Kanban board for tracking agent work items',
+  '/messages': 'All agent messages, requests, and directives',
+  '/plans': 'Multi-step execution plans with progress tracking',
+  '/bugs': 'Bug reports filed by agents or operators',
+  '/assets': 'Files and artifacts uploaded by agents',
+  '/operators': 'Human team members who own and control agents',
+  '/approvals': 'Review and vote on gated actions (deploys, deletes, etc.)',
+  '/drones': 'GPU/CPU compute job queue and worker status',
+  '/spawns': 'Provision new agent instances on the network',
+  '/concepts': 'Shared characters, styles, rulesets, and libraries',
+  '/context': 'Versioned key-value store for agent memory and configuration',
+  '/webhooks': 'Event webhook subscriptions and delivery logs',
+  '/ops': 'Admin actions, instance config, and kill switch',
+  '/health': 'Agent status, stale detection, and network uptime',
+  '/agent-health': 'Per-agent profiles, performance stats, and leaderboard',
+  '/onboarding': 'Setup wizard for new Mycelium instances',
+  '/plugins': 'Server plugins, extensions, and integrations',
+  '/analytics': 'Spend tracking, usage metrics, and cost breakdown',
+  '/feedback': 'Agent performance ratings and operator reviews',
+  '/templates': 'Reusable agent configuration templates',
+  '/teams': 'Team organization and membership management',
+  '/team-settings': 'Team roles, permissions, and configuration',
+  '/deployments': 'Customer instances, provisioning, and health checks',
 }
 
 function formatTime(date: Date | null): string {
@@ -59,6 +91,7 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const pageTitle = routeTitles[location.pathname] || 'Mycelium'
+  const pageDesc = routeDescriptions[location.pathname] || ''
   useEffect(() => {
     document.title = pageTitle === 'Dashboard' ? 'Mycelium' : pageTitle + ' — Mycelium'
   }, [pageTitle])
@@ -114,7 +147,12 @@ export default function AppLayout() {
                 <Menu size={20} strokeWidth={1.5} />
               </button>
             )}
-            <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+            <div className="flex items-baseline gap-3">
+              <h1 className="text-lg font-semibold text-text">{pageTitle}</h1>
+              {pageDesc && (
+                <span className="text-xs text-text-muted hidden lg:inline">{pageDesc}</span>
+              )}
+            </div>
           </div>
 
           {/* Right: controls */}

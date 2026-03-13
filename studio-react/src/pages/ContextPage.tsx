@@ -434,7 +434,7 @@ export default function ContextPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-text">Context Keys</h1>
+          <h1 className="text-xl font-semibold text-text">Context Store</h1>
           <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full bg-accent/15 text-accent text-xs font-bold tabular-nums">
             {filtered.length}
           </span>

@@ -128,8 +128,8 @@ async function testMessaging(agent, result) {
 
 async function testTaskLifecycle(agent, result) {
   var task = await agent.createTask({
-    title: 'QA test task ' + Date.now(),
-    description: 'Automated QA — will be completed immediately',
+    title: '[QA] lifecycle test ' + Date.now(),
+    description: 'Automated QA — created and completed immediately. Safe to delete.',
     project_id: 'mycelium'
   })
   assert(task && task.id, 'Task created with ID', result)
@@ -145,8 +145,8 @@ async function testTaskLifecycle(agent, result) {
 
 async function testBugLifecycle(agent, result) {
   var bug = await agent.fileBug({
-    title: 'QA test bug ' + Date.now(),
-    description: 'Automated QA — will be fixed immediately',
+    title: '[QA] lifecycle test ' + Date.now(),
+    description: 'Automated QA — filed and fixed immediately. Safe to delete.',
     project_id: 'mycelium',
     severity: 'low',
     category: 'other'
