@@ -1,6 +1,10 @@
 // Auto-Memory DB helpers
 
 export default function createAutoMemoryDB(db) {
+  // Migration: add access tracking columns
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN last_accessed_at TEXT'); } catch (e) { /* already exists */ }
+
   return {
     // -- Config --
     getConfig(key) {
@@ -28,7 +32,11 @@ export default function createAutoMemoryDB(db) {
     },
 
     getFact(id) {
-      return db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+      var fact = db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+      if (fact) {
+        try { db.prepare("UPDATE am_facts SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?").run(id); } catch (e) { /* */ }
+      }
+      return fact;
     },
 
     listFacts(opts) {
@@ -115,6 +123,21 @@ export default function createAutoMemoryDB(db) {
       var total = db.prepare('SELECT COUNT(*) as c FROM am_extraction_errors').get().c;
       var last24h = db.prepare("SELECT COUNT(*) as c FROM am_extraction_errors WHERE created_at >= datetime('now', '-1 day')").get().c;
       return { total: total, last_24h: last24h };
+    },
+
+    // Batch-update facts for decay: returns all facts not accessed in 24h with their timestamps
+    getDecayableFacts() {
+      return db.prepare(
+        "SELECT id, category, confidence, last_accessed_at, updated_at FROM am_facts WHERE superseded_by IS NULL AND (last_accessed_at IS NULL OR last_accessed_at < datetime('now', '-1 day'))"
+      ).all();
+    },
+
+    pruneLowConfidence(threshold) {
+      // Mark facts below threshold as superseded (superseded_by = -1 signals decay-pruned)
+      var result = db.prepare(
+        'UPDATE am_facts SET superseded_by = -1 WHERE superseded_by IS NULL AND confidence < ?'
+      ).run(threshold);
+      return result.changes;
     },
 
     pruneExcessFacts(agentId, maxFacts) {

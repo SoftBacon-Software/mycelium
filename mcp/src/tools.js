@@ -129,11 +129,17 @@ export function registerTools(server) {
     async () => {
       var st = getState();
       if (st.role === 'agent' && st.agentId) {
-        var data = await apiGet('/boot/' + st.agentId);
+        var data = await apiGet('/boot/' + st.agentId + '?smart=true');
         setBooted(data);
         startHeartbeat();
         var proj = data.agent.project || '';
         var lines = ['Booted as ' + st.agentId + ' (' + proj + ')'];
+
+        // Smart boot context stats
+        if (data.context_meta) {
+          var cm = data.context_meta;
+          lines.push('Context (' + cm.selected + '/' + cm.total_available + ' keys, ' + cm.method + ')');
+        }
 
         // Role contract
         if (data.role_contract) {
