@@ -622,8 +622,8 @@ export default function DeploymentsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-xl font-semibold text-text">Deployments</h1>
-        <p className="text-sm text-text-muted mt-0.5">Customer instances, support, and deploy operations</p>
+        <h1 className="text-xl font-semibold text-text">Instances</h1>
+        <p className="text-sm text-text-muted mt-0.5">Customer instances, provisioning, and health checks</p>
       </div>
 
       <InstancesSection />

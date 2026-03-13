@@ -72,7 +72,7 @@ export default function AdminOpsPage() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-xl font-semibold text-text">Admin Ops</h1>
+            <h1 className="text-xl font-semibold text-text">Ops Console</h1>
             <p className="text-sm text-text-muted mt-0.5">Actionable items requiring attention</p>
           </div>
           {totalCount > 0 && (

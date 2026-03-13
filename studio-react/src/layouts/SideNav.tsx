@@ -21,6 +21,7 @@ interface NavItem {
   label: string
   icon: LucideIcon
   adminOnly?: boolean
+  desc?: string
 }
 
 interface NavSection {
@@ -37,51 +38,51 @@ const staticNavSections: NavSection[] = [
     id: 'pinned',
     label: null,
     items: [
-      { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-      { to: '/inbox', label: 'Inbox', icon: Inbox },
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard, desc: 'Overview of agents, tasks, and activity' },
+      { to: '/inbox', label: 'Inbox', icon: Inbox, desc: 'Pending approvals, mentions, and notifications' },
     ],
   },
   {
     id: 'work',
     label: 'Work',
     items: [
-      { to: '/tasks', label: 'Tasks', icon: CheckSquare },
-      { to: '/plans', label: 'Plans', icon: Map },
-      { to: '/bugs', label: 'Bugs', icon: Bug },
+      { to: '/tasks', label: 'Tasks', icon: CheckSquare, desc: 'Kanban board for agent work items' },
+      { to: '/plans', label: 'Plans', icon: Map, desc: 'Multi-step execution plans with progress tracking' },
+      { to: '/bugs', label: 'Bugs', icon: Bug, desc: 'Bug reports filed by agents or operators' },
     ],
   },
   {
     id: 'communicate',
     label: 'Communicate',
     items: [
-      { to: '/messages', label: 'Activity Log', icon: Radio },
-      { to: '/channels', label: 'Channels', icon: MessageSquare },
+      { to: '/messages', label: 'Activity Log', icon: Radio, desc: 'All agent messages, requests, and directives' },
+      { to: '/channels', label: 'Channels', icon: MessageSquare, desc: 'Persistent chat channels for teams' },
     ],
   },
   {
     id: 'observe',
     label: 'Observe',
     items: [
-      { to: '/health', label: 'Network Health', icon: Activity },
-      { to: '/agent-health', label: 'Agent Health', icon: HeartPulse },
-      { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-      { to: '/feedback', label: 'Feedback', icon: MessageCircle },
+      { to: '/health', label: 'Network', icon: Activity, desc: 'Agent status, stale detection, and uptime' },
+      { to: '/agent-health', label: 'Agent Health', icon: HeartPulse, desc: 'Per-agent profiles, stats, and leaderboard' },
+      { to: '/analytics', label: 'Analytics', icon: BarChart3, desc: 'Spend tracking and usage metrics' },
+      { to: '/feedback', label: 'Feedback', icon: MessageCircle, desc: 'Agent performance ratings and reviews' },
     ],
   },
   {
     id: 'manage',
     label: 'Manage',
     items: [
-      { to: '/operators', label: 'Operators', icon: Users },
-      { to: '/teams', label: 'Teams', icon: Users },
-      { to: '/team-settings', label: 'Team Settings', icon: Settings2 },
-      { to: '/deployments', label: 'Deployments', icon: Server, adminOnly: true },
-      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true },
-      { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true },
-      { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true },
-      { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true },
-      { to: '/spawns', label: 'Spawns', icon: Zap, adminOnly: true },
-      { to: '/templates', label: 'Templates', icon: Layers, adminOnly: true },
+      { to: '/operators', label: 'Operators', icon: Users, desc: 'Human team members who control agents' },
+      { to: '/teams', label: 'Teams', icon: Users, desc: 'Team organization and membership' },
+      { to: '/team-settings', label: 'Settings', icon: Settings2, desc: 'Team roles, permissions, and configuration' },
+      { to: '/deployments', label: 'Instances', icon: Server, adminOnly: true, desc: 'Customer instances and provisioning' },
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, adminOnly: true, desc: 'Review and vote on gated actions' },
+      { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true, desc: 'Shared characters, styles, and rulesets' },
+      { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true, desc: 'Files and artifacts uploaded by agents' },
+      { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true, desc: 'GPU/CPU compute job queue and workers' },
+      { to: '/spawns', label: 'Spawns', icon: Zap, adminOnly: true, desc: 'Provision new agent instances' },
+      { to: '/templates', label: 'Templates', icon: Layers, adminOnly: true, desc: 'Reusable agent configuration templates' },
     ],
   },
   {
@@ -89,11 +90,11 @@ const staticNavSections: NavSection[] = [
     label: 'Advanced',
     defaultCollapsed: true,
     items: [
-      { to: '/plugins', label: 'Plugins', icon: Puzzle, adminOnly: true },
-      { to: '/webhooks', label: 'Webhooks', icon: Webhook, adminOnly: true },
-      { to: '/context', label: 'Config Store', icon: Database },
-      { to: '/ops', label: 'Ops Console', icon: Settings, adminOnly: true },
-      { to: '/onboarding', label: 'Onboarding', icon: Rocket, adminOnly: true },
+      { to: '/plugins', label: 'Plugins', icon: Puzzle, adminOnly: true, desc: 'Server plugins and extensions' },
+      { to: '/webhooks', label: 'Webhooks', icon: Webhook, adminOnly: true, desc: 'Event webhook subscriptions and logs' },
+      { to: '/context', label: 'Context Store', icon: Database, desc: 'Versioned key-value store for agent memory' },
+      { to: '/ops', label: 'Ops Console', icon: Settings, adminOnly: true, desc: 'Admin actions, config, and kill switch' },
+      { to: '/onboarding', label: 'Onboarding', icon: Rocket, adminOnly: true, desc: 'Setup wizard for new instances' },
     ],
   },
 ]
@@ -269,7 +270,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
                       key={item.to}
                       to={item.to}
                       end={item.to === '/'}
-                      title={isNarrow ? item.label : undefined}
+                      title={isNarrow ? item.label : item.desc || undefined}
                       className={({ isActive }) =>
                         [
                           'flex items-center gap-3 px-2.5 py-2 text-sm rounded-lg transition-all duration-150',
