@@ -35,3 +35,15 @@ CREATE TABLE IF NOT EXISTS am_config (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Extraction error log
+CREATE TABLE IF NOT EXISTS am_extraction_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT,
+  project_id TEXT,
+  source_event TEXT,
+  error_message TEXT NOT NULL,
+  input_text_preview TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_am_errors_created ON am_extraction_errors(created_at DESC);

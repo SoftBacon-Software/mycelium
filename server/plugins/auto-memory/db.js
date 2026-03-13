@@ -101,6 +101,22 @@ export default function createAutoMemoryDB(db) {
       return result.changes;
     },
 
+    logExtractionError(agentId, projectId, sourceEvent, errorMessage, inputPreview) {
+      db.prepare(
+        'INSERT INTO am_extraction_errors (agent_id, project_id, source_event, error_message, input_text_preview) VALUES (?, ?, ?, ?, ?)'
+      ).run(agentId || '', projectId || '', sourceEvent || '', errorMessage, (inputPreview || '').substring(0, 500));
+    },
+
+    getExtractionErrors(limit) {
+      return db.prepare('SELECT * FROM am_extraction_errors ORDER BY created_at DESC LIMIT ?').all(limit || 50);
+    },
+
+    getErrorStats() {
+      var total = db.prepare('SELECT COUNT(*) as c FROM am_extraction_errors').get().c;
+      var last24h = db.prepare("SELECT COUNT(*) as c FROM am_extraction_errors WHERE created_at >= datetime('now', '-1 day')").get().c;
+      return { total: total, last_24h: last24h };
+    },
+
     pruneExcessFacts(agentId, maxFacts) {
       maxFacts = maxFacts || 500;
       // Delete oldest superseded facts for this agent beyond the limit
