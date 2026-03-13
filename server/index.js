@@ -30,7 +30,7 @@ function checkVoiceAuth(req, res) {
   if (adminKey === process.env.ADMIN_KEY) return true;
   var auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) {
-    try { jwt.verify(auth.slice(7), process.env.JWT_SECRET); return true; } catch (e) { /* invalid */ }
+    try { jwt.verify(auth.slice(7), process.env.JWT_SECRET, { algorithms: ['HS256'] }); return true; } catch (e) { /* invalid */ }
   }
   var agentKey = req.headers['x-agent-key'];
   if (agentKey) {
@@ -403,7 +403,7 @@ wss.on('connection', function (ws, req) {
   var url = new URL(req.url, 'http://localhost');
   var token = url.searchParams.get('token');
   if (!token) { ws.close(4401, 'Authentication required'); return; }
-  try { jwt.verify(token, process.env.JWT_SECRET); } catch (e) { ws.close(4403, 'Invalid token'); return; }
+  try { jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] }); } catch (e) { ws.close(4403, 'Invalid token'); return; }
 
   ws.isAlive = true;
   var peerId = 'peer_' + (++peerCounter);
