@@ -168,18 +168,18 @@ function getEventBadgeVariant(type: string): 'accent' | 'blue' | 'green' | 'mute
 
 // -- Quick link data --
 const quickLinks = [
-  { to: '/tasks', label: 'Tasks', desc: 'Kanban board', color: 'text-accent' },
-  { to: '/messages', label: 'Messages', desc: 'Agent comms', color: 'text-blue' },
-  { to: '/plans', label: 'Plans', desc: 'Execution plans', color: 'text-purple' },
-  { to: '/bugs', label: 'Bugs', desc: 'Bug tracker', color: 'text-red' },
-  { to: '/assets', label: 'Assets', desc: 'Art pipeline', color: 'text-accent' },
-  { to: '/drones', label: 'Drones', desc: 'GPU compute', color: 'text-blue' },
-  { to: '/approvals', label: 'Approvals', desc: 'Review queue', color: 'text-green' },
-  { to: '/concepts', label: 'Concepts', desc: 'Shared concepts', color: 'text-purple' },
-  { to: '/context', label: 'Context', desc: 'Key-value store', color: 'text-text-dim' },
-  { to: '/webhooks', label: 'Webhooks', desc: 'Delivery log', color: 'text-blue' },
-  { to: '/ops', label: 'Admin Ops', desc: 'Action items', color: 'text-red' },
-  { to: '/health', label: 'Network Health', desc: 'Mission control', color: 'text-green' },
+  { to: '/tasks', label: 'Tasks', desc: 'Work items', color: 'text-accent' },
+  { to: '/messages', label: 'Activity', desc: 'Agent comms', color: 'text-blue' },
+  { to: '/plans', label: 'Plans', desc: 'Step tracking', color: 'text-purple' },
+  { to: '/bugs', label: 'Bugs', desc: 'Bug reports', color: 'text-red' },
+  { to: '/assets', label: 'Assets', desc: 'Files & artifacts', color: 'text-accent' },
+  { to: '/drones', label: 'Drones', desc: 'GPU/CPU jobs', color: 'text-blue' },
+  { to: '/approvals', label: 'Approvals', desc: 'Gated actions', color: 'text-green' },
+  { to: '/concepts', label: 'Concepts', desc: 'Shared knowledge', color: 'text-purple' },
+  { to: '/context', label: 'Context', desc: 'Agent memory', color: 'text-text-dim' },
+  { to: '/webhooks', label: 'Webhooks', desc: 'Event hooks', color: 'text-blue' },
+  { to: '/ops', label: 'Ops Console', desc: 'Admin controls', color: 'text-red' },
+  { to: '/health', label: 'Network', desc: 'Agent status', color: 'text-green' },
   { to: '/feedback', label: 'Feedback', desc: 'Agent ratings', color: 'text-accent' },
 ]
 
@@ -530,11 +530,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-text">Dashboard</h1>
-          <p className="text-sm text-text-muted mt-0.5">Mycelium overview</p>
-        </div>
+      <div className="flex items-center justify-end">
         <div className="flex items-center gap-2">
           {!sleepStatus?.sleep_mode?.active && (
             <SleepModePanel status={sleepStatus} onActivate={handleSleepActivate} onDeactivate={handleSleepDeactivate} />
@@ -564,6 +560,7 @@ export default function DashboardPage() {
           color="green"
           icon="agents"
           to="/health"
+          tooltip="AI agents connected to the network. Click to see status and health."
         />
         <SummaryCard
           title="Tasks"
@@ -572,6 +569,7 @@ export default function DashboardPage() {
           color="accent"
           icon="tasks"
           to="/tasks"
+          tooltip="Work items assigned to agents. Click to open the kanban board."
         />
         <SummaryCard
           title="Messages"
@@ -580,6 +578,7 @@ export default function DashboardPage() {
           color={pendingRequests.length > 0 ? 'accent' : 'blue'}
           icon="messages"
           to="/messages"
+          tooltip="Inter-agent messages, requests, and directives."
         />
         <SummaryCard
           title="Bugs"
@@ -588,6 +587,7 @@ export default function DashboardPage() {
           color="red"
           icon="bugs"
           to="/bugs"
+          tooltip="Bug reports filed by agents or operators."
         />
         <SummaryCard
           title="Plans"
@@ -596,6 +596,7 @@ export default function DashboardPage() {
           color="purple"
           icon="plans"
           to="/plans"
+          tooltip="Multi-step execution plans. Agents auto-claim steps."
         />
         <SummaryCard
           title="Assets"
@@ -604,6 +605,7 @@ export default function DashboardPage() {
           color="accent"
           icon="assets"
           to="/assets"
+          tooltip="Files and artifacts uploaded by agents."
         />
         <SummaryCard
           title="Drones"
@@ -612,6 +614,7 @@ export default function DashboardPage() {
           color="blue"
           icon="drones"
           to="/drones"
+          tooltip="GPU/CPU compute jobs queued for drone workers."
         />
         <SummaryCard
           title="Concepts"
@@ -620,6 +623,7 @@ export default function DashboardPage() {
           color="purple"
           icon="concepts"
           to="/concepts"
+          tooltip="Shared knowledge: characters, styles, rulesets, libraries."
         />
         <SummaryCard
           title="Context"
@@ -628,6 +632,7 @@ export default function DashboardPage() {
           color="muted"
           icon="context"
           to="/context"
+          tooltip="Versioned key-value store for agent memory and config."
         />
       </div>
 

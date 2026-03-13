@@ -7,6 +7,7 @@ interface SummaryCardProps {
   color?: 'accent' | 'green' | 'red' | 'blue' | 'purple' | 'muted'
   icon?: string
   to?: string
+  tooltip?: string
 }
 
 const colorClasses: Record<string, { text: string; glow: string; ring: string }> = {
@@ -30,7 +31,7 @@ const iconMap: Record<string, string> = {
   context: '\u{1F511}',
 }
 
-export default function SummaryCard({ title, value, subtitle, color = 'accent', icon, to }: SummaryCardProps) {
+export default function SummaryCard({ title, value, subtitle, color = 'accent', icon, to, tooltip }: SummaryCardProps) {
   const c = colorClasses[color] || colorClasses.accent
 
   const inner = (
@@ -51,8 +52,8 @@ export default function SummaryCard({ title, value, subtitle, color = 'accent', 
   const className = `bg-surface-raised rounded-lg p-4 flex items-center gap-4 ring-1 ${c.ring} transition-colors cursor-pointer active:bg-surface`
 
   if (to) {
-    return <Link to={to} className={className}>{inner}</Link>
+    return <Link to={to} className={className} title={tooltip}>{inner}</Link>
   }
 
-  return <div className={className}>{inner}</div>
+  return <div className={className} title={tooltip}>{inner}</div>
 }

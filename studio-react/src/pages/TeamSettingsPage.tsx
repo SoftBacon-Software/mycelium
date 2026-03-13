@@ -536,7 +536,7 @@ export default function TeamSettingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-text">Team Settings</h1>
+          <h1 className="text-xl font-semibold text-text">Settings</h1>
           <p className="text-sm text-text-muted mt-0.5">Configure your team's DNA — standards, workflow, brand, and guardrails</p>
         </div>
         <button
