@@ -105,13 +105,12 @@ export default function (core) {
     res.json(db.stats());
   });
 
-  // GET /memory/config — current provider config
+  // GET /memory/config — current provider config (admin only, key stripped)
   router.get('/config', function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
     var config = db.getAllConfig();
-    // Mask API key
-    if (config.embedding_api_key) config.embedding_api_key = '***';
+    delete config.embedding_api_key;
     res.json(config);
   });
 

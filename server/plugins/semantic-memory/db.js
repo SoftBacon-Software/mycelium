@@ -161,8 +161,11 @@ export default function createMemoryDB(db) {
         params.push(opts.namespace);
       }
 
+      // Cap rows loaded for JS-side cosine sim to prevent DoS on large tables
+      var vectorCap = 5000;
+      params.push(vectorCap);
       var rows = db.prepare(
-        'SELECT id, source_type, source_id, chunk_index, embedding FROM sm_embeddings WHERE ' + where.join(' AND ')
+        'SELECT id, source_type, source_id, chunk_index, embedding FROM sm_embeddings WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
       ).all(...params);
 
       // Compute cosine similarity in JS
