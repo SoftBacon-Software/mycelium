@@ -134,8 +134,9 @@ export default function createAutoMemoryDB(db) {
 
     pruneLowConfidence(threshold) {
       // Mark facts below threshold as superseded (superseded_by = -1 signals decay-pruned)
+      // Age guard: don't prune facts less than 7 days old (may have low initial confidence)
       var result = db.prepare(
-        'UPDATE am_facts SET superseded_by = -1 WHERE superseded_by IS NULL AND confidence < ?'
+        "UPDATE am_facts SET superseded_by = -1 WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
       ).run(threshold);
       return result.changes;
     },

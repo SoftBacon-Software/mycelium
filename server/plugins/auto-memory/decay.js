@@ -1,5 +1,7 @@
 // Confidence decay for auto-memory facts
-// Model: effective_confidence = base_confidence * max(0.1, 1.0 - days_since_access * rate)
+// Model: each cycle applies confidence *= max(0.1, 1.0 - days_since_last_access * rate)
+// This compounds across cycles — effectively exponential decay.
+// Accessing a fact resets the reference point (last_accessed_at), keeping active facts high.
 
 var DECAY_RATES = {
   convention: 0.002,   // ~450 days to floor

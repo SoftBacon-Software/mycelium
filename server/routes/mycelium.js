@@ -1136,6 +1136,7 @@ router.put('/waitlist/:id', function (req, res) {
 // Lazy-load smart boot dependencies (plugin may not be available)
 var _contextScorer = null;
 var _createMemoryDB = null;
+var _generateEmbedding = null;
 
 // Pre-load smart boot deps at startup (fire-and-forget)
 (async function () {
@@ -1144,13 +1145,15 @@ var _createMemoryDB = null;
     _contextScorer = scorerMod.scoreContextKeys;
     var dbMod = await import('../plugins/semantic-memory/db.js');
     _createMemoryDB = dbMod.default;
+    var embedMod = await import('../plugins/semantic-memory/embeddings.js');
+    _generateEmbedding = embedMod.generateEmbedding;
     console.log('[mycelium] Smart boot dependencies loaded');
   } catch (e) {
     console.log('[mycelium] Smart boot deps not available (semantic-memory plugin not loaded):', e.message);
   }
 })();
 
-router.get('/boot/:agentId', asyncHandler(function (req, res) {
+router.get('/boot/:agentId', asyncHandler(async function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
   if (agentId !== req.params.agentId) {
@@ -1177,7 +1180,29 @@ router.get('/boot/:agentId', asyncHandler(function (req, res) {
   if (req.query.smart === 'true' && _contextScorer) {
     try {
       var memoryDb = _createMemoryDB ? _createMemoryDB(getDB()) : null;
-      var payload = getSmartBootPayload(agentId, _contextScorer, memoryDb);
+      // Generate query embedding from work context for vector scoring
+      var queryEmbedding = null;
+      if (_generateEmbedding && memoryDb) {
+        try {
+          var embConfig = memoryDb.getAllConfig();
+          if (embConfig.embedding_provider && embConfig.embedding_provider !== 'none') {
+            // Build query text from agent's current work
+            var agent = getAgent(agentId);
+            var workTexts = [];
+            if (agent && agent.working_on) workTexts.push(agent.working_on);
+            var recentWork = db.prepare(
+              "SELECT title FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') LIMIT 5"
+            ).all(agentId);
+            for (var rw of recentWork) { if (rw.title) workTexts.push(rw.title); }
+            if (workTexts.length > 0) {
+              queryEmbedding = await _generateEmbedding(embConfig, workTexts.join(' '));
+            }
+          }
+        } catch (e) {
+          // Non-critical — falls back to keyword+access scoring
+        }
+      }
+      var payload = getSmartBootPayload(agentId, _contextScorer, memoryDb, queryEmbedding);
       if (!payload) return res.status(404).json({ error: 'Agent not found' });
       var diff = computeSavepointDiff(agentId);
       payload.savepoint = diff;
