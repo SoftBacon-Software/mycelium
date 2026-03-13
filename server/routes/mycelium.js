@@ -348,7 +348,7 @@ function getStudioUser(req) {
   var auth = req.headers['authorization'];
   if (!auth || !auth.startsWith('Bearer ')) return null;
   try {
-    var decoded = jwt.verify(auth.slice(7), JWT_SECRET);
+    var decoded = jwt.verify(auth.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded && decoded.studioUser) {
       if (decoded.userId) touchStudioUserSeen(decoded.userId);
       return decoded;
@@ -2582,7 +2582,7 @@ router.get('/events/stream', asyncHandler(function (req, res) {
   var token = req.query.token;
   if (token) {
     try {
-      var decoded = jwt.verify(token, JWT_SECRET);
+      var decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
       if (decoded && decoded.studioUser) { req._authIsAdmin = true; authOk = true; }
     } catch (e) { /* invalid token, fall through to header auth */ }
   }

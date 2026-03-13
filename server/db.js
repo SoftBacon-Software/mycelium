@@ -815,6 +815,12 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     try {
       var existingData = JSON.parse(existing.data);
       var newData = typeof data === 'string' ? JSON.parse(data) : data;
+      // Sanitize against prototype pollution
+      if (newData && typeof newData === 'object') {
+        delete newData.__proto__;
+        delete newData.constructor;
+        delete newData.prototype;
+      }
       merged = JSON.stringify(Object.assign({}, existingData, newData));
     } catch (e) {
       merged = typeof data === 'string' ? data : JSON.stringify(data);
