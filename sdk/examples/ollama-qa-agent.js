@@ -119,9 +119,7 @@ async function testSavepoints(agent, result) {
 }
 
 async function testMessaging(agent, result) {
-  await agent.sendMessage(agent.agentId, 'QA self-test message ' + Date.now())
-  result.passed++
-
+  // Just verify readMessages works — don't send self-messages (creates noise)
   var msgs = await agent.readMessages({ limit: 5 })
   assert(Array.isArray(msgs), 'readMessages returns array', result)
 }
