@@ -34,6 +34,10 @@ var QA_COOLDOWN_MS = 10 * 60 * 1000 // 10 minutes between QA cycles
 var _recentBugs = {} // suiteName -> timestamp, prevents duplicate bug filing
 
 export async function onIdle(agent) {
+  // QA self-tests DISABLED — was causing loop (62 duplicate bugs, stale test keys)
+  // To re-enable, remove this return and restart macbook-ollama
+  return
+
   // Cooldown: don't run QA more than once every 10 minutes
   var now = Date.now()
   if (now - _lastQaRun < QA_COOLDOWN_MS) return
