@@ -29,12 +29,29 @@ var TEST_SUITES = [
 ]
 
 var _testIndex = 0
+var _lastQaRun = 0
+var QA_COOLDOWN_MS = 10 * 60 * 1000 // 10 minutes between QA cycles
+var _recentBugs = {} // suiteName -> timestamp, prevents duplicate bug filing
 
 export async function onIdle(agent) {
+  // QA self-tests DISABLED — was causing loop (62 duplicate bugs, stale test keys)
+  // To re-enable, remove this return and restart macbook-ollama
+  return
+
+  // Cooldown: don't run QA more than once every 10 minutes
+  var now = Date.now()
+  if (now - _lastQaRun < QA_COOLDOWN_MS) return
+  _lastQaRun = now
+
   var suiteName = TEST_SUITES[_testIndex % TEST_SUITES.length]
   _testIndex++
 
   console.log('[qa] Running test suite: %s', suiteName)
+
+  // Cleanup stale test artifacts before running
+  try { await cleanupTestArtifacts(agent) } catch (e) {
+    console.error('[qa] Cleanup failed:', e.message)
+  }
 
   var result = { suite: suiteName, ts: new Date().toISOString(), passed: 0, failed: 0, errors: [] }
 
@@ -67,18 +84,43 @@ export async function onIdle(agent) {
   }
 
   if (result.failed > 0) {
-    try {
-      await agent.fileBug({
-        title: 'QA: ' + suiteName + ' — ' + result.failed + ' failure(s)',
-        description: 'Automated QA detected failures in ' + suiteName + ' suite.\n\nErrors:\n' + result.errors.join('\n'),
-        project_id: 'mycelium',
-        severity: 'normal',
-        category: 'api'
-      })
-    } catch (e) {
-      console.error('[qa] Failed to file bug:', e.message)
+    // Deduplicate: don't file another bug for the same suite within 1 hour
+    var lastBugTime = _recentBugs[suiteName] || 0
+    if (now - lastBugTime > 60 * 60 * 1000) {
+      try {
+        await agent.fileBug({
+          title: 'QA: ' + suiteName + ' — ' + result.failed + ' failure(s)',
+          description: 'Automated QA detected failures in ' + suiteName + ' suite.\n\nErrors:\n' + result.errors.join('\n'),
+          project_id: 'mycelium',
+          severity: 'normal',
+          category: 'api'
+        })
+        _recentBugs[suiteName] = now
+      } catch (e) {
+        console.error('[qa] Failed to file bug:', e.message)
+      }
+    } else {
+      console.log('[qa] Skipping bug filing for %s — already filed within the last hour', suiteName)
     }
   }
+}
+
+async function cleanupTestArtifacts(agent) {
+  // Clean up qa-test namespace keys to prevent accumulation
+  try {
+    var keys = await agent.getContext('qa-test')
+    if (keys && typeof keys === 'object') {
+      var keyNames = Object.keys(keys)
+      for (var k of keyNames) {
+        if (k.startsWith('test-')) {
+          await agent.deleteContext('qa-test', k)
+        }
+      }
+      if (keyNames.length > 0) {
+        console.log('[qa] Cleaned up %d stale test keys', keyNames.length)
+      }
+    }
+  } catch (e) { /* namespace may not exist */ }
 }
 
 function assert(condition, msg, result) {

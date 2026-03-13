@@ -1,0 +1,108 @@
+// Embedding provider abstraction for semantic memory
+// Supports: ollama (nomic-embed-text), openai (text-embedding-3-small)
+
+export async function generateEmbedding(config, text) {
+  var provider = config.embedding_provider || 'none';
+  if (provider === 'none' || !provider) return null;
+
+  if (provider === 'ollama') {
+    return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', text);
+  } else if (provider === 'openai') {
+    return embedOpenAI(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, text);
+  }
+
+  console.warn('[semantic-memory] Unknown embedding provider:', provider);
+  return null;
+}
+
+export async function generateEmbeddingBatch(config, texts) {
+  var provider = config.embedding_provider || 'none';
+  if (provider === 'none' || !provider) return texts.map(function () { return null; });
+
+  if (provider === 'ollama') {
+    // Ollama doesn't have a batch endpoint, call sequentially
+    var results = [];
+    for (var t of texts) {
+      try {
+        results.push(await embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', t));
+      } catch (e) {
+        console.error('[semantic-memory] Batch embed failed for item:', e.message);
+        results.push(null);
+      }
+    }
+    return results;
+  } else if (provider === 'openai') {
+    return embedOpenAIBatch(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, texts);
+  }
+
+  return texts.map(function () { return null; });
+}
+
+export function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  var dot = 0, magA = 0, magB = 0;
+  for (var i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  var denom = Math.sqrt(magA) * Math.sqrt(magB);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+// -- Ollama --
+
+async function embedOllama(baseUrl, model, text) {
+  var response = await fetch(baseUrl + '/api/embed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model, input: text }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) throw new Error('Ollama embed error: HTTP ' + response.status);
+  var data = await response.json();
+  // Ollama returns { embeddings: [[...]] } for /api/embed
+  if (data.embeddings && data.embeddings[0]) return data.embeddings[0];
+  // Fallback for older API
+  if (data.embedding) return data.embedding;
+  throw new Error('Ollama embed: unexpected response format');
+}
+
+// -- OpenAI --
+
+async function embedOpenAI(baseUrl, model, apiKey, text) {
+  if (!apiKey) throw new Error('OpenAI API key required for embeddings');
+  var response = await fetch(baseUrl + '/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey
+    },
+    body: JSON.stringify({ model: model, input: text }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) throw new Error('OpenAI embed error: HTTP ' + response.status);
+  var data = await response.json();
+  if (data.data && data.data[0]) return data.data[0].embedding;
+  throw new Error('OpenAI embed: unexpected response format');
+}
+
+async function embedOpenAIBatch(baseUrl, model, apiKey, texts) {
+  if (!apiKey) throw new Error('OpenAI API key required for embeddings');
+  var response = await fetch(baseUrl + '/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey
+    },
+    body: JSON.stringify({ model: model, input: texts }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!response.ok) throw new Error('OpenAI batch embed error: HTTP ' + response.status);
+  var data = await response.json();
+  if (data.data && Array.isArray(data.data)) {
+    // OpenAI returns sorted by index
+    return data.data.sort(function (a, b) { return a.index - b.index; }).map(function (d) { return d.embedding; });
+  }
+  throw new Error('OpenAI batch embed: unexpected response format');
+}

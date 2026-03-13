@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import createMemoryDB from './db.js';
+import { generateEmbedding, generateEmbeddingBatch } from './embeddings.js';
 
 export default function (core) {
   var router = Router();
@@ -10,7 +11,7 @@ export default function (core) {
   var { apiError, parseIntParam } = core;
 
   // POST /memory/search — hybrid search
-  router.post('/search', function (req, res) {
+  router.post('/search', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var { query, source_types, namespace, project_id, limit, mode } = req.body;
@@ -22,7 +23,6 @@ export default function (core) {
     if (source_types && Array.isArray(source_types)) opts.source_types = source_types;
     if (namespace) opts.namespace = namespace;
     if (project_id) {
-      // Filter by project_id in metadata
       opts.project_id = project_id;
     }
 
@@ -30,7 +30,17 @@ export default function (core) {
     if (mode === 'keyword') {
       results = db.searchKeyword(query, opts);
     } else {
-      results = db.searchHybrid(query, opts, null);
+      // Generate query embedding for hybrid search
+      var queryEmbedding = null;
+      try {
+        var config = db.getAllConfig();
+        if (config.embedding_provider && config.embedding_provider !== 'none') {
+          queryEmbedding = await generateEmbedding(config, query);
+        }
+      } catch (e) {
+        console.error('[semantic-memory] Query embedding failed, falling back to keyword:', e.message);
+      }
+      results = db.searchHybrid(query, opts, queryEmbedding);
     }
 
     // Post-filter by project_id if specified (metadata-level filtering)
@@ -118,14 +128,52 @@ export default function (core) {
     res.json({ ok: true, config: db.getAllConfig() });
   });
 
-  // POST /memory/reindex — re-embed all content (admin, async)
-  router.post('/reindex', function (req, res) {
+  // POST /memory/reindex — batch-embed all unembedded content (admin, async)
+  router.post('/reindex', async function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
-    // For now, just trigger re-indexing of all content_text entries without embeddings
-    // Full re-embedding requires an embedding provider which will be configured separately
-    var stats = db.stats();
-    res.json({ ok: true, message: 'Reindex queued', stats: stats });
+
+    var config = db.getAllConfig();
+    if (!config.embedding_provider || config.embedding_provider === 'none') {
+      return apiError(res, 400, 'No embedding provider configured. Set via PUT /memory/config');
+    }
+
+    var batchSize = parseInt(req.body.batch_size) || 50;
+    var unembedded = db.getUnembedded(batchSize);
+
+    if (unembedded.length === 0) {
+      return res.json({ ok: true, message: 'All content already embedded', embedded: 0, stats: db.stats() });
+    }
+
+    // Process batch
+    var embedded = 0;
+    var errors = 0;
+    var texts = unembedded.map(function (row) { return row.content_text; });
+    var embeddings = await generateEmbeddingBatch(config, texts);
+
+    for (var i = 0; i < unembedded.length; i++) {
+      if (embeddings[i]) {
+        try {
+          db.updateEmbedding(unembedded[i].source_type, unembedded[i].source_id, unembedded[i].chunk_index, embeddings[i], config.embedding_model || config.embedding_provider);
+          embedded++;
+        } catch (e) {
+          errors++;
+          console.error('[semantic-memory] reindex embed update failed:', e.message);
+        }
+      } else {
+        errors++;
+      }
+    }
+
+    var remaining = db.getUnembedded(1).length;
+    res.json({
+      ok: true,
+      message: remaining > 0 ? 'Batch complete, more remaining — call again' : 'Reindex complete',
+      embedded: embedded,
+      errors: errors,
+      remaining: remaining > 0,
+      stats: db.stats()
+    });
   });
 
   return router;

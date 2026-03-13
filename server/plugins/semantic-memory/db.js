@@ -1,5 +1,7 @@
 // Semantic Memory DB helpers
 
+import { cosineSimilarity } from './embeddings.js';
+
 var _vecAvailable = null;
 
 export default function createMemoryDB(db) {
@@ -143,18 +145,109 @@ export default function createMemoryDB(db) {
       }
     },
 
-    searchHybrid(query, opts, embeddingFn) {
-      // Always do keyword search
-      var keywordResults = this.searchKeyword(query, Object.assign({}, opts, { limit: (opts.limit || 10) * 2 }));
+    // -- Vector Search --
+    searchVector(queryEmbedding, opts) {
+      opts = opts || {};
+      var limit = Math.min(opts.limit || 10, 100);
+      var where = ['embedding IS NOT NULL'];
+      var params = [];
 
-      // If no embedding function or vec not available, return keyword only
-      if (!embeddingFn || !_vecAvailable) {
-        return keywordResults.slice(0, opts.limit || 10);
+      if (opts.source_types && opts.source_types.length > 0) {
+        where.push('source_type IN (' + opts.source_types.map(function () { return '?'; }).join(',') + ')');
+        params = params.concat(opts.source_types);
+      }
+      if (opts.namespace) {
+        where.push('namespace = ?');
+        params.push(opts.namespace);
       }
 
-      // TODO: vector search + hybrid scoring when sqlite-vec is available
-      // For now, keyword search is the primary mode
-      return keywordResults.slice(0, opts.limit || 10);
+      var rows = db.prepare(
+        'SELECT id, source_type, source_id, chunk_index, embedding FROM sm_embeddings WHERE ' + where.join(' AND ')
+      ).all(...params);
+
+      // Compute cosine similarity in JS
+      var scored = [];
+      for (var row of rows) {
+        var embedding = null;
+        try {
+          if (typeof row.embedding === 'string') {
+            embedding = JSON.parse(row.embedding);
+          } else if (Buffer.isBuffer(row.embedding)) {
+            embedding = JSON.parse(row.embedding.toString());
+          }
+        } catch (e) { continue; }
+        if (!embedding) continue;
+
+        var sim = cosineSimilarity(queryEmbedding, embedding);
+        scored.push({ id: row.id, source_type: row.source_type, source_id: row.source_id, chunk_index: row.chunk_index, score: sim });
+      }
+
+      scored.sort(function (a, b) { return b.score - a.score; });
+      var topIds = scored.slice(0, limit);
+
+      // Fetch full rows only for top results
+      return topIds.map(function (s) {
+        var full = db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id);
+        if (!full) return null;
+        try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
+        full.score = s.score;
+        return full;
+      }).filter(Boolean);
+    },
+
+    updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model) {
+      var embeddingStr = JSON.stringify(embedding);
+      db.prepare(
+        "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
+      ).run(embeddingStr, model, sourceType, sourceId, chunkIndex || 0);
+    },
+
+    getUnembedded(limit) {
+      return db.prepare(
+        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL ORDER BY updated_at DESC LIMIT ?'
+      ).all(limit || 50);
+    },
+
+    searchHybrid(query, opts, queryEmbedding) {
+      opts = opts || {};
+      var limit = opts.limit || 10;
+
+      // Always do keyword search
+      var keywordResults = this.searchKeyword(query, Object.assign({}, opts, { limit: limit * 2 }));
+
+      // If no query embedding, return keyword only
+      if (!queryEmbedding) {
+        return keywordResults.slice(0, limit);
+      }
+
+      // Vector search
+      var vectorResults = this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
+
+      // Reciprocal Rank Fusion (RRF)
+      var K = 60; // standard RRF constant
+      var scores = {}; // key: source_type:source_id:chunk_index -> { score, row }
+
+      for (var ki = 0; ki < keywordResults.length; ki++) {
+        var kr = keywordResults[ki];
+        var key = kr.source_type + ':' + kr.source_id + ':' + (kr.chunk_index || 0);
+        if (!scores[key]) scores[key] = { score: 0, row: kr };
+        scores[key].score += 1 / (K + ki + 1);
+      }
+
+      for (var vi = 0; vi < vectorResults.length; vi++) {
+        var vr = vectorResults[vi];
+        var key2 = vr.source_type + ':' + vr.source_id + ':' + (vr.chunk_index || 0);
+        if (!scores[key2]) scores[key2] = { score: 0, row: vr };
+        scores[key2].score += 1 / (K + vi + 1);
+        scores[key2].row.vector_score = vr.score; // attach vector similarity for debugging
+      }
+
+      // Sort by combined RRF score
+      var merged = Object.values(scores).sort(function (a, b) { return b.score - a.score; });
+      return merged.slice(0, limit).map(function (m) {
+        m.row.rrf_score = m.score;
+        return m.row;
+      });
     },
 
     // -- Stats --

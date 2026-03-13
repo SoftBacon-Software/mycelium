@@ -87,6 +87,9 @@ export function initDB() {
     ["support_tickets", "draft_response", "TEXT"],
     // Plan #62 — multi-runtime agent support
     ["agents", "runtime", "TEXT NOT NULL DEFAULT ''"],
+    // Smart Memory — access tracking for context keys
+    ["context_keys", "access_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["context_keys", "last_accessed_at", "TEXT"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -872,6 +875,12 @@ export function getContextKey(namespace, key) {
     db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
     return null;
   }
+  if (row) {
+    // Track access for smart boot scoring
+    try {
+      db.prepare("UPDATE context_keys SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?").run(row.id);
+    } catch (e) { /* non-critical */ }
+  }
   return row;
 }
 
@@ -1401,6 +1410,132 @@ export function getSlimBootPayload(agentId) {
     })(),
     server_time: new Date().toISOString()
   };
+}
+
+// Smart boot: slim boot + scored context injection
+export function getSmartBootPayload(agentId, contextScorer, memoryDb) {
+  var slim = getSlimBootPayload(agentId);
+  if (!slim) return null;
+
+  var agent = getAgent(agentId);
+  var projectId = agent ? agent.project_id : '';
+
+  // Gather work context from slim boot data
+  var workContext = {
+    tasks: [],
+    plan_steps: [],
+    messages: [],
+    project_id: projectId
+  };
+
+  // Get assigned tasks for context
+  try {
+    var myTasks = db.prepare(
+      "SELECT title, description FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') LIMIT 10"
+    ).all(agentId);
+    workContext.tasks = myTasks;
+  } catch (e) { /* */ }
+
+  // Get plan steps assigned to this agent
+  try {
+    var mySteps = db.prepare(
+      "SELECT ps.title, ps.description FROM plan_steps ps JOIN plans p ON ps.plan_id = p.id WHERE ps.assignee = ? AND ps.status IN ('pending', 'in_progress') AND p.status = 'active' LIMIT 10"
+    ).all(agentId);
+    workContext.plan_steps = mySteps;
+  } catch (e) { /* */ }
+
+  // Get recent messages
+  try {
+    var recentMsgs = db.prepare(
+      "SELECT content FROM messages WHERE to_agent = ? AND created_at > datetime('now', '-1 day') ORDER BY created_at DESC LIMIT 5"
+    ).all(agentId);
+    workContext.messages = recentMsgs;
+  } catch (e) { /* */ }
+
+  // Load ALL context keys for agent's namespaces
+  var namespaces = [agentId, projectId, 'mycelium'].filter(Boolean);
+  var allKeys = [];
+  var seen = {};
+  for (var ns of namespaces) {
+    var keys = listContextKeys(ns);
+    for (var k of keys) {
+      var uid = k.namespace + ':' + k.key;
+      if (!seen[uid]) {
+        seen[uid] = true;
+        allKeys.push(k);
+      }
+    }
+  }
+
+  // Get embedding config + key embeddings from semantic memory if available
+  var scorerOpts = {};
+  if (memoryDb) {
+    try {
+      var config = memoryDb.getAllConfig();
+      if (config.embedding_provider && config.embedding_provider !== 'none') {
+        // Look up embeddings for context keys already indexed
+        var keyEmbeddings = {};
+        for (var ck of allKeys) {
+          var sourceId = ck.namespace + ':' + ck.key;
+          var row = db.prepare(
+            'SELECT embedding FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND embedding IS NOT NULL LIMIT 1'
+          ).get('context_key', sourceId);
+          if (row && row.embedding) {
+            try {
+              keyEmbeddings[sourceId] = JSON.parse(typeof row.embedding === 'string' ? row.embedding : row.embedding.toString());
+            } catch (e) { /* */ }
+          }
+        }
+        if (Object.keys(keyEmbeddings).length > 0) {
+          scorerOpts.keyEmbeddings = keyEmbeddings;
+          // Build query embedding from work context synchronously isn't possible,
+          // so vector scoring uses pre-existing embeddings only (query embedding added at route level)
+        }
+      }
+    } catch (e) { /* semantic-memory not available */ }
+  }
+
+  // Score and filter
+  var maxKeys = 20; // default, could be configured via instance config
+  try {
+    var maxKeysSetting = db.prepare("SELECT value FROM instance_config WHERE key = 'smart_boot_max_keys'").get();
+    if (maxKeysSetting) maxKeys = parseInt(maxKeysSetting.value) || 20;
+  } catch (e) { /* */ }
+
+  var scored = contextScorer(allKeys, workContext, scorerOpts);
+
+  // Always include critical keys + top N by score
+  var selected = [];
+  var nonCritical = [];
+  for (var s of scored) {
+    if (s.critical) {
+      selected.push(s);
+    } else {
+      nonCritical.push(s);
+    }
+  }
+
+  // Fill remaining slots with top-scored non-critical keys
+  var remaining = maxKeys - selected.length;
+  if (remaining > 0) {
+    selected = selected.concat(nonCritical.slice(0, remaining));
+  }
+
+  // Determine scoring method
+  var method = scorerOpts.queryEmbedding ? 'hybrid' : (scorerOpts.keyEmbeddings ? 'keyword+vector' : 'keyword+access');
+
+  // Attach to slim boot
+  slim.context_keys = selected.map(function (s) {
+    return { namespace: s.namespace, key: s.key, data: s.data, score: Math.round(s.score * 1000) / 1000, reasons: s.reasons };
+  });
+  slim.context_meta = {
+    total_available: allKeys.length,
+    selected: selected.length,
+    method: method,
+    max_keys: maxKeys
+  };
+
+  return slim;
 }
 
 // Build a role contract from agent fields + context keys

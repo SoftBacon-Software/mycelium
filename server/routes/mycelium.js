@@ -120,7 +120,7 @@ import {
   createMessage, createRequest, getMessage,
   acknowledgeMessage, resolveMessage, listPendingRequests,
   listMessages, listThreads, bulkDeleteMessages,
-  getBootPayload, getSlimBootPayload, getOverview, getSlimOverview, buildWorkQueue,
+  getBootPayload, getSlimBootPayload, getSmartBootPayload, getOverview, getSlimOverview, buildWorkQueue,
   createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
   createPlan, getPlan, listPlans, updatePlan, deletePlan,
   createPlanStep, updatePlanStep, deletePlanStep, reorderPlanSteps,
@@ -1133,6 +1133,23 @@ router.put('/waitlist/:id', function (req, res) {
 
 // ======== BOOT ========
 
+// Lazy-load smart boot dependencies (plugin may not be available)
+var _contextScorer = null;
+var _createMemoryDB = null;
+
+// Pre-load smart boot deps at startup (fire-and-forget)
+(async function () {
+  try {
+    var scorerMod = await import('../plugins/semantic-memory/context-scorer.js');
+    _contextScorer = scorerMod.scoreContextKeys;
+    var dbMod = await import('../plugins/semantic-memory/db.js');
+    _createMemoryDB = dbMod.default;
+    console.log('[mycelium] Smart boot dependencies loaded');
+  } catch (e) {
+    console.log('[mycelium] Smart boot deps not available (semantic-memory plugin not loaded):', e.message);
+  }
+})();
+
 router.get('/boot/:agentId', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
@@ -1154,6 +1171,24 @@ router.get('/boot/:agentId', asyncHandler(function (req, res) {
     try { fullPayload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
     emitEvent('agent_boot', agentId, null, agentId + ' booted (verbose)');
     return res.json(fullPayload);
+  }
+
+  // Smart boot mode — scored context injection
+  if (req.query.smart === 'true' && _contextScorer) {
+    try {
+      var memoryDb = _createMemoryDB ? _createMemoryDB(getDB()) : null;
+      var payload = getSmartBootPayload(agentId, _contextScorer, memoryDb);
+      if (!payload) return res.status(404).json({ error: 'Agent not found' });
+      var diff = computeSavepointDiff(agentId);
+      payload.savepoint = diff;
+      payload.changes_since_last = formatSavepointSummary(diff);
+      try { payload.profile = ensureAgentProfile(agentId); } catch (e) { /* non-critical */ }
+      emitEvent('agent_boot', agentId, null, agentId + ' booted (smart)');
+      return res.json(payload);
+    } catch (e) {
+      console.error('[mycelium] Smart boot failed, falling back to slim:', e.message);
+      // Fall through to slim boot
+    }
   }
 
   // Default: slim boot

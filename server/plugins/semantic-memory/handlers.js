@@ -1,12 +1,30 @@
 // Semantic Memory event handlers — auto-index platform content
 
 import createMemoryDB from './db.js';
+import { generateEmbedding } from './embeddings.js';
 
 export function registerHooks(core) {
   var db = createMemoryDB(core.db);
 
   function isAutoIndexEnabled() {
     return db.getConfig('auto_index') === 'true';
+  }
+
+  function getEmbeddingConfig() {
+    return db.getAllConfig();
+  }
+
+  // Fire-and-forget embedding after indexing content
+  function autoEmbed(sourceType, sourceId, contentText) {
+    var config = getEmbeddingConfig();
+    if (!config.embedding_provider || config.embedding_provider === 'none') return;
+    generateEmbedding(config, contentText).then(function (embedding) {
+      if (embedding) {
+        db.updateEmbedding(sourceType, sourceId, 0, embedding, config.embedding_model || config.embedding_provider);
+      }
+    }).catch(function (e) {
+      console.error('[semantic-memory] auto-embed failed for ' + sourceType + ':' + sourceId + ':', e.message);
+    });
   }
 
   // Auto-index context key updates
@@ -20,10 +38,12 @@ export function registerHooks(core) {
       if (typeof value === 'object') value = JSON.stringify(value);
       if (!value || value.length < 10) return; // skip tiny values
 
-      db.index('context_key', namespace + ':' + key, value, {
+      var sourceId = namespace + ':' + key;
+      db.index('context_key', sourceId, value, {
         namespace: namespace,
         metadata: { namespace: namespace, key: key, agent_id: eventData.agent }
       });
+      autoEmbed('context_key', sourceId, value);
     } catch (e) {
       console.error('[semantic-memory] auto-index context_key failed:', e.message);
     }
@@ -47,6 +67,7 @@ export function registerHooks(core) {
           msg_type: data.msg_type
         }
       });
+      autoEmbed('message', String(messageId), content);
     } catch (e) {
       console.error('[semantic-memory] auto-index message failed:', e.message);
     }
@@ -68,6 +89,7 @@ export function registerHooks(core) {
       db.index('concept', String(conceptId), text, {
         metadata: { concept_id: conceptId, name: data.name, type: data.type }
       });
+      autoEmbed('concept', String(conceptId), text);
     } catch (e) {
       console.error('[semantic-memory] auto-index concept failed:', e.message);
     }
@@ -85,6 +107,7 @@ export function registerHooks(core) {
       db.index('task', String(taskId), text, {
         metadata: { task_id: taskId, project_id: data.project_id || eventData.project_id }
       });
+      autoEmbed('task', String(taskId), text);
     } catch (e) {
       console.error('[semantic-memory] auto-index task failed:', e.message);
     }
@@ -101,6 +124,7 @@ export function registerHooks(core) {
       db.index('task', String(taskId), text, {
         metadata: { task_id: taskId, project_id: eventData.project_id, status: 'done', agent_id: eventData.agent }
       });
+      autoEmbed('task', String(taskId), text);
     } catch (e) {
       console.error('[semantic-memory] auto-index task_completed failed:', e.message);
     }
