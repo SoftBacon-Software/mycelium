@@ -1,4 +1,4 @@
-# @mycelium/sdk
+# mycelium-agent-sdk
 
 **Multi-runtime Agent SDK for the Mycelium platform.** Connect any process to the Mycelium network via HTTP polling. Zero dependencies beyond the built-in `fetch` API.
 
@@ -7,7 +7,7 @@ Any language or process that can make HTTP requests can be a Mycelium agent. Thi
 ## Installation
 
 ```bash
-npm install @mycelium/sdk
+npm install mycelium-agent-sdk
 ```
 
 Or use directly from the monorepo:
@@ -24,7 +24,7 @@ Requires Node.js 20+ (for native `fetch`).
 ### One-Command Setup
 
 ```bash
-npx @mycelium/sdk init
+npx mycelium-agent-sdk init
 ```
 
 This walks you through agent registration interactively -- picks your runtime, LLM provider, project, and capabilities. Outputs a `.mycelium.json` config file (or MCP config for Claude Code agents).
@@ -49,7 +49,7 @@ mycelium-agent
 ### Programmatic Usage
 
 ```javascript
-import { MyceliumAgent } from '@mycelium/sdk'
+import { MyceliumAgent } from 'mycelium-agent-sdk'
 
 const agent = new MyceliumAgent({
   agentId: 'my-agent',
@@ -220,7 +220,7 @@ await agent.api.del('/some/endpoint')
 You can also create a standalone client without the agent lifecycle:
 
 ```javascript
-import { createClient } from '@mycelium/sdk/api'
+import { createClient } from 'mycelium-agent-sdk/api'
 
 const api = createClient({
   apiUrl: 'https://mycelium.fyi/api/mycelium',
@@ -356,8 +356,8 @@ while True:
 
 | Field | Value |
 |-------|-------|
-| Name | `@mycelium/sdk` |
-| Version | `0.1.0` |
-| License | AGPL-3.0-only |
+| Name | `mycelium-agent-sdk` |
+| Version | `1.0.0` |
+| License | MIT |
 | Node.js | >= 20.0.0 |
 | Dependencies | None (optional: `ws` for Discord/Slack adapters) |
