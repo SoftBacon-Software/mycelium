@@ -432,6 +432,10 @@ export function deleteChannel(id: number): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/channels/${id}`);
 }
 
+export function startDmChannel(userId: string, userType: string = 'operator'): Promise<{ ok: boolean; channel_id: number; channel: Channel }> {
+  return apiPost<{ ok: boolean; channel_id: number; channel: Channel }>('/channels/dm', { user_id: userId, user_type: userType });
+}
+
 export function fetchChannelMembers(id: number): Promise<ChannelMember[]> {
   return apiGet<ChannelMember[]>(`/channels/${id}/members`);
 }
