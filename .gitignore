@@ -2,6 +2,7 @@ node_modules/
 mcp/node_modules/
 runner/node_modules/
 runner/config.json
+file-drone/file_drone_config.json
 server/data/
 *.db
 .env
