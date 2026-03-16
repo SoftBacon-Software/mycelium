@@ -10,7 +10,7 @@ import {
   MessageSquare, Radio, ShieldCheck, Inbox,
   Users, Cpu, FolderOpen, Lightbulb, Database, Server, Layers,
   Settings, Settings2, Activity, Webhook, Puzzle, BarChart3, Rocket, MessageCircle, Zap,
-  ChevronRight, PanelLeftClose, PanelLeftOpen, X, HeartPulse,
+  ChevronRight, PanelLeftClose, PanelLeftOpen, X, HeartPulse, HardDrive,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -81,6 +81,7 @@ const staticNavSections: NavSection[] = [
       { to: '/concepts', label: 'Concepts', icon: Lightbulb, adminOnly: true, desc: 'Shared characters, styles, and rulesets' },
       { to: '/assets', label: 'Assets', icon: FolderOpen, adminOnly: true, desc: 'Files and artifacts uploaded by agents' },
       { to: '/drones', label: 'Drones', icon: Cpu, adminOnly: true, desc: 'GPU/CPU compute job queue and workers' },
+      { to: '/files', label: 'File Server', icon: HardDrive, desc: 'Browse shared drives from local file drones' },
       { to: '/spawns', label: 'Spawns', icon: Zap, adminOnly: true, desc: 'Provision new agent instances' },
       { to: '/templates', label: 'Templates', icon: Layers, adminOnly: true, desc: 'Reusable agent configuration templates' },
     ],
