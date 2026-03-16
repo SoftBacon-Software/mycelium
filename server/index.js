@@ -395,7 +395,7 @@ setInterval(function () {
 // ---- Voice chat signaling (WebRTC) ----
 import { WebSocketServer } from 'ws';
 
-var wss = new WebSocketServer({ server: server, path: '/voice' });
+var wss = new WebSocketServer({ noServer: true });
 var peerCounter = 0;
 
 wss.on('connection', function (ws, req) {
@@ -501,3 +501,190 @@ function findPeerWs(peerId) {
   }
   return null;
 }
+
+// ---- File Drone WebSocket Tunnel ----
+// Local file drones connect via WebSocket and serve filesystem to the network.
+// HTTP routes in mycelium.js send requests through this tunnel.
+
+var fileDrones = new Map(); // droneId -> { ws, info, pendingRequests }
+app.locals.fileDrones = fileDrones; // Expose to routes
+
+var fileDroneWss = new WebSocketServer({ noServer: true });
+var _fileDroneReqCounter = 0;
+
+fileDroneWss.on('connection', function (ws, req) {
+  var url = new URL(req.url, 'http://localhost');
+  var agentKey = url.searchParams.get('key');
+  var droneId = url.searchParams.get('drone_id');
+
+  // Authenticate via agent key (same SHA-256 lookup as checkVoiceAuth)
+  if (!agentKey || !droneId) {
+    ws.close(4401, 'Missing key or drone_id');
+    return;
+  }
+  var keyHash = crypto.createHash('sha256').update(agentKey).digest('hex');
+  var db = getDB();
+  var match = db.prepare("SELECT id FROM agents WHERE api_key_hash = ?").get(keyHash);
+  if (!match || match.id !== droneId) {
+    ws.close(4403, 'Invalid credentials');
+    return;
+  }
+
+  console.log('[file-drone] Connected: ' + droneId);
+  ws.isAlive = true;
+
+  var drone = { ws: ws, info: {}, pendingRequests: new Map() };
+  fileDrones.set(droneId, drone);
+
+  // Update agent status
+  try {
+    db.prepare("UPDATE agents SET status = 'online', last_heartbeat = datetime('now') WHERE id = ?").run(droneId);
+  } catch (e) { /* non-fatal */ }
+
+  ws.on('pong', function () { ws.isAlive = true; });
+
+  ws.on('message', function (raw) {
+    ws.isAlive = true;
+    try {
+      var msg = JSON.parse(raw);
+
+      // Initial status message from drone
+      if (msg.type === 'status') {
+        drone.info = msg.data || {};
+        return;
+      }
+
+      // Pong response
+      if (msg.type === 'pong') return;
+
+      // Response to a pending request (result, file_start, file_chunk, file_end, error)
+      var reqId = msg.id;
+      if (reqId && drone.pendingRequests.has(reqId)) {
+        var pending = drone.pendingRequests.get(reqId);
+        if (pending.onMessage) pending.onMessage(msg);
+      }
+    } catch (e) {
+      console.warn('[file-drone] Parse error from ' + droneId + ':', e.message);
+    }
+  });
+
+  ws.on('close', function () {
+    console.log('[file-drone] Disconnected: ' + droneId);
+    // Reject all pending requests
+    for (var [id, pending] of drone.pendingRequests) {
+      if (pending.reject) pending.reject(new Error('Drone disconnected'));
+    }
+    drone.pendingRequests.clear();
+    fileDrones.delete(droneId);
+    try {
+      db.prepare("UPDATE agents SET status = 'offline' WHERE id = ?").run(droneId);
+    } catch (e) { /* non-fatal */ }
+  });
+
+  ws.on('error', function (err) {
+    console.warn('[file-drone] Error from ' + droneId + ':', err.message);
+  });
+});
+
+// Heartbeat for file drones
+setInterval(function () {
+  fileDroneWss.clients.forEach(function (ws) {
+    if (!ws.isAlive) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 15000);
+
+// ---- Manual WebSocket upgrade routing (required for multiple WSS on one HTTP server) ----
+server.on('upgrade', function (request, socket, head) {
+  var pathname = new URL(request.url, 'http://localhost').pathname;
+  if (pathname === '/voice') {
+    wss.handleUpgrade(request, socket, head, function (ws) {
+      wss.emit('connection', ws, request);
+    });
+  } else if (pathname === '/ws/file-drone') {
+    fileDroneWss.handleUpgrade(request, socket, head, function (ws) {
+      fileDroneWss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// Helper: send a request to a file drone and wait for response
+// Used by HTTP routes in mycelium.js via app.locals.sendFileDroneRequest
+app.locals.sendFileDroneRequest = function (droneId, type, params, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    var drone = fileDrones.get(droneId);
+    if (!drone || drone.ws.readyState !== 1) {
+      return reject(new Error('File drone not connected: ' + droneId));
+    }
+    var reqId = 'freq_' + (++_fileDroneReqCounter);
+    var timer = setTimeout(function () {
+      drone.pendingRequests.delete(reqId);
+      reject(new Error('Request timed out'));
+    }, timeoutMs || 15000);
+
+    drone.pendingRequests.set(reqId, {
+      resolve: resolve,
+      reject: reject,
+      onMessage: function (msg) {
+        if (msg.type === 'result' || msg.type === 'error') {
+          clearTimeout(timer);
+          drone.pendingRequests.delete(reqId);
+          if (msg.type === 'error') {
+            reject(new Error((msg.data && msg.data.error) || 'Drone error'));
+          } else {
+            resolve(msg.data);
+          }
+        }
+        // file_start, file_chunk, file_end handled by streaming version
+      }
+    });
+
+    drone.ws.send(JSON.stringify({ id: reqId, type: type, params: params }));
+  });
+};
+
+// Helper: stream a file download from drone, piping to HTTP response
+app.locals.streamFileDroneDownload = function (droneId, params, res, requestType) {
+  return new Promise(function (resolve, reject) {
+    var drone = fileDrones.get(droneId);
+    if (!drone || drone.ws.readyState !== 1) {
+      return reject(new Error('File drone not connected: ' + droneId));
+    }
+    var reqId = 'freq_' + (++_fileDroneReqCounter);
+    var timer = setTimeout(function () {
+      drone.pendingRequests.delete(reqId);
+      reject(new Error('Download timed out'));
+    }, 300000); // 5 min timeout for downloads
+    var headersSent = false;
+
+    drone.pendingRequests.set(reqId, {
+      resolve: resolve,
+      reject: reject,
+      onMessage: function (msg) {
+        if (msg.type === 'error') {
+          clearTimeout(timer);
+          drone.pendingRequests.delete(reqId);
+          reject(new Error((msg.data && msg.data.error) || 'Download error'));
+        } else if (msg.type === 'file_start') {
+          headersSent = true;
+          res.setHeader('Content-Type', msg.data.mime || 'application/octet-stream');
+          res.setHeader('Content-Length', msg.data.size);
+          res.setHeader('Content-Disposition', 'attachment; filename="' + (msg.data.name || 'file').replace(/"/g, '_') + '"');
+        } else if (msg.type === 'file_chunk') {
+          var buf = Buffer.from(msg.data, 'base64');
+          res.write(buf);
+        } else if (msg.type === 'file_end') {
+          clearTimeout(timer);
+          drone.pendingRequests.delete(reqId);
+          res.end();
+          resolve();
+        }
+      }
+    });
+
+    drone.ws.send(JSON.stringify({ id: reqId, type: requestType || 'file_download', params: params }));
+  });
+};
