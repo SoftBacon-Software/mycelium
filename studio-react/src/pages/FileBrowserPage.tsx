@@ -19,7 +19,7 @@ interface BrowseResult {
 }
 
 interface SearchResult {
-  results: FileEntry & { path: string }[]
+  results: (FileEntry & { path: string })[]
   query: string
   truncated?: boolean
   error?: string
@@ -167,8 +167,17 @@ export default function FileBrowserPage() {
     fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
-        if (!res.ok) throw new Error('Download failed')
+      .then(async (res) => {
+        if (!res.ok) {
+          // Try to extract the actual error message from the JSON response
+          try {
+            const body = await res.json()
+            throw new Error(body.error || `Download failed (${res.status})`)
+          } catch (e) {
+            if (e instanceof SyntaxError) throw new Error(`Download failed (${res.status})`)
+            throw e
+          }
+        }
         return res.blob()
       })
       .then((blob) => {
@@ -177,21 +186,23 @@ export default function FileBrowserPage() {
         link.href = blobUrl
         link.download = fileName
         link.click()
-        URL.revokeObjectURL(blobUrl)
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
       })
       .catch((err) => toast.error(err.message))
   }
 
   function downloadFile(path: string) {
+    if (!status?.online) { toast.error('File drone is offline'); return }
     const url = `/api/mycelium/file-server/download?path=${encodeURIComponent(path)}`
     const fileName = path.split('/').pop() || 'download'
     triggerDownload(url, fileName)
   }
 
   function downloadFolder(path: string) {
+    if (!status?.online) { toast.error('File drone is offline'); return }
     const url = `/api/mycelium/file-server/download-folder?path=${encodeURIComponent(path)}`
     const folderName = (path.split('/').pop() || 'folder') + '.zip'
-    toast.info('Zipping folder...')
+    toast.info('Zipping folder — this may take a moment for large folders...')
     triggerDownload(url, folderName)
   }
 
