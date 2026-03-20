@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
-import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel, deleteChannel } from '../api/endpoints'
+import { fetchChannelMessages, fetchChannelUnread, sendChannelMessage, markChannelRead, createChannel, deleteChannel, startDmChannel } from '../api/endpoints'
 import type { Channel, ChannelMessage } from '../api/types'
 import { Avatar, formatTime } from '../components/messages/ChatMessage'
 import Badge from '../components/shared/Badge'
@@ -168,11 +168,29 @@ function ChannelSidebar({
   onChannelDeleted: (id: number) => void
 }) {
   const [showCreate, setShowCreate] = useState(false)
+  const [showDmPicker, setShowDmPicker] = useState(false)
   const [newName, setNewName] = useState('')
   const [newType, setNewType] = useState<ChannelType>('general')
   const [newDesc, setNewDesc] = useState('')
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const agents = useDashboardStore((s) => s.agents)
+  const operators = useDashboardStore((s) => s.operators)
+  const user = useAuthStore((s) => s.user)
+
+  async function handleStartDm(targetId: string, targetType: 'operator' | 'agent') {
+    setCreating(true)
+    try {
+      const res = await startDmChannel(targetId, targetType)
+      setShowDmPicker(false)
+      onChannelCreated()
+      onSelect(res.channel_id)
+    } catch (err) {
+      console.error('Failed to start DM:', err)
+    } finally {
+      setCreating(false)
+    }
+  }
 
   async function handleDelete(e: React.MouseEvent, ch: Channel) {
     e.stopPropagation()
@@ -293,18 +311,63 @@ function ChannelSidebar({
         </div>
       )}
 
+      {/* DM picker */}
+      {showDmPicker && (
+        <div className="px-3 py-2 border-b border-border space-y-1 max-h-48 overflow-y-auto">
+          <div className="text-text-muted text-[10px] font-semibold tracking-wider uppercase mb-1">Start a DM</div>
+          {operators.filter((op) => op.id !== user?.username).map((op) => (
+            <button
+              key={op.id}
+              onClick={() => handleStartDm(op.display_name || op.id, 'operator')}
+              disabled={creating}
+              className="w-full text-left px-2 py-1 rounded-sm text-xs text-text hover:bg-surface-raised transition-colors disabled:opacity-50"
+            >
+              {op.display_name || op.id}
+            </button>
+          ))}
+          {agents.filter((a) => a.agent_type !== 'drone').map((a) => (
+            <button
+              key={a.id}
+              onClick={() => handleStartDm(a.id, 'agent')}
+              disabled={creating}
+              className="w-full text-left px-2 py-1 rounded-sm text-xs text-text-dim hover:bg-surface-raised transition-colors disabled:opacity-50"
+            >
+              {a.name || a.id} <span className="text-text-muted">(agent)</span>
+            </button>
+          ))}
+          <button
+            onClick={() => setShowDmPicker(false)}
+            className="w-full px-2 py-1 rounded-sm text-xs text-text-muted hover:text-text transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {/* Channel list */}
       <div className="flex-1 overflow-y-auto py-2">
         {SIDEBAR_GROUPS.map(({ key, label }) => {
           const list = grouped.get(key)
-          if (!list || list.length === 0) return null
+          if (!list) return null
+          if (key !== 'dm' && list.length === 0) return null
 
           return (
             <div key={key} className="mb-2">
-              <div className="px-3 py-1">
+              <div className="px-3 py-1 flex items-center justify-between">
                 <span className="text-text-muted text-[10px] font-semibold tracking-wider uppercase">
                   {label}
                 </span>
+                {key === 'dm' && (
+                  <button
+                    onClick={() => setShowDmPicker(!showDmPicker)}
+                    className="text-text-muted hover:text-accent transition-colors p-0.5 rounded-sm hover:bg-surface-raised"
+                    title="New DM"
+                  >
+                    <svg viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M8 3v10M3 8h10" />
+                    </svg>
+                  </button>
+                )}
               </div>
               {list.map((ch) => {
                 const isActive = ch.id === activeId

@@ -12,7 +12,7 @@ export default function Tooltip({ content, children, position = 'right', delay =
   const [coords, setCoords] = useState({ top: 0, left: 0 })
   const triggerRef = useRef<HTMLDivElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }

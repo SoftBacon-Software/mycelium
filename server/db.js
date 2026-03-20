@@ -412,6 +412,10 @@ export function updateProject(id, fields) {
   buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
 }
 
+export function deleteProject(id) {
+  getDB().prepare('DELETE FROM projects WHERE id = ?').run(id);
+}
+
 // -- Tasks --
 
 export function createTask(title, description, projectId, requester, priority, tags) {
