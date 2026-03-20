@@ -104,7 +104,7 @@ var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 
 import {
   createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
-  createProject, listProjects, getProject, updateProject,
+  createProject, listProjects, getProject, updateProject, deleteProject,
   createTask, getTask, listTasks, updateTask,
   setTaskDependency, resolveTaskDependencies,
   approveTask, listTasksNeedingApproval,
@@ -1517,7 +1517,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   // Agents can only update themselves, admin can update anyone
-  if (who !== '__admin__' && who !== '__system__' && who !== req.params.id) {
+  if (!req._authIsAdmin && who !== req.params.id) {
     return res.status(403).json({ error: 'Can only update your own profile' });
   }
   var agent = getAgent(req.params.id);
@@ -1526,7 +1526,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
   if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
   if (req.body.name !== undefined) fields.name = req.body.name;
   // Admin-only fields
-  if (who === '__admin__' || who === '__system__') {
+  if (req._authIsAdmin) {
     if (req.body.role !== undefined) fields.role = req.body.role;
     if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
     if (req.body.project !== undefined) fields.project = req.body.project;
@@ -1535,7 +1535,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
     if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   }
   // Self-update fields (agent can only set on themselves)
-  if (who === req.params.id || who === '__admin__' || who === '__system__') {
+  if (who === req.params.id || req._authIsAdmin) {
     if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
     if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
     if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
@@ -3478,7 +3478,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, '{}', 'directive');
         }
       }
     }
@@ -3555,7 +3555,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Sleep mode ended. Human operators are available again.', '{}', 'info');
       }
     }
 
@@ -3605,7 +3605,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       if (mySleptAt) summaryLines.push('\nSlept since: ' + mySleptAt);
       var wakeUpAgent = listAgents().find(function(a) { return a.operator_id === operatorId2; });
       if (wakeUpAgent) {
-        createMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
+        createMessage('__system__', wakeUpAgent.id, null, null, summaryLines.join('\n'), '{}', 'info');
       }
     }
 
@@ -3663,7 +3663,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, '{}', 'directive');
         }
       }
     }
@@ -3676,7 +3676,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', '{}', 'info');
       }
     }
   }
@@ -4316,6 +4316,14 @@ router.put('/projects/:id', asyncHandler(function (req, res) {
   if (!project) return res.status(404).json({ error: 'Project not found' });
   updateProject(req.params.id, req.body);
   res.json(getProject(req.params.id));
+}));
+
+router.delete('/projects/:id', asyncHandler(function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  deleteProject(req.params.id);
+  res.json({ ok: true, deleted: req.params.id });
 }));
 
 // GET /projects/:id/bug-categories — get bug categories for a project (dynamic or defaults)
@@ -5521,13 +5529,7 @@ function notifyApprovalDecision(approval, status, decidedBy, reason) {
     var content = statusLabel + ': [' + approval.action_type + '] ' + approval.title;
     if (reason) content += ' — ' + reason;
     // 1. Send message to agent
-    createMessage({
-      from_agent: '__system__',
-      to_agent: agentId,
-      content: content,
-      msg_type: 'info',
-      project_id: approval.project_id || approval.project || 'mycelium'
-    });
+    createMessage('__system__', agentId, null, approval.project_id || approval.project || 'mycelium', content, '{}', 'info');
     // 2. Create inbox item for agent's operator
     var agent = getAgent(agentId);
     if (agent && agent.operator_id) {
