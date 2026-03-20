@@ -5,15 +5,14 @@
 //
 // Environment variables:
 //   OLLAMA_URL    — Ollama API base URL (default: http://localhost:11434)
-//   OLLAMA_MODEL  — Model to use (default: qwen2.5-coder:14b-instruct-q4_K_M)
+//   OLLAMA_MODEL  — Model to use (default: qwen3.5:9b)
 //
 // Run with:
 //   MYCELIUM_AGENT_ID=macbook-ollama MYCELIUM_API_KEY=dvk_xxx \
-//   OLLAMA_MODEL=qwen2.5-coder:14b-instruct-q4_K_M \
 //   MYCELIUM_HANDLER=./examples/ollama-agent.js mycelium-agent
 
 var OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
-var OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder:14b-instruct-q4_K_M'
+var OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3.5:9b'
 
 async function chat(messages) {
   var start = Date.now()
