@@ -3478,7 +3478,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, '{}', 'directive');
         }
       }
     }
@@ -3555,7 +3555,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Sleep mode ended. Human operators are available again.', '{}', 'info');
       }
     }
 
@@ -3605,7 +3605,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       if (mySleptAt) summaryLines.push('\nSlept since: ' + mySleptAt);
       var wakeUpAgent = listAgents().find(function(a) { return a.operator_id === operatorId2; });
       if (wakeUpAgent) {
-        createMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
+        createMessage('__system__', wakeUpAgent.id, null, null, summaryLines.join('\n'), '{}', 'info');
       }
     }
 
@@ -3663,7 +3663,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, '{}', 'directive');
         }
       }
     }
@@ -3676,7 +3676,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', '{}', 'info');
       }
     }
   }
@@ -5529,13 +5529,7 @@ function notifyApprovalDecision(approval, status, decidedBy, reason) {
     var content = statusLabel + ': [' + approval.action_type + '] ' + approval.title;
     if (reason) content += ' — ' + reason;
     // 1. Send message to agent
-    createMessage({
-      from_agent: '__system__',
-      to_agent: agentId,
-      content: content,
-      msg_type: 'info',
-      project_id: approval.project_id || approval.project || 'mycelium'
-    });
+    createMessage('__system__', agentId, null, approval.project_id || approval.project || 'mycelium', content, '{}', 'info');
     // 2. Create inbox item for agent's operator
     var agent = getAgent(agentId);
     if (agent && agent.operator_id) {
