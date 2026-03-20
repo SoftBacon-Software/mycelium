@@ -104,7 +104,7 @@ var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 
 import {
   createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
-  createProject, listProjects, getProject, updateProject,
+  createProject, listProjects, getProject, updateProject, deleteProject,
   createTask, getTask, listTasks, updateTask,
   setTaskDependency, resolveTaskDependencies,
   approveTask, listTasksNeedingApproval,
@@ -1517,7 +1517,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   // Agents can only update themselves, admin can update anyone
-  if (who !== '__admin__' && who !== '__system__' && who !== req.params.id) {
+  if (!req._authIsAdmin && who !== req.params.id) {
     return res.status(403).json({ error: 'Can only update your own profile' });
   }
   var agent = getAgent(req.params.id);
@@ -1526,7 +1526,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
   if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
   if (req.body.name !== undefined) fields.name = req.body.name;
   // Admin-only fields
-  if (who === '__admin__' || who === '__system__') {
+  if (req._authIsAdmin) {
     if (req.body.role !== undefined) fields.role = req.body.role;
     if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
     if (req.body.project !== undefined) fields.project = req.body.project;
@@ -1535,7 +1535,7 @@ router.put('/agents/:id', asyncHandler(function (req, res) {
     if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
   }
   // Self-update fields (agent can only set on themselves)
-  if (who === req.params.id || who === '__admin__' || who === '__system__') {
+  if (who === req.params.id || req._authIsAdmin) {
     if (req.body.llm_backend !== undefined) fields.llm_backend = req.body.llm_backend;
     if (req.body.llm_model !== undefined) fields.llm_model = req.body.llm_model;
     if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
@@ -3175,6 +3175,19 @@ router.get('/studio/users', asyncHandler(function (req, res) {
   res.json(listStudioUsers());
 }));
 
+// Update studio user (admin only)
+router.put('/studio/users/:id', asyncHandler(function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var user = getStudioUserById(parseIntParam(req.params.id));
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  var fields = {};
+  if (req.body.role !== undefined) fields.role = req.body.role;
+  if (req.body.display_name !== undefined) fields.display_name = req.body.display_name;
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'No fields to update' });
+  updateStudioUser(user.id, fields);
+  res.json({ ok: true, id: user.id, username: user.username, ...fields });
+}));
+
 // Update studio user password (admin only)
 router.put('/studio/users/:id/password', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
@@ -3465,7 +3478,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, '{}', 'directive');
         }
       }
     }
@@ -3542,24 +3555,49 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Sleep mode ended. Human operators are available again.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Sleep mode ended. Human operators are available again.', '{}', 'info');
       }
     }
 
     // Send morning summary as inbox message to the waking operator so it shows up on next boot
     if (log && operatorId2) {
+      // Filter log entries to only those that occurred during THIS sleep window
+      var sleepStart = mySleptAt ? new Date(mySleptAt).getTime() : 0;
+      var overnightTasks = (log.tasks_completed || []).filter(function(t) {
+        return t.time && new Date(t.time).getTime() >= sleepStart;
+      });
+      var overnightSteps = (log.steps_completed || []).filter(function(s) {
+        return s.time && new Date(s.time).getTime() >= sleepStart;
+      });
+      var overnightApprovals = (log.approvals_queued || []).filter(function(a) {
+        return a.time && new Date(a.time).getTime() >= sleepStart;
+      });
+
+      // DB cross-check: get actual task completions as authoritative source
+      var dbTasks = [];
+      if (mySleptAt) {
+        try {
+          dbTasks = getDB().prepare(
+            "SELECT id, title, assignee, updated_at FROM tasks WHERE status = 'done' AND updated_at >= ?"
+          ).all(mySleptAt);
+        } catch (e) { /* non-critical */ }
+      }
+
       var summaryLines = ['Good morning! Here\'s what happened while you were away:'];
-      if (log.tasks_completed && log.tasks_completed.length > 0) {
-        summaryLines.push('\nTasks completed (' + log.tasks_completed.length + '):');
-        for (var t of log.tasks_completed) summaryLines.push('  ✓ ' + (t.title || t.id));
+      // Use DB count if available (more reliable), fall back to log
+      var taskCount = dbTasks.length > 0 ? dbTasks.length : overnightTasks.length;
+      var taskList = dbTasks.length > 0 ? dbTasks : overnightTasks;
+      if (taskCount > 0) {
+        summaryLines.push('\nTasks completed (' + taskCount + '):');
+        for (var t of taskList) summaryLines.push('  \u2713 ' + (t.title || t.id));
       }
-      if (log.steps_completed && log.steps_completed.length > 0) {
-        summaryLines.push('\nPlan steps completed (' + log.steps_completed.length + '):');
-        for (var s of log.steps_completed) summaryLines.push('  ✓ ' + (s.title || s.id));
+      if (overnightSteps.length > 0) {
+        summaryLines.push('\nPlan steps completed (' + overnightSteps.length + '):');
+        for (var s of overnightSteps) summaryLines.push('  \u2713 ' + (s.title || s.id));
       }
-      if (log.approvals_queued && log.approvals_queued.length > 0) {
-        summaryLines.push('\nApprovals waiting (' + log.approvals_queued.length + '):');
-        for (var a of log.approvals_queued) summaryLines.push('  ! ' + (a.title || a.id));
+      if (overnightApprovals.length > 0) {
+        summaryLines.push('\nApprovals waiting (' + overnightApprovals.length + '):');
+        for (var a of overnightApprovals) summaryLines.push('  ! ' + (a.title || a.id));
       }
       if (log.dispatches && log.dispatches.length > 0) summaryLines.push('\nAgent dispatches: ' + log.dispatches.length);
       if (log.messages_sent && log.messages_sent > 0) summaryLines.push('Messages sent: ' + log.messages_sent);
@@ -3567,7 +3605,7 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       if (mySleptAt) summaryLines.push('\nSlept since: ' + mySleptAt);
       var wakeUpAgent = listAgents().find(function(a) { return a.operator_id === operatorId2; });
       if (wakeUpAgent) {
-        createMessage('__system__', wakeUpAgent.id, null, summaryLines.join('\n'), 'info');
+        createMessage('__system__', wakeUpAgent.id, null, null, summaryLines.join('\n'), '{}', 'info');
       }
     }
 
@@ -3576,7 +3614,14 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
       sleep_mode: { active: false },
       was_override: wasAlreadyAwake,
       slept_since: mySleptAt,
-      morning_summary: log
+      morning_summary: log && operatorId2 ? {
+        tasks_completed: overnightTasks || [],
+        tasks_completed_db: dbTasks || [],
+        steps_completed: overnightSteps || [],
+        approvals_queued: overnightApprovals || [],
+        dispatches: log.dispatches || [],
+        messages_sent: log.messages_sent || 0
+      } : log
     });
   }
 }));
@@ -3618,7 +3663,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
       var agents = listAgents();
       for (var agent of agents) {
         if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, 'directive');
+          createMessage('__system__', agent.id, null, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, '{}', 'directive');
         }
       }
     }
@@ -3631,7 +3676,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
     var agents2 = listAgents();
     for (var agent2 of agents2) {
       if (agent2.status === 'online' || agent2.status === 'idle') {
-        createMessage('__system__', agent2.id, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', 'info');
+        createMessage('__system__', agent2.id, null, null, 'Operator ' + displayName(req.params.id) + ' is back. Human operators available.', '{}', 'info');
       }
     }
   }
@@ -4273,6 +4318,14 @@ router.put('/projects/:id', asyncHandler(function (req, res) {
   res.json(getProject(req.params.id));
 }));
 
+router.delete('/projects/:id', asyncHandler(function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  deleteProject(req.params.id);
+  res.json({ ok: true, deleted: req.params.id });
+}));
+
 // GET /projects/:id/bug-categories — get bug categories for a project (dynamic or defaults)
 router.get('/projects/:id/bug-categories', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
@@ -4649,9 +4702,10 @@ router.get('/channels', asyncHandler(function (req, res) {
   res.json(channels);
 }));
 
-// POST /channels — create channel (admin only)
+// POST /channels — create channel
 router.post('/channels', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
   var name = escapeHtml(req.body.name);
   var slug = escapeHtml(req.body.slug);
   if (!name || !slug) return res.status(400).json({ error: 'name and slug are required' });
@@ -4659,7 +4713,7 @@ router.post('/channels', asyncHandler(function (req, res) {
   if (existing) return res.status(409).json({ error: 'Channel slug already exists', channel_id: existing.id });
   var type = req.body.type || 'general';
   var description = escapeHtml(req.body.description || '');
-  var createdBy = getAdminDisplayName(req);
+  var createdBy = who;
   var id = createChannel(name, slug, type, req.body.linked_type || null, req.body.linked_id || null, description, createdBy);
   if (req.body.members && Array.isArray(req.body.members)) {
     for (var m of req.body.members) {
@@ -4668,6 +4722,19 @@ router.post('/channels', asyncHandler(function (req, res) {
   }
   emitEvent('channel_created', createdBy, null, createdBy + ' created channel ' + name, { channel_id: id });
   res.json({ ok: true, id: id, name: name, slug: slug });
+}));
+
+// POST /channels/dm — start or get a DM channel with another user
+router.post('/channels/dm', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var targetId = req.body.user_id || req.body.target;
+  if (!targetId) return res.status(400).json({ error: 'user_id is required' });
+  var myType = req._authAgentId ? 'agent' : 'operator';
+  var targetType = req.body.user_type || 'operator';
+  var channelId = getOrCreateDmChannel(who, targetId, myType, targetType);
+  var channel = getChannel(channelId);
+  res.json({ ok: true, channel_id: channelId, channel: channel });
 }));
 
 // GET /channels/:id — channel detail + member count
@@ -5462,13 +5529,7 @@ function notifyApprovalDecision(approval, status, decidedBy, reason) {
     var content = statusLabel + ': [' + approval.action_type + '] ' + approval.title;
     if (reason) content += ' — ' + reason;
     // 1. Send message to agent
-    createMessage({
-      from_agent: '__system__',
-      to_agent: agentId,
-      content: content,
-      msg_type: 'info',
-      project_id: approval.project_id || approval.project || 'mycelium'
-    });
+    createMessage('__system__', agentId, null, approval.project_id || approval.project || 'mycelium', content, '{}', 'info');
     // 2. Create inbox item for agent's operator
     var agent = getAgent(agentId);
     if (agent && agent.operator_id) {
@@ -6653,6 +6714,120 @@ router.get('/admin/health/history', asyncHandler(function (req, res) {
   var limit = parseInt(req.query.limit) || 50;
   var events = listEvents({ type: 'health_patrol', limit: limit });
   res.json(events);
+}));
+
+// ===== FILE SERVER (WebSocket tunnel to local file drones) =====
+
+// Find first online file drone, or a specific one by ID
+function findFileDrone(req, droneId) {
+  var fileDrones = req.app.locals.fileDrones;
+  if (!fileDrones) return null;
+  if (droneId) {
+    var d = fileDrones.get(droneId);
+    return (d && d.ws.readyState === 1) ? droneId : null;
+  }
+  // Find first connected file drone
+  for (var [id, drone] of fileDrones) {
+    if (drone.ws.readyState === 1) return id;
+  }
+  return null;
+}
+
+// GET /file-server/status — check if a file drone is online
+router.get('/file-server/status', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.query.drone_id);
+  if (!droneId) return res.json({ online: false, message: 'No file drone connected' });
+  var drone = req.app.locals.fileDrones.get(droneId);
+  res.json({
+    online: true,
+    drone_id: droneId,
+    info: drone.info || {},
+  });
+}));
+
+// POST /file-server/browse — list directory contents
+router.post('/file-server/browse', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.body.drone_id);
+  if (!droneId) return res.status(503).json({ error: 'No file drone connected' });
+  try {
+    var result = await req.app.locals.sendFileDroneRequest(droneId, 'file_list', {
+      path: req.body.path || '/'
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(504).json({ error: e.message });
+  }
+}));
+
+// POST /file-server/search — search for files
+router.post('/file-server/search', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.body.drone_id);
+  if (!droneId) return res.status(503).json({ error: 'No file drone connected' });
+  try {
+    var result = await req.app.locals.sendFileDroneRequest(droneId, 'file_search', {
+      query: req.body.query || '*',
+      path: req.body.path || '/'
+    }, 30000);
+    res.json(result);
+  } catch (e) {
+    res.status(504).json({ error: e.message });
+  }
+}));
+
+// POST /file-server/info — get file/directory info
+router.post('/file-server/info', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.body.drone_id);
+  if (!droneId) return res.status(503).json({ error: 'No file drone connected' });
+  try {
+    var result = await req.app.locals.sendFileDroneRequest(droneId, 'file_info', {
+      path: req.body.path || '/'
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(504).json({ error: e.message });
+  }
+}));
+
+// GET /file-server/download-folder — zip and stream a folder
+router.get('/file-server/download-folder', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.query.drone_id);
+  if (!droneId) return res.status(503).json({ error: 'No file drone connected' });
+  var folderPath = req.query.path;
+  if (!folderPath) return res.status(400).json({ error: 'path query parameter required' });
+  try {
+    await req.app.locals.streamFileDroneDownload(droneId, { path: folderPath }, res, 'folder_download');
+  } catch (e) {
+    if (!res.headersSent) {
+      res.status(504).json({ error: e.message });
+    }
+  }
+}));
+
+// GET /file-server/download — stream file download
+router.get('/file-server/download', asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var droneId = findFileDrone(req, req.query.drone_id);
+  if (!droneId) return res.status(503).json({ error: 'No file drone connected' });
+  var filePath = req.query.path;
+  if (!filePath) return res.status(400).json({ error: 'path query parameter required' });
+  try {
+    await req.app.locals.streamFileDroneDownload(droneId, { path: filePath }, res);
+  } catch (e) {
+    if (!res.headersSent) {
+      res.status(504).json({ error: e.message });
+    }
+  }
 }));
 
 export default router;

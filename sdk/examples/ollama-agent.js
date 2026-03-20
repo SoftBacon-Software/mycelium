@@ -40,12 +40,12 @@ async function chat(messages) {
 // ── Work handler ────────────────────────────────────────────────────
 
 export async function onWork(item, agent) {
-  console.log('[ollama] Working on: %s (#%d)', item.title, item.id)
+  console.log('[ollama] Analyzing (not completing): %s (#%d)', item.title, item.id)
 
   var messages = [
     {
       role: 'system',
-      content: 'You are a coding assistant on the Mycelium network. Complete tasks concisely. Return code in fenced blocks when applicable.'
+      content: 'Analyze this task. Describe what needs to be done. Do NOT claim you completed it.'
     },
     {
       role: 'user',
@@ -55,42 +55,25 @@ export async function onWork(item, agent) {
 
   try {
     var response = await chat(messages)
-    console.log('[ollama] Response: %s...', response.slice(0, 120))
-    await agent.completeTask(item.id, response)
-    console.log('[ollama] Task #%d completed', item.id)
+    console.log('[ollama] Analysis for task #%d: %s', item.id, response.slice(0, 200))
+    // Unclaim — real work needs a real agent (Claude Code with file access)
+    await agent.api.put('/tasks/' + item.id, { status: 'open', assignee: null })
+    agent.workingOn = ''
+    console.log('[ollama] Task #%d unclaimed back to open', item.id)
   } catch (err) {
     console.error('[ollama] Failed on task #%d: %s', item.id, err.message)
-    await agent.updateTask(item.id, {
-      status: 'open',
-      notes: 'Ollama error: ' + err.message
-    })
+    await agent.api.put('/tasks/' + item.id, { status: 'open', assignee: null })
+    agent.workingOn = ''
   }
 }
 
 // ── Message handler ─────────────────────────────────────────────────
 
 export async function onMessage(msg, agent) {
-  console.log('[ollama] Message from %s: %s', msg.from_agent, msg.content)
-
-  var messages = [
-    {
-      role: 'system',
-      content: 'You are a helpful coding assistant on the Mycelium network. Keep responses concise.'
-    },
-    {
-      role: 'user',
-      content: msg.content
-    }
-  ]
-
-  try {
-    var response = await chat(messages)
-    await agent.sendMessage(msg.from_agent, response)
-    console.log('[ollama] Replied to %s', msg.from_agent)
-  } catch (err) {
-    console.error('[ollama] Failed to reply to %s: %s', msg.from_agent, err.message)
-    await agent.sendMessage(msg.from_agent, 'Error processing your message: ' + err.message)
-  }
+  // Only log regular messages — do NOT auto-reply.
+  // Replying to every message floods the activity log with generic noise.
+  // Requests and directives are handled in onRequest below.
+  console.log('[ollama] Message from %s: %s', msg.from_agent, (msg.content || '').slice(0, 120))
 }
 
 // ── Request handler ─────────────────────────────────────────────────
@@ -111,7 +94,7 @@ export async function onRequest(req, type, agent) {
 
   try {
     var response = await chat(messages)
-    await agent.respondToRequest(req.id, response)
+    await agent.respondToRequest(req.id, '[ollama/' + OLLAMA_MODEL + '] ' + response)
     console.log('[ollama] Resolved %s #%d', type, req.id)
   } catch (err) {
     console.error('[ollama] Failed to resolve %s #%d: %s', type, req.id, err.message)

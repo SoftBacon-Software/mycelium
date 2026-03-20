@@ -35,6 +35,7 @@ const TeamsPage = lazy(() => import('./pages/TeamsPage'))
 const TeamSettingsPage = lazy(() => import('./pages/TeamSettingsPage'))
 const AgentTemplatesPage = lazy(() => import('./pages/AgentTemplatesPage'))
 const PluginPageView = lazy(() => import('./pages/PluginPageView'))
+const FileBrowserPage = lazy(() => import('./pages/FileBrowserPage'))
 
 export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -91,6 +92,7 @@ export default function App() {
             <Route path="deployments" element={<DeploymentsPage />} />
             <Route path="team-settings" element={<TeamSettingsPage />} />
             <Route path="templates" element={<AgentTemplatesPage />} />
+            <Route path="files" element={<FileBrowserPage />} />
             <Route path="plugins/:pluginName/*" element={<Suspense fallback={<div className="p-8 text-text-dim">Loading...</div>}><PluginPageView /></Suspense>} />
             <Route path="*" element={
               <div className="flex flex-col items-center justify-center h-full gap-4 text-text-dim">
