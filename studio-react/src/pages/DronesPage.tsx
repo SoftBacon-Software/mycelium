@@ -17,6 +17,7 @@ const statusColors: Record<string, string> = {
 const statusDot: Record<string, string> = {
   online: 'bg-green',
   offline: 'bg-text-muted',
+  paused: 'bg-amber',
 }
 
 function formatSize(bytes: number): string {
@@ -379,9 +380,11 @@ export default function DronesPage() {
                       <h3 className="text-sm font-semibold text-text">{drone.name}</h3>
                       <span className="text-xs text-text-muted font-mono">{drone.id}</span>
                     </div>
-                    {drone.working_on && (
+                    {drone.status === 'paused' ? (
+                      <p className="mt-1 text-xs text-amber/70 ml-4">GPU released — available for gaming</p>
+                    ) : drone.working_on ? (
                       <p className="mt-1 text-xs text-text-dim ml-4">{drone.working_on}</p>
-                    )}
+                    ) : null}
                     <div className="flex items-center gap-3 mt-2 ml-4">
                       {Array.isArray(caps) && caps.map((cap: string) => (
                         <span key={cap} className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-accent/15 text-accent">
@@ -390,9 +393,26 @@ export default function DronesPage() {
                       ))}
                     </div>
                   </div>
-                  <div className="text-right text-xs text-text-muted">
+                  <div className="text-right text-xs text-text-muted flex flex-col items-end gap-1">
                     <div>{drone.status}</div>
-                    <div className="mt-0.5">Last seen {timeAgo(drone.last_heartbeat)}</div>
+                    <div>Last seen {timeAgo(drone.last_heartbeat)}</div>
+                    <button
+                      onClick={async () => {
+                        const action = drone.status === 'paused' ? 'resume' : 'pause';
+                        await fetch(`/api/mycelium/drones/${drone.id}/${action}`, {
+                          method: 'PUT',
+                          headers: { 'Authorization': `Bearer ${localStorage.getItem('mycelium_token')}` }
+                        });
+                        refresh();
+                      }}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                        drone.status === 'paused'
+                          ? 'bg-green/20 text-green hover:bg-green/30'
+                          : 'bg-amber/20 text-amber hover:bg-amber/30'
+                      }`}
+                    >
+                      {drone.status === 'paused' ? 'Resume Drone' : 'Pause Drone'}
+                    </button>
                   </div>
                 </div>
               </div>
