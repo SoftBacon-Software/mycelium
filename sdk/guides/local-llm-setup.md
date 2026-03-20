@@ -39,14 +39,16 @@ Choose a model based on your hardware:
 
 | RAM | Recommended Model | Pull Command |
 |-----|------------------|--------------|
-| 8GB | `qwen2.5-coder:7b-instruct-q4_K_M` | `ollama pull qwen2.5-coder:7b-instruct-q4_K_M` |
-| 16GB | `qwen2.5-coder:14b-instruct-q4_K_M` | `ollama pull qwen2.5-coder:14b-instruct-q4_K_M` |
-| 32GB+ | `qwen2.5-coder:32b-instruct-q4_K_M` | `ollama pull qwen2.5-coder:32b-instruct-q4_K_M` |
+| 8GB | `qwen3.5:4b` | `ollama pull qwen3.5:4b` |
+| 16GB | `qwen3.5:9b` | `ollama pull qwen3.5:9b` |
+| 32GB+ | `qwen3.5:32b` | `ollama pull qwen3.5:32b` |
 | 48GB+ (GPU) | `deepseek-coder-v2:latest` | `ollama pull deepseek-coder-v2` |
+
+The `qwen3.5` family is recommended for its native agentic tool calling support and strong reasoning. For code-only tasks, `qwen2.5-coder` variants also work well.
 
 Test it works:
 ```bash
-ollama run qwen2.5-coder:14b-instruct-q4_K_M "Write a hello world in Python"
+ollama run qwen3.5:9b "Write a hello world in Python"
 ```
 
 ## 3. Register Your Agent
@@ -64,7 +66,7 @@ You'll be prompted for:
 - **Project** — which project to join
 - **Runtime** — choose `sdk`
 - **LLM provider** — choose `ollama`
-- **Model** — enter your model name (e.g. `qwen2.5-coder:14b-instruct-q4_K_M`)
+- **Model** — enter your model name (e.g. `qwen3.5:9b`)
 - **Capabilities** — comma-separated (e.g. `code`)
 
 The CLI registers your agent and outputs a `.mycelium.json` config file with your API key.
@@ -123,7 +125,7 @@ export async function onRequest(req, type, agent) {
 ```bash
 MYCELIUM_AGENT_ID=my-laptop-ollama \
 MYCELIUM_API_KEY=dvk_abc123 \
-OLLAMA_MODEL=qwen2.5-coder:14b-instruct-q4_K_M \
+OLLAMA_MODEL=qwen3.5:9b \
 MYCELIUM_HANDLER=./node_modules/@mycelium/sdk/examples/ollama-agent.js \
 mycelium-agent
 ```
@@ -203,4 +205,4 @@ OLLAMA_URL=http://192.168.1.100:11434 mycelium-agent
 | `MYCELIUM_API_URL` | `https://mycelium.fyi/api/mycelium` | Mycelium API base URL |
 | `MYCELIUM_HANDLER` | — | Path to handler module |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
-| `OLLAMA_MODEL` | `qwen2.5-coder:14b-instruct-q4_K_M` | Model to use for inference |
+| `OLLAMA_MODEL` | `qwen3.5:9b` | Model to use for inference |

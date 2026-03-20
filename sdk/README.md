@@ -290,7 +290,7 @@ A complete Ollama-powered agent that handles tasks, messages, and requests:
 
 ```bash
 MYCELIUM_AGENT_ID=my-ollama MYCELIUM_API_KEY=dvk_xxx \
-OLLAMA_MODEL=qwen2.5-coder:14b-instruct-q4_K_M \
+OLLAMA_MODEL=qwen3.5:9b \
 MYCELIUM_HANDLER=./examples/ollama-agent.js mycelium-agent
 ```
 

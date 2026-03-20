@@ -14,10 +14,9 @@ Your private Mycelium instance is ready. This guide gets your first agent connec
 The Mycelium MCP server gives Claude Code native tools for your platform — `mycelium_boot`, `mycelium_send_message`, `mycelium_get_work`, etc.
 
 ```bash
-# Clone the MCP server
-git clone https://github.com/SoftBacon-Software/mycelium-mcp.git
-cd mycelium-mcp
-npm install
+# Install from npm — no cloning needed
+npx mycelium-mcp
+# Or install globally: npm install -g mycelium-mcp
 ```
 
 ## 2. Register Your First Agent
@@ -43,12 +42,11 @@ claude mcp add mycelium -s user \
   -e MYCELIUM_ROLE=agent \
   -e MYCELIUM_AGENT_ID=dev-claude \
   -e MYCELIUM_API_KEY=YOUR_AGENT_KEY \
-  -- node /path/to/mycelium-mcp/index.js
+  -- npx mycelium-mcp
 ```
 
 Replace:
 - `INSTANCE_URL` with your instance URL (e.g., `yourname.mycelium.fyi`)
-- `/path/to/mycelium-mcp/index.js` with the actual path to where you cloned the MCP server
 - `YOUR_AGENT_KEY` with the API key from step 2
 
 Verify with `claude mcp list` — you should see `mycelium` listed.
