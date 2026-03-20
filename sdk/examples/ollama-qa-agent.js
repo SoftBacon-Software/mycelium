@@ -5,19 +5,24 @@
 //
 // Reuses ollama-agent.js for work/message/request handling.
 // Adds idle-cycle QA test rotation.
+//
+// Fix history:
+//   v2 — Fixed feedback loop: added max bugs per day, persistent cooldown
+//         via context key, and proper cleanup of lifecycle test artifacts.
 
 import { onWork, onRequest } from './ollama-agent.js'
 export { onWork, onRequest }
 
 // Override onMessage to ignore self-messages (QA test sends messages to itself)
 export async function onMessage(msg, agent) {
-  if (msg.from_agent === agent.agentId) return // ignore self-messages from QA tests
+  if (msg.from_agent === agent.agentId) return
   var { onMessage: _onMessage } = await import('./ollama-agent.js')
   return _onMessage(msg, agent)
 }
 
 var QA_NAMESPACE = 'macbook-ollama'
 var QA_KEY = 'qa-results'
+var QA_STATE_KEY = 'qa-state'
 
 var TEST_SUITES = [
   'context_keys',
@@ -28,23 +33,31 @@ var TEST_SUITES = [
   'plan_lifecycle'
 ]
 
-var _testIndex = 0
-var _lastQaRun = 0
 var QA_COOLDOWN_MS = 10 * 60 * 1000 // 10 minutes between QA cycles
-var _recentBugs = {} // suiteName -> timestamp, prevents duplicate bug filing
+var MAX_BUGS_PER_DAY = 3 // stop filing after this many per calendar day
+var _cachedState = null // in-memory cache — loaded from context once, then kept in memory
 
 export async function onIdle(agent) {
-  // QA self-tests DISABLED — was causing loop (62 duplicate bugs, stale test keys)
-  // To re-enable, remove this return and restart macbook-ollama
-  return
+  // Load from context only on first idle call (survives restarts via context)
+  if (!_cachedState) {
+    _cachedState = await loadQaState(agent)
+  }
+  var state = _cachedState
 
-  // Cooldown: don't run QA more than once every 10 minutes
+  // Cooldown check — always works because state is in memory
   var now = Date.now()
-  if (now - _lastQaRun < QA_COOLDOWN_MS) return
-  _lastQaRun = now
+  if (now - state.lastRun < QA_COOLDOWN_MS) return
 
-  var suiteName = TEST_SUITES[_testIndex % TEST_SUITES.length]
-  _testIndex++
+  // Daily bug cap — reset at midnight UTC
+  var today = new Date().toISOString().slice(0, 10)
+  if (state.bugDay !== today) {
+    state.bugDay = today
+    state.bugsToday = 0
+  }
+
+  var suiteName = TEST_SUITES[state.testIndex % TEST_SUITES.length]
+  state.testIndex++
+  state.lastRun = now
 
   console.log('[qa] Running test suite: %s', suiteName)
 
@@ -71,22 +84,23 @@ export async function onIdle(agent) {
 
   console.log('[qa] %s: %d passed, %d failed', suiteName, result.passed, result.failed)
 
+  // Save results
   try {
     await agent.setContext(QA_NAMESPACE, QA_KEY, JSON.stringify({
       last_suite: suiteName,
       last_run: result.ts,
       passed: result.passed,
       failed: result.failed,
-      errors: result.errors.slice(0, 10)
+      errors: result.errors.slice(0, 5)
     }))
   } catch (e) {
     console.error('[qa] Failed to save results:', e.message)
   }
 
-  if (result.failed > 0) {
-    // Deduplicate: don't file another bug for the same suite within 1 hour
-    var lastBugTime = _recentBugs[suiteName] || 0
-    if (now - lastBugTime > 60 * 60 * 1000) {
+  // File bug only if under daily cap and not a duplicate suite within this session
+  if (result.failed > 0 && state.bugsToday < MAX_BUGS_PER_DAY) {
+    var lastBugForSuite = state.suiteBugTimes[suiteName] || 0
+    if (now - lastBugForSuite > 60 * 60 * 1000) {
       try {
         await agent.fileBug({
           title: 'QA: ' + suiteName + ' — ' + result.failed + ' failure(s)',
@@ -95,18 +109,49 @@ export async function onIdle(agent) {
           severity: 'normal',
           category: 'api'
         })
-        _recentBugs[suiteName] = now
+        state.suiteBugTimes[suiteName] = now
+        state.bugsToday++
+        console.log('[qa] Bug filed for %s (%d/%d today)', suiteName, state.bugsToday, MAX_BUGS_PER_DAY)
       } catch (e) {
         console.error('[qa] Failed to file bug:', e.message)
       }
     } else {
-      console.log('[qa] Skipping bug filing for %s — already filed within the last hour', suiteName)
+      console.log('[qa] Skipping bug for %s — already filed within the last hour', suiteName)
     }
+  } else if (result.failed > 0) {
+    console.log('[qa] Skipping bug — daily cap reached (%d/%d)', state.bugsToday, MAX_BUGS_PER_DAY)
+  }
+
+  // Persist state so cooldowns survive restarts
+  await saveQaState(agent, state)
+}
+
+async function loadQaState(agent) {
+  try {
+    var raw = await agent.getContext(QA_NAMESPACE, QA_STATE_KEY)
+    if (raw && raw.data) {
+      var parsed = typeof raw.data === 'string' ? JSON.parse(raw.data) : raw.data
+      return {
+        testIndex: parsed.testIndex || 0,
+        lastRun: parsed.lastRun || 0,
+        bugDay: parsed.bugDay || '',
+        bugsToday: parsed.bugsToday || 0,
+        suiteBugTimes: parsed.suiteBugTimes || {}
+      }
+    }
+  } catch (e) { /* first run */ }
+  return { testIndex: 0, lastRun: 0, bugDay: '', bugsToday: 0, suiteBugTimes: {} }
+}
+
+async function saveQaState(agent, state) {
+  try {
+    await agent.setContext(QA_NAMESPACE, QA_STATE_KEY, JSON.stringify(state))
+  } catch (e) {
+    console.error('[qa] Failed to persist QA state:', e.message)
   }
 }
 
 async function cleanupTestArtifacts(agent) {
-  // Clean up qa-test namespace keys to prevent accumulation
   try {
     var keys = await agent.getContext('qa-test')
     if (keys && typeof keys === 'object') {
@@ -148,6 +193,7 @@ async function testContextKeys(agent, result) {
   var history = await agent.contextHistory(ns, key, 5)
   assert(Array.isArray(history) && history.length > 0, 'Context history has entries after update', result)
 
+  // Always clean up test key
   await agent.deleteContext(ns, key)
   result.passed++
 }
@@ -161,45 +207,54 @@ async function testSavepoints(agent, result) {
 }
 
 async function testMessaging(agent, result) {
-  // Just verify readMessages works — don't send self-messages (creates noise)
   var msgs = await agent.readMessages({ limit: 5 })
   assert(Array.isArray(msgs), 'readMessages returns array', result)
 }
 
 async function testTaskLifecycle(agent, result) {
-  var task = await agent.createTask({
-    title: '[QA] lifecycle test ' + Date.now(),
-    description: 'Automated QA — created and completed immediately. Safe to delete.',
-    project_id: 'mycelium'
-  })
-  assert(task && task.id, 'Task created with ID', result)
+  var task = null
+  try {
+    task = await agent.createTask({
+      title: '[QA] lifecycle test ' + Date.now(),
+      description: 'Automated QA — safe to delete.',
+      project_id: 'mycelium'
+    })
+    assert(task && task.id, 'Task created with ID', result)
+    if (!task || !task.id) return
 
-  if (!task || !task.id) return
+    await agent.claimTask(task.id)
+    result.passed++
 
-  await agent.claimTask(task.id)
-  result.passed++
-
-  await agent.completeTask(task.id, 'QA test complete')
-  result.passed++
+    await agent.completeTask(task.id, 'QA test complete')
+    result.passed++
+  } catch (e) {
+    result.failed++
+    result.errors.push('Task lifecycle: ' + e.message)
+  }
 }
 
 async function testBugLifecycle(agent, result) {
-  var bug = await agent.fileBug({
-    title: '[QA] lifecycle test ' + Date.now(),
-    description: 'Automated QA — filed and fixed immediately. Safe to delete.',
-    project_id: 'mycelium',
-    severity: 'low',
-    category: 'other'
-  })
-  assert(bug && bug.id, 'Bug filed with ID', result)
+  var bug = null
+  try {
+    bug = await agent.fileBug({
+      title: '[QA] lifecycle test ' + Date.now(),
+      description: 'Automated QA — safe to delete.',
+      project_id: 'mycelium',
+      severity: 'low',
+      category: 'other'
+    })
+    assert(bug && bug.id, 'Bug filed with ID', result)
+    if (!bug || !bug.id) return
 
-  if (!bug || !bug.id) return
+    await agent.claimBug(bug.id)
+    result.passed++
 
-  await agent.claimBug(bug.id)
-  result.passed++
-
-  await agent.fixBug(bug.id, 'QA auto-fix')
-  result.passed++
+    await agent.fixBug(bug.id, 'QA auto-fix')
+    result.passed++
+  } catch (e) {
+    result.failed++
+    result.errors.push('Bug lifecycle: ' + e.message)
+  }
 }
 
 async function testPlanLifecycle(agent, result) {
