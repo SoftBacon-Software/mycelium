@@ -373,6 +373,15 @@ export function registerTools(server) {
         for (var aq of overview.approval_queue) lines.push(formatTask(aq));
         lines.push('');
       }
+      if (overview.pending_approvals && overview.pending_approvals.length) {
+        lines.push('=== Pending Approvals (' + overview.pending_approvals.length + ') ===');
+        for (var pa of overview.pending_approvals) {
+          var paLine = '#' + pa.id + ' [' + pa.action_type + '] ' + (pa.title || 'Untitled');
+          if (pa.requested_by) paLine += ' (by ' + pa.requested_by + ')';
+          lines.push(paLine);
+        }
+        lines.push('');
+      }
       if (!lines.length) lines.push('No open work items.');
       return text(lines.join('\n'));
     }
