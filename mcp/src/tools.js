@@ -2169,7 +2169,7 @@ export async function registerPluginTools(server) {
     var count = 0;
     for (var tool of tools) {
       try {
-        var schema = pluginSchemaToZod(tool.schema);
+        var schema = pluginSchemaToZod(tool.inputSchema || tool.schema);
         var handler = buildPluginHandler(tool.endpoint);
         registerDual(server, tool.name, tool.description, schema, handler);
         count++;
