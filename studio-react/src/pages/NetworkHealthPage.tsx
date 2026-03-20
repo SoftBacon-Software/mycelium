@@ -175,20 +175,25 @@ const healthColors: Record<HealthLevel, { bg: string; text: string; dot: string 
   red: { bg: 'bg-red/10', text: 'text-red', dot: 'bg-red' },
 }
 
-// ─── Agent avatar colors ──────────────────────────────────────────────────────
+// ─── Agent avatar colors (auto-generated from ID hash) ───────────────────────
 
-const agentAvatarColors: Record<string, string> = {
-  hijack: 'bg-purple/20 text-purple',
-  greatness: 'bg-green/20 text-green',
-  macbook: 'bg-blue/20 text-blue',
-  admin: 'bg-accent/20 text-accent',
-  unakron: 'bg-red/20 text-red',
-  dev: 'bg-red/20 text-red',
-}
+const AVATAR_PALETTES = [
+  'bg-purple/20 text-purple',
+  'bg-green/20 text-green',
+  'bg-blue/20 text-blue',
+  'bg-accent/20 text-accent',
+  'bg-red/20 text-red',
+  'bg-pink-500/20 text-pink-500',
+  'bg-teal-500/20 text-teal-500',
+  'bg-amber-500/20 text-amber-500',
+]
 
 function getAvatarColor(agentId: string): string {
-  const key = agentId.replace(/-claude$/, '')
-  return agentAvatarColors[key] || 'bg-accent/20 text-accent'
+  let hash = 0
+  for (let i = 0; i < agentId.length; i++) {
+    hash = ((hash << 5) - hash + agentId.charCodeAt(i)) | 0
+  }
+  return AVATAR_PALETTES[Math.abs(hash) % AVATAR_PALETTES.length]
 }
 
 // ─── Role badge variant ───────────────────────────────────────────────────────
@@ -552,19 +557,46 @@ function AgentsGrid({ agents }: { agents: Agent[] }) {
     )
   }
 
-  // Sort: online first, then idle, then offline
-  const statusRank = (s: string) => s === 'online' ? 0 : s === 'idle' ? 1 : 2
+  const STALE_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+  const isStale = (a: Agent) =>
+    a.status !== 'online' && a.status !== 'idle' &&
+    a.last_heartbeat && Date.now() - new Date(a.last_heartbeat).getTime() > STALE_MS
+
+  // Sort: online first, then idle, then offline, stale last
+  const statusRank = (a: Agent) => {
+    if (a.status === 'online') return 0
+    if (a.status === 'idle') return 1
+    if (isStale(a)) return 3
+    return 2
+  }
   const sorted = [...agents].sort((a, b) => {
-    const r = statusRank(a.status) - statusRank(b.status)
+    const r = statusRank(a) - statusRank(b)
     if (r !== 0) return r
     return (a.name || a.id).localeCompare(b.name || b.id)
   })
 
+  const active = sorted.filter((a) => !isStale(a))
+  const stale = sorted.filter(isStale)
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-      {sorted.map((agent) => (
-        <AgentCard key={agent.id} agent={agent} />
-      ))}
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {active.map((agent) => (
+          <AgentCard key={agent.id} agent={agent} />
+        ))}
+      </div>
+      {stale.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2">
+            Stale ({stale.length})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 opacity-50">
+            {stale.map((agent) => (
+              <AgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1452,11 +1484,25 @@ function NetworkHealthPageInner() {
     return () => clearInterval(interval)
   }, [refresh])
 
-  // Filter agents: non-drone agents only for the agents grid
+  // Filter agents: detect drones by name pattern or agent_type, move them to drones list
+  const isDrone = (a: Agent) =>
+    a.agent_type === 'drone' || /drone/i.test(a.id) || /drone/i.test(a.name || '')
+
   const nonDroneAgents = useMemo(
-    () => agents.filter((a) => a.agent_type !== 'drone'),
+    () => agents.filter((a) => !isDrone(a)),
     [agents],
   )
+
+  // Merge server drones + any misclassified drones from the agents list
+  const allDrones = useMemo(() => {
+    const droneFromAgents = agents.filter(isDrone)
+    const droneIds = new Set(drones.map((d) => d.id))
+    const merged = [...drones]
+    for (const d of droneFromAgents) {
+      if (!droneIds.has(d.id)) merged.push(d)
+    }
+    return merged
+  }, [agents, drones])
 
   // ─── Fetch profiles + calibration data ───────────────────────────────────────
   useEffect(() => {
@@ -1516,7 +1562,7 @@ function NetworkHealthPageInner() {
       {/* 1. Network Status Bar */}
       <NetworkStatusBar
         agents={nonDroneAgents}
-        drones={drones}
+        drones={allDrones}
         plans={plans}
         bugs={bugs}
         instanceConfig={instanceConfig}
@@ -1528,7 +1574,7 @@ function NetworkHealthPageInner() {
           <EventRatePulse />
         </div>
         <div>
-          <AgentActivityTimeline agents={[...nonDroneAgents, ...drones]} />
+          <AgentActivityTimeline agents={[...nonDroneAgents, ...allDrones]} />
         </div>
       </div>
 
@@ -1578,10 +1624,10 @@ function NetworkHealthPageInner() {
         <h2 className="text-sm font-semibold text-text-dim mb-3 flex items-center gap-2">
           Drones
           <span className="text-text-muted font-normal">
-            ({drones.filter((d) => d.status === 'online').length}/{drones.length} online)
+            ({allDrones.filter((d) => d.status === 'online').length}/{allDrones.length} online)
           </span>
         </h2>
-        <DronesGrid drones={drones} droneJobs={droneJobs} />
+        <DronesGrid drones={allDrones} droneJobs={droneJobs} />
       </section>
 
       {/* 10. Active Plans Progress */}
