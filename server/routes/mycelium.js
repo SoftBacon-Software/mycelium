@@ -134,7 +134,7 @@ import {
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
   createTeamChat, listTeamChat,
-  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs,
+  createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs, pauseDrone, resumeDrone, getDroneStatus,
   createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
@@ -4914,6 +4914,39 @@ router.get('/drones', asyncHandler(function (req, res) {
     return d;
   });
   res.json(drones);
+}));
+
+// Pause drone — stop job assignment, signal worker to unload models
+router.put('/drones/:id/pause', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var result = pauseDrone(req.params.id);
+  try {
+    createMessage(who, req.params.id, null, 'mycelium',
+      JSON.stringify({ action: 'pause' }), '{}', 'message', null, 'normal');
+  } catch (e) { /* best effort */ }
+  res.json(result);
+}));
+
+// Resume drone — restart job assignment, signal worker to reload models
+router.put('/drones/:id/resume', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var result = resumeDrone(req.params.id);
+  try {
+    createMessage(who, req.params.id, null, 'mycelium',
+      JSON.stringify({ action: 'resume' }), '{}', 'message', null, 'normal');
+  } catch (e) { /* best effort */ }
+  res.json(result);
+}));
+
+// Get drone status with queued job count
+router.get('/drones/:id/status', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var status = getDroneStatus(req.params.id);
+  if (!status) return res.status(404).json({ error: 'Drone not found' });
+  res.json(status);
 }));
 
 // Claim next job matching drone capabilities (drone-side)

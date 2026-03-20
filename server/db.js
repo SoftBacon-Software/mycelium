@@ -2358,6 +2358,27 @@ export function listDrones() {
   return db.prepare("SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, created_at FROM agents WHERE project_id = 'drone' ORDER BY created_at").all();
 }
 
+export function pauseDrone(droneId) {
+  db.prepare(`UPDATE agents SET status = 'paused', working_on = 'Paused (GPU released)' WHERE id = ?`).run(droneId);
+  return { ok: true, status: 'paused' };
+}
+
+export function resumeDrone(droneId) {
+  db.prepare(`UPDATE agents SET status = 'online', working_on = '' WHERE id = ?`).run(droneId);
+  return { ok: true, status: 'online' };
+}
+
+export function getDroneStatus(droneId) {
+  var agent = db.prepare(`SELECT id, name, status, working_on, capabilities, last_heartbeat FROM agents WHERE id = ?`).get(droneId);
+  if (!agent) return null;
+  var pendingJobs = db.prepare(`SELECT COUNT(*) as count FROM dv_drone_jobs WHERE status = 'pending'`).get();
+  return {
+    ...agent,
+    capabilities: JSON.parse(agent.capabilities || '[]'),
+    queued_jobs: pendingJobs.count
+  };
+}
+
 // -- Drone Profiles --
 
 export function createDroneProfile(id, name, description, requires, artifacts, setupScript, workspace, env) {
