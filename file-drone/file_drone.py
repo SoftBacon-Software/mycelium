@@ -351,7 +351,7 @@ async def connect_and_serve(config):
     while True:
         try:
             print(f"Connecting to {ws_url.split('?')[0]}...")
-            async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10, max_size=50 * 1024 * 1024) as ws:
+            async with websockets.connect(ws_url, ping_interval=None, ping_timeout=None, max_size=50 * 1024 * 1024) as ws:
                 print("Connected! Serving files...")
                 reconnect_delay = 2  # Reset on successful connection
 
