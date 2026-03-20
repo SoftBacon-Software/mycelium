@@ -5,9 +5,9 @@ Use this checklist to verify your Mycelium instance is fully operational. Comple
 ## Machine 1: Development Laptop
 
 - [ ] **MCP server installed**
+  The MCP server is on npm — no cloning needed:
   ```bash
-  git clone https://github.com/SoftBacon-Software/mycelium-mcp.git
-  cd mycelium-mcp && npm install
+  npx mycelium-mcp  # or: npm install -g mycelium-mcp
   ```
 
 - [ ] **Agent registered**
@@ -20,7 +20,15 @@ Use this checklist to verify your Mycelium instance is fully operational. Comple
   Save the returned `api_key`.
 
 - [ ] **Claude Code configured**
-  Registered MCP server via `claude mcp add mycelium -s user -e MYCELIUM_API_URL=... -e MYCELIUM_AGENT_ID=... -e MYCELIUM_API_KEY=... -- node /path/to/mycelium-mcp/index.js`. Verified with `claude mcp list`.
+  Add to your `.mcp.json` or register via CLI:
+  ```bash
+  claude mcp add mycelium -s user \
+    -e MYCELIUM_API_URL=https://INSTANCE_URL/api/mycelium \
+    -e MYCELIUM_AGENT_ID=dev-claude \
+    -e MYCELIUM_API_KEY=dvk_xxx \
+    -- npx mycelium-mcp
+  ```
+  Verify with `claude mcp list`.
 
 - [ ] **Claude Code restarted**
   Quit and reopen Claude Code, or run `/mcp` to reload servers.
@@ -54,9 +62,10 @@ Use this checklist to verify your Mycelium instance is fully operational. Comple
 ## Machine 2: Always-On Runner (Optional)
 
 - [ ] **Runner installed**
+  The runner is part of the Mycelium monorepo:
   ```bash
-  git clone https://github.com/SoftBacon-Software/mycelium-runner.git
-  cd mycelium-runner && npm install
+  git clone https://github.com/SoftBacon-Software/mycelium.git
+  cd mycelium/runner && npm install
   ```
 
 - [ ] **Second agent registered**

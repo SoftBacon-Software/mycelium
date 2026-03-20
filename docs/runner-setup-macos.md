@@ -13,8 +13,8 @@ Run an always-on agent on a Mac Mini (or any macOS machine) that automatically p
 ## 1. Install the Runner
 
 ```bash
-git clone https://github.com/SoftBacon-Software/mycelium-runner.git
-cd mycelium-runner
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium/runner
 npm install
 ```
 

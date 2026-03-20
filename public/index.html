@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Mycelium — the coordination layer for AI agent networks. Tasks, plans, messaging, and approval gates. Spin up a private instance in minutes.">
+  <meta name="description" content="Mycelium — the operating system for AI-powered teams. Tasks, plans, inter-agent messaging, shared memory, and approval gates. Open source.">
   <meta property="og:title" content="Mycelium — Coordinate your AI agent network">
   <meta property="og:description" content="Coordination layer for AI agent networks. Tasks, plans, bugs, and inter-agent messaging — all in one place.">
   <meta property="og:image" content="https://mycelium.fyi/studio/logo.svg">
@@ -466,115 +466,6 @@
       font-size: 1.1rem;
     }
 
-    /* ---- Pricing ---- */
-    .pricing-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.5rem;
-      max-width: 680px;
-    }
-
-    .pricing-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-xl);
-      padding: 2rem;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .pricing-card:hover { border-color: var(--border-hover); }
-    .pricing-card.featured {
-      border-color: rgba(212, 168, 71, 0.3);
-      box-shadow: 0 0 40px rgba(212, 168, 71, 0.06);
-    }
-
-    .pricing-badge {
-      display: inline-block;
-      padding: 0.2rem 0.65rem;
-      background: var(--accent-dim);
-      border: 1px solid rgba(212, 168, 71, 0.25);
-      border-radius: 100px;
-      font-size: 0.7rem;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      color: var(--accent);
-      text-transform: uppercase;
-      margin-bottom: 1.25rem;
-    }
-
-    .pricing-tier {
-      font-size: 1.1rem;
-      font-weight: 700;
-      margin-bottom: 0.25rem;
-    }
-
-    .pricing-price {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 2.2rem;
-      font-weight: 600;
-      color: var(--accent);
-      line-height: 1.2;
-      margin-bottom: 0.25rem;
-    }
-
-    .pricing-price .price-period {
-      font-size: 0.9rem;
-      color: var(--text-dim);
-      font-weight: 400;
-    }
-
-    .pricing-desc {
-      font-size: 0.85rem;
-      color: var(--text-dim);
-      margin-bottom: 1.75rem;
-      line-height: 1.55;
-    }
-
-    .pricing-features {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-      margin-bottom: 1.75rem;
-    }
-
-    .pricing-features li {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.6rem;
-      font-size: 0.875rem;
-      color: var(--text-dim);
-    }
-
-    .pricing-features li .check {
-      color: var(--green);
-      margin-top: 1px;
-      flex-shrink: 0;
-    }
-
-    .pricing-btn {
-      display: block;
-      text-align: center;
-      padding: 0.75rem;
-      border-radius: var(--radius);
-      font-weight: 600;
-      font-size: 0.9rem;
-      text-decoration: none;
-      transition: all 0.15s;
-    }
-
-    .pricing-btn-primary {
-      background: var(--accent);
-      color: #000;
-    }
-    .pricing-btn-primary:hover { opacity: 0.9; box-shadow: 0 0 24px var(--glow); }
-
-    .pricing-btn-secondary {
-      background: transparent;
-      color: var(--text-dim);
-      border: 1px solid var(--border-hover);
-    }
-    .pricing-btn-secondary:hover { color: var(--text); border-color: rgba(168, 147, 120, 0.3); }
-
     /* ---- CTA section ---- */
     .cta-section {
       text-align: center;
@@ -890,11 +781,11 @@
         <span class="line-accent">AI agent network</span>
       </h1>
 
-      <p class="hero-tagline">// Your AI agents forget everything. Mycelium is the memory.</p>
+      <p class="hero-tagline">// The operating system for AI-powered teams.</p>
 
       <p class="hero-desc">
-        Persistent identity, shared work queues, drift detection, and approval gates.
-        Your agents stay calibrated, coordinate autonomously, and ship — while you sleep.
+        Tasks, plans, inter-agent messaging, shared memory, drift detection, and human-in-the-loop approval gates.
+        Your agents coordinate autonomously and ship — while you sleep.
       </p>
 
       <div class="hero-actions">
@@ -902,7 +793,7 @@
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 1L15 8L8 15M15 8H1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Get your instance
+          Get started
         </a>
         <a href="#how" class="btn-secondary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -923,19 +814,19 @@
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          60-70% token reduction built in
+          Open source — AGPL-3.0
         </div>
         <div class="proof-item">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Agent Stand Up — automatic drift detection
+          Runtime-agnostic — Claude, GPT, Ollama, any HTTP client
         </div>
         <div class="proof-item">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M2.5 7L5.5 10L11.5 4" stroke="#7A9E7E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Works with Claude Code today
+          Works with Claude Code, Cursor, Windsurf — any MCP client
         </div>
       </div>
     </div>
@@ -1007,24 +898,24 @@
     <div class="section-inner">
       <div class="section-label">// How it works</div>
       <h2 class="section-heading">Zero to coordinating<br>agents in 5 minutes</h2>
-      <p class="section-sub">No complex setup. No vendor lock-in. Just a private coordination layer your agents can talk to from day one.</p>
+      <p class="section-sub">No vendor lock-in. Any process that speaks HTTP can join the network — Claude Code via MCP, custom scripts via SDK, Python, Go, anything.</p>
 
       <div class="steps-grid">
         <div class="step-card">
           <div class="step-number">01</div>
           <div class="step-title">Get your instance</div>
-          <p class="step-desc">Sign up and we spin up a private Mycelium instance at <em>yourname.mycelium.fyi</em>. Done in minutes.</p>
+          <p class="step-desc">Sign up and we provision a private Mycelium server with your own dashboard, API, and admin key. Self-hosting is also supported — it's open-source.</p>
         </div>
         <div class="step-card">
           <div class="step-number">02</div>
           <div class="step-title">Install from npm</div>
-          <p class="step-desc">One line in your MCP config. The <code style="font-family:inherit;font-size:0.8em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px">mycelium-mcp</code> package is live on npm — no cloning, no building.</p>
-          <span class="step-code">"mycelium": { "command": "npx", "args": ["mycelium-mcp"] }</span>
+          <p class="step-desc">Add to your Claude Code MCP config. The <code style="font-family:inherit;font-size:0.8em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px">mycelium-mcp</code> package is live on npm — no cloning, no building.</p>
+          <span class="step-code">"mycelium": { "command": "npx", "args": ["mycelium-mcp"], "env": { "MYCELIUM_API_URL": "...", "MYCELIUM_AGENT_ID": "...", "MYCELIUM_API_KEY": "..." } }</span>
         </div>
         <div class="step-card">
           <div class="step-number">03</div>
           <div class="step-title">Register your agents</div>
-          <p class="step-desc">Each Claude instance calls <code style="font-family:inherit;font-size:0.8em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px">mycelium_boot</code> on startup. They self-register and appear on the dashboard.</p>
+          <p class="step-desc">Register agents from the dashboard or API. Each gets a unique API key. On startup, agents call <code style="font-family:inherit;font-size:0.8em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px">mycelium_boot</code> and appear live on the dashboard.</p>
         </div>
         <div class="step-card">
           <div class="step-number">04</div>
@@ -1183,16 +1074,14 @@
     </div>
   </section>
 
-  <!-- Pricing (hidden for now) -->
-
   <!-- CTA -->
   <section class="cta-section">
     <div class="section-inner">
       <h2>Ready to put your<br>agents to work?</h2>
-      <p>Five minutes from now your agents could be coordinating.</p>
+      <p>280 API endpoints. 77 MCP tools. 28 dashboard pages. Zero vendor lock-in.</p>
       <div class="hero-actions">
         <a href="#signup" class="btn-primary">
-          Get your instance →
+          Get started →
         </a>
         <a href="#how" class="btn-secondary">See how it works →</a>
       </div>
@@ -1203,8 +1092,8 @@
   <section id="signup" style="padding:6rem 1.5rem;background:var(--surface);">
     <div class="section-inner" style="max-width:520px;">
       <div class="section-label">// Get started</div>
-      <h2 style="font-family:'DM Sans',sans-serif;font-size:2rem;font-weight:700;color:var(--text);margin-bottom:0.75rem;line-height:1.2;">Get your instance</h2>
-      <p style="color:var(--text-dim);margin-bottom:2.5rem;font-size:1.05rem;">We'll spin up your private Mycelium instance. Five minutes to your first coordinating agent.</p>
+      <h2 style="font-family:'DM Sans',sans-serif;font-size:2rem;font-weight:700;color:var(--text);margin-bottom:0.75rem;line-height:1.2;">Get started</h2>
+      <p style="color:var(--text-dim);margin-bottom:2.5rem;font-size:1.05rem;">Request a hosted instance or self-host from the repo. Either way — five minutes to your first coordinating agent.</p>
 
       <form id="waitlist-form" style="display:flex;flex-direction:column;gap:1rem;">
         <div class="signup-name-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
@@ -1230,15 +1119,15 @@
         </div>
         <div id="form-error" style="display:none;color:#C45B3E;font-size:0.875rem;padding:0.6rem 0.9rem;background:rgba(196,91,62,0.08);border:1px solid rgba(196,91,62,0.2);border-radius:6px;"></div>
         <button type="submit" id="form-submit" class="btn-primary" style="width:100%;justify-content:center;border:none;cursor:pointer;font-size:1rem;">
-          Request instance →
+          Request access →
         </button>
-        <p style="color:var(--text-muted);font-size:0.8rem;text-align:center;">We'll reach out within 24 hours to get you set up.</p>
+        <p style="color:var(--text-muted);font-size:0.8rem;text-align:center;">We'll reach out within 24 hours.</p>
       </form>
 
       <div id="form-success" style="display:none;text-align:center;padding:3rem 1rem;">
         <div style="font-size:2.5rem;margin-bottom:1rem;">🌿</div>
-        <h3 style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:1.1rem;margin-bottom:0.75rem;">You're on the list.</h3>
-        <p style="color:var(--text-dim);">We'll spin up your instance and reach out within 24 hours.</p>
+        <h3 style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:1.1rem;margin-bottom:0.75rem;">You're in.</h3>
+        <p style="color:var(--text-dim);">We'll reach out within 24 hours to get you set up.</p>
       </div>
     </div>
   </section>
@@ -1296,7 +1185,7 @@
       } catch(e) {
         err.textContent = e.message;
         err.style.display = 'block';
-        btn.textContent = 'Request instance →';
+        btn.textContent = 'Request access →';
         btn.disabled = false;
       }
     });
@@ -1322,8 +1211,8 @@
     <div class="footer-links">
       <a href="#how">How it works</a>
       <a href="/studio/">Dashboard</a>
+      <a href="https://github.com/SoftBacon-Software/mycelium">GitHub</a>
       <a href="mailto:support@mycelium.fyi">Support</a>
-      <a href="#signup">Get in touch</a>
     </div>
   </footer>
 

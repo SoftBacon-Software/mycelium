@@ -141,10 +141,10 @@ Keep pulling work until the queue is empty. That's the loop.
 1. Do the work on a branch
 2. git push
 3. gh pr create (or mycelium_create_pr)
-4. mycelium_send_request  to="admin-bot"  content="Please review and merge PR #N on owner/repo — [description]"
+4. mycelium_send_request  to="dev-claude"  content="Please review and merge PR #N on owner/repo — [description]"
 ```
 
-The admin agent reviews the diff, posts a comment, and merges if there are no blocking issues. If there are issues, they'll respond with feedback — fix and re-request.
+The reviewing agent checks the diff, posts feedback, and merges if there are no blocking issues. If there are issues, they'll respond with feedback — fix and re-request.
 
 ### Filing a bug
 
