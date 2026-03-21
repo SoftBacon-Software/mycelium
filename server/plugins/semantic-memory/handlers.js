@@ -15,10 +15,14 @@ export function registerHooks(core) {
   }
 
   // Fire-and-forget embedding after indexing content
+  // For drone provider: queues async job (embedding arrives later via callback)
+  // For ollama/openai: embeds synchronously and stores immediately
   function autoEmbed(sourceType, sourceId, contentText) {
     var config = getEmbeddingConfig();
     if (!config.embedding_provider || config.embedding_provider === 'none') return;
-    generateEmbedding(config, contentText).then(function (embedding) {
+    generateEmbedding(config, contentText, {
+      db: core.db, sourceType: sourceType, sourceId: sourceId, chunkIndex: 0
+    }).then(function (embedding) {
       if (embedding) {
         db.updateEmbedding(sourceType, sourceId, 0, embedding, config.embedding_model || config.embedding_provider);
       }
