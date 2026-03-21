@@ -2315,7 +2315,7 @@ export function updateDroneJob(id, fields) {
   var f = Object.assign({}, fields);
   if (f.input_data !== undefined && typeof f.input_data !== 'string') f.input_data = JSON.stringify(f.input_data);
   if (f.result_data !== undefined && typeof f.result_data !== 'string') f.result_data = JSON.stringify(f.result_data);
-  buildUpdate('drone_jobs', id, f, ['status', 'command', 'input_data', 'result_url', 'result_data', 'error', 'completed_at']);
+  buildUpdate('drone_jobs', id, f, ['status', 'command', 'input_data', 'result_url', 'result_data', 'error', 'completed_at', 'drone_id', 'started_at']);
 }
 
 export function listDroneJobs(filters) {
