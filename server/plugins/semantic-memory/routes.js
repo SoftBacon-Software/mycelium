@@ -2,7 +2,7 @@
 
 import { Router } from 'express';
 import createMemoryDB from './db.js';
-import { generateEmbedding, generateEmbeddingBatch } from './embeddings.js';
+import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
 export default function (core) {
   var router = Router();
@@ -105,6 +105,16 @@ export default function (core) {
     res.json(db.stats());
   });
 
+  // PUT /memory/embeddings/:sourceType/:sourceId — drone callback to store embedding
+  router.put('/embeddings/:sourceType/:sourceId', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var { embedding, model, chunk_index } = req.body;
+    if (!embedding || !Array.isArray(embedding)) return apiError(res, 400, 'embedding array is required');
+    db.updateEmbedding(req.params.sourceType, decodeURIComponent(req.params.sourceId), chunk_index || 0, embedding, model || 'unknown');
+    res.json({ ok: true, source_type: req.params.sourceType, source_id: decodeURIComponent(req.params.sourceId) });
+  });
+
   // GET /memory/config — current provider config (admin only, key stripped)
   router.get('/config', function (req, res) {
     var who = checkAdmin(req, res);
@@ -144,7 +154,28 @@ export default function (core) {
       return res.json({ ok: true, message: 'All content already embedded', embedded: 0, stats: db.stats() });
     }
 
-    // Process batch
+    // Drone provider: queue async jobs instead of embedding synchronously
+    if (config.embedding_provider === 'drone') {
+      var queued = 0;
+      for (var row of unembedded) {
+        try {
+          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
+          queued++;
+        } catch (e) {
+          console.error('[semantic-memory] reindex drone queue failed:', e.message);
+        }
+      }
+      var droneRemaining = db.getUnembedded(1).length;
+      return res.json({
+        ok: true,
+        message: 'Queued ' + queued + ' drone embed jobs' + (droneRemaining > 0 ? ' — more remaining, call again' : ''),
+        queued: queued,
+        remaining: droneRemaining > 0,
+        stats: db.stats()
+      });
+    }
+
+    // Process batch (ollama/openai — synchronous embedding)
     var embedded = 0;
     var errors = 0;
     var texts = unembedded.map(function (row) { return row.content_text; });

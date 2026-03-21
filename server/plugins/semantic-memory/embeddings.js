@@ -1,9 +1,44 @@
 // Embedding provider abstraction for semantic memory
-// Supports: ollama (nomic-embed-text), openai (text-embedding-3-small)
+// Supports: ollama (nomic-embed-text), openai (text-embedding-3-small), drone (async via job queue)
 
-export async function generateEmbedding(config, text) {
+// Queue a drone job to embed content asynchronously.
+// The drone worker calls local Ollama, then PUTs the vector back via callback endpoint.
+export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model) {
+  var callbackPath = '/api/mycelium/memory/embeddings/' + encodeURIComponent(sourceType) + '/' + encodeURIComponent(sourceId);
+  var inputData = JSON.stringify({
+    text: text,
+    source_type: sourceType,
+    source_id: sourceId,
+    chunk_index: chunkIndex || 0,
+    model: model || 'nomic-embed-text',
+    callback_path: callbackPath
+  });
+  var result = rawDb.prepare(
+    "INSERT INTO drone_jobs (title, command, input_data, requires, requester, priority, job_type) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+  ).get(
+    'Embed: ' + sourceType + ':' + sourceId,
+    '',
+    inputData,
+    JSON.stringify(['ollama']),
+    'semantic-memory',
+    3,
+    'embed'
+  );
+  return result.id;
+}
+
+// opts (optional): { db, sourceType, sourceId, chunkIndex } — needed for drone provider to queue jobs
+export async function generateEmbedding(config, text, opts) {
   var provider = config.embedding_provider || 'none';
   if (provider === 'none' || !provider) return null;
+
+  if (provider === 'drone') {
+    // Drone provider: queue async job if caller provides context, always return null
+    if (opts && opts.db && opts.sourceType && opts.sourceId) {
+      createDroneEmbedJob(opts.db, opts.sourceType, opts.sourceId, opts.chunkIndex || 0, text, config.embedding_model);
+    }
+    return null;
+  }
 
   if (provider === 'ollama') {
     return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', text);
@@ -15,9 +50,25 @@ export async function generateEmbedding(config, text) {
   return null;
 }
 
-export async function generateEmbeddingBatch(config, texts) {
+// opts (optional): { db, items: [{ source_type, source_id, chunk_index }] } — needed for drone provider
+export async function generateEmbeddingBatch(config, texts, opts) {
   var provider = config.embedding_provider || 'none';
   if (provider === 'none' || !provider) return texts.map(function () { return null; });
+
+  if (provider === 'drone') {
+    // Queue individual drone jobs for each text
+    if (opts && opts.db && opts.items) {
+      for (var i = 0; i < opts.items.length; i++) {
+        var item = opts.items[i];
+        try {
+          createDroneEmbedJob(opts.db, item.source_type, item.source_id, item.chunk_index || 0, texts[i], config.embedding_model);
+        } catch (e) {
+          console.error('[semantic-memory] Drone batch embed queue failed:', e.message);
+        }
+      }
+    }
+    return texts.map(function () { return null; });
+  }
 
   if (provider === 'ollama') {
     // Ollama doesn't have a batch endpoint, call sequentially
