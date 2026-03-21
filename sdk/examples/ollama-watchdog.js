@@ -1,10 +1,11 @@
 // Watchdog handler for macbook-ollama
 //
-// Unified network watchdog that rotates through four roles on idle:
+// Unified network watchdog that rotates through five roles on idle:
 //   1. QA — rotating test suites against the Mycelium API
 //   2. Uptime — pings monitored endpoints, files bugs on downtime
 //   3. Janitor — cleans up stale data (expired context, old QA artifacts)
 //   4. Health patrol — checks agent/task/drone staleness, broadcasts alerts
+//   5. Embedder — claims and processes embed drone jobs via local Ollama
 //
 // Reuses ollama-agent.js for work/message/request handling.
 // Shares a single daily bug cap across all roles.
@@ -13,6 +14,7 @@
 //   v1 — QA bot only (ollama-qa-agent.js)
 //   v2 — Fixed feedback loop: persistent cooldown, daily bug cap
 //   v3 — Unified watchdog: uptime, janitor, health patrol added
+//   v4 — Embedder role: local nomic-embed-text via drone job queue
 
 import { onWork, onRequest } from './ollama-agent.js'
 export { onWork, onRequest }
@@ -45,6 +47,12 @@ var MONITORED_ENDPOINTS = [
 ]
 
 var UPTIME_TIMEOUT = 10000 // 10s
+
+// Embedder config
+var OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
+var EMBED_MODEL = 'nomic-embed-text'
+var EMBED_COOLDOWN = 5 * 1000          // 5s — check for embed jobs frequently
+var EMBED_BATCH_MAX = 10               // process up to 10 jobs per idle cycle
 
 // QA test suites
 var TEST_SUITES = [
@@ -79,7 +87,10 @@ async function loadState(agent) {
         // Janitor
         janitorLastRun: p.janitorLastRun || 0,
         // Health
-        healthLastRun: p.healthLastRun || 0
+        healthLastRun: p.healthLastRun || 0,
+        // Embedder
+        embedLastRun: p.embedLastRun || 0,
+        embedsProcessed: p.embedsProcessed || 0
       }
     }
   } catch (e) { /* first run */ }
@@ -88,7 +99,8 @@ async function loadState(agent) {
     qaIndex: 0, qaLastRun: 0,
     uptimeLastRun: 0, endpointStatus: {},
     janitorLastRun: 0,
-    healthLastRun: 0
+    healthLastRun: 0,
+    embedLastRun: 0, embedsProcessed: 0
   }
 }
 
@@ -149,7 +161,9 @@ export async function onIdle(agent) {
   resetBugDay()
 
   // Pick the role whose cooldown has expired and is most overdue
+  // Embedder is checked first — short cooldown, high throughput priority
   var roles = [
+    { name: 'embed', lastRun: _state.embedLastRun, cooldown: EMBED_COOLDOWN },
     { name: 'uptime', lastRun: _state.uptimeLastRun, cooldown: UPTIME_COOLDOWN },
     { name: 'qa', lastRun: _state.qaLastRun, cooldown: QA_COOLDOWN },
     { name: 'health', lastRun: _state.healthLastRun, cooldown: HEALTH_COOLDOWN },
@@ -165,6 +179,7 @@ export async function onIdle(agent) {
 
   try {
     switch (role.name) {
+      case 'embed': await runEmbedder(agent); break
       case 'qa': await runQA(agent); break
       case 'uptime': await runUptime(agent); break
       case 'janitor': await runJanitor(agent); break
@@ -174,7 +189,10 @@ export async function onIdle(agent) {
     console.error('[watchdog] %s crashed: %s', role.name, e.message)
   }
 
-  await saveState(agent)
+  // Only persist state for non-embed roles (embed runs every 5s, too frequent for context writes)
+  if (role.name !== 'embed') {
+    await saveState(agent)
+  }
 }
 
 // ── Role 1: QA ──────────────────────────────────────────────────────
@@ -376,6 +394,80 @@ async function runHealth(agent) {
     }
   } catch (e) {
     console.error('[health] Patrol failed:', e.message)
+  }
+}
+
+// ── Role 5: Embedder ────────────────────────────────────────────────
+
+async function runEmbedder(agent) {
+  _state.embedLastRun = Date.now()
+
+  // Claim embed jobs from the drone queue
+  var processed = 0
+  for (var i = 0; i < EMBED_BATCH_MAX; i++) {
+    var claimed = null
+    try {
+      var resp = await agent.api.post('/drones/claim', { capabilities: ['ollama'] })
+      claimed = resp && resp.job ? resp.job : null
+    } catch (e) {
+      // No jobs or endpoint error — stop polling
+      break
+    }
+    if (!claimed) break
+
+    try {
+      var inputData = {}
+      try { inputData = JSON.parse(claimed.input_data || '{}') } catch (e) { inputData = {} }
+
+      var text = inputData.text || ''
+      if (!text) {
+        // No text to embed — mark done with empty result
+        await agent.api.put('/drones/jobs/' + claimed.id, { status: 'done', result_data: JSON.stringify({ error: 'no text provided' }) })
+        continue
+      }
+
+      // Call local Ollama for embedding
+      var embedResp = await fetch(OLLAMA_URL + '/api/embed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: inputData.model || EMBED_MODEL, input: text }),
+        signal: AbortSignal.timeout(30000)
+      })
+      if (!embedResp.ok) throw new Error('Ollama HTTP ' + embedResp.status)
+      var embedData = await embedResp.json()
+      var embedding = (embedData.embeddings && embedData.embeddings[0]) || embedData.embedding
+      if (!embedding) throw new Error('No embedding in Ollama response')
+
+      // PUT result back via callback_path if provided
+      if (inputData.callback_path) {
+        await agent.api.put(inputData.callback_path, {
+          embedding: embedding,
+          model: inputData.model || EMBED_MODEL,
+          chunk_index: inputData.chunk_index || 0
+        })
+      }
+
+      // Mark drone job done
+      await agent.api.put('/drones/jobs/' + claimed.id, {
+        status: 'done',
+        result_data: JSON.stringify({ dims: embedding.length, model: inputData.model || EMBED_MODEL })
+      })
+
+      processed++
+    } catch (e) {
+      console.error('[embed] Job #%d failed: %s', claimed.id, e.message)
+      try {
+        await agent.api.put('/drones/jobs/' + claimed.id, {
+          status: 'failed',
+          error: e.message
+        })
+      } catch (e2) { /* best effort */ }
+    }
+  }
+
+  if (processed > 0) {
+    _state.embedsProcessed += processed
+    console.log('[embed] Processed %d job(s) (%d total)', processed, _state.embedsProcessed)
   }
 }
 
