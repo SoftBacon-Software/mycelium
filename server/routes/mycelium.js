@@ -304,7 +304,7 @@ function getBugCategories(projectId) {
   return DEFAULT_BUG_CATEGORIES;
 }
 var CHANNEL_STATUSES = ['active', 'archived'];
-var DRONE_JOB_STATUSES = ['done', 'completed', 'failed', 'cancelled', 'dismissed'];
+var DRONE_JOB_STATUSES = ['pending', 'claimed', 'done', 'completed', 'failed', 'cancelled', 'dismissed'];
 
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
@@ -5100,6 +5100,11 @@ router.put('/drones/jobs/:id', asyncHandler(function (req, res) {
   if (req.body.result_url !== undefined) fields.result_url = req.body.result_url;
   if (req.body.result_data !== undefined) fields.result_data = req.body.result_data;
   if (req.body.error !== undefined) fields.error = req.body.error;
+  if (req.body.drone_id !== undefined) fields.drone_id = req.body.drone_id;
+  if (fields.status === 'claimed' && !job.started_at) {
+    fields.started_at = new Date().toISOString();
+    if (!fields.drone_id) fields.drone_id = who;
+  }
   if (fields.status === 'done' || fields.status === 'failed') {
     fields.completed_at = new Date().toISOString();
   }
