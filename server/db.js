@@ -259,15 +259,18 @@ export function updateAgentKey(id, apiKeyHash) {
 }
 
 export function deleteAgent(id) {
-  db.prepare('DELETE FROM tasks WHERE assignee = ?').run(id);
-  db.prepare('DELETE FROM messages WHERE from_agent = ? OR to_agent = ?').run(id, id);
-  db.prepare('DELETE FROM bugs WHERE assignee = ?').run(id);
-  db.prepare('DELETE FROM drone_jobs WHERE requester = ? OR drone_id = ?').run(id, id);
-  db.prepare('DELETE FROM agent_savepoints WHERE agent_id = ?').run(id);
-  db.prepare('DELETE FROM webhooks WHERE agent_id = ?').run(id);
-  db.prepare('DELETE FROM message_reads WHERE agent_id = ?').run(id);
-  db.prepare('DELETE FROM channel_members WHERE user_id = ? AND user_type = ?').run(id, 'agent');
-  db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+  var txn = db.transaction(function () {
+    db.prepare('DELETE FROM tasks WHERE assignee = ?').run(id);
+    db.prepare('DELETE FROM messages WHERE from_agent = ? OR to_agent = ?').run(id, id);
+    db.prepare('DELETE FROM bugs WHERE assignee = ?').run(id);
+    db.prepare('DELETE FROM drone_jobs WHERE requester = ? OR drone_id = ?').run(id, id);
+    db.prepare('DELETE FROM agent_savepoints WHERE agent_id = ?').run(id);
+    db.prepare('DELETE FROM webhooks WHERE agent_id = ?').run(id);
+    db.prepare('DELETE FROM message_reads WHERE agent_id = ?').run(id);
+    db.prepare('DELETE FROM channel_members WHERE user_id = ? AND user_type = ?').run(id, 'agent');
+    db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+  });
+  txn();
 }
 
 export function updateAgent(id, fields) {

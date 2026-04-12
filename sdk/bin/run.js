@@ -18,6 +18,10 @@ var agentId = process.env.MYCELIUM_AGENT_ID
 var apiKey = process.env.MYCELIUM_API_KEY
 var apiUrl = process.env.MYCELIUM_API_URL
 var handlerPath = process.env.MYCELIUM_HANDLER
+var runtime = process.env.MYCELIUM_RUNTIME
+var llmBackend = process.env.MYCELIUM_LLM_BACKEND
+var llmModel = process.env.MYCELIUM_LLM_MODEL
+var capabilities = process.env.MYCELIUM_CAPABILITIES
 
 if (!agentId || !apiKey) {
   console.error('Usage: MYCELIUM_AGENT_ID=xxx MYCELIUM_API_KEY=dvk_xxx mycelium-agent')
@@ -29,13 +33,21 @@ if (!agentId || !apiKey) {
   console.error('Optional:')
   console.error('  MYCELIUM_API_URL   — API base URL (default: https://mycelium.fyi/api/mycelium)')
   console.error('  MYCELIUM_HANDLER   — Path to JS module with handler functions')
+  console.error('  MYCELIUM_RUNTIME   — Agent runtime (sdk, claude-code, cursor, etc.)')
+  console.error('  MYCELIUM_LLM_BACKEND — LLM backend (ollama, anthropic, openai, etc.)')
+  console.error('  MYCELIUM_LLM_MODEL — LLM model name')
+  console.error('  MYCELIUM_CAPABILITIES — Comma-separated capabilities (code,review,gpu,etc.)')
   process.exit(1)
 }
 
 var agent = new MyceliumAgent({
   agentId: agentId,
   apiKey: apiKey,
-  apiUrl: apiUrl
+  apiUrl: apiUrl,
+  runtime: runtime || undefined,
+  llmBackend: llmBackend || undefined,
+  llmModel: llmModel || undefined,
+  capabilities: capabilities ? capabilities.split(',').map(function(s) { return s.trim() }) : undefined
 })
 
 // Load custom handler if provided
@@ -79,8 +91,9 @@ try {
     )
   }
   agent.start()
-  console.log('[mycelium] Agent running — heartbeat every %ds, polling every %ds',
-    agent.heartbeatInterval / 1000,
+  console.log('[mycelium] Agent running — heartbeat: %ds idle / %ds active, polling every %ds',
+    agent.idleHeartbeat / 1000,
+    agent.activeHeartbeat / 1000,
     agent.pollInterval / 1000
   )
 } catch (err) {

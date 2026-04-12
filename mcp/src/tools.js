@@ -1534,10 +1534,10 @@ export function registerTools(server) {
   registerDual(server, 'studio_request_work',
     'Request work assignment from Claude Admin.',
     {
-      type: { type: 'string', description: 'Request type: task_request, asset_request, work_request' },
-      description: { type: 'string', description: 'What work is needed' },
-      target: { type: 'string', description: 'Target agent (for cross-agent requests)' },
-      priority: { type: 'string', description: 'Priority: low, normal, high, urgent' }
+      type: z.string().optional().describe('Request type: task_request, asset_request, work_request'),
+      description: z.string().optional().describe('What work is needed'),
+      target: z.string().optional().describe('Target agent (for cross-agent requests)'),
+      priority: z.string().optional().describe('Priority: low, normal, high, urgent')
     },
     async function (params) {
       var res = await apiPost('/work/request', {
@@ -1553,9 +1553,9 @@ export function registerTools(server) {
   registerDual(server, 'studio_file_directive',
     'Issue a blocking directive to an agent.',
     {
-      to: { type: 'string', description: 'Target agent ID' },
-      content: { type: 'string', description: 'Directive content' },
-      project_id: { type: 'string', description: 'Project context' }
+      to: z.string().describe('Target agent ID'),
+      content: z.string().describe('Directive content'),
+      project_id: z.string().optional().describe('Project context')
     },
     async function (params) {
       var st = getState();
@@ -1575,9 +1575,9 @@ export function registerTools(server) {
   registerDual(server, 'studio_upload_asset',
     'Mark an asset ready and set its file path.',
     {
-      asset_id: { type: 'number', description: 'Asset ID to update' },
-      path: { type: 'string', description: 'File path or URL where asset is available' },
-      status: { type: 'string', description: 'New status (default: ready)' }
+      asset_id: z.number().describe('Asset ID to update'),
+      path: z.string().optional().describe('File path or URL where asset is available'),
+      status: z.string().optional().describe('New status (default: ready)')
     },
     async function (params) {
       var res = await apiPut('/assets/' + params.asset_id, {
@@ -1591,7 +1591,7 @@ export function registerTools(server) {
   registerDual(server, 'studio_download_asset',
     'Get download info for a ready asset.',
     {
-      asset_id: { type: 'number', description: 'Asset ID to check' }
+      asset_id: z.number().describe('Asset ID to check')
     },
     async function (params) {
       var res = await apiGet('/assets/' + params.asset_id);

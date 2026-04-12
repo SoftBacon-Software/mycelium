@@ -2265,22 +2265,22 @@ router.get('/agents/:id/identity', asyncHandler(function (req, res) {
   // Gather team-sourced responsibilities and guardrails from team settings
   var teamGuardrails = [];
   var teamResponsibilities = [];
-  for (var ti = 0; ti < teams.length; ti++) {
-    var teamId = teams[ti].id;
-    var teamName = teams[ti].name || teamId;
-    try {
-      var settings = getAllTeamSettingsGrouped();
-      if (settings.guardrails) {
-        for (var gk in settings.guardrails) {
-          teamGuardrails.push({ value: String(settings.guardrails[gk]), source: 'team:' + teamName, locked: true });
+  var allTeamSettings = null;
+  try { allTeamSettings = getAllTeamSettingsGrouped(); } catch (e) { /* no settings */ }
+  if (allTeamSettings) {
+    for (var ti = 0; ti < teams.length; ti++) {
+      var teamName = teams[ti].name || teams[ti].id;
+      if (allTeamSettings.guardrails) {
+        for (var gk in allTeamSettings.guardrails) {
+          teamGuardrails.push({ value: String(allTeamSettings.guardrails[gk]), source: 'team:' + teamName, locked: true });
         }
       }
-      if (settings.team_rules) {
-        for (var trk in settings.team_rules) {
-          teamResponsibilities.push({ value: String(settings.team_rules[trk]), source: 'team:' + teamName, locked: true });
+      if (allTeamSettings.team_rules) {
+        for (var trk in allTeamSettings.team_rules) {
+          teamResponsibilities.push({ value: String(allTeamSettings.team_rules[trk]), source: 'team:' + teamName, locked: true });
         }
       }
-    } catch (e) { /* no settings */ }
+    }
   }
 
   // Gather ruleset guardrails from linked project concepts
@@ -3632,7 +3632,7 @@ router.get('/admin/sleep', asyncHandler(function (req, res) {
   var config = getSleepMode();
   var log = null;
   var logVal = getInstanceConfig('sleep_mode_log');
-  try { log = logVal ? JSON.parse(logVal) : null; } catch (e) {}
+  try { log = logVal ? JSON.parse(logVal) : null; } catch (e) { console.warn('[mycelium] Failed to parse sleep_mode_log:', e.message); }
   res.json({
     sleep_mode: config,
     autonomous: isNetworkAutonomous(),

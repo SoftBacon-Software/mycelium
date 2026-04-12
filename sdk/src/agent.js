@@ -25,8 +25,10 @@ export class MyceliumAgent {
     this.llmModel = opts.llmModel || ''           // claude-opus-4-6, deepseek-coder-v3, etc.
     this.capabilities = opts.capabilities || []   // ['code', 'review', 'gpu', 'admin', 'assets']
 
-    // Heartbeat config
-    this.heartbeatInterval = opts.heartbeatInterval || 60000  // 60s default
+    // Heartbeat config — adaptive by default (matches MCP behavior)
+    this.idleHeartbeat = opts.idleHeartbeat || 300000         // 5 min when idle
+    this.activeHeartbeat = opts.activeHeartbeat || 90000      // 90s when working
+    this.heartbeatInterval = opts.heartbeatInterval || this.idleHeartbeat
     this.pollInterval = opts.pollInterval || 30000            // 30s work poll
 
     // State
@@ -87,7 +89,25 @@ export class MyceliumAgent {
       await this._processInbox(result.inbox)
     }
 
+    // Adaptive heartbeat: switch interval based on working state
+    this._adjustHeartbeatInterval()
+
     return result
+  }
+
+  _adjustHeartbeatInterval() {
+    var target = this.workingOn ? this.activeHeartbeat : this.idleHeartbeat
+    if (target !== this.heartbeatInterval && this._heartbeatTimer) {
+      var mode = target === this.activeHeartbeat ? 'active' : 'idle'
+      console.log('[mycelium] Heartbeat switched to %s (%ds)', mode, target / 1000)
+      this.heartbeatInterval = target
+      clearInterval(this._heartbeatTimer)
+      this._heartbeatTimer = setInterval(() => {
+        this.heartbeat().catch(err => {
+          console.error('[mycelium] heartbeat error:', err.message)
+        })
+      }, this.heartbeatInterval)
+    }
   }
 
   // ── Work ────────────────────────────────────────────────────────

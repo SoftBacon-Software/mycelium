@@ -12,7 +12,11 @@ function resolveKey() {
     var settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
     var mcpEnv = settings.mcpServers && settings.mcpServers.mycelium && settings.mcpServers.mycelium.env;
     if (mcpEnv && mcpEnv.MYCELIUM_API_KEY) return mcpEnv.MYCELIUM_API_KEY;
-  } catch {}
+  } catch (e) {
+    if (envKey) {
+      process.stderr.write('[mycelium] Could not read settings.json for API key, using env var: ' + e.message + '\n');
+    }
+  }
   return envKey;
 }
 
