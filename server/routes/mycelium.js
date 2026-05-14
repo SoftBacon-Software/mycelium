@@ -2688,6 +2688,10 @@ router.post('/requests', asyncHandler(function (req, res) {
   var target = toAgent ? ' to ' + toAgent : ' (broadcast)';
   emitEvent('request_created', agentId, projectId, agentId + ' sent request' + target, { message_id: id });
   if (toAgent) {
+    // Recipient-tagged push event for real-time delivery to the target agent.
+    emitEvent('request_received', toAgent, projectId,
+      agentId + ' → ' + toAgent,
+      { message_id: id, from: agentId, blocking: true });
     dispatchWebhook('request_created', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
   }
 
@@ -2801,7 +2805,14 @@ router.post('/messages', agentWriteLimiter, asyncHandler(function (req, res) {
   if (!(agentId === '__system__' && toAgent === '__system__')) {
     var target = toAgent ? ' to ' + displayName(toAgent) : ' (broadcast)';
     emitEvent('message_sent', agentId, projectId, displayName(agentId) + ' sent message' + target, { message_id: id });
+    // Recipient-tagged push event so SSE subscribers filtering on `agent=<me>`
+    // get notified when something arrives FOR them. This is what enables real-
+    // time push to agents (Jarvis, Clara, Jetson) without polling. Event type
+    // is parallel to message_sent so dashboards still get sender events.
     if (toAgent) {
+      emitEvent('message_received', toAgent, projectId,
+        displayName(agentId) + ' → ' + displayName(toAgent),
+        { message_id: id, from: agentId, msg_type: msgType, priority: msgPriority });
       dispatchWebhook('message_sent', toAgent, { message_id: id, from: agentId, content: content.substring(0, 200) });
     }
     // Requests route to the target agent's operator inbox (so operators can respond)
@@ -2860,6 +2871,13 @@ router.put('/messages/:id/resolve', asyncHandler(function (req, res) {
   var responderId = (agentId === '__system__' && msg.to_agent) ? msg.to_agent : agentId;
   resolveMessage(msg.id, responderId);
   emitEvent('request_resolved', responderId, msg.project_id, responderId + ' resolved request #' + msg.id, { message_id: msg.id });
+  // Notify the original sender via their SSE stream so they see the
+  // resolution in real time (without polling). agent-tagged to from_agent.
+  if (msg.from_agent && msg.from_agent !== responderId) {
+    emitEvent('message_resolved_for_sender', msg.from_agent, msg.project_id,
+      responderId + ' resolved your message #' + msg.id,
+      { message_id: msg.id, resolved_by: responderId });
+  }
 
   var result = { ok: true, id: msg.id, status: 'resolved' };
 
@@ -2867,6 +2885,14 @@ router.put('/messages/:id/resolve', asyncHandler(function (req, res) {
   if (req.body.response) {
     var responseId = createMessage(responderId, msg.from_agent, msg.thread_id, msg.project_id, req.body.response, '{}');
     result.response_id = responseId;
+    // Recipient-tagged push event for the original sender — they get the
+    // reply pushed to their SSE stream immediately.
+    if (msg.from_agent) {
+      emitEvent('message_received', msg.from_agent, msg.project_id,
+        responderId + ' → ' + msg.from_agent,
+        { message_id: responseId, from: responderId, msg_type: 'message',
+          in_reply_to: msg.id });
+    }
   }
 
   res.json(result);
