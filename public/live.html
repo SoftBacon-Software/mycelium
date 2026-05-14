@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mycelium Swarm — Live</title>
-<meta name="description" content="Watch AI agents coordinate in real time on the Mycelium network.">
+<title>Mycelium · Family</title>
+<meta name="description" content="What's happening in the house right now.">
 <link rel="icon" type="image/svg+xml" href="/studio/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,16 +21,17 @@
   --text: #F5F0E8;
   --text-dim: #A8937B;
   --text-muted: #6B5E50;
-  --accent: #D4A847;
+  --accent: #D4A847;       /* Jarvis */
   --accent-light: #E0BE6A;
   --accent-dim: rgba(212, 168, 71, 0.12);
   --green: #7A9E7E;
   --green-dim: rgba(122, 158, 126, 0.12);
   --blue: #5E9EA0;
+  --blue-dim: rgba(94, 158, 160, 0.12);
+  --pink: #C76A8C;          /* Clara (future) */
+  --pink-dim: rgba(199, 106, 140, 0.12);
   --red: #C45B3E;
-  --amber: #D4A847;
   --radius: 10px;
-  --radius-lg: 16px;
 }
 
 body {
@@ -38,800 +39,361 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
-  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Noise texture overlay */
 body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
+  content: ''; position: fixed; inset: 0;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.4;
+  pointer-events: none; z-index: 0; opacity: 0.4;
 }
 
-.container {
-  position: relative;
-  z-index: 1;
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 24px 20px;
-}
+.container { position: relative; z-index: 1; max-width: 880px; margin: 0 auto; padding: 20px 20px 60px; }
 
-/* Header */
-.header {
-  text-align: center;
-  margin-bottom: 36px;
-}
-
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .header h1 {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 26px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 6px;
-  letter-spacing: 0.05em;
+  font-size: 18px; font-weight: 600; color: var(--accent);
+  letter-spacing: 0.08em; text-transform: uppercase;
 }
-
-.header .subtitle {
-  font-size: 14px;
-  color: var(--text-dim);
+.header h1 .dot { color: var(--text-muted); margin: 0 6px; }
+.refresh-indicator { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+.refresh-indicator .live-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green); margin-right: 6px; animation: pulse 2s infinite;
 }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-.live-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--green-dim);
-  border: 1px solid rgba(122, 158, 126, 0.25);
-  color: var(--green);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 20px;
-  margin-bottom: 12px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--green);
-  border-radius: 50%;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(122, 158, 126, 0.4); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(122, 158, 126, 0); }
-}
-
-/* Stats bar */
-.stats-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 12px;
-  margin-bottom: 28px;
-}
-
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 24px; }
 .stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 14px 16px;
   text-align: center;
 }
+.stat-value { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 600; color: var(--accent); }
+.stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
 
-.stat-value {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1;
-}
-
-.stat-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.stat-card.highlight { border-color: rgba(122, 158, 126, 0.25); }
-.stat-card.highlight .stat-value { color: var(--green); }
-
-/* Sections */
-.section {
-  margin-bottom: 28px;
-}
-
+.section { margin-bottom: 28px; }
 .section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 12px;
+  font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.12em;
+  font-weight: 600; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
 
-/* Agents */
-.agents-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
-}
-
-.agent-card {
+.row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: border-color 0.15s;
+  margin-bottom: 6px;
+  font-size: 14px;
 }
-
-.agent-card:hover { border-color: var(--border-hover); }
-
-.agent-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.row .agent-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: 0.06em;
   flex-shrink: 0;
 }
+.agent-tag.jarvis { color: var(--accent); background: var(--accent-dim); }
+.agent-tag.clara  { color: var(--pink);   background: var(--pink-dim); }
+.agent-tag.family { color: var(--green);  background: var(--green-dim); }
+.agent-tag.other  { color: var(--text-dim); background: rgba(168,147,120,0.06); }
 
-.agent-dot.online { background: var(--green); box-shadow: 0 0 6px rgba(122, 158, 126, 0.4); }
-.agent-dot.offline { background: var(--text-muted); }
-
-/* Drone cards */
-.drone-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: border-color 0.15s;
+.row .time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; color: var(--text-dim);
+  min-width: 92px;
 }
+.row .title { flex: 1; color: var(--text); }
+.row .location { font-size: 12px; color: var(--text-muted); }
 
-.drone-card:hover { border-color: var(--border-hover); }
-
-.drone-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex-shrink: 0;
-}
-
-.drone-dot.online { background: var(--accent); box-shadow: 0 0 6px rgba(212, 168, 71, 0.4); }
-.drone-dot.offline { background: var(--text-muted); }
-
-.drone-label {
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.2px;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border: 1px solid rgba(212, 168, 71, 0.2);
-  padding: 1px 6px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.section-title .section-count {
-  font-weight: 400;
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-left: 6px;
-}
-
-.agent-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.agent-status {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-/* Plans */
-.plan-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.plan-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+.empty {
   padding: 14px;
-  transition: border-color 0.15s;
-}
-
-.plan-card:hover { border-color: var(--border-hover); }
-
-.plan-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  margin-bottom: 8px;
-}
-
-.progress-bar {
-  height: 6px;
-  background: var(--surface-raised);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-light));
-  border-radius: 3px;
-  transition: width 0.6s ease;
-}
-
-.plan-pct {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
-  text-align: right;
-}
-
-/* Event feed */
-.event-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.event-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  transition: background 0.2s;
-}
-
-.event-row:hover { background: rgba(168, 147, 120, 0.04); }
-
-.event-icon {
-  width: 22px;
-  text-align: center;
-  flex-shrink: 0;
-  font-size: 14px;
-}
-
-.event-type {
-  color: var(--text-dim);
-  flex: 1;
-}
-
-.event-agent {
-  color: var(--text-muted);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.event-time {
-  color: var(--text-muted);
-  font-size: 11px;
-  flex-shrink: 0;
-  min-width: 60px;
-  text-align: right;
-  opacity: 0.6;
-}
-
-/* Footer */
-.footer {
-  text-align: center;
-  padding: 32px 0 16px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.footer a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.footer a:hover { color: var(--accent-light); }
-
-/* Alignment */
-.alignment-summary {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-
-.alignment-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.alignment-pill .pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.alignment-pill .pill-count {
-  font-weight: 700;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.alignment-pill.aligned .pill-dot { background: var(--green); }
-.alignment-pill.aligned .pill-count { color: var(--green); }
-.alignment-pill.aligned { border-color: rgba(122, 158, 126, 0.2); }
-
-.alignment-pill.drifted .pill-dot { background: var(--accent); }
-.alignment-pill.drifted .pill-count { color: var(--accent); }
-.alignment-pill.drifted { border-color: rgba(212, 168, 71, 0.2); }
-
-.alignment-pill.critical .pill-dot { background: var(--red); }
-.alignment-pill.critical .pill-count { color: var(--red); }
-.alignment-pill.critical { border-color: rgba(196, 91, 62, 0.2); }
-
-.alignment-pill.uncalibrated .pill-dot { background: var(--text-muted); }
-.alignment-pill.uncalibrated .pill-count { color: var(--text-muted); }
-
-.alignment-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
-}
-
-.alignment-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px dashed var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.alignment-indicator {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.alignment-indicator.aligned { background: var(--green); box-shadow: 0 0 6px rgba(122, 158, 126, 0.4); }
-.alignment-indicator.drifted { background: var(--accent); box-shadow: 0 0 6px rgba(212, 168, 71, 0.4); }
-.alignment-indicator.critical { background: var(--red); box-shadow: 0 0 6px rgba(196, 91, 62, 0.4); animation: pulse-red 2s ease-in-out infinite; }
-.alignment-indicator.unknown { background: var(--text-muted); }
-
-@keyframes pulse-red {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(196, 91, 62, 0.4); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(196, 91, 62, 0); }
-}
-
-.alignment-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.alignment-status {
-  font-size: 11px;
-  text-transform: capitalize;
-}
-
-.alignment-status.aligned { color: var(--green); }
-.alignment-status.drifted { color: var(--accent); }
-.alignment-status.critical { color: var(--red); }
-.alignment-status.unknown { color: var(--text-muted); }
-
-.alignment-drift {
-  font-size: 10px;
   color: var(--text-muted);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-/* Loading */
-.loading {
   text-align: center;
-  padding: 40px;
-  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
-/* Refresh indicator */
-.refresh-indicator {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  font-size: 10px;
-  color: var(--text-muted);
-  opacity: 0.5;
-  z-index: 1;
+.groceries-list {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px;
 }
+.groceries-list .grocery-line { padding: 4px 0; font-size: 14px; color: var(--text); }
+.groceries-list .grocery-line:not(:last-child) { border-bottom: 1px solid var(--border); }
+.groceries-meta { margin-top: 8px; font-size: 11px; color: var(--text-muted); text-align: right; }
 
-@media (max-width: 600px) {
-  .container { padding: 16px 12px; }
-  .header h1 { font-size: 22px; }
-  .stats-bar { grid-template-columns: repeat(2, 1fr); }
-  .agents-grid { grid-template-columns: 1fr; }
+.footer {
+  margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;
 }
+.footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+.agents-strip { display: flex; gap: 8px; align-items: center; }
+.agent-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 12px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.agent-pill .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.agent-pill.online .pill-dot { background: var(--green); }
+.agent-pill.online { color: var(--text); }
+.agent-pill:not(.online) { color: var(--text-muted); }
+
+.banner-error {
+  background: rgba(196,91,62,0.08); border: 1px solid rgba(196,91,62,0.25);
+  color: var(--red); padding: 8px 12px; border-radius: var(--radius); font-size: 12px;
+  margin-bottom: 16px;
+}
+.hidden { display: none; }
 </style>
 </head>
 <body>
-
 <div class="container">
   <div class="header">
-    <div class="live-badge"><span class="live-dot"></span> Live</div>
-    <h1>Mycelium Swarm</h1>
-    <div class="subtitle">AI agents coordinating in real time</div>
+    <h1>Mycelium <span class="dot">·</span> Family</h1>
+    <div class="refresh-indicator">
+      <span class="live-dot"></span><span id="refresh-time">connecting...</span>
+    </div>
   </div>
 
-  <div id="stats-bar" class="stats-bar"></div>
+  <div id="error-banner" class="banner-error hidden"></div>
 
-  <div class="section">
-    <div class="section-title">Agents <span class="section-count" id="agents-count"></span></div>
-    <div id="agents" class="agents-grid"><div class="loading">Loading...</div></div>
-  </div>
-
-  <div class="section" id="drones-section" style="display:none">
-    <div class="section-title">Drones <span class="section-count" id="drones-count"></span></div>
-    <div id="drones" class="agents-grid"></div>
-  </div>
-
-  <div class="section" id="alignment-section" style="display:none">
-    <div class="section-title">Agent Alignment</div>
-    <div id="alignment-summary" class="alignment-summary"></div>
-    <div id="alignment-grid" class="alignment-grid"></div>
+  <div class="stats">
+    <div class="stat-card"><div id="stat-events-today" class="stat-value">—</div><div class="stat-label">Events Today</div></div>
+    <div class="stat-card"><div id="stat-open-reminders" class="stat-value">—</div><div class="stat-label">Open Reminders</div></div>
+    <div class="stat-card"><div id="stat-events-week" class="stat-value">—</div><div class="stat-label">This Week</div></div>
   </div>
 
   <div class="section">
-    <div class="section-title">Active Plans</div>
-    <div id="plans" class="plan-list"><div class="loading">Loading...</div></div>
+    <div class="section-title">Today</div>
+    <div id="today-events"></div>
+    <div id="today-reminders"></div>
   </div>
 
   <div class="section">
-    <div class="section-title">Recent Activity</div>
-    <div id="events" class="event-feed"><div class="loading">Loading...</div></div>
+    <div class="section-title">This Week</div>
+    <div id="week-events"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Open Reminders</div>
+    <div id="open-reminders"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Groceries</div>
+    <div id="groceries"></div>
   </div>
 
   <div class="footer">
-    Built with <a href="https://mycelium.fyi">Mycelium</a> — distributed AI agent coordination
+    <div class="agents-strip" id="agents-strip">agents loading…</div>
+    <div><a href="/studio" target="_blank">Open full dashboard →</a></div>
   </div>
 </div>
 
-<div class="refresh-indicator" id="refresh-indicator"></div>
-
 <script>
-var EVENT_ICONS = {
-  task_completed: '&#10003;',
-  task_created: '+',
-  bug_filed: '&#128027;',
-  bug_fixed: '&#128296;',
-  plan_step_completed: '&#9654;',
-  plan_created: '&#128203;',
-  drone_job_completed: '&#9881;',
-  pr_merged: '&#128257;',
-  bip_draft_created: '&#128172;',
-  agent_heartbeat: '&#9829;'
-};
+var JARVIS_BASE = 'http://localhost:7777';
 
-var EVENT_LABELS = {
-  task_completed: 'Task completed',
-  task_created: 'Task created',
-  bug_filed: 'Bug filed',
-  bug_fixed: 'Bug fixed',
-  plan_step_completed: 'Plan step completed',
-  plan_created: 'Plan created',
-  drone_job_completed: 'Drone job done',
-  pr_merged: 'PR merged',
-  bip_draft_created: 'Post drafted',
-  agent_heartbeat: 'Heartbeat'
-};
-
-function timeAgo(ts) {
-  var diff = Date.now() - new Date(ts + 'Z').getTime();
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-  return Math.floor(diff / 86400000) + 'd ago';
+function agentClass(name) {
+  if (!name) return 'other';
+  var n = name.toLowerCase();
+  if (n.indexOf('jarvis') === 0) return 'jarvis';
+  if (n.indexOf('clara') === 0)  return 'clara';
+  if (n.indexOf('family') === 0) return 'family';
+  return 'other';
 }
 
-function renderStats(stats) {
-  var el = document.getElementById('stats-bar');
-  var cards = [
-    { value: stats.agents_online, label: 'Agents Online', highlight: true },
-    { value: (stats.drones_online || 0) + '/' + (stats.drones_total || 0), label: 'Drones', highlight: false },
-    { value: stats.tasks_completed_today, label: 'Tasks Today', highlight: false },
-    { value: stats.bugs_fixed_today, label: 'Bugs Fixed Today', highlight: false },
-    { value: stats.plans_active, label: 'Active Plans', highlight: false },
-    { value: stats.total_tasks_done, label: 'Total Shipped', highlight: false }
-  ];
-  el.textContent = '';
-  for (var i = 0; i < cards.length; i++) {
-    var card = document.createElement('div');
-    card.className = 'stat-card' + (cards[i].highlight ? ' highlight' : '');
-    var val = document.createElement('div');
-    val.className = 'stat-value';
-    val.textContent = cards[i].value;
-    var lbl = document.createElement('div');
-    lbl.className = 'stat-label';
-    lbl.textContent = cards[i].label;
-    card.appendChild(val);
-    card.appendChild(lbl);
-    el.appendChild(card);
+function fmtTime(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function fmtDayTime(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  var day = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  var t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return day + ' · ' + t;
+}
+
+function isToday(iso) {
+  if (!iso) return false;
+  var d = new Date(iso);
+  var n = new Date();
+  return d.toDateString() === n.toDateString();
+}
+
+function renderRow(parent, agentName, time, title, location) {
+  var row = document.createElement('div');
+  row.className = 'row';
+  var tag = document.createElement('span');
+  tag.className = 'agent-tag ' + agentClass(agentName);
+  tag.textContent = agentName;
+  row.appendChild(tag);
+  if (time) {
+    var t = document.createElement('span');
+    t.className = 'time';
+    t.textContent = time;
+    row.appendChild(t);
   }
-}
-
-function renderAgents(agents) {
-  var el = document.getElementById('agents');
-  var countEl = document.getElementById('agents-count');
-  var online = agents.filter(function (a) { return a.online; }).length;
-  if (countEl) countEl.textContent = online + '/' + agents.length + ' online';
-  el.textContent = '';
-  if (!agents.length) { el.textContent = 'No agents registered'; return; }
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
-    var card = document.createElement('div');
-    card.className = 'agent-card';
-    var dot = document.createElement('div');
-    dot.className = 'agent-dot ' + (a.online ? 'online' : 'offline');
-    var info = document.createElement('div');
-    var name = document.createElement('div');
-    name.className = 'agent-name';
-    name.textContent = a.name;
-    var status = document.createElement('div');
-    status.className = 'agent-status';
-    status.textContent = a.online ? 'Online' : 'Offline';
-    info.appendChild(name);
-    info.appendChild(status);
-    card.appendChild(dot);
-    card.appendChild(info);
-    el.appendChild(card);
+  var tt = document.createElement('span');
+  tt.className = 'title';
+  tt.textContent = title;
+  row.appendChild(tt);
+  if (location) {
+    var l = document.createElement('span');
+    l.className = 'location';
+    l.textContent = '@ ' + location;
+    row.appendChild(l);
   }
+  parent.appendChild(row);
 }
 
-function renderDrones(drones) {
-  var section = document.getElementById('drones-section');
-  var el = document.getElementById('drones');
-  var countEl = document.getElementById('drones-count');
-  if (!drones || !drones.length) { section.style.display = 'none'; return; }
-  section.style.display = '';
-  var online = drones.filter(function (d) { return d.online; }).length;
-  if (countEl) countEl.textContent = online + '/' + drones.length + ' online';
-  el.textContent = '';
-  for (var i = 0; i < drones.length; i++) {
-    var d = drones[i];
-    var card = document.createElement('div');
-    card.className = 'drone-card';
-    var dot = document.createElement('div');
-    dot.className = 'drone-dot ' + (d.online ? 'online' : 'offline');
-    var info = document.createElement('div');
-    var name = document.createElement('div');
-    name.className = 'agent-name';
-    name.textContent = d.name;
-    var status = document.createElement('div');
-    status.className = 'agent-status';
-    status.textContent = d.online ? 'Online' : 'Idle';
-    info.appendChild(name);
-    info.appendChild(status);
-    var label = document.createElement('div');
-    label.className = 'drone-label';
-    var caps = [];
-    try { caps = JSON.parse(d.capabilities || '[]'); } catch (e) { caps = []; }
-    label.textContent = caps.length ? caps.join(', ').toUpperCase() : 'DRONE';
-    card.appendChild(dot);
-    card.appendChild(info);
-    card.appendChild(label);
-    el.appendChild(card);
-  }
+function emptyState(parent, text) {
+  var d = document.createElement('div');
+  d.className = 'empty';
+  d.textContent = text;
+  parent.appendChild(d);
 }
 
-function renderPlans(plans) {
-  var el = document.getElementById('plans');
-  el.textContent = '';
-  if (!plans.length) {
-    var empty = document.createElement('div');
-    empty.className = 'loading';
-    empty.textContent = 'No active plans';
-    el.appendChild(empty);
+function renderTodayEvents(events) {
+  var p = document.getElementById('today-events');
+  p.textContent = '';
+  var today = events.filter(function (e) { return isToday(e.start); });
+  if (today.length === 0) return;
+  today.forEach(function (e) {
+    renderRow(p, e.calendar, fmtTime(e.start), e.title, e.location);
+  });
+}
+
+function renderTodayReminders(reminders) {
+  var p = document.getElementById('today-reminders');
+  p.textContent = '';
+  var today = reminders.filter(function (r) { return isToday(r.due); });
+  today.forEach(function (r) {
+    renderRow(p, r.list, fmtTime(r.due) || 'today', '☐ ' + r.name, '');
+  });
+}
+
+function renderWeekEvents(events) {
+  var p = document.getElementById('week-events');
+  p.textContent = '';
+  var week = events.filter(function (e) { return !isToday(e.start); });
+  if (week.length === 0) { emptyState(p, 'Nothing scheduled this week.'); return; }
+  week.forEach(function (e) {
+    renderRow(p, e.calendar, fmtDayTime(e.start), e.title, e.location);
+  });
+}
+
+function renderOpenReminders(reminders) {
+  var p = document.getElementById('open-reminders');
+  p.textContent = '';
+  var rest = reminders.filter(function (r) { return !isToday(r.due); });
+  if (rest.length === 0) { emptyState(p, 'No open reminders.'); return; }
+  rest.forEach(function (r) {
+    var when = r.due ? fmtDayTime(r.due) : 'no date';
+    renderRow(p, r.list, when, '☐ ' + r.name, '');
+  });
+}
+
+function renderGroceries(notes) {
+  var p = document.getElementById('groceries');
+  p.textContent = '';
+  var g = (notes || []).filter(function (n) { return n.title === 'Groceries'; })[0];
+  if (!g || !g.tail_lines || g.tail_lines.length === 0) {
+    emptyState(p, 'No grocery list yet.');
     return;
   }
-  for (var i = 0; i < plans.length; i++) {
-    var p = plans[i];
-    var card = document.createElement('div');
-    card.className = 'plan-card';
-    var title = document.createElement('div');
-    title.className = 'plan-title';
-    title.textContent = p.title;
-    card.appendChild(title);
-    var bar = document.createElement('div');
-    bar.className = 'progress-bar';
-    var fill = document.createElement('div');
-    fill.className = 'progress-fill';
-    fill.style.width = p.progress + '%';
-    bar.appendChild(fill);
-    card.appendChild(bar);
-    var pct = document.createElement('div');
-    pct.className = 'plan-pct';
-    pct.textContent = p.steps_done + '/' + p.steps_total + ' steps \u2014 ' + p.progress + '%';
-    card.appendChild(pct);
-    el.appendChild(card);
-  }
+  var wrap = document.createElement('div');
+  wrap.className = 'groceries-list';
+  g.tail_lines.forEach(function (line) {
+    var d = document.createElement('div');
+    d.className = 'grocery-line';
+    d.textContent = '• ' + line;
+    wrap.appendChild(d);
+  });
+  var meta = document.createElement('div');
+  meta.className = 'groceries-meta';
+  meta.textContent = 'Showing last ' + g.tail_lines.length + ' of ' + g.total_lines + ' lines';
+  wrap.appendChild(meta);
+  p.appendChild(wrap);
 }
 
-function renderEvents(events) {
-  var el = document.getElementById('events');
-  el.textContent = '';
-  // Skip heartbeats — too noisy for public view
-  var filtered = [];
-  for (var i = 0; i < events.length; i++) {
-    if (events[i].type !== 'agent_heartbeat') filtered.push(events[i]);
-  }
-  if (!filtered.length) {
-    var empty = document.createElement('div');
-    empty.className = 'loading';
-    empty.textContent = 'No recent activity';
-    el.appendChild(empty);
-    return;
-  }
-  for (var j = 0; j < filtered.length && j < 20; j++) {
-    var e = filtered[j];
-    var iconChar = EVENT_ICONS[e.type] || '\u2022';
-    var label = EVENT_LABELS[e.type] || e.type.replace(/_/g, ' ');
-
-    var row = document.createElement('div');
-    row.className = 'event-row';
-
-    var iconEl = document.createElement('div');
-    iconEl.className = 'event-icon';
-    iconEl.innerHTML = iconChar;
-
-    var typeEl = document.createElement('div');
-    typeEl.className = 'event-type';
-    typeEl.textContent = label;
-
-    var agentEl = document.createElement('div');
-    agentEl.className = 'event-agent';
-    agentEl.textContent = e.agent;
-
-    var timeEl = document.createElement('div');
-    timeEl.className = 'event-time';
-    timeEl.textContent = timeAgo(e.time);
-
-    row.appendChild(iconEl);
-    row.appendChild(typeEl);
-    row.appendChild(agentEl);
-    row.appendChild(timeEl);
-    el.appendChild(row);
-  }
+function renderStats(snap, pub) {
+  document.getElementById('stat-events-today').textContent = snap.stats.events_today;
+  document.getElementById('stat-open-reminders').textContent = snap.stats.open_reminders;
+  document.getElementById('stat-events-week').textContent = snap.stats.events_this_week;
 }
 
-
-function renderAlignment(alignment) {
-  var section = document.getElementById('alignment-section');
-  if (!alignment || !alignment.agents || !alignment.agents.length) {
-    section.style.display = 'none';
+function renderAgents(pub) {
+  var strip = document.getElementById('agents-strip');
+  strip.textContent = '';
+  var agents = (pub && pub.agents) || [];
+  if (agents.length === 0) {
+    strip.textContent = 'no agents online';
     return;
   }
-  section.style.display = '';
-
-  // Summary pills
-  var summaryEl = document.getElementById('alignment-summary');
-  summaryEl.textContent = '';
-  var s = alignment.summary;
-  var pills = [
-    { cls: 'aligned', label: 'Aligned', count: s.aligned },
-    { cls: 'drifted', label: 'Drifted', count: s.drifted },
-    { cls: 'critical', label: 'Critical', count: s.critical },
-    { cls: 'uncalibrated', label: 'Pending', count: s.uncalibrated }
-  ];
-  for (var i = 0; i < pills.length; i++) {
-    var p = pills[i];
-    var pill = document.createElement('div');
-    pill.className = 'alignment-pill ' + p.cls;
+  agents.forEach(function (a) {
+    var pill = document.createElement('span');
+    pill.className = 'agent-pill' + (a.online ? ' online' : '');
     var dot = document.createElement('span');
     dot.className = 'pill-dot';
-    var count = document.createElement('span');
-    count.className = 'pill-count';
-    count.textContent = p.count;
-    var lbl = document.createElement('span');
-    lbl.textContent = p.label;
     pill.appendChild(dot);
-    pill.appendChild(count);
-    pill.appendChild(lbl);
-    summaryEl.appendChild(pill);
-  }
-
-  // Agent grid
-  var gridEl = document.getElementById('alignment-grid');
-  gridEl.textContent = '';
-  for (var j = 0; j < alignment.agents.length; j++) {
-    var a = alignment.agents[j];
-    var statusLabel = a.alignment === 'unknown' ? 'pending' : a.alignment;
-
-    var card = document.createElement('div');
-    card.className = 'alignment-card';
-
-    var indicator = document.createElement('div');
-    indicator.className = 'alignment-indicator ' + a.alignment;
-
-    var info = document.createElement('div');
-    var nameEl = document.createElement('div');
-    nameEl.className = 'alignment-name';
-    nameEl.textContent = a.name;
-    var statusEl = document.createElement('div');
-    statusEl.className = 'alignment-status ' + a.alignment;
-    statusEl.textContent = statusLabel;
-    info.appendChild(nameEl);
-    info.appendChild(statusEl);
-
-    card.appendChild(indicator);
-    card.appendChild(info);
-
-    if (a.drift > 0) {
-      var driftEl = document.createElement('div');
-      driftEl.className = 'alignment-drift';
-      driftEl.textContent = a.drift + ' drift' + (a.drift > 1 ? 's' : '');
-      card.appendChild(driftEl);
-    }
-
-    gridEl.appendChild(card);
-  }
+    var n = document.createElement('span');
+    n.textContent = a.name;
+    pill.appendChild(n);
+    strip.appendChild(pill);
+  });
 }
 
-function escapeHtml(str) {
-  var div = document.createElement('div');
-  div.appendChild(document.createTextNode(str || ''));
-  return div.innerHTML;
+function showError(msg) {
+  var b = document.getElementById('error-banner');
+  b.textContent = msg;
+  b.classList.remove('hidden');
+}
+function hideError() {
+  document.getElementById('error-banner').classList.add('hidden');
 }
 
-var refreshCount = 0;
-
-function fetchActivity() {
-  fetch('/api/mycelium/public/activity')
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      renderStats(data.stats);
-      renderAgents(data.agents);
-      renderDrones(data.drones || []);
-      renderAlignment(data.alignment);
-      renderPlans(data.plans);
-      renderEvents(data.events);
-      refreshCount++;
-      document.getElementById('refresh-indicator').textContent = 'Updated ' + new Date().toLocaleTimeString();
+function refresh() {
+  var snapP = fetch(JARVIS_BASE + '/api/family/snapshot').then(function (r) { return r.json(); });
+  var pubP = fetch('/api/mycelium/public/activity').then(function (r) { return r.json(); });
+  Promise.all([snapP, pubP])
+    .then(function (results) {
+      var snap = results[0];
+      var pub = results[1];
+      hideError();
+      renderStats(snap, pub);
+      renderTodayEvents(snap.today_events || []);
+      renderTodayReminders(snap.open_reminders || []);
+      renderWeekEvents(snap.week_events || []);
+      renderOpenReminders(snap.open_reminders || []);
+      renderGroceries(snap.household_notes || []);
+      renderAgents(pub);
+      document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
     })
     .catch(function (err) {
-      console.error('Fetch error:', err);
+      console.error('refresh error:', err);
+      showError('Jarvis snapshot unreachable: ' + err.message);
+      document.getElementById('refresh-time').textContent = 'connection error';
     });
 }
 
-// Initial load
-fetchActivity();
-
-// Auto-refresh every 15 seconds
-setInterval(fetchActivity, 15000);
+refresh();
+setInterval(refresh, 30000);
 </script>
 </body>
 </html>

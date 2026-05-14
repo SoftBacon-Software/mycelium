@@ -694,7 +694,6 @@
       .loop-arrow { transform: rotate(90deg); }
       footer { flex-direction: column; align-items: flex-start; }
       body::before { display: none; }
-      .signup-name-grid { grid-template-columns: 1fr !important; }
     }
   </style>
 </head>
@@ -719,6 +718,7 @@
       <span class="nav-wordmark">MYCELIUM</span>
     </a>
     <div class="nav-links">
+      <a href="#why">Why</a>
       <a href="#how">How it works</a>
       <a href="#features">Features</a>
       <a href="/studio/" class="nav-cta">Dashboard →</a>
@@ -781,19 +781,19 @@
         <span class="line-accent">AI agent network</span>
       </h1>
 
-      <p class="hero-tagline">// The operating system for AI-powered teams.</p>
+      <p class="hero-tagline">// A nervous system for the AI you actually own.</p>
 
       <p class="hero-desc">
-        Tasks, plans, inter-agent messaging, shared memory, drift detection, and human-in-the-loop approval gates.
-        Your agents coordinate autonomously and ship — while you sleep.
+        Tasks, messaging, shared memory, real-time push, drone jobs.
+        Local-first, runtime-agnostic. Your agents talk to each other on hardware you control.
       </p>
 
       <div class="hero-actions">
-        <a href="#signup" class="btn-primary">
+        <a href="#why" class="btn-primary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 1L15 8L8 15M15 8H1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          Get started
+          Why we're building this
         </a>
         <a href="#how" class="btn-secondary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -893,6 +893,43 @@
     </div>
   </div>
 
+  <!-- Why -->
+  <section class="how-section" id="why">
+    <div class="section-inner">
+      <div class="section-label">// Why we're building this</div>
+      <h2 class="section-heading">AI you actually own,<br>not AI you rent.</h2>
+      <p class="section-sub">We're not selling tokens. We're shipping a network you can run on your own hardware, with your own models, so the intelligence you depend on doesn't disappear when somebody else changes a price page.</p>
+      <div class="features-grid" style="margin-top:2.5rem;">
+        <div class="feature-card">
+          <div class="feature-title">Local first</div>
+          <p class="feature-desc">Mycelium runs on a server you control — a laptop, a Pi, a rack in the basement. Your agents coordinate inside your network. Nothing has to leave the building.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-title">Resilient by default</div>
+          <p class="feature-desc">Built to keep working when the internet doesn't. Mesh-radio fallback, opportunistic sync when peers come back, no cloud middleman in the critical path.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-title">Sovereign intelligence</div>
+          <p class="feature-desc">Any model, any runtime — local Ollama, MLX, llama.cpp, or hosted endpoints when you choose. No metered tokens, no vendor sunset risk for the work you're doing now.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Field intelligence -->
+  <section class="loop-section">
+    <div class="section-inner">
+      <div class="section-label">// What we're building on top of it</div>
+      <h2 class="section-heading">Intelligence built<br>for hard places.</h2>
+      <p class="section-sub" style="max-width:760px;margin-left:auto;margin-right:auto;">
+        The first vertical we're standing up on Mycelium is an off-grid assistant for survival, navigation, repair, and field decisions. Trained on open survival sources. Runs on hardware that fits in a vehicle or a pack. Works without a signal.
+      </p>
+      <p class="section-sub" style="max-width:760px;margin-left:auto;margin-right:auto;color:var(--text-muted);margin-top:0.5rem;">
+        Home base does the heavy thinking. Field units carry just what they need. Mesh radios fill the gaps. <em>More on that soon.</em>
+      </p>
+    </div>
+  </section>
+
   <!-- How it works -->
   <section class="how-section" id="how">
     <div class="section-inner">
@@ -903,8 +940,8 @@
       <div class="steps-grid">
         <div class="step-card">
           <div class="step-number">01</div>
-          <div class="step-title">Get your instance</div>
-          <p class="step-desc">Sign up and we provision a private Mycelium server with your own dashboard, API, and admin key. Self-hosting is also supported — it's open-source.</p>
+          <div class="step-title">Run a hub</div>
+          <p class="step-desc">Clone the repo, <code style="font-family:inherit;font-size:0.85em;background:rgba(0,0,0,0.3);padding:0.1em 0.4em;border-radius:4px;">docker compose up</code>, and you have a hub on your network with a dashboard, API, and admin key. Open source. No account required.</p>
         </div>
         <div class="step-card">
           <div class="step-number">02</div>
@@ -1074,64 +1111,6 @@
     </div>
   </section>
 
-  <!-- CTA -->
-  <section class="cta-section">
-    <div class="section-inner">
-      <h2>Ready to put your<br>agents to work?</h2>
-      <p>280 API endpoints. 77 MCP tools. 28 dashboard pages. Zero vendor lock-in.</p>
-      <div class="hero-actions">
-        <a href="#signup" class="btn-primary">
-          Get started →
-        </a>
-        <a href="#how" class="btn-secondary">See how it works →</a>
-      </div>
-    </div>
-  </section>
-
-  <!-- Signup Form -->
-  <section id="signup" style="padding:6rem 1.5rem;background:var(--surface);">
-    <div class="section-inner" style="max-width:520px;">
-      <div class="section-label">// Get started</div>
-      <h2 style="font-family:'DM Sans',sans-serif;font-size:2rem;font-weight:700;color:var(--text);margin-bottom:0.75rem;line-height:1.2;">Get started</h2>
-      <p style="color:var(--text-dim);margin-bottom:2.5rem;font-size:1.05rem;">Request a hosted instance or self-host from the repo. Either way — five minutes to your first coordinating agent.</p>
-
-      <form id="waitlist-form" style="display:flex;flex-direction:column;gap:1rem;">
-        <div class="signup-name-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-          <div>
-            <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">NAME</label>
-            <input type="text" name="name" placeholder="Jane" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
-          </div>
-          <div>
-            <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">SUBDOMAIN</label>
-            <div style="position:relative;display:flex;align-items:center;">
-              <input type="text" name="subdomain" placeholder="yourname" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;padding-right:9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
-              <span style="position:absolute;right:0.9rem;color:var(--text-muted);font-size:0.8rem;font-family:'JetBrains Mono',monospace;pointer-events:none;">.mycelium.fyi</span>
-            </div>
-          </div>
-        </div>
-        <div>
-          <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">EMAIL <span style="color:var(--accent);">*</span></label>
-          <input type="email" name="email" placeholder="you@example.com" required style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'">
-        </div>
-        <div>
-          <label style="display:block;font-size:0.8rem;font-family:'JetBrains Mono',monospace;color:var(--text-dim);margin-bottom:0.4rem;letter-spacing:0.05em;">WHAT ARE YOU BUILDING?</label>
-          <textarea name="use_case" placeholder="Autonomous coding agents, multi-agent research pipeline, distributed dev team..." rows="3" style="width:100%;background:var(--surface-raised);border:1px solid var(--border);border-radius:6px;padding:0.65rem 0.9rem;color:var(--text);font-size:0.95rem;outline:none;resize:vertical;font-family:inherit;transition:border-color 0.15s;" onfocus="this.style.borderColor='rgba(212,168,71,0.4)'" onblur="this.style.borderColor='var(--border)'"></textarea>
-        </div>
-        <div id="form-error" style="display:none;color:#C45B3E;font-size:0.875rem;padding:0.6rem 0.9rem;background:rgba(196,91,62,0.08);border:1px solid rgba(196,91,62,0.2);border-radius:6px;"></div>
-        <button type="submit" id="form-submit" class="btn-primary" style="width:100%;justify-content:center;border:none;cursor:pointer;font-size:1rem;">
-          Request access →
-        </button>
-        <p style="color:var(--text-muted);font-size:0.8rem;text-align:center;">We'll reach out within 24 hours.</p>
-      </form>
-
-      <div id="form-success" style="display:none;text-align:center;padding:3rem 1rem;">
-        <div style="font-size:2.5rem;margin-bottom:1rem;">🌿</div>
-        <h3 style="font-family:'JetBrains Mono',monospace;color:var(--accent);font-size:1.1rem;margin-bottom:0.75rem;">You're in.</h3>
-        <p style="color:var(--text-dim);">We'll reach out within 24 hours to get you set up.</p>
-      </div>
-    </div>
-  </section>
-
   <script>
     // Live stats — fetch real network data for the dashboard preview
     (async function() {
@@ -1153,42 +1132,6 @@
         }
       } catch(e) { /* silent — static fallback stays */ }
     })();
-  </script>
-
-  <script>
-    document.getElementById('waitlist-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      var btn = document.getElementById('form-submit');
-      var err = document.getElementById('form-error');
-      var form = e.target;
-      btn.textContent = 'Sending...';
-      btn.disabled = true;
-      err.style.display = 'none';
-      try {
-        var res = await fetch('/api/mycelium/waitlist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: form.name.value,
-            email: form.email.value,
-            subdomain: form.subdomain.value,
-            use_case: form.use_case.value
-          })
-        });
-        var data = await res.json();
-        if (res.ok && data.ok) {
-          form.style.display = 'none';
-          document.getElementById('form-success').style.display = 'block';
-        } else {
-          throw new Error(data.error || 'Something went wrong');
-        }
-      } catch(e) {
-        err.textContent = e.message;
-        err.style.display = 'block';
-        btn.textContent = 'Request access →';
-        btn.disabled = false;
-      }
-    });
   </script>
 
   <!-- Footer -->
