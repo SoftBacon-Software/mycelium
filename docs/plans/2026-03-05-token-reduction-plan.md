@@ -677,7 +677,7 @@ git commit -m "feat: work route builds queue directly, no full boot payload"
 **Step 1: Verify server starts**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 node -c server/db.js && node -c server/routes/mycelium.js && echo "Syntax OK"
 ```
 
