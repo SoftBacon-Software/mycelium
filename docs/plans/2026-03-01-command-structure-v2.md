@@ -390,7 +390,7 @@ After the `initDB` function (after migrations loop, around line 49), add a seed 
   var opCount = db.prepare('SELECT COUNT(*) as c FROM dv_operators').get();
   if (opCount.c === 0) {
     db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities, email) VALUES (?, ?, ?, ?, ?)").run(
-      'greatness', 'Greatness', 'owner', 'Platform dev, WS game, asset generation, coordination', 'grbarajas@gmail.com'
+      'greatness', 'Greatness', 'owner', 'Platform dev, WS game, asset generation, coordination', ''
     );
     db.prepare("INSERT INTO dv_operators (id, display_name, role, responsibilities, email) VALUES (?, ?, ?, ?, ?)").run(
       'hijack', 'Hijack', 'ui_lead', 'UI/UX, Project A development, visual design', ''

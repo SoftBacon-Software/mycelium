@@ -18,20 +18,20 @@
 **Step 1: Install stripe**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium && npm install stripe
+cd /path/to/mycelium && npm install stripe
 ```
 
 **Step 2: Verify it installed**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium && node -e "require('stripe'); console.log('ok')"
+cd /path/to/mycelium && node -e "require('stripe'); console.log('ok')"
 ```
 Expected: `ok`
 
 **Step 3: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add package.json package-lock.json
 git commit -m "feat(billing): add stripe dependency"
 ```
@@ -210,7 +210,7 @@ export function registerHooks(core) {
 **Step 6: Verify plugin loads**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium && node server/index.js
+cd /path/to/mycelium && node server/index.js
 ```
 
 Check console for `[plugins] Loaded billing` or similar. Ctrl+C to stop.
@@ -218,7 +218,7 @@ Check console for `[plugins] Loaded billing` or similar. Ctrl+C to stop.
 **Step 7: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add server/plugins/billing/
 git commit -m "feat(billing): scaffold billing plugin with schema, db, routes"
 ```
@@ -436,7 +436,7 @@ export default function (core) {
 **Step 2: Test the server starts**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium && node server/index.js
+cd /path/to/mycelium && node server/index.js
 ```
 
 Check for no errors. Ctrl+C.
@@ -444,7 +444,7 @@ Check for no errors. Ctrl+C.
 **Step 3: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add server/plugins/billing/routes.js
 git commit -m "feat(billing): add Stripe webhook endpoint with event handling"
 ```
@@ -501,13 +501,13 @@ event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
 **Step 4: Test the server starts**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium && node server/index.js
+cd /path/to/mycelium && node server/index.js
 ```
 
 **Step 5: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add server/index.js server/plugins/billing/routes.js
 git commit -m "feat(billing): capture raw body for Stripe webhook signature verification"
 ```
@@ -591,7 +591,7 @@ Note: This middleware is optional for now since we're running a single shared in
 **Step 3: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add server/routes/mycelium.js
 git commit -m "feat(billing): add plan enforcement middleware (not yet mounted)"
 ```
@@ -632,7 +632,7 @@ badge.style.cssText = 'padding:2px 8px;border-radius:4px;font-size:12px;color:#f
 **Step 3: Commit**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add public/
 git commit -m "feat(billing): add subscription status badge to org dashboard"
 ```
@@ -689,7 +689,7 @@ Verify:
 **Step 5: Commit any fixes, deploy**
 
 ```bash
-cd /Users/grb/projects/mycelium/mycelium
+cd /path/to/mycelium
 git add -A
 git commit -m "feat(billing): final adjustments from e2e testing"
 ```
