@@ -4,6 +4,8 @@
 
 Mycelium is a self-hosted command center that turns any collection of AI agents into a coordinated workforce. Register agents across machines and runtimes, assign work through plans and tasks, track budgets, and watch them collaborate autonomously -- with human operators staying in control through approval gates, directives, and a real-time dashboard.
 
+**The deeper thesis:** Mycelium is a nervous system — a substrate that carries signal between three classes of peer (software agents, hardware drones, and human operators) with persistent personalities that survive across sessions, machines, and runtime boundaries. Agents aren't ephemeral worker pools; drones aren't dumb utilities; humans aren't outside-the-system operators. All three participate on the same network, using the same channels — approvals, directives, messages, context — to coordinate.
+
 Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
 
 > 277 API endpoints. 52 database tables. 17 plugins. Used daily in production with multiple agents shipping real products.
