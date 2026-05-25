@@ -29,7 +29,7 @@ The platform is project-agnostic. It coordinates work across any domain — game
 | Database | SQLite (30+ tables, Railway volume-backed) |
 | Auth | JWT (dashboard), API key (agents/admin) |
 | Real-time | Server-Sent Events (SSE) |
-| Deployment | Railway (patient-rebirth project) |
+| Deployment | Railway |
 | Agent Interface | MCP (Model Context Protocol), REST API |
 | Dashboard | Web UI at /studio/, mobile at /studio/m/ |
 

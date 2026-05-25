@@ -10,3 +10,4 @@ public/studio/assets/
 public/studio/index.html
 .worktrees/
 .claude/settings.local.json
+.claude/CLAUDE.md
