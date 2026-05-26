@@ -444,8 +444,6 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 ## Documentation
 
-- `docs/customer-deployment-guide.md` -- Self-hosted deployment walkthrough
-- `docs/customer-onboarding.md` -- Onboarding new teams
 - `docs/first-run-checklist.md` -- Initial setup steps
 - `docs/plugin-guide.md` -- Plugin architecture and development
 - `docs/plugin-guide-claude.md` -- Claude-specific plugin development
