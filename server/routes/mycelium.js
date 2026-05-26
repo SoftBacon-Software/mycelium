@@ -3167,7 +3167,7 @@ router.get('/studio/me', asyncHandler(function (req, res) {
   if (!user) {
     // Check admin key
     var key = req.headers['x-admin-key'];
-    if (key === ADMIN_KEY) return res.json({ id: 0, username: 'admin', display_name: 'Admin', role: 'admin' });
+    if (isAdminKey(key)) return res.json({ id: 0, username: 'admin', display_name: 'Admin', role: 'admin' });
     return res.status(401).json({ error: 'Not authenticated' });
   }
   var dbUser = getStudioUserById(user.userId);
@@ -4674,7 +4674,7 @@ router.get('/team-chat', asyncHandler(function (req, res) {
   if (!user) {
     // Also allow admin key
     var key = req.headers['x-admin-key'];
-    if (key !== ADMIN_KEY) return res.status(403).json({ error: 'Studio login required' });
+    if (!isAdminKey(key)) return res.status(403).json({ error: 'Studio login required' });
   }
   var limit = parseLimit(req.query.limit, 50);
   res.json(listTeamChat(limit));
@@ -5113,7 +5113,7 @@ router.put('/drones/jobs/:id', asyncHandler(function (req, res) {
   var job = getDroneJob(parseIntParam(req.params.id));
   if (!job) return res.status(404).json({ error: 'Drone job not found' });
   // Only the assigned drone, the requester, or an admin can update a job
-  var isAdmin = req.headers['x-admin-key'] === ADMIN_KEY || !!getStudioUser(req);
+  var isAdmin = isAdminKey(req.headers['x-admin-key']) || !!getStudioUser(req);
   if (!isAdmin && job.drone_id && job.drone_id !== who && job.requester !== who) {
     return res.status(403).json({ error: 'Not authorized to update this job' });
   }
@@ -6014,7 +6014,7 @@ router.delete('/feedback/:id', asyncHandler(async function (req, res) {
 router.get('/inbox', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   // Operators get their own inbox via JWT; admin can query any operator
   var operatorId = req.query.operator_id;
   if (!operatorId) {
@@ -6043,7 +6043,7 @@ router.get('/inbox', asyncHandler(function (req, res) {
 router.get('/inbox/count', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var operatorId = req.query.operator_id;
   if (!operatorId && user) {
     var op = getDB().prepare('SELECT id FROM operators WHERE studio_user_id = ?').get(user.userId);
@@ -6061,7 +6061,7 @@ router.get('/inbox/count', asyncHandler(function (req, res) {
 router.get('/inbox/:id', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var item = getInboxItem(parseIntParam(req.params.id));
   if (!item) return apiError(res, 404, 'Inbox item not found');
   try { item.data = JSON.parse(item.data); } catch (e) { item.data = {}; }
@@ -6086,7 +6086,7 @@ router.post('/inbox', asyncHandler(function (req, res) {
 router.put('/inbox/:id/read', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var item = getInboxItem(parseIntParam(req.params.id));
   if (!item) return apiError(res, 404, 'Inbox item not found');
   markInboxItemRead(item.id);
@@ -6097,7 +6097,7 @@ router.put('/inbox/:id/read', asyncHandler(function (req, res) {
 router.put('/inbox/:id/action', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var item = getInboxItem(parseIntParam(req.params.id));
   if (!item) return apiError(res, 404, 'Inbox item not found');
   markInboxItemActioned(item.id);
@@ -6108,7 +6108,7 @@ router.put('/inbox/:id/action', asyncHandler(function (req, res) {
 router.delete('/inbox/:id', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var item = getInboxItem(parseIntParam(req.params.id));
   if (!item) return apiError(res, 404, 'Inbox item not found');
   dismissInboxItem(item.id);
@@ -6119,7 +6119,7 @@ router.delete('/inbox/:id', asyncHandler(function (req, res) {
 router.post('/inbox/bulk-dismiss', asyncHandler(function (req, res) {
   var user = getStudioUser(req);
   var adminKey = req.headers['x-admin-key'];
-  if (!user && adminKey !== ADMIN_KEY) return apiError(res, 401, 'Authentication required');
+  if (!user && !isAdminKey(adminKey)) return apiError(res, 401, 'Authentication required');
   var ids = req.body.ids;
   var all = req.body.all;
   var operatorId = req.body.operator_id;
