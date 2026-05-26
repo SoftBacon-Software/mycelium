@@ -256,9 +256,9 @@ export async function loadPlugins(core, router) {
       if (manifest.type === 'worker') {
         var workerPort = (manifest.worker && manifest.worker.port) || getWorkerPort(workerPortIndex++);
         var configEnv = {};
-        // Load plugin config from dv_plugin_config if available
+        // Load plugin config from plugin_config if available
         try {
-          var configRows = getDB().prepare('SELECT key, value FROM dv_plugin_config WHERE plugin_name = ?').all(manifest.name);
+          var configRows = getDB().prepare('SELECT key, value FROM plugin_config WHERE plugin_name = ?').all(manifest.name);
           for (var row of configRows) configEnv['PLUGIN_' + row.key.toUpperCase()] = row.value;
         } catch (e) { /* table may not exist yet */ }
 

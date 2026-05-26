@@ -17,7 +17,7 @@
 //   MYCELIUM_API_URL — API URL
 
 import { MyceliumAgent } from '../src/index.js'
-import { spawn, execSync } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { writeFileSync, unlinkSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -120,13 +120,13 @@ function speak(text) {
 
   try {
     if (TTS_ENGINE === 'say') {
-      execSync('say ' + JSON.stringify(text), { timeout: 30000 })
+      spawnSync('say', [text], { timeout: 30000 })
     } else if (TTS_ENGINE === 'espeak') {
-      execSync('espeak ' + JSON.stringify(text), { timeout: 30000 })
+      spawnSync('espeak', [text], { timeout: 30000 })
     } else if (TTS_ENGINE === 'piper') {
       var tmpFile = join(tmpdir(), 'mycelium_tts_' + Date.now() + '.wav')
-      execSync('echo ' + JSON.stringify(text) + ' | piper --output_file ' + tmpFile, { timeout: 30000 })
-      execSync('aplay ' + tmpFile, { timeout: 30000 })
+      spawnSync('piper', ['--output_file', tmpFile], { input: text, timeout: 30000 })
+      spawnSync('aplay', [tmpFile], { timeout: 30000 })
       try { unlinkSync(tmpFile) } catch {}
     }
   } catch (err) {

@@ -25,9 +25,14 @@ import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 
 // Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
+function isAdminKey(key) {
+  var expected = process.env.ADMIN_KEY;
+  return key && expected && key.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected));
+}
 function checkVoiceAuth(req, res) {
   var adminKey = req.headers['x-admin-key'];
-  if (adminKey === process.env.ADMIN_KEY) return true;
+  if (isAdminKey(adminKey)) return true;
   var auth = req.headers['authorization'];
   if (auth && auth.startsWith('Bearer ')) {
     try { jwt.verify(auth.slice(7), process.env.JWT_SECRET, { algorithms: ['HS256'] }); return true; } catch (e) { /* invalid */ }
