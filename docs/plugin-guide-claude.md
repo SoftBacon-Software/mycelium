@@ -38,7 +38,7 @@ server/plugins/<name>/
 ## schema.sql
 
 ```sql
-CREATE TABLE IF NOT EXISTS dv_PLUGINNAME_items (
+CREATE TABLE IF NOT EXISTS mycelium_PLUGINNAME_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   title       TEXT NOT NULL DEFAULT '',
   status      TEXT NOT NULL DEFAULT 'active',
@@ -47,10 +47,10 @@ CREATE TABLE IF NOT EXISTS dv_PLUGINNAME_items (
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_PLUGINNAME_items_status ON dv_PLUGINNAME_items(status);
+CREATE INDEX IF NOT EXISTS idx_PLUGINNAME_items_status ON mycelium_PLUGINNAME_items(status);
 ```
 
-Prefix tables with `dv_PLUGINNAME_`. Always use `IF NOT EXISTS`. Runs on every server start.
+Prefix tables with `mycelium_PLUGINNAME_`. Always use `IF NOT EXISTS`. Runs on every server start.
 
 ## db.js
 
@@ -61,11 +61,11 @@ export default function createPluginDB(db) {
   return {
     create(title, data, createdBy) {
       return db.prepare(
-        'INSERT INTO dv_PLUGINNAME_items (title, data, created_by) VALUES (?, ?, ?) RETURNING id'
+        'INSERT INTO mycelium_PLUGINNAME_items (title, data, created_by) VALUES (?, ?, ?) RETURNING id'
       ).get(title, JSON.stringify(data || {}), createdBy || '').id;
     },
     get(id) {
-      var row = db.prepare('SELECT * FROM dv_PLUGINNAME_items WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM mycelium_PLUGINNAME_items WHERE id = ?').get(id);
       if (row) try { row.data = JSON.parse(row.data); } catch(e) { row.data = {}; }
       return row;
     },
@@ -74,7 +74,7 @@ export default function createPluginDB(db) {
       if (filters.status) { where.push('status = ?'); params.push(filters.status); }
       params.push(Math.min(filters.limit || 50, 200));
       return db.prepare(
-        'SELECT * FROM dv_PLUGINNAME_items WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
+        'SELECT * FROM mycelium_PLUGINNAME_items WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
       ).all(...params).map(function(row) {
         try { row.data = JSON.parse(row.data); } catch(e) { row.data = {}; }
         return row;
@@ -88,10 +88,10 @@ export default function createPluginDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_PLUGINNAME_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE mycelium_PLUGINNAME_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
     delete(id) {
-      db.prepare('DELETE FROM dv_PLUGINNAME_items WHERE id = ?').run(id);
+      db.prepare('DELETE FROM mycelium_PLUGINNAME_items WHERE id = ?').run(id);
     }
   };
 }
@@ -291,7 +291,7 @@ core.emitEvent('PLUGINNAME_action', who, projectId, who + ' did something', { it
 ## Checklist for a Complete Plugin
 
 1. [ ] `plugin.json` with unique name matching directory
-2. [ ] `schema.sql` with `IF NOT EXISTS` tables prefixed `dv_PLUGINNAME_`
+2. [ ] `schema.sql` with `IF NOT EXISTS` tables prefixed `mycelium_PLUGINNAME_`
 3. [ ] `db.js` exporting factory function with CRUD helpers
 4. [ ] `routes.js` with auth checks on every endpoint
 5. [ ] `handlers.js` if reacting to events (optional)

@@ -76,7 +76,7 @@ The manifest tells Mycelium how to load your plugin:
 Create tables in `schema.sql`. Always use `IF NOT EXISTS` — this file runs every time the server starts:
 
 ```sql
-CREATE TABLE IF NOT EXISTS dv_myplugin_items (
+CREATE TABLE IF NOT EXISTS mycelium_myplugin_items (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   title       TEXT NOT NULL DEFAULT '',
   status      TEXT NOT NULL DEFAULT 'active',
@@ -85,10 +85,10 @@ CREATE TABLE IF NOT EXISTS dv_myplugin_items (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_myplugin_items_status ON dv_myplugin_items(status);
+CREATE INDEX IF NOT EXISTS idx_myplugin_items_status ON mycelium_myplugin_items(status);
 ```
 
-Convention: prefix your tables with `dv_<pluginname>_` to avoid collisions.
+Convention: prefix your tables with `mycelium_<pluginname>_` to avoid collisions.
 
 ### Database Helpers
 
@@ -99,13 +99,13 @@ export default function createMyPluginDB(db) {
   return {
     create(title, data) {
       var r = db.prepare(
-        'INSERT INTO dv_myplugin_items (title, data) VALUES (?, ?) RETURNING id'
+        'INSERT INTO mycelium_myplugin_items (title, data) VALUES (?, ?) RETURNING id'
       ).get(title, JSON.stringify(data || {}));
       return r.id;
     },
 
     get(id) {
-      var row = db.prepare('SELECT * FROM dv_myplugin_items WHERE id = ?').get(id);
+      var row = db.prepare('SELECT * FROM mycelium_myplugin_items WHERE id = ?').get(id);
       if (row) {
         try { row.data = JSON.parse(row.data); } catch (e) { row.data = {}; }
       }
@@ -119,7 +119,7 @@ export default function createMyPluginDB(db) {
       var limit = Math.min(filters.limit || 50, 200);
       params.push(limit);
       return db.prepare(
-        'SELECT * FROM dv_myplugin_items WHERE ' + where.join(' AND ') +
+        'SELECT * FROM mycelium_myplugin_items WHERE ' + where.join(' AND ') +
         ' ORDER BY created_at DESC LIMIT ?'
       ).all(...params);
     },
@@ -133,11 +133,11 @@ export default function createMyPluginDB(db) {
       if (sets.length === 0) return;
       sets.push("updated_at = datetime('now')");
       values.push(id);
-      db.prepare('UPDATE dv_myplugin_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
+      db.prepare('UPDATE mycelium_myplugin_items SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
     },
 
     delete(id) {
-      db.prepare('DELETE FROM dv_myplugin_items WHERE id = ?').run(id);
+      db.prepare('DELETE FROM mycelium_myplugin_items WHERE id = ?').run(id);
     }
   };
 }

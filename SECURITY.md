@@ -73,7 +73,7 @@ the `.env.example` shows how to generate them.
 
 - Risk-tiered approval system (`low` / `medium` / `high` / `critical`)
   forces human-in-the-loop for the actions you care about. Configure
-  the tiers in `dv_instance_config` to match your risk appetite.
+  the tiers in `instance_config` to match your risk appetite.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
