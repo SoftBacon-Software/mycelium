@@ -84,12 +84,26 @@ informal house style:
 
 ## Tests
 
-There's no automated test suite right now. (Yes, we know.)
+There's a vitest suite under `test/`. Run it locally before opening
+a PR:
 
-If you're adding non-trivial logic, please include a small repro or
-manual-test plan in the PR description. If you'd like to start a
-testing pattern (especially for the SDK or plugin authors), we'd
-welcome the PR.
+```bash
+npm install          # one-time, gets vitest + supertest as devDeps
+npm test             # one-shot run
+npm run test:watch   # re-run on file change
+npm run test:coverage
+```
+
+Every PR runs the suite via `.github/workflows/test.yml` on Node 20
+and Node 22. PRs that fail tests can still be merged if the failure
+is unrelated and documented in the PR description, but adding tests
+for new logic is strongly preferred.
+
+**Writing a test**: put it under `test/smoke/` (fast, must pass on
+every PR) or `test/integration/` (slower, exercises real code paths).
+See `test/README.md` for layout + conventions. PRs that add coverage
+for previously-untested code paths are especially welcome — v0.1.0
+shipped with smoke coverage only.
 
 ## Plugin development
 

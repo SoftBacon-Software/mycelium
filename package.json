@@ -20,7 +20,10 @@
     "start:mcp": "node mcp/index.js",
     "start:runner": "node runner/index.js",
     "start:printer": "node printer-drone/index.js",
-    "start:printer:mock": "node printer-drone/index.js --mock"
+    "start:printer:mock": "node printer-drone/index.js --mock",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -36,5 +39,10 @@
     "resend": "^6.9.3",
     "stripe": "^20.4.1",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.7",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.7"
   }
 }
