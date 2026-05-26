@@ -2371,7 +2371,7 @@ export function resumeDrone(droneId) {
 export function getDroneStatus(droneId) {
   var agent = db.prepare(`SELECT id, name, status, working_on, capabilities, last_heartbeat FROM agents WHERE id = ?`).get(droneId);
   if (!agent) return null;
-  var pendingJobs = db.prepare(`SELECT COUNT(*) as count FROM dv_drone_jobs WHERE status = 'pending'`).get();
+  var pendingJobs = db.prepare(`SELECT COUNT(*) as count FROM drone_jobs WHERE status = 'pending'`).get();
   return {
     ...agent,
     capabilities: JSON.parse(agent.capabilities || '[]'),
