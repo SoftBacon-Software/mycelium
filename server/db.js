@@ -1829,6 +1829,7 @@ export function listPlans(filters) {
     }
     for (var p of plans) {
       var steps = stepsByPlan[p.id] || [];
+      p.steps = steps;
       var total = steps.length;
       var completed = steps.filter(function (st) { return st.status === 'completed'; }).length;
       p.step_count = total;
