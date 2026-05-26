@@ -75,26 +75,26 @@ There are three types of participants:
 
 ### Database Design
 
-SQLite with 30+ tables, all prefixed `dv_`. WAL mode enables concurrent reads without blocking writes. Foreign keys enforced. Busy timeout 5 seconds.
+SQLite with 30+ tables with stable, unprefixed names. WAL mode enables concurrent reads without blocking writes. Foreign keys enforced. Busy timeout 5 seconds.
 
 **Core tables:**
 
 | Table | Purpose |
 |-------|---------|
-| `dv_agents` | Agent registry. ID, project, API key hash, status, working_on, capabilities, role, model |
-| `dv_operators` | Human team members. Display name, role, availability (available/away/sleeping) |
-| `dv_tasks` | Work items. Title, description, assignee, status, priority, dependencies (blocked_by/blocks), linked PR/branch |
-| `dv_plans` | Multi-step initiatives. Title, owner, status, priority. Contains ordered steps |
-| `dv_plan_steps` | Individual steps within a plan. Status, assignee, linked_task_id for auto-completion cascade |
-| `dv_messages` | All inter-agent communication. Types: message, request, directive, info, chat |
-| `dv_approvals` | Human-in-the-loop gates. Action type, risk tier, quorum voting |
-| `dv_bugs` | Bug reports. Severity, category, assignee, status |
-| `dv_drone_jobs` | GPU/CPU job queue. Command, requirements, priority, result data |
-| `dv_channels` | Chat channels (general, DM, project-linked) |
-| `dv_concepts` | Shared definitions (characters, styles, rulesets, libraries, brands) |
-| `dv_context_keys` | Namespaced key-value store for persistent config |
-| `dv_agent_savepoints` | Session state snapshots for resume-on-boot |
-| `dv_webhooks` | Event subscriptions with delivery tracking |
+| `agents` | Agent registry. ID, project, API key hash, status, working_on, capabilities, role, model |
+| `operators` | Human team members. Display name, role, availability (available/away/sleeping) |
+| `tasks` | Work items. Title, description, assignee, status, priority, dependencies (blocked_by/blocks), linked PR/branch |
+| `plans` | Multi-step initiatives. Title, owner, status, priority. Contains ordered steps |
+| `plan_steps` | Individual steps within a plan. Status, assignee, linked_task_id for auto-completion cascade |
+| `messages` | All inter-agent communication. Types: message, request, directive, info, chat |
+| `approvals` | Human-in-the-loop gates. Action type, risk tier, quorum voting |
+| `bugs` | Bug reports. Severity, category, assignee, status |
+| `drone_jobs` | GPU/CPU job queue. Command, requirements, priority, result data |
+| `channels` | Chat channels (general, DM, project-linked) |
+| `concepts` | Shared definitions (characters, styles, rulesets, libraries, brands) |
+| `context_keys` | Namespaced key-value store for persistent config |
+| `agent_savepoints` | Session state snapshots for resume-on-boot |
+| `webhooks` | Event subscriptions with delivery tracking |
 
 ### Authentication
 
@@ -254,7 +254,7 @@ File management with status tracking: `registered → requested → in_progress 
 ### Events & SSE
 
 Every significant action emits an event (50+ event types). Events are:
-1. Saved to `dv_events` table
+1. Saved to `events` table
 2. Broadcast via SSE to connected clients
 3. Forwarded to plugin event hooks
 4. Delivered to webhook subscribers

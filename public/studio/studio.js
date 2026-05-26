@@ -331,8 +331,8 @@
     }).then(function (data) {
       authToken = data.token;
       currentUser = data.user;
-      sessionStorage.setItem('dv_token', authToken);
-      sessionStorage.setItem('dv_user', JSON.stringify(currentUser));
+      sessionStorage.setItem('mycelium_token', authToken);
+      sessionStorage.setItem('mycelium_user', JSON.stringify(currentUser));
       loginScreen.style.display = 'none'; dashboard.style.display = '';
       updateUserDisplay();
       fetchOverview();
@@ -354,8 +354,8 @@
   usernameInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') passwordInput.focus(); });
   passwordInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') tryLogin(); });
   logoutBtn.addEventListener('click', function () {
-    sessionStorage.removeItem('dv_token');
-    sessionStorage.removeItem('dv_user');
+    sessionStorage.removeItem('mycelium_token');
+    sessionStorage.removeItem('mycelium_user');
     authToken = ''; currentUser = null;
     if (pollTimer) clearInterval(pollTimer);
     dashboard.style.display = 'none'; loginScreen.style.display = '';
@@ -364,8 +364,8 @@
   refreshBtn.addEventListener('click', function () { fetchOverview(); });
 
   // Auto-login from saved token
-  var savedToken = sessionStorage.getItem('dv_token');
-  var savedUser = sessionStorage.getItem('dv_user');
+  var savedToken = sessionStorage.getItem('mycelium_token');
+  var savedUser = sessionStorage.getItem('mycelium_user');
   if (savedToken && savedUser) {
     authToken = savedToken;
     try { currentUser = JSON.parse(savedUser); } catch (e) { console.warn('[studio] JSON parse failed for saved user session:', e.message); currentUser = null; }
@@ -377,8 +377,8 @@
         // No intro sound on session restore — only on fresh login
       } else {
         authToken = ''; currentUser = null;
-        sessionStorage.removeItem('dv_token');
-        sessionStorage.removeItem('dv_user');
+        sessionStorage.removeItem('mycelium_token');
+        sessionStorage.removeItem('mycelium_user');
       }
     });
   }
