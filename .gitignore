@@ -14,3 +14,6 @@ public/studio/index.html
 
 # macOS
 .DS_Store
+
+# Internal release-prep notes (not for public consumption)
+release-readiness/
