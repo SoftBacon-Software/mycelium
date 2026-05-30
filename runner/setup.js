@@ -39,7 +39,17 @@ async function main() {
   const isWindows = platform() === 'win32';
 
   // 1. Admin key
-  const adminKey = (await ask('Mycelium admin key (Enter for default): ')).trim() || 'KPeO7ZspKsAQotZsrvnZ2vYk';
+  // Admin key must NOT be hardcoded — it grants X-Admin-Key root over the API.
+  // Prefer the environment; otherwise prompt and require a non-empty value.
+  let adminKey = (process.env.MYCELIUM_ADMIN_KEY || '').trim();
+  if (!adminKey) {
+    adminKey = (await ask('Mycelium admin key (required): ')).trim();
+  }
+  if (!adminKey) {
+    console.error('Admin key is required (set MYCELIUM_ADMIN_KEY or enter it when prompted). Aborting.');
+    rl.close();
+    process.exit(1);
+  }
 
   // 2. Fetch existing agents from Mycelium
   console.log('\nFetching agents from Mycelium...');
