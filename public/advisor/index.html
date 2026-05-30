@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mycelium — Local LLM Advisor</title>
+<style>
+  :root{--bg:#0b0f1a;--panel:#121829;--panel2:#0e1422;--ink:#e8ecf6;--dim:#8b96b0;--line:#1f2a40;--corn:#6f9bff;--good:#49d6a0;--amber:#ffb24d}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:radial-gradient(1200px 700px at 70% -10%,#16203a 0,var(--bg) 60%);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;min-height:100vh;padding:32px 18px}
+  .wrap{max-width:680px;margin:0 auto}
+  h1{font-size:26px;letter-spacing:.2px}
+  .sub{color:var(--dim);margin:6px 0 26px}
+  .q{margin-bottom:18px}
+  .q label{display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin-bottom:8px}
+  .opts{display:flex;flex-wrap:wrap;gap:8px}
+  .opt{border:1px solid var(--line);background:#0e1626;color:var(--ink);border-radius:10px;padding:9px 13px;cursor:pointer;font-size:14px}
+  .opt[aria-pressed="true"]{border-color:var(--corn);background:#16224a;color:#fff}
+  input[type=number],input[type=text]{background:#0e1626;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:10px 12px;font-size:15px}
+  input[type=number]{width:140px}
+  input[type=text]{width:100%}
+  .card{margin-top:24px;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:20px;display:none}
+  .card.show{display:block}
+  .model{font-size:22px;font-weight:700;color:var(--corn)}
+  .line{margin-top:10px}.line .k{color:var(--dim);font-size:13px}
+  .warn{margin-top:12px;border:1px solid #4a3a1f;background:#1d160c;color:var(--amber);border-radius:10px;padding:10px 12px;font-size:14px}
+  .note{margin-top:12px;color:var(--dim);font-size:13px}
+  .cta{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+  .cta p{color:var(--ink)}
+  .cta a{display:inline-block;margin-top:10px;background:var(--corn);color:#08101f;text-decoration:none;font-weight:600;border-radius:10px;padding:11px 16px}
+  .foot{margin-top:28px;color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Local LLM Advisor</h1>
+  <div class="sub">One opinionated pick for your machine. No choice paralysis.</div>
+
+  <div class="q"><label>Mode</label><div class="opts" data-q="mode"></div></div>
+  <div class="q" id="q-platform"><label>What are you running on?</label><div class="opts" data-q="platform"></div></div>
+  <div class="q"><label>How much memory? (Apple = unified RAM · NVIDIA = VRAM, in GB)</label><input id="mem" type="number" min="1" max="1024" value="32"></div>
+  <div class="q" id="q-task"><label>What are you mainly doing?</label><div class="opts" data-q="task"></div></div>
+  <div class="q" id="q-priority"><label>Optimize for?</label><div class="opts" data-q="priority"></div></div>
+  <div class="q" id="q-comfort"><label>Setup comfort?</label><div class="opts" data-q="comfort"></div></div>
+  <div id="diag-extra" style="display:none">
+    <div class="q"><label>Which model are you running?</label><input id="diag-model" type="text" placeholder="e.g. Qwen3-Coder-30B-A3B"></div>
+  </div>
+  <div id="upgrade-extra" style="display:none">
+    <div class="q" id="q-current"><label>GPU you have now</label><div class="opts" data-q="current"></div></div>
+    <div class="q" id="q-candidate"><label>GPU you're considering</label><div class="opts" data-q="candidate"></div></div>
+    <div class="q" id="q-goal"><label>What do you want from the upgrade?</label><div class="opts" data-q="goal"></div></div>
+    <div class="q"><label><input id="second-card" type="checkbox" checked style="width:auto;margin-right:8px;vertical-align:middle"> Adding it as a SECOND card (keeping the current one)</label></div>
+  </div>
+
+  <div class="card" id="result"></div>
+  <div class="foot" id="meta"></div>
+</div>
+
+<script type="module">
+import { RULESET } from './ruleset.gen.mjs';
+import { UPGRADE } from './upgrade.gen.mjs';
+import { resolve, formatResult, diagnose, upgrade } from './advisor.mjs';
+
+// The app link is the funnel destination. Single constant so it's easy to set.
+const SQUAD_LINK = '/'; // TODO at deploy: point at the Mycelium app landing page
+
+// Escape any ruleset-sourced string before it goes into innerHTML. All
+// interpolated values come from the committed ruleset (trusted), but the
+// ruleset is edited monthly — esc() is defense-in-depth so a future warning/
+// model string containing < & " can never break or inject into the page.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+const TASK_LABELS = { agentic_code:'Coding (agentic)', general_chat:'General chat', long_doc:'Long documents', creative:'Creative' };
+const PLATFORM_LABELS = { apple_silicon:'Apple Silicon', nvidia:'NVIDIA GPU', cpu_only:'CPU only' };
+const PRIORITY_LABELS = { speed:'Speed', balanced:'Balanced', quality:'Quality' };
+const COMFORT_LABELS = { just_works:'Just works', tinkerer:'Tinkerer' };
+const MODE_LABELS = { recommend:'Recommend a model', diagnose:'Why is mine slow?', upgrade:'Should I upgrade?' };
+// GPU options for upgrade mode come from the operator-authored upgrade data.
+const GPU_LABELS = { rtx_4060:'RTX 4060 (8GB)', rtx_5060ti:'RTX 5060 Ti (16GB)', rtx_3080ti:'RTX 3080 Ti (12GB)', rtx_3090:'RTX 3090 (24GB)', tesla_p40:'Tesla P40 (24GB)', tesla_p100:'Tesla P100 (16GB)' };
+const GOAL_LABELS = { capacity:'Run bigger models', speed:'More speed', mixed:'A bit of both' };
+
+const state = { mode:'recommend', platform:'apple_silicon', task:'agentic_code', priority:'balanced', comfort:'just_works',
+                current:'rtx_4060', candidate:'tesla_p40', goal:'capacity' };
+
+function chips(q, values, labels, current) {
+  const host = document.querySelector(`.opts[data-q="${q}"]`);
+  host.innerHTML = '';
+  for (const v of values) {
+    const b = document.createElement('button');
+    b.className = 'opt'; b.textContent = labels[v] || v;
+    b.setAttribute('aria-pressed', String(v === current));
+    b.onclick = () => {
+      state[q] = v; chips(q, values, labels, v);
+      if (q === 'mode') onModeChange(); else render();
+    };
+    host.appendChild(b);
+  }
+}
+
+function onModeChange() {
+  document.getElementById('diag-extra').style.display = state.mode === 'diagnose' ? 'block' : 'none';
+  render();
+}
+
+function render() {
+  const memoryGb = Math.max(1, parseInt(document.getElementById('mem').value || '0', 10) || 0);
+  const card = document.getElementById('result');
+
+  // ---- Diagnose mode ----
+  if (state.mode === 'diagnose') {
+    const model = document.getElementById('diag-model').value.trim();
+    if (!model || !memoryGb) { card.classList.remove('show'); return; }
+    const d = diagnose(RULESET, { platform: state.platform, memoryGb, model, task: state.task });
+    const heading = d.cause === 'spill' ? 'Too big for your memory'
+      : d.cause === 'fits' ? 'Should fit — check offload'
+      : 'Unknown model';
+    const tone = d.cause === 'spill' ? 'warn' : 'note';
+    card.className = 'card show';
+    card.innerHTML =
+      `<div class="model">${esc(heading)}</div>` +
+      `<div class="${tone}" style="margin-top:12px">${esc(d.explanation)}</div>` +
+      (d.fixModel ? `<div class="line" style="margin-top:12px"><span class="k">Try instead</span> · ${esc(d.fixModel)}</div>` : '') +
+      `<div class="cta"><p>${esc('Want a team that sizes itself to your hardware automatically?')}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+    return;
+  }
+
+  // ---- Recommend mode ----
+  if (!memoryGb) { card.classList.remove('show'); return; }
+  let r, f;
+  try {
+    r = resolve(RULESET, { platform: state.platform, memoryGb, task: state.task, priority: state.priority, comfort: state.comfort });
+    f = formatResult(RULESET, r);
+  } catch (e) {
+    card.className = 'card show';
+    card.innerHTML = `<div class="warn">No pick available for that combination yet. Try a different task or platform.</div>`;
+    return;
+  }
+  card.className = 'card show';
+  card.innerHTML =
+    `<div class="model">${esc(f.modelLine)}</div>` +
+    `<div class="line"><span class="k">Run it with</span> · ${esc(r.runner)}</div>` +
+    (f.agenticLine ? `<div class="line"><span class="k">Drive it with</span> · ${esc(r.agenticTool)} <span class="k">(point it at the local endpoint)</span></div>` : '') +
+    `<div class="line"><span class="k">Expect</span> · roughly ${esc(r.tpsRange || 'varies')} on your hardware</div>` +
+    (r.warning ? `<div class="warn">${esc(r.warning)}</div>` : '') +
+    `<div class="note">${esc(f.priorityNote)}</div>` +
+    `<div class="cta"><p>${esc(f.funnelLine)}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+}
+
+chips('mode', ['recommend','diagnose'], MODE_LABELS, state.mode);
+chips('platform', RULESET.questions.find(q=>q.id==='platform').options, PLATFORM_LABELS, state.platform);
+chips('task', RULESET.questions.find(q=>q.id==='task').options, TASK_LABELS, state.task);
+chips('priority', ['speed','balanced','quality'], PRIORITY_LABELS, state.priority);
+chips('comfort', ['just_works','tinkerer'], COMFORT_LABELS, state.comfort);
+document.getElementById('mem').addEventListener('input', render);
+document.getElementById('diag-model').addEventListener('input', render);
+document.getElementById('meta').textContent = `ruleset ${RULESET.schema} · updated ${RULESET.version}`;
+render();
+</script>
+</body>
+</html>
