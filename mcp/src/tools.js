@@ -971,7 +971,7 @@ export function registerTools(server) {
     'List skills installed for this agent.',
     {},
     async () => {
-      var agentId = getAgentId();
+      var st = getState(); var agentId = st.agentId;
       var skills = await apiGet('/agents/' + encodeURIComponent(agentId) + '/skills');
       if (!skills.length) return text('No skills installed.');
       var lines = skills.map(function(s) {
