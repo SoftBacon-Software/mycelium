@@ -133,6 +133,17 @@ const SQUAD_LINK = '/';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
+// The squad CTA only fits Apple Silicon — the Mycelium app is Apple-Silicon only.
+// Other platforms still get honest model advice (this stays the helpful public
+// advisor), but a softer, accurate footer — no "get your squad" promise we can't
+// keep on NVIDIA / CPU.
+function ctaFooter(appleLine, isApple) {
+  if (isApple) {
+    return `<div class="cta"><p>${esc(appleLine)}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+  }
+  return `<div class="cta"><p>${esc('Mycelium assembles a local AI squad on Apple Silicon — owned, and free to run. On a Mac?')}</p><a href="${SQUAD_LINK}">About Mycelium →</a></div>`;
+}
+
 const TASK_LABELS = { agentic_code:'Coding (agentic)', general_chat:'General chat', long_doc:'Long documents', creative:'Creative' };
 const PLATFORM_LABELS = { apple_silicon:'Apple Silicon', nvidia:'NVIDIA GPU', cpu_only:'CPU only' };
 const PRIORITY_LABELS = { speed:'Speed', balanced:'Balanced', quality:'Quality' };
@@ -253,7 +264,7 @@ function render() {
       ((u.principles && u.principles.length)
         ? `<div class="prin">` + u.principles.map(p => `<div class="pr"><span class="k">${esc(PRINCIPLE_TITLES[p.id] || p.id)}</span>${esc(p.text || '')}</div>`).join('') + `</div>`
         : '') +
-      `<div class="cta"><p>${esc('Not sure what actually fits your rig? A squad that sizes itself to your hardware does this for you.')}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+      ctaFooter('Not sure what actually fits your rig? A squad that sizes itself to your hardware does this for you.', false);
     return;
   }
 
@@ -282,7 +293,7 @@ function render() {
       fitMeter +
       `<div class="${tone}" style="margin-top:13px">${esc(d.explanation)}</div>` +
       (d.fixModel ? `<div class="line" style="margin-top:13px"><span class="k">Try instead</span> · ${esc(d.fixModel)}</div>` : '') +
-      `<div class="cta"><p>${esc('Want a team that sizes itself to your hardware automatically?')}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+      ctaFooter('Want a team that sizes itself to your hardware automatically?', state.platform === 'apple_silicon');
     return;
   }
 
@@ -301,11 +312,12 @@ function render() {
   card.innerHTML =
     `<div class="model">${esc(f.modelLine)}</div>` +
     `<div class="line"><span class="k">Run it with</span> · ${esc(r.runner)}</div>` +
+    (r.ollamaTag ? `<div class="line"><span class="k">Pull it</span> · <code>ollama pull ${esc(r.ollamaTag)}</code></div>` : '') +
     (f.agenticLine ? `<div class="line"><span class="k">Drive it with</span> · ${esc(r.agenticTool)} <span class="k">(point it at the local endpoint)</span></div>` : '') +
     `<div class="line"><span class="k">Expect</span> · roughly ${esc(r.tpsRange || 'varies')} on your hardware</div>` +
     (r.warning ? `<div class="warn">${esc(r.warning)}</div>` : '') +
     `<div class="note">${esc(f.priorityNote)}</div>` +
-    `<div class="cta"><p>${esc(f.funnelLine)}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+    ctaFooter(f.funnelLine, state.platform === 'apple_silicon');
 }
 
 /* ============================ INIT ============================ */
