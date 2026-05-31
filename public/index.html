@@ -259,30 +259,35 @@ function mobileBeats(){
   MBEATS.forEach(b=>show($(b[0]),0,.95));
   show($('s2copy'),0,.95);
   MBEATS.forEach(([id,ax,ay,lo,hi])=>{const o=seg(lo,hi);if(o>0)show($(id),o,.92+.08*o);});
-  // ---- the connective wires: from each beat's anchor to the next, growing
-  // with scroll across the gap between them. A node sits at every beat point. ----
+  // ---- connective wires + nodes. Each node fades IN only as its incoming
+  // wire arrives, stays while its card is up, then fades OUT once you scroll
+  // past — so nothing floats behind the squad intro or lingers into the finale.
   for(let i=0;i<MBEATS.length;i++){
     const [,ax,ay,lo,hi,col]=MBEATS[i];
     const here=P(ax,ay), c=C[col];
-    // node at this beat, bright while its card is up, dim otherwise
-    const onHere=seg(lo,hi);
-    node(here.x,here.y,6,c,.35+.55*onHere);
-    // wire from previous beat → this one, grown by progress through the gap
+    // node envelope: rise just before this beat's window, fall just after.
+    // never always-on (the old .35 floor made every node visible at sp=0).
+    const nIn=band(sp,lo-.04,lo+.01), nOut=1-band(sp,hi-.01,hi+.04);
+    const na=nIn*nOut*(.5+.5*seg(lo,hi));
+    if(na>.01) node(here.x,here.y,6,c,na);
+    // wire from previous beat → this one: grows across the boundary as the
+    // beat arrives, then fades out once you leave the beat (never persists).
     if(i>0){
-      const prev=MBEATS[i-1];
-      const there=P(prev[1],prev[2]);
-      const gapLo=prev[4], gapHi=hi;                 // from prev card-up start window to this one
-      const grow=clamp(band(sp,prev[3],hi-(hi-lo)*0.5),0,1); // reach as we leave prev, complete as this arrives
-      const alpha=clamp(band(sp,prev[3]-.04,prev[3]+.06),0,1)*clamp(1-band(sp,hi,hi+.06),0,1);
-      if(grow>0&&alpha>0) wireSeg(there,here,grow,c,alpha);
+      const prev=MBEATS[i-1], there=P(prev[1],prev[2]);
+      const grow=band(sp,lo-.05,lo+.04);                          // travels in as the beat arrives
+      const wa=band(sp,lo-.06,lo-.01)*(1-band(sp,hi-.01,hi+.04)); // appears at the gap, gone after the beat
+      if(grow>0&&wa>.01) wireSeg(there,here,grow,c,wa);
     }
   }
-  const fv=ease(clamp(band(sp,.88,.99),0,1));
-  if(fv>0){ // last beat → finale center, converging wire
+  // finale: last beat converges to center; the wire + center node fully fade
+  // to ZERO before the "$0 / on your Mac" headline settles in.
+  const wIn=band(sp,.85,.90), wOut=1-band(sp,.90,.95), wv=wIn*wOut;
+  if(wv>.01){
     const last=MBEATS[MBEATS.length-1], lp=P(last[1],last[2]), ctr=P(.5,.5);
-    wireSeg(lp,ctr,Math.min(1,band(sp,.86,.93)),C.green,1-fv*0.3);
-    node(ctr.x,ctr.y,9,C.green,fv);
+    wireSeg(lp,ctr,wIn,C.green,wv);
+    node(ctr.x,ctr.y,9,C.green,wv);
   }
+  const fv=ease(band(sp,.88,.99));
   show($('finale'),fv,.94+.06*fv);
 }
 
