@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mycelium — Local LLM Advisor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Space+Mono:wght@400;700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  :root{--bg:#08081c;--ink:#f3f1fd;--soft:#a9adde;--mute:#5b5c86;
+    --green:#8cf2a6;--amber:#fcc74d;--violet:#9e80f2;--teal:#66d9d9;--indigo:#5b62e7;--bright:#8e93f0;--corn:#3c3c6e;--cyan:#8cf2ff;--red:#ff6f6f;
+    --mono:'Space Mono',monospace;--disp:'Bricolage Grotesque',sans-serif;--body:'Hanken Grotesk',sans-serif;}
+  body{background:#05060f;color:var(--ink);font-family:var(--body);min-height:100vh;line-height:1.5}
+
+  /* ---- calm hub-and-spokes hero (data-driven) ---- */
+  .hero{position:relative;height:240px;overflow:hidden;border-bottom:1px solid rgba(142,147,240,.14);
+    background:radial-gradient(120% 135% at 50% 6%,#20204a 0%,#13132f 46%,#08081c 100%)}
+  .hero canvas{position:absolute;inset:0;width:100%;height:100%}
+  .hero-scrim{position:absolute;top:0;left:0;right:0;height:48%;pointer-events:none;
+    background:linear-gradient(180deg,rgba(8,8,28,.94) 0%,rgba(8,8,28,.62) 52%,transparent 100%)}
+  .hero::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
+  .hero-top{position:absolute;top:18px;left:0;right:0;text-align:center;pointer-events:none}
+  .hero-kicker{font-family:var(--mono);font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--soft);display:inline-flex;gap:9px;align-items:center}
+  .hero-kicker .led{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+  .hero-title{font-family:var(--disp);font-weight:700;font-size:clamp(1.6rem,4.4vw,2.3rem);letter-spacing:-.02em;margin-top:8px}
+  .hero-sub{color:var(--soft);font-size:.96rem;margin-top:4px}
+
+  .wrap{max-width:720px;margin:0 auto;padding:30px 20px 64px}
+
+  .q{margin-bottom:18px}
+  .q > label{display:block;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.16em;color:var(--mute);margin-bottom:9px}
+  .opts{display:flex;flex-wrap:wrap;gap:8px}
+  .opt{font-family:var(--mono);font-size:13px;color:var(--soft);border:1px solid rgba(123,130,255,.22);
+    background:rgba(14,20,40,.6);border-radius:12px;padding:9px 15px;cursor:pointer;backdrop-filter:blur(8px);
+    transition:.18s cubic-bezier(.2,.8,.2,1)}
+  .opt:hover{border-color:rgba(142,147,240,.5);color:var(--ink)}
+  .opt[aria-pressed="true"]{border-color:var(--bright);background:rgba(91,98,231,.18);color:#fff;box-shadow:0 0 18px rgba(91,98,231,.22)}
+  input[type=number],input[type=text]{font-family:var(--body);background:rgba(14,20,40,.6);border:1px solid rgba(123,130,255,.22);
+    color:var(--ink);border-radius:12px;padding:11px 13px;font-size:15px;outline:none}
+  input[type=number]{width:150px}input[type=text]{width:100%}
+  input:focus{border-color:var(--bright);box-shadow:0 0 18px rgba(91,98,231,.2)}
+  .chk{display:flex;align-items:center;gap:9px;font-family:var(--body);color:var(--soft);font-size:14px;cursor:pointer}
+  .chk input{width:16px;height:16px;accent-color:var(--bright)}
+
+  /* ---- result card (glass, .fyi) ---- */
+  .card{margin-top:26px;border-radius:16px;border:1px solid rgba(142,147,240,.28);
+    background:linear-gradient(180deg,rgba(28,28,61,.92),rgba(14,14,34,.92));
+    box-shadow:0 22px 60px rgba(0,0,0,.5),0 0 30px rgba(91,98,231,.16);padding:22px;display:none}
+  .card.show{display:block}
+  .model{font-family:var(--disp);font-weight:700;font-size:23px;letter-spacing:-.01em;color:var(--bright)}
+  .verdict{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:-.01em}
+  .verdict.good{color:var(--green)}.verdict.warn{color:var(--amber)}.verdict.note{color:var(--bright)}
+  .line{margin-top:11px;font-size:14.5px;color:var(--ink)}
+  .line .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--mute)}
+  .warn{margin-top:13px;border:1px solid rgba(252,199,77,.32);background:rgba(252,199,77,.07);color:var(--amber);border-radius:12px;padding:11px 13px;font-size:14px}
+  .note{margin-top:12px;color:var(--soft);font-size:13.5px}
+  .prin{margin-top:14px;display:grid;gap:9px}
+  .pr{border:1px solid rgba(123,130,255,.18);background:rgba(14,20,40,.5);border-radius:11px;padding:10px 12px;font-size:13px;color:var(--soft)}
+  .pr .k{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--cyan);margin-bottom:3px}
+
+  /* ---- the red "can't fit" overflow meter (live twin of the landing beat) ---- */
+  .fit{margin-top:16px}
+  .fit-top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px}
+  .fit-top .lbl{color:var(--mute)}.fit-need{color:var(--red)}
+  .fit-bar{height:16px;border-radius:99px;overflow:hidden;display:flex;border:1px solid rgba(255,111,111,.35);background:rgba(255,255,255,.04)}
+  .fit-have{height:100%;background:linear-gradient(90deg,var(--green),var(--teal))}
+  .fit-over{height:100%;background:linear-gradient(90deg,#ff6f6f,#ff3b3b);box-shadow:inset 0 0 16px rgba(255,90,90,.55);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--mono);font-size:10px;letter-spacing:.05em;white-space:nowrap}
+
+  .cta{margin-top:20px;border-top:1px solid rgba(142,147,240,.16);padding-top:17px}
+  .cta p{color:var(--ink);font-size:14.5px}
+  .cta a{display:inline-flex;align-items:center;gap:8px;margin-top:12px;text-decoration:none;font-family:var(--mono);font-size:13px;letter-spacing:.03em;font-weight:700;
+    color:#08101f;background:linear-gradient(90deg,var(--green),var(--teal));border-radius:99px;padding:11px 18px;transition:.18s}
+  .cta a:hover{filter:brightness(1.08);box-shadow:0 0 22px rgba(140,242,166,.35)}
+
+  .foot{margin-top:30px;color:var(--mute);font-family:var(--mono);font-size:11px;letter-spacing:.06em}
+
+  @media (max-width:560px){
+    .hero{height:210px}
+    .hero-title{font-size:1.3rem}
+    .hero-sub{display:none}
+    .wrap{padding:24px 16px 52px}
+    input[type=number]{width:120px}
+  }
+</style>
+</head>
+<body>
+  <div class="hero">
+    <canvas id="hero"></canvas>
+    <div class="hero-scrim"></div>
+    <div class="hero-top">
+      <div class="hero-kicker"><span class="led"></span>local llm advisor</div>
+      <div class="hero-title">One pick for your machine.</div>
+      <div class="hero-sub">No choice paralysis. Tell it your hardware — it tells you what to run.</div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="q"><label>Mode</label><div class="opts" data-q="mode"></div></div>
+    <div class="q" id="q-platform"><label>What are you running on?</label><div class="opts" data-q="platform"></div></div>
+    <div class="q"><label>How much memory? (Apple = unified RAM · NVIDIA = VRAM, in GB)</label><input id="mem" type="number" min="1" max="1024" value="32"></div>
+    <div class="q" id="q-task"><label>What are you mainly doing?</label><div class="opts" data-q="task"></div></div>
+    <div class="q" id="q-priority"><label>Optimize for?</label><div class="opts" data-q="priority"></div></div>
+    <div class="q" id="q-comfort"><label>Setup comfort?</label><div class="opts" data-q="comfort"></div></div>
+
+    <div id="diag-extra" style="display:none">
+      <div class="q"><label>Which model are you running?</label><input id="diag-model" type="text" placeholder="e.g. Qwen3-Coder-30B-A3B"></div>
+    </div>
+
+    <div id="upgrade-extra" style="display:none">
+      <div class="q" id="q-current"><label>GPU you have now</label><div class="opts" data-q="current"></div></div>
+      <div class="q" id="q-candidate"><label>GPU you're considering</label><div class="opts" data-q="candidate"></div></div>
+      <div class="q" id="q-goal"><label>What do you want from the upgrade?</label><div class="opts" data-q="goal"></div></div>
+      <div class="q"><label class="chk"><input id="second-card" type="checkbox" checked> Adding it as a SECOND card (keeping the current one)</label></div>
+    </div>
+
+    <div class="card" id="result"></div>
+    <div class="foot" id="meta"></div>
+  </div>
+
+<script type="module">
+import { RULESET } from './ruleset.gen.mjs';
+import { UPGRADE } from './upgrade.gen.mjs';
+import { resolve, formatResult, diagnose, upgrade } from './advisor.mjs';
+
+// Funnel destination — same-origin landing page (the .fyi squad pitch).
+const SQUAD_LINK = '/';
+
+// Escape ruleset/knowledge strings before innerHTML. The data is operator-authored
+// (trusted) but edited monthly — esc() is defense-in-depth against a stray < & ".
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+const TASK_LABELS = { agentic_code:'Coding (agentic)', general_chat:'General chat', long_doc:'Long documents', creative:'Creative' };
+const PLATFORM_LABELS = { apple_silicon:'Apple Silicon', nvidia:'NVIDIA GPU', cpu_only:'CPU only' };
+const PRIORITY_LABELS = { speed:'Speed', balanced:'Balanced', quality:'Quality' };
+const COMFORT_LABELS = { just_works:'Just works', tinkerer:'Tinkerer' };
+const MODE_LABELS = { recommend:'Recommend a model', diagnose:'Why is mine slow?', upgrade:'Should I upgrade?' };
+const GPU_LABELS = { rtx_4060:'RTX 4060 (8GB)', rtx_5060ti:'RTX 5060 Ti (16GB)', rtx_3080ti:'RTX 3080 Ti (12GB)', rtx_3090:'RTX 3090 (24GB)', tesla_p40:'Tesla P40 (24GB)', tesla_p100:'Tesla P100 (16GB)' };
+const GOAL_LABELS = { capacity:'Run bigger models', speed:'More speed', mixed:'A bit of both' };
+const PRINCIPLE_TITLES = { pcie_inference:'PCIe bandwidth', multi_gpu_mixing:'Mixing cards', capacity_vs_speed:'Capacity vs speed' };
+const GPU_KEYS = Object.keys(GPU_LABELS);
+
+const state = { mode:'recommend', platform:'apple_silicon', task:'agentic_code', priority:'balanced', comfort:'just_works',
+                current:'rtx_4060', candidate:'tesla_p40', goal:'capacity' };
+
+/* ============================ HERO ENGINE ============================ */
+/* A calm hub-and-spokes squad that idles. When the live result is a memory
+   spill, a RED "won't fit" node appears outside the ring and its wire refuses
+   to connect — the same beat as the landing animation, driven by real input. */
+const hv = document.getElementById('hero'), hx = hv.getContext('2d');
+const HC = { green:'#8cf2a6', amber:'#fcc74d', violet:'#9e80f2', teal:'#66d9d9', indigo:'#5b62e7', bright:'#8e93f0', cyan:'#8cf2ff', red:'#ff6f6f' };
+const hrgba = (h,a)=>{const n=parseInt(h.slice(1),16);return`rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;};
+const bez=(t,s,c1,c2,e)=>{const m=1-t;return{x:m*m*m*s.x+3*m*m*t*c1.x+3*m*t*t*c2.x+t*t*t*e.x,y:m*m*m*s.y+3*m*m*t*c1.y+3*m*t*t*c2.y+t*t*t*e.y};};
+function hdot(x,y,r,c,a){if(r<=0||a<=0)return;hx.beginPath();hx.arc(x,y,r,0,7);hx.fillStyle=hrgba(c,a);hx.fill();}
+function hport(x,y,r,c,a=1){hdot(x,y,r*2,c,.5*a);hdot(x,y,r,c,a);hdot(x,y,r*.45,'#ffffff',.9*a);}
+function hnode(x,y,r,c,g){hdot(x,y,r*3.4,c,g*.09);hdot(x,y,r*2,c,g*.16);hdot(x,y,r,c,g);hdot(x,y,r*.4,'#ffffff',.85*g);}
+function hwire(s,e,grow,c,alpha=1,pulse=true){
+  if(grow<=0||alpha<=0)return;
+  const dx=e.x-s.x,dy=e.y-s.y,b=.42,c1={x:s.x+dx*b,y:s.y+dy*.12},c2={x:e.x-dx*b,y:e.y-dy*.12};
+  const N=40,pts=[];for(let i=0;i<=N;i++)pts.push(bez(i/N*grow,s,c1,c2,e));
+  const stroke=(w,col,al)=>{hx.beginPath();hx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)hx.lineTo(pts[i].x,pts[i].y);hx.lineWidth=w;hx.lineCap='round';hx.strokeStyle=hrgba(col,al*alpha);hx.stroke();};
+  hx.save();hx.globalCompositeOperation='lighter';
+  stroke(10,HC.cyan,.1);stroke(4.5,c,.28);stroke(1.5,c,.92);
+  hport(s.x,s.y,3.4,c,alpha);
+  if(grow>=1&&pulse){hport(e.x,e.y,5,c,alpha);
+    const per=2.6,tt=(performance.now()/1000%per)/per;
+    for(let k=0;k<6;k++){const lt=tt-k*.04;if(lt<0)continue;const bl=Math.sin(lt*Math.PI),pp=bez(lt,s,c1,c2,e);hdot(pp.x,pp.y,2.8-k*.35,c,(.9-k*.13)*bl*alpha);}}
+  hx.restore();
+}
+let HW,HH,hub,hnodes,hspill;
+function hplace(){
+  HW=hv.clientWidth;HH=hv.clientHeight;
+  const dpr=Math.min(devicePixelRatio||1,2);hv.width=HW*dpr;hv.height=HH*dpr;hx.setTransform(dpr,0,0,dpr,0,0);
+  const P=(fx,fy)=>({x:fx*HW,y:fy*HH});
+  hub={...P(.5,.9),r:7,color:HC.amber};
+  hnodes=[
+    {n:'Ada',  c:HC.bright, ...P(.13,.72)},
+    {n:'Lucy', c:HC.green,  ...P(.37,.58)},
+    {n:'Echo', c:HC.teal,   ...P(.63,.58)},
+    {n:'Kira', c:HC.violet, ...P(.87,.72)},
+  ];
+  hspill=P(.5,.66);
+}
+function hlabel(a){hx.save();hx.font="700 11px 'Space Mono',monospace";hx.textAlign='center';hx.fillStyle=hrgba(a.c,.92);hx.fillText(a.n,a.x,a.y+18);hx.restore();}
+let spill = null; // {minFit, mem} when the live result is a spill, else null
+function hdraw(){
+  const t=performance.now()/1000;
+  hx.clearRect(0,0,HW,HH);
+  hnodes.forEach((a,i)=>{const breathe=.7+.18*Math.sin(t*1.3+i*1.7);hwire(hub,a,1,a.c,.9,true);hnode(a.x,a.y,5.5,a.c,breathe);hlabel(a);});
+  hnode(hub.x,hub.y,hub.r,hub.color,.55+.2*Math.sin(t*1.6));
+  if(spill){
+    const flick=.55+.35*Math.abs(Math.sin(t*3.1));
+    const grow=.5+.05*Math.sin(t*5);            // reaches out, never connects
+    hwire(hub,hspill,grow,HC.red,.45+.3*Math.abs(Math.sin(t*3.1)),false);
+    hnode(hspill.x,hspill.y,8,HC.red,flick);
+    hx.save();hx.textAlign='center';hx.font="700 11px 'Space Mono',monospace";
+    hx.fillStyle=hrgba(HC.red,.95);
+    hx.fillText(`✕ won’t fit · needs ~${spill.minFit}GB`, hspill.x, hspill.y+22);hx.restore();
+  }
+  requestAnimationFrame(hdraw);
+}
+
+/* ============================ TOOL ============================ */
+function chips(q, values, labels, current) {
+  const host = document.querySelector(`.opts[data-q="${q}"]`);
+  host.innerHTML = '';
+  for (const v of values) {
+    const b = document.createElement('button');
+    b.className = 'opt'; b.textContent = labels[v] || v;
+    b.setAttribute('aria-pressed', String(v === current));
+    b.onclick = () => {
+      state[q] = v; chips(q, values, labels, v);
+      if (q === 'mode') onModeChange(); else render();
+    };
+    host.appendChild(b);
+  }
+}
+
+function onModeChange() {
+  document.getElementById('diag-extra').style.display    = state.mode === 'diagnose' ? 'block' : 'none';
+  document.getElementById('upgrade-extra').style.display = state.mode === 'upgrade'  ? 'block' : 'none';
+  // Recommend-only questions are irrelevant in diagnose/upgrade; hide the noise.
+  const recOnly = state.mode === 'recommend';
+  document.getElementById('q-priority').style.display = recOnly ? 'block' : 'none';
+  document.getElementById('q-comfort').style.display  = recOnly ? 'block' : 'none';
+  render();
+}
+
+function render() {
+  spill = null; // default: hero shows the calm squad
+  const card = document.getElementById('result');
+  const memEl = document.getElementById('mem');
+  const memoryGb = Math.max(0, parseInt(memEl.value || '0', 10) || 0);
+
+  // ---- Upgrade mode ----
+  if (state.mode === 'upgrade') {
+    const u = upgrade(UPGRADE, { current: state.current, candidate: state.candidate, goal: state.goal,
+                                 secondCard: document.getElementById('second-card').checked });
+    const candName = GPU_LABELS[state.candidate] || state.candidate;
+    const recLabel = u.recommend === 'candidate' ? `Worth it — the ${candName}`
+      : u.recommend === 'current' ? 'Keep what you have'
+      : 'Hold off — not worth it';
+    const recTone = u.recommend === 'candidate' ? 'good' : u.recommend === 'current' ? 'note' : 'warn';
+    card.className = 'card show';
+    card.innerHTML =
+      `<div class="verdict ${recTone}">${esc(recLabel)}</div>` +
+      `<div class="note" style="margin-top:10px">${esc(u.verdict)}</div>` +
+      (u.candidateNote ? `<div class="line"><span class="k">${esc(candName)}</span> · ${esc(u.candidateNote)}</div>` : '') +
+      (u.currentNote ? `<div class="line"><span class="k">${esc(GPU_LABELS[state.current] || state.current)}</span> · ${esc(u.currentNote)}</div>` : '') +
+      ((u.principles && u.principles.length)
+        ? `<div class="prin">` + u.principles.map(p => `<div class="pr"><span class="k">${esc(PRINCIPLE_TITLES[p.id] || p.id)}</span>${esc(p.text || '')}</div>`).join('') + `</div>`
+        : '') +
+      `<div class="cta"><p>${esc('Not sure what actually fits your rig? A squad that sizes itself to your hardware does this for you.')}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+    return;
+  }
+
+  // ---- Diagnose mode ----
+  if (state.mode === 'diagnose') {
+    const model = document.getElementById('diag-model').value.trim();
+    if (!model || !memoryGb) { card.classList.remove('show'); return; }
+    const d = diagnose(RULESET, { platform: state.platform, memoryGb, model, task: state.task });
+    const heading = d.cause === 'spill' ? "Too big for your memory"
+      : d.cause === 'fits' ? 'Should fit — check offload'
+      : 'Not in our grid';
+    const tone = d.cause === 'spill' ? 'warn' : 'note';
+    let fitMeter = '';
+    if (d.cause === 'spill' && d.minFit) {
+      spill = { minFit: d.minFit, mem: memoryGb };          // light up the red hero node
+      const havePct = Math.max(6, Math.min(94, Math.round(memoryGb / d.minFit * 100)));
+      fitMeter =
+        `<div class="fit"><div class="fit-top"><span class="lbl">memory fit</span>` +
+        `<span class="fit-need">needs ~${esc(d.minFit)}GB · you have ${esc(memoryGb)}GB</span></div>` +
+        `<div class="fit-bar"><div class="fit-have" style="width:${havePct}%"></div>` +
+        `<div class="fit-over" style="width:${100 - havePct}%">spills</div></div></div>`;
+    }
+    card.className = 'card show';
+    card.innerHTML =
+      `<div class="model">${esc(heading)}</div>` +
+      fitMeter +
+      `<div class="${tone}" style="margin-top:13px">${esc(d.explanation)}</div>` +
+      (d.fixModel ? `<div class="line" style="margin-top:13px"><span class="k">Try instead</span> · ${esc(d.fixModel)}</div>` : '') +
+      `<div class="cta"><p>${esc('Want a team that sizes itself to your hardware automatically?')}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+    return;
+  }
+
+  // ---- Recommend mode ----
+  if (!memoryGb) { card.classList.remove('show'); return; }
+  let r, f;
+  try {
+    r = resolve(RULESET, { platform: state.platform, memoryGb, task: state.task, priority: state.priority, comfort: state.comfort });
+    f = formatResult(RULESET, r);
+  } catch (e) {
+    card.className = 'card show';
+    card.innerHTML = `<div class="warn">No pick available for that combination yet. Try a different task or platform.</div>`;
+    return;
+  }
+  card.className = 'card show';
+  card.innerHTML =
+    `<div class="model">${esc(f.modelLine)}</div>` +
+    `<div class="line"><span class="k">Run it with</span> · ${esc(r.runner)}</div>` +
+    (f.agenticLine ? `<div class="line"><span class="k">Drive it with</span> · ${esc(r.agenticTool)} <span class="k">(point it at the local endpoint)</span></div>` : '') +
+    `<div class="line"><span class="k">Expect</span> · roughly ${esc(r.tpsRange || 'varies')} on your hardware</div>` +
+    (r.warning ? `<div class="warn">${esc(r.warning)}</div>` : '') +
+    `<div class="note">${esc(f.priorityNote)}</div>` +
+    `<div class="cta"><p>${esc(f.funnelLine)}</p><a href="${SQUAD_LINK}">Get your squad →</a></div>`;
+}
+
+/* ============================ INIT ============================ */
+chips('mode', ['recommend','diagnose','upgrade'], MODE_LABELS, state.mode);
+chips('platform', RULESET.questions.find(q=>q.id==='platform').options, PLATFORM_LABELS, state.platform);
+chips('task', RULESET.questions.find(q=>q.id==='task').options, TASK_LABELS, state.task);
+chips('priority', ['speed','balanced','quality'], PRIORITY_LABELS, state.priority);
+chips('comfort', ['just_works','tinkerer'], COMFORT_LABELS, state.comfort);
+chips('current', GPU_KEYS, GPU_LABELS, state.current);
+chips('candidate', GPU_KEYS, GPU_LABELS, state.candidate);
+chips('goal', ['capacity','speed','mixed'], GOAL_LABELS, state.goal);
+document.getElementById('mem').addEventListener('input', render);
+document.getElementById('diag-model').addEventListener('input', render);
+document.getElementById('second-card').addEventListener('change', render);
+document.getElementById('meta').textContent = `ruleset ${RULESET.schema} · updated ${RULESET.version}`;
+
+addEventListener('resize', hplace);
+hplace(); hdraw();
+onModeChange();
+</script>
+</body>
+</html>

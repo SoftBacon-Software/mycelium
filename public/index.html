@@ -8,7 +8,7 @@
 <style>
   *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
   :root{--bg:#08081c;--ink:#f3f1fd;--soft:#a9adde;--mute:#5b5c86;
-    --green:#8cf2a6;--amber:#fcc74d;--violet:#9e80f2;--teal:#66d9d9;--indigo:#5b62e7;--bright:#8e93f0;--corn:#3c3c6e;--cyan:#8cf2ff;
+    --green:#8cf2a6;--amber:#fcc74d;--violet:#9e80f2;--teal:#66d9d9;--indigo:#5b62e7;--bright:#8e93f0;--corn:#3c3c6e;--cyan:#8cf2ff;--red:#ff6f6f;
     --mono:'Space Mono',monospace;--disp:'Bricolage Grotesque',sans-serif;--body:'Hanken Grotesk',sans-serif;}
   html{scroll-behavior:auto}
   body{background:#05060f;color:var(--ink);font-family:var(--body)}
@@ -28,7 +28,8 @@
   .meter.show{opacity:1}.meter-top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:7px}
   .meter-top .lbl{color:var(--mute)}.meter-top b{color:var(--green)}
   .meter-bar{height:9px;border-radius:99px;background:rgba(255,255,255,.05);border:1px solid rgba(123,130,255,.2);overflow:hidden}
-  .meter-fill{height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--green),var(--teal));box-shadow:0 0 14px rgba(140,242,166,.5)}
+  .meter-fill{height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--green),var(--teal));box-shadow:0 0 14px rgba(140,242,166,.5);transition:background .25s}
+  .meter-fill.over{background:linear-gradient(90deg,#ff6f6f,#ff3b3b);box-shadow:0 0 16px rgba(255,90,90,.6)}
 
   /* beat elements — positioned by JS (left/top %), animated by scroll */
   .beat{position:absolute;transform:translate(-50%,-50%) scale(.9);opacity:0;transition:opacity .15s linear;pointer-events:none;will-change:transform,opacity}
@@ -69,6 +70,17 @@
   .hint{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute);opacity:0;transition:opacity .5s;pointer-events:none}
   .hint.show{opacity:.8;animation:bob 2s ease-in-out infinite}
   @keyframes bob{50%{transform:translate(-50%,5px)}}
+
+  /* mobile: beats are centered + shown one-at-a-time (JS crossfade) so they never overlap */
+  @media (max-width:640px){
+    .agent-card{width:min(82vw,230px)}
+    .panel{width:min(84vw,300px)}
+    .chat{width:min(84vw,260px)}
+    .copy{width:min(88vw,420px)}.copy h2{font-size:1.5rem}
+    .finale{width:min(90vw,820px)}
+    .chooser{width:min(88vw,360px)}
+    .chip{font-size:12px;white-space:normal;justify-content:center;text-align:center}
+  }
 </style>
 </head>
 <body>
@@ -117,9 +129,9 @@
 
 <script>
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');let W,H,DPR,GRID=46;
-function resize(){DPR=Math.min(devicePixelRatio||1,1.25);W=cv.clientWidth=cv.parentElement.clientWidth;H=cv.clientHeight=cv.parentElement.clientHeight;cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);place();}
+function resize(){DPR=Math.min(devicePixelRatio||1,1.25);W=cv.clientWidth=cv.parentElement.clientWidth;H=cv.clientHeight=cv.parentElement.clientHeight;cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);mobile=innerWidth<=640;layoutDone=false;place();}
 addEventListener('resize',resize);
-const C={green:'#8cf2a6',amber:'#fcc74d',violet:'#9e80f2',teal:'#66d9d9',indigo:'#5b62e7',bright:'#8e93f0',corn:'#3c3c6e',cyan:'#8cf2ff'};
+const C={green:'#8cf2a6',amber:'#fcc74d',violet:'#9e80f2',teal:'#66d9d9',indigo:'#5b62e7',bright:'#8e93f0',corn:'#3c3c6e',cyan:'#8cf2ff',red:'#ff6f6f'};
 function rgba(h,a){const n=parseInt(h.slice(1),16);return`rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
 const $=id=>document.getElementById(id);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -178,7 +190,7 @@ function mlabel(a,lt,alpha){if(lt<0||alpha<=0)return;const w=a.role,len=w.length
 
 // ---- intro clock + scroll progress ----
 let introStart=performance.now(),introDone=false;
-const T_WARP=1.8,T_LAND=2.7,T_CHOOSE=6.6,T_AGENTS=13.2,T_END=14.6;
+const T_WARP=1.8,T_LAND=2.7,T_CHOOSE=6.6,T_FIT=8.0,T_AGENTS=14.6,T_END=16.0;
 let sp=0; // scroll progress 0..1
 function updateScroll(){const sc=document.querySelector('.scroller');const r=sc.getBoundingClientRect();
   sp=clamp(-r.top/(sc.offsetHeight-innerHeight),0,1);
@@ -198,15 +210,42 @@ function squad(vis){
   node(hub.x,hub.y,hub.r,hub.color,vis*(.55+.2*Math.sin(performance.now()/600)));
 }
 
+// the "won't fit" beat: a too-big model reaches for the hub, overshoots the budget, is rejected
+function rejectBeat(rt){
+  const rn={x:hub.x,y:hub.y-Math.min(W,H)*0.30};
+  const fade=rt>1.0?Math.max(0,1-(rt-1.0)/.55):1;                              // rejected → fades out
+  const grow=rt<1.0?Math.min(.6,rt/.5*.6):Math.max(.4,.6-(rt-1.0)*.6);        // reaches, never connects, recoils
+  const puls=.55+.45*Math.abs(Math.sin(rt*9));
+  wireSeg(hub,rn,grow,C.red,(.5+.3*puls)*fade,false);
+  node(rn.x,rn.y,9,C.red,puls*fade);
+  ctx.save();ctx.font="700 13px 'Space Mono',monospace";ctx.textAlign='center';
+  ctx.fillStyle=rgba(C.red,.95*fade);ctx.fillText('✕ Llama-3-70B · needs 80 GB',rn.x,rn.y-18);ctx.restore();
+}
+
 // DOM anchor positioning (% of pin)
 function pos(el,fx,fy){el.style.left=(fx*100)+'%';el.style.top=(fy*100)+'%';}
 function show(el,on,scale){el.style.opacity=on;el.style.transform=`translate(-50%,-50%) scale(${scale})`;}
-const A={ // fractional anchors
+const A={ // fractional anchors (desktop)
   s1card:[.30,.46], s1panel:[.68,.44], s1copy:[.5,.16],
   s2chat:[.30,.74], ag0:[.5,.30], ag1:[.69,.42], ag2:[.5,.58], s2copy:[.5,.13], finale:[.5,.5]
 };
-let layoutDone=false;
-function layout(){for(const k in A)if($(k))pos($(k),A[k][0],A[k][1]);layoutDone=true;}
+const A_M={ // mobile: everything centered — beats show one at a time, never overlap
+  s1card:[.5,.5], s1panel:[.5,.5], s1copy:[.5,.27],
+  s2chat:[.5,.5], ag0:[.5,.5], ag1:[.5,.5], ag2:[.5,.5], s2copy:[.5,.27], finale:[.5,.5]
+};
+let layoutDone=false, mobile=innerWidth<=640;
+function layout(){const AA=mobile?A_M:A;for(const k in AA)if($(k))pos($(k),AA[k][0],AA[k][1]);layoutDone=true;}
+// mobile crossfade: trapezoid 0→1→0 over [lo,hi] so only one beat is visible at a time
+function seg(lo,hi){const d=(hi-lo)*0.28;return clamp(Math.min((sp-lo)/d,(hi-sp)/d),0,1);}
+function mobileBeats(){
+  $('hint').classList.toggle('show',sp<0.04);
+  squad(1-ease(band(sp,0,.06)));
+  ['s1copy','s1card','s1panel','s2copy','s2chat','ag0','ag1','ag2'].forEach(id=>show($(id),0,.95));
+  const B=[['s1copy',.06,.19],['s1card',.19,.32],['s1panel',.32,.45],['s2copy',.45,.56],
+           ['s2chat',.56,.65],['ag0',.65,.73],['ag1',.73,.81],['ag2',.81,.88]];
+  B.forEach(([id,lo,hi])=>{const o=seg(lo,hi);if(o>0)show($(id),o,.92+.08*o);});
+  show($('finale'),ease(clamp(band(sp,.88,.99),0,1)),.94+.06*ease(clamp(band(sp,.88,.99),0,1)));
+}
 
 function P(fx,fy){return{x:fx*W,y:fy*H};} // anchor → canvas point
 
@@ -221,12 +260,15 @@ function draw(){
     // ---- INTRO (time-driven) ----
     warp(t);
     if(t>=T_WARP)node(hub.x,hub.y,hub.r,hub.color,Math.min(1,(t-T_WARP)/.6)*.7);
-    if(t>=T_CHOOSE){const at=t-T_CHOOSE;agents.forEach(a=>{if(at<a.spawnAt)return;const el=at-a.spawnAt,grow=Math.min(1,el/.7);wireSeg(hub,a,grow,a.color,1);if(grow>=1){node(a.x,a.y,a.r,a.color,.7);mlabel(a,el-.7,1);}});}
+    if(t>=T_CHOOSE&&t<T_FIT+.55)rejectBeat(t-T_CHOOSE);
+    if(t>=T_FIT){const at=t-T_FIT;agents.forEach(a=>{if(at<a.spawnAt)return;const el=at-a.spawnAt,grow=Math.min(1,el/.7);wireSeg(hub,a,grow,a.color,1);if(grow>=1){node(a.x,a.y,a.r,a.color,.7);mlabel(a,el-.7,1);}});}
     introHUD(t);
     $('hint').classList.toggle('show',t>T_AGENTS);
   } else {
     // ---- SCROLL-DRIVEN beats ----
-    hideIntroHUD();$('hint').classList.toggle('show',sp<0.04);
+    hideIntroHUD();
+    if(mobile){ mobileBeats(); } else {
+    $('hint').classList.toggle('show',sp<0.04);
     const p1=band(sp,0,.14), p2=band(sp,.14,.4), p3=band(sp,.4,.74), p4=band(sp,.74,1);
     // squad visible until beat1 fades it
     squad(1-ease(p1));
@@ -251,6 +293,7 @@ function draw(){
     show($('s2chat'),clamp(band(p3,.1,.4),0,1)*clamp(1-p4*2.5,0,1), .9+.1*clamp(band(p3,.1,.4),0,1));
     [['ag0',.25],['ag1',.4],['ag2',.55]].forEach(([id,st])=>show($(id),clamp(band(p3,st,st+.22),0,1)*clamp(1-p4*2.5,0,1),.9+.1*clamp(band(p3,st,st+.22),0,1)));
     show($('finale'),ease(clamp(band(sp,.82,.96),0,1)), .92+.08*ease(clamp(band(sp,.82,.96),0,1)));
+    }
   }
   requestAnimationFrame(draw);
 }
@@ -258,11 +301,18 @@ function draw(){
 // intro HUD
 const chips=[...document.querySelectorAll('.chip')];
 function introHUD(t){$('status').classList.add('show');
-  $('statusText').textContent=t<T_WARP?'entering the system':t<T_CHOOSE?'model chooser':t<T_AGENTS?'assembling squad':'squad online';
+  $('statusText').textContent=t<T_WARP?'entering the system':t<T_CHOOSE?'model chooser':t<T_FIT?'checking fit…':t<T_AGENTS?'assembling squad':'squad online';
   chips.forEach((c,i)=>c.classList.toggle('show',t>=T_LAND+.3+i*.95&&t<T_CHOOSE));
   $('meter').classList.toggle('show',t>=T_LAND+.6);
-  let used=0;if(t>=T_CHOOSE){const at=t-T_CHOOSE;agents.forEach(a=>{if(at>=a.spawnAt+.7)used+=a.mem;});}
-  $('memUsed').textContent=used;$('memFill').style.width=(used/64*100)+'%';}
+  const fill=$('memFill'),u=$('memUsed');
+  if(t>=T_CHOOSE&&t<T_FIT){                       // too-big model overshoots the 64 GB budget → red
+    fill.classList.add('over');fill.style.width='100%';u.textContent='80';u.style.color='var(--red)';
+  } else {
+    fill.classList.remove('over');u.style.color='';
+    let used=0;if(t>=T_FIT){const at=t-T_FIT;agents.forEach(a=>{if(at>=a.spawnAt+.7)used+=a.mem;});}
+    u.textContent=used;fill.style.width=(used/64*100)+'%';
+  }
+}
 function hideIntroHUD(){$('status').classList.remove('show');chips.forEach(c=>c.classList.remove('show'));$('meter').classList.remove('show');}
 
 resize();updateScroll();draw();

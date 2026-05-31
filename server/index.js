@@ -181,6 +181,12 @@ if (fs.existsSync(dashboardPath)) {
   app.use('/', express.static(dashboardPath, { index: false }));
 }
 
+// ---- Local LLM Advisor (public, static) — the web acquisition funnel ----
+var advisorPath = path.join(__dirname, '..', 'public', 'advisor');
+if (fs.existsSync(advisorPath)) {
+  app.use('/advisor', express.static(advisorPath));
+}
+
 // Landing page at GET / (after static so it doesn't shadow favicon/assets above)
 if (fs.existsSync(landingPage)) {
   app.get('/', function (req, res) {
