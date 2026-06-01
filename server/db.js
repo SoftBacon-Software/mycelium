@@ -2999,7 +2999,17 @@ export function getOverview(userId) {
 // =============== SLIM OVERVIEW ===============
 
 function timeSince(dateStr) {
-  var diff = Date.now() - new Date(dateStr).getTime();
+  // SQLite datetime('now') yields a space-separated UTC string with no zone
+  // (e.g. "2026-06-01 14:23:05"). Per the ECMAScript Date spec only the
+  // 'T'-separated ISO form is treated as UTC when the zone is omitted; the
+  // space form parses as LOCAL time, landing hours in the future on hosts west
+  // of UTC and producing negative ages. Normalize to ISO-UTC before parsing,
+  // mirroring the frontend's parseTimestamp (utils/time.ts).
+  var ms = dateStr.includes('T')
+    ? new Date(dateStr).getTime()
+    : new Date(dateStr.replace(' ', 'T') + 'Z').getTime();
+  var diff = Date.now() - ms;
+  if (diff < 0) diff = 0; // clamp residual skew, like timeAgo's "just now"
   if (diff < 60000) return Math.round(diff / 1000) + 's ago';
   if (diff < 3600000) return Math.round(diff / 60000) + 'm ago';
   if (diff < 86400000) return Math.round(diff / 3600000) + 'h ago';
