@@ -61,7 +61,8 @@ export async function sendEmail({ to, subject, html, replyTo, from }) {
       to: Array.isArray(to) ? to : [to],
       subject: subject,
       html: html,
-      reply_to: replyTo || REPLY_TO_DEFAULT
+      // Resend v6 SDK expects camelCase replyTo, not snake_case reply_to
+      replyTo: replyTo || REPLY_TO_DEFAULT
     });
     if (result.error) {
       console.error('[email] Resend error:', result.error);
@@ -130,7 +131,8 @@ function muted(text) {
 
 /** Waitlist confirmation email */
 export function templateWaitlistConfirmation(name, email) {
-  var greeting = name ? ('Hi ' + name + ',') : 'Hi there,';
+  var safeName = escapeHtml(name);
+  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi there,';
   var html = emailWrapper('Welcome to the Waitlist', `
     <p>${greeting}</p>
     <p>Thanks for signing up for Mycelium. We received your request and you're on the list.</p>
@@ -149,25 +151,31 @@ export function templateWaitlistConfirmation(name, email) {
 
 /** Instance ready notification */
 export function templateInstanceReady(name, email, domain, dashboardUrl, username, tempPassword) {
-  var greeting = name ? ('Hi ' + name + ',') : 'Hi there,';
+  var safeName = escapeHtml(name);
+  var safeDomain = escapeHtml(domain);
+  var safeUsername = escapeHtml(username);
+  var safeTempPassword = escapeHtml(tempPassword);
+  var safeDashboardUrl = escapeHtml(dashboardUrl);
+  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi there,';
   var html = emailWrapper('Your Instance is Ready', `
     <p>${greeting}</p>
     <p>Your Mycelium instance is live and ready to use.</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Dashboard:</strong> <a href="${dashboardUrl}" style="color:${COLORS.teal};text-decoration:none;">${dashboardUrl}</a></p>
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Username:</strong> <code style="background:${COLORS.bg};padding:2px 6px;border-radius:3px;color:${COLORS.text};">${username}</code></p>
-      <p style="margin:0;"><strong style="color:${COLORS.primary};">Temporary Password:</strong> <code style="background:${COLORS.bg};padding:2px 6px;border-radius:3px;color:${COLORS.text};">${tempPassword}</code></p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Dashboard:</strong> <a href="${safeDashboardUrl}" style="color:${COLORS.teal};text-decoration:none;">${safeDashboardUrl}</a></p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Username:</strong> <code style="background:${COLORS.bg};padding:2px 6px;border-radius:3px;color:${COLORS.text};">${safeUsername}</code></p>
+      <p style="margin:0;"><strong style="color:${COLORS.primary};">Temporary Password:</strong> <code style="background:${COLORS.bg};padding:2px 6px;border-radius:3px;color:${COLORS.text};">${safeTempPassword}</code></p>
     </div>
-    ${button('Open Dashboard', dashboardUrl)}
+    ${button('Open Dashboard', safeDashboardUrl)}
     <p><strong style="color:${COLORS.rust};">Please change your password</strong> after your first login.</p>
-    ${muted('Your instance: ' + domain)}
+    ${muted('Your instance: ' + safeDomain)}
   `);
   return { to: email, subject: 'Your Mycelium instance is ready', html: html };
 }
 
 /** Password reset email */
 export function templatePasswordReset(email, displayName, resetUrl, expiresMinutes) {
-  var greeting = displayName ? ('Hi ' + displayName + ',') : 'Hi,';
+  var safeDisplayName = escapeHtml(displayName);
+  var greeting = safeDisplayName ? ('Hi ' + safeDisplayName + ',') : 'Hi,';
   var html = emailWrapper('Password Reset', `
     <p>${greeting}</p>
     <p>We received a request to reset your password. Click the button below to choose a new one:</p>
@@ -182,24 +190,26 @@ export function templatePasswordReset(email, displayName, resetUrl, expiresMinut
 /** Support ticket confirmation (sent to customer) */
 export function templateTicketConfirmation(email, name, ticketId, subject) {
   var safeName = escapeHtml(name);
+  var safeTicketId = escapeHtml(ticketId);
   var safeSubject = escapeHtml(subject);
   var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi,';
   var html = emailWrapper('We Received Your Request', `
     <p>${greeting}</p>
     <p>Thanks for reaching out. We've received your support request and our team is on it.</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${ticketId}</strong></p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${safeTicketId}</strong></p>
       <p style="margin:0;color:${COLORS.text};">${safeSubject}</p>
     </div>
     <p>We'll follow up by email when there's an update. Most issues are resolved within 24 hours.</p>
     ${muted('Reply to this email if you have additional details to share.')}
   `);
-  return { to: email, subject: 'Ticket #' + ticketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
+  return { to: email, subject: 'Ticket #' + safeTicketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
 }
 
 /** Support ticket resolution (sent to customer) */
 export function templateTicketResolution(email, name, ticketId, subject, resolution) {
   var safeName = escapeHtml(name);
+  var safeTicketId = escapeHtml(ticketId);
   var safeSubject = escapeHtml(subject);
   var safeResolution = escapeHtml(resolution);
   var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi,';
@@ -207,13 +217,13 @@ export function templateTicketResolution(email, name, ticketId, subject, resolut
     <p>${greeting}</p>
     <p>We've resolved your support request:</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${ticketId}</strong>: ${safeSubject}</p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Ticket #${safeTicketId}</strong>: ${safeSubject}</p>
       ${safeResolution ? '<p style="margin:12px 0 0;color:' + COLORS.moss + ';"><strong>Resolution:</strong> ' + safeResolution + '</p>' : ''}
     </div>
     <p>If this doesn't fully address your issue, just reply to this email and we'll reopen it.</p>
     ${muted('Thank you for using Mycelium.')}
   `);
-  return { to: email, subject: 'Resolved — Ticket #' + ticketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
+  return { to: email, subject: 'Resolved — Ticket #' + safeTicketId + ': ' + safeSubject, replyTo: 'support@mycelium.fyi', html: html };
 }
 
 /** Payment failed — 7-day grace period warning */
@@ -234,12 +244,14 @@ export function templatePaymentFailed(name, email, portalUrl) {
 
 /** Instance suspended — read-only for 30 days */
 export function templateInstanceSuspended(name, email, domain) {
-  var greeting = name ? ('Hi ' + name + ',') : 'Hi,';
+  var safeName = escapeHtml(name);
+  var safeDomain = escapeHtml(domain);
+  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi,';
   var html = emailWrapper('Instance Suspended', `
     <p>${greeting}</p>
     <p>Your Mycelium instance has been <strong style="color:${COLORS.rust};">suspended</strong> due to an unpaid subscription.</p>
     <div style="background:${COLORS.surface};border:1px solid ${COLORS.border};border-radius:8px;padding:20px;margin:20px 0;">
-      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Instance:</strong> ${domain || 'your instance'}</p>
+      <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Instance:</strong> ${safeDomain || 'your instance'}</p>
       <p style="margin:0 0 8px;"><strong style="color:${COLORS.primary};">Status:</strong> <span style="color:${COLORS.rust};">Suspended (read-only)</span></p>
       <p style="margin:0;"><strong style="color:${COLORS.primary};">Data retention:</strong> 30 days</p>
     </div>
