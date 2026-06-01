@@ -134,6 +134,7 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   const [collapsedSections, setCollapsedSections] = useState(loadCollapsedSections)
   const agents = useDashboardStore((s) => s.agents)
   const inboxUnread = useDashboardStore((s) => s.inboxUnread)
+  const pendingApprovals = useDashboardStore((s) => s.pendingApprovals)
   const userRole = useAuthStore((s) => s.user?.role)
   const isAdmin = userRole === 'admin'
   const voiceConnected = useVoiceStore((s) => s.isConnected)
@@ -169,6 +170,13 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
   }, [pluginNav])
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
+
+  // Persistent pending-approval count for the /approvals nav badge.
+  // Same derivation as the dashboard ActionRequired component.
+  const pendingApprovalCount = useMemo(
+    () => pendingApprovals.filter((a) => a.status === 'pending').length,
+    [pendingApprovals]
+  )
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -287,6 +295,11 @@ export default function SideNav({ mobileOpen, onMobileClose, isMobile }: SideNav
                       {item.to === '/inbox' && inboxUnread > 0 && (
                         <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/20 text-accent text-[10px] font-bold tabular-nums ml-auto shrink-0">
                           {inboxUnread}
+                        </span>
+                      )}
+                      {item.to === '/approvals' && isAdmin && pendingApprovalCount > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-accent/20 text-accent text-[10px] font-bold tabular-nums ml-auto shrink-0">
+                          {pendingApprovalCount}
                         </span>
                       )}
                     </NavLink>
