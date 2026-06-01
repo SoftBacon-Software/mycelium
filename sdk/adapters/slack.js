@@ -285,7 +285,7 @@ async function handleMention(event) {
 
 // ── Polling for Mycelium → Slack messages ───────────────────────
 
-var lastCheckedMessageId = 0
+var lastCheckedMessageId = {}
 
 async function pollMyceliumChannels() {
   for (var mChannelId in reverseChannelMap) {
@@ -293,12 +293,17 @@ async function pollMyceliumChannels() {
       var messages = await agent.api.get('/channels/' + mChannelId + '/messages?limit=10')
       if (!Array.isArray(messages)) continue
 
+      // Initialize lastCheckedMessageId for this channel if not set
+      if (lastCheckedMessageId[mChannelId] === undefined) {
+        lastCheckedMessageId[mChannelId] = 0
+      }
+
       for (var i = messages.length - 1; i >= 0; i--) {
         var msg = messages[i]
-        if (msg.id <= lastCheckedMessageId) continue
+        if (msg.id <= lastCheckedMessageId[mChannelId]) continue
         if (msg.from_agent === agent.agentId) continue
         await bridgeToSlack(msg)
-        if (msg.id > lastCheckedMessageId) lastCheckedMessageId = msg.id
+        if (msg.id > lastCheckedMessageId[mChannelId]) lastCheckedMessageId[mChannelId] = msg.id
       }
     } catch (err) {
       console.error('[bridge] Mycelium→Slack poll error:', err.message)
