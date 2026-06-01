@@ -18,7 +18,7 @@
 
 import { MyceliumAgent } from '../src/index.js'
 import { spawn, spawnSync } from 'child_process'
-import { writeFileSync, unlinkSync, existsSync } from 'fs'
+import fs from 'node:fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -94,7 +94,7 @@ function transcribe(audioFile) {
       // Read transcript
       var txtFile = audioFile.replace(/\.wav$/, '.txt')
       try {
-        var text = require('fs').readFileSync(txtFile, 'utf-8').trim()
+        var text = readFileSync(txtFile, 'utf-8').trim()
         try { unlinkSync(txtFile) } catch {}
         resolve(text)
       } catch {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useDashboardStore } from '../stores/dashboardStore'
+import { apiGet } from '../api/client'
 
 export default function PluginPageView() {
   const { pluginName, '*': pagePath } = useParams()
@@ -16,13 +17,7 @@ export default function PluginPageView() {
     setLoading(true)
     setError(null)
     const url = `/api/mycelium${routePrefix}/${pagePath || ''}`
-    fetch(url, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
-        return r.json()
-      })
+    apiGet<unknown>(url)
       .then((d) => {
         setData(d)
         setLoading(false)

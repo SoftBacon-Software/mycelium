@@ -393,7 +393,7 @@ export async function provisionCustomerInstance(config) {
     progress('user', 'Creating admin studio user...');
     try {
       result.studioUser = await createRemoteStudioUser({
-        instanceUrl: 'https://' + customerDomain,
+        instanceUrl: 'https://' + liveDomain,
         adminKey: config.adminKey,
         username: config.adminUsername,
         password: config.adminPassword

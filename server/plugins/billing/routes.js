@@ -201,7 +201,7 @@ export default function (core) {
                 : customerId.replace(/[^a-z0-9-]/gi, '-').toLowerCase().substring(0, 32);
 
               var tempPassword = crypto.randomBytes(16).toString('base64url');
-              var adminKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+              var adminKey = 'myc_' + crypto.randomBytes(24).toString('hex');
               var jwtSecret = crypto.randomBytes(32).toString('hex');
               var adminUsername = 'admin';
               var customerDomain = slug + '.' + baseDomain;

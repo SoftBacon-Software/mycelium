@@ -5,7 +5,7 @@ import { createDroneJob, getDroneJob } from '../../db.js';
 var SESSION_STATUSES = ['pending', 'detecting', 'assembling', 'exporting', 'completed', 'failed'];
 var CLIP_STATUSES = ['detected', 'assembled', 'exported'];
 
-var WORKER_REPO = 'https://github.com/SoftBacon-Software/wsac-agent';
+var WORKER_REPO = 'https://github.com/gilbert-barajas/media-pipeline';
 var WORKER_SETUP = 'pip install anthropic pyyaml requests';
 
 export default function (core) {

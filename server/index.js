@@ -3,11 +3,15 @@
 // Crash diagnostics — ensure unhandled errors always print before exit
 process.on('uncaughtException', (err) => {
   process.stdout.write('[FATAL] uncaughtException: ' + (err?.stack || err?.message || String(err)) + '\n');
-  process.exit(1);
+  // Only exit for genuinely corrupt exceptions, not routine failures
+  // Keep serving to avoid hard-killing the platform from stray rejections
+  if (err && err.message && err.message.includes('corrupt')) {
+    process.exit(1);
+  }
 });
 process.on('unhandledRejection', (reason) => {
   process.stdout.write('[FATAL] unhandledRejection: ' + (reason?.stack || reason?.message || String(reason)) + '\n');
-  process.exit(1);
+  // Log rejection diagnostics but keep serving — stray rejections from setInterval, WS handlers, etc. shouldn't hard-kill the platform
 });
 
 process.stdout.write('[boot] Node ' + process.version + ' PORT=' + (process.env.PORT || '(not set, will use 3002)') + '\n');

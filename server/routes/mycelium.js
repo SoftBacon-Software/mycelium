@@ -1831,7 +1831,7 @@ router.put('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
   if (req.body.ttl) opts.ttl = parseInt(req.body.ttl, 10);
   if (req.body.expires_at) opts.expires_at = req.body.expires_at;
   upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
-  emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
+  emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key, { namespace: req.params.namespace, key: req.params.key, value: dataStr });
   res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
 }));
 
@@ -2758,6 +2758,24 @@ router.get('/messages', asyncHandler(function (req, res) {
     offset: parseInt(req.query.offset) || 0,
     channel_id: req.query.channel_id ? parseIntParam(req.query.channel_id) : undefined
   };
+  // For non-admin callers, scope results to messages where caller is sender OR recipient
+  if (!req._authIsAdmin) {
+    // Override filters to only include messages where the caller is sender OR recipient
+    if (filters.from_agent && filters.from_agent !== who) {
+      // If from_agent is specified but not matching the caller, no results
+      filters.from_agent = who;
+    } else if (!filters.from_agent) {
+      // If no from_agent specified, filter by caller as sender
+      filters.from_agent = who;
+    }
+    if (filters.to_agent && filters.to_agent !== who) {
+      // If to_agent is specified but not matching the caller, no results
+      filters.to_agent = who;
+    } else if (!filters.to_agent) {
+      // If no to_agent specified, filter by caller as recipient
+      filters.to_agent = who;
+    }
+  }
   res.json(listMessages(filters));
 }));
 
@@ -3723,7 +3741,7 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
   // Check if exists
   if (getAgent(id)) return res.status(409).json({ error: 'Agent ' + id + ' already exists' });
   // Generate API key — store as SHA-256 (high-entropy key, bcrypt adds no security)
-  var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+  var apiKey = 'myc_' + crypto.randomBytes(24).toString('hex');
   var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   // Resolve template defaults if provided
   var tmpl = null;
@@ -3773,7 +3791,7 @@ router.put('/admin/agents/:id/key', adminWriteLimiter, asyncHandler(function (re
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  var apiKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+  var apiKey = 'myc_' + crypto.randomBytes(24).toString('hex');
   var hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   updateAgentKey(req.params.id, hash);
   invalidateAgentKeyCache(req.params.id);
@@ -3787,7 +3805,7 @@ router.put('/admin/agents/:id/key', adminWriteLimiter, asyncHandler(function (re
 router.post('/agents/rekey', asyncHandler(function (req, res) {
   var agentId = checkAgent(req, res);
   if (!agentId) return;
-  var newKey = 'dvk_' + crypto.randomBytes(24).toString('hex');
+  var newKey = 'myc_' + crypto.randomBytes(24).toString('hex');
   var newHash = crypto.createHash('sha256').update(newKey).digest('hex');
   updateAgentKey(agentId, newHash);
   invalidateAgentKeyCache(agentId);

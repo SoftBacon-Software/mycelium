@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mycelium Cockpit</title>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; background-color: #222; color: #fff; margin: 0; padding: 20px; }
+        .container { display: flex; flex-direction: column; gap: 20px; }
+        .section { border: 1px solid #444; padding: 10px; border-radius: 5px; }
+        .agents, .active-work, .events, .plans { margin-bottom: 20px; }
+        h2 { color: #ffcc33; }
+        ul { list-style-type: none; padding: 0; }
+        li { background-color: #111; border: 1px solid #444; margin-bottom: 5px; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="section agents" id="agents">
+            <h2>Agent Status</h2>
+            <ul></ul>
+        </div>
+        <div class="section active-work" id="active-work">
+            <h2>Active Work</h2>
+            <ul></ul>
+        </div>
+        <div class="section events" id="events">
+            <h2>Recent Events</h2>
+            <ul></ul>
+        </div>
+        <div class="section plans" id="plans">
+            <h2>Active Plans</h2>
+            <ul></ul>
+        </div>
+    </div>
+
+    <script>
+        const adminKey = new URLSearchParams(window.location.hash.substring(1)).get('key');
+        if (!adminKey) {
+            alert('Admin key not found in URL hash. Please use #key=your_admin_key.');
+            document.body.innerHTML = '<h2 style="color: red;">Admin key missing.</h2>';
+            throw new Error('Admin key missing.');
+        }
+
+        const headers = { 'Authorization': `Bearer ${adminKey}` };
+
+        async function fetchData(url) {
+            try {
+                const response = await fetch(url, { headers });
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        }
+
+        async function updateAgents() {
+            const agents = await fetchData('/agents');
+            const agentsList = document.getElementById('agents').querySelector('ul');
+            agentsList.innerHTML = '';
+            if (agents) {
+                agents.forEach(agent => {
+                    const li = document.createElement('li');
+                    li.textContent = `${agent.name} - ${agent.status}`;
+                    agentsList.appendChild(li);
+                });
+            }
+        }
+
+        async function updateActiveWork() {
+            const tasks = await fetchData('/tasks?status=in_progress');
+            const activeWorkList = document.getElementById('active-work').querySelector('ul');
+            activeWorkList.innerHTML = '';
+            if (tasks) {
+                tasks.forEach(task => {
+                    const li = document.createElement('li');
+                    li.textContent = `${task.name} - ${task.status}`;
+                    activeWorkList.appendChild(li);
+                });
+            }
+        }
+
+        async function updateEvents() {
+            const events = await fetchData('/events?limit=20&squadIds=all');
+            const eventsList = document.getElementById('events').querySelector('ul');
+            eventsList.innerHTML = '';
+            if (events) {
+                events.forEach(event => {
+                    const li = document.createElement('li');
+                    li.textContent = `${event.timestamp} - ${event.description}`;
+                    eventsList.appendChild(li);
+                });
+            }
+        }
+
+        async function updatePlans() {
+            const plans = await fetchData('/plans?status=active');
+            const plansList = document.getElementById('plans').querySelector('ul');
+            plansList.innerHTML = '';
+            if (plans) {
+                plans.forEach(plan => {
+                    const li = document.createElement('li');
+                    li.textContent = `${plan.name} - ${plan.status}`;
+                    plansList.appendChild(li);
+                });
+            }
+        }
+
+        async function updateAll() {
+            await Promise.all([updateAgents(), updateActiveWork(), updateEvents(), updatePlans()]);
+        }
+
+        updateAll();
+        setInterval(updateAll, 5000);
+    </script>
+</body>
+</html>
