@@ -27,8 +27,14 @@ export function initDB() {
   // Migration: rename dv_* tables to clean names BEFORE schema.sql runs
   migrateTableNames(db);
 
-  // Migrations: add columns that may not exist yet on the LIVE database.
-  // MUST run BEFORE schema.sql because schema has CREATE INDEX on these columns.
+  // Upgrade bridges (idempotent). These run BEFORE schema.exec so that an OLD
+  // production DB — whose legacy CREATE TABLE bodies predate these columns — has
+  // the columns added before schema.sql's CREATE INDEX statements reference them.
+  //
+  // On a FRESH DB the target tables don't exist yet, so each guarded ALTER simply
+  // no-ops (caught below); schema.sql then creates fully-formed tables because it
+  // is now the canonical source of truth and already declares every one of these
+  // columns. Net result: fresh init == live schema, and old DBs still upgrade.
   var migrations = [
     ["tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"],
     ["tasks", "blocks", "TEXT NOT NULL DEFAULT '[]'"],
@@ -96,28 +102,43 @@ export function initDB() {
     try { db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); } catch (e) { /* already exists */ }
   }
 
-  // Team columns migration
-  var projectCols = db.pragma('table_info(projects)').map(function(c) { return c.name; });
-  if (!projectCols.includes('team_id')) {
-    db.prepare('ALTER TABLE projects ADD COLUMN team_id TEXT').run();
-    console.log('[migration] Added team_id to projects');
-  }
-  var operatorCols = db.pragma('table_info(operators)').map(function(c) { return c.name; });
-  if (!operatorCols.includes('primary_team_id')) {
-    db.prepare('ALTER TABLE operators ADD COLUMN primary_team_id TEXT').run();
-    console.log('[migration] Added primary_team_id to operators');
-  }
-  var agentCols = db.pragma('table_info(agents)').map(function(c) { return c.name; });
-  if (!agentCols.includes('primary_team_id')) {
-    db.prepare('ALTER TABLE agents ADD COLUMN primary_team_id TEXT').run();
-    console.log('[migration] Added primary_team_id to agents');
-  }
+  // Team columns upgrade bridge (idempotent). Same contract as the loop above:
+  // on an OLD DB these add team_id / primary_team_id before schema.exec indexes
+  // them; on a FRESH DB the tables don't exist yet so each block no-ops. Wrapped
+  // in try/catch so a missing table can never crash init.
+  try {
+    var projectCols = db.pragma('table_info(projects)').map(function(c) { return c.name; });
+    if (projectCols.length && !projectCols.includes('team_id')) {
+      db.prepare('ALTER TABLE projects ADD COLUMN team_id TEXT').run();
+      console.log('[migration] Added team_id to projects');
+    }
+  } catch (e) { /* table missing on fresh init or column exists — skip */ }
+  try {
+    var operatorCols = db.pragma('table_info(operators)').map(function(c) { return c.name; });
+    if (operatorCols.length && !operatorCols.includes('primary_team_id')) {
+      db.prepare('ALTER TABLE operators ADD COLUMN primary_team_id TEXT').run();
+      console.log('[migration] Added primary_team_id to operators');
+    }
+  } catch (e) { /* table missing on fresh init or column exists — skip */ }
+  try {
+    var agentCols = db.pragma('table_info(agents)').map(function(c) { return c.name; });
+    if (agentCols.length && !agentCols.includes('primary_team_id')) {
+      db.prepare('ALTER TABLE agents ADD COLUMN primary_team_id TEXT').run();
+      console.log('[migration] Added primary_team_id to agents');
+    }
+  } catch (e) { /* table missing on fresh init or column exists — skip */ }
 
-  // Run platform schema AFTER migrations (schema has CREATE INDEX on migrated columns)
+  // Run platform schema AFTER the upgrade bridges. schema.sql is the canonical
+  // source of truth: every CREATE TABLE declares all columns the app needs, and
+  // its CREATE INDEX statements can safely reference columns the bridges above
+  // just ensured exist on old DBs. CREATE TABLE IF NOT EXISTS is a no-op for any
+  // table that already exists (old DB); on a fresh DB it creates everything whole.
   var schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
 
-  // Indexes on migrated columns
+  // Indexes on columns that historically came from ALTER migrations.
+  // schema.sql now also declares these, so these are redundant on a fresh DB but
+  // remain here (IF NOT EXISTS) to cover OLD DBs upgraded via the bridges above.
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_blocked ON tasks(blocked_by)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_approval ON tasks(needs_approval)'); } catch (e) {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(msg_type)'); } catch (e) {}
