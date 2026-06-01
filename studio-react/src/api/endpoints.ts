@@ -335,6 +335,18 @@ export function resolveApproval(
   });
 }
 
+// List approvals, optionally filtered by stored status ('pending' |
+// 'approved' | 'denied' | ...). Omit `status` to get every status.
+// Used by ApprovalsPage to back its resolved-state tabs, which the
+// 10s-polled dashboard overview (pending-only) cannot supply.
+export function fetchApprovals(opts?: { status?: string; limit?: number }): Promise<Approval[]> {
+  const params = new URLSearchParams();
+  if (opts?.status) params.set('status', opts.status);
+  if (opts?.limit != null) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  return apiGet<Approval[]>(`/approvals${qs ? `?${qs}` : ''}`);
+}
+
 // Requests
 
 export function resolveRequest(id: string, response: string): Promise<Message> {

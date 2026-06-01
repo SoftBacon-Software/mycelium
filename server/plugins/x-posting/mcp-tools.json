@@ -16,7 +16,7 @@
   },
   {
     "name": "mycelium_x_publish",
-    "description": "Publish a tweet draft to X/Twitter via API v2. Requires x-posting plugin credentials configured. Gated action: x_publish.",
+    "description": "Publish a tweet draft. NORMAL FLOW: a draft created via mycelium_x_post auto-files a pending approval; once an operator approves it in the Approvals dashboard, the server auto-publishes via the approval_approved hook — agents should NOT call this tool in that flow. ADMIN ONLY: callers authenticated with X-Admin-Key may invoke this tool to bypass the gate. Requires x-posting plugin credentials configured.",
     "schema": {
       "type": "object",
       "properties": {

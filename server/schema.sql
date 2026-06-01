@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS agents (
   llm_backend     TEXT NOT NULL DEFAULT '',
   llm_model       TEXT NOT NULL DEFAULT '',
   runtime         TEXT NOT NULL DEFAULT '',
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  primary_team_id TEXT
 );
 
 -- Organizations (multi-tenant)
@@ -43,7 +44,9 @@ CREATE TABLE IF NOT EXISTS projects (
   repo_url        TEXT NOT NULL DEFAULT '',
   type            TEXT NOT NULL DEFAULT 'software',
   status          TEXT NOT NULL DEFAULT 'active',
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  bug_categories  TEXT NOT NULL DEFAULT '[]',
+  team_id         TEXT
 );
 
 -- Cross-project tasks
@@ -58,7 +61,17 @@ CREATE TABLE IF NOT EXISTS tasks (
   priority        TEXT NOT NULL DEFAULT 'normal',
   tags            TEXT NOT NULL DEFAULT '[]',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  blocked_by      TEXT NOT NULL DEFAULT '[]',
+  blocks          TEXT NOT NULL DEFAULT '[]',
+  needs_approval  INTEGER NOT NULL DEFAULT 0,
+  approved_by     TEXT,
+  approved_at     TEXT,
+  linked_asset_id INTEGER,
+  request_id      INTEGER,
+  branch          TEXT,
+  pr_url          TEXT,
+  repo            TEXT
 );
 
 -- Per-project context snapshots (legacy)
@@ -80,7 +93,13 @@ CREATE TABLE IF NOT EXISTS assets (
   metadata        TEXT NOT NULL DEFAULT '{}',
   requester       TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  file_path       TEXT NOT NULL DEFAULT '',
+  download_url    TEXT NOT NULL DEFAULT '',
+  requested_by    TEXT NOT NULL DEFAULT '',
+  assigned_to     TEXT NOT NULL DEFAULT '',
+  drone_job_id    INTEGER,
+  prompt          TEXT NOT NULL DEFAULT ''
 );
 
 -- Activity feed
@@ -107,7 +126,9 @@ CREATE TABLE IF NOT EXISTS messages (
   status          TEXT NOT NULL DEFAULT 'sent',
   channel_id      INTEGER,
   priority        TEXT NOT NULL DEFAULT 'normal',   -- 'urgent' | 'normal' | 'fyi'
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at     TEXT,
+  resolved_by     TEXT
 );
 
 -- Namespaced context storage
@@ -120,6 +141,8 @@ CREATE TABLE IF NOT EXISTS context_keys (
   expires_at  TEXT,
   updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by  TEXT NOT NULL DEFAULT '',
+  access_count     INTEGER NOT NULL DEFAULT 0,
+  last_accessed_at TEXT,
   UNIQUE(namespace, key)
 );
 
@@ -232,7 +255,8 @@ CREATE TABLE IF NOT EXISTS studio_users (
   display_name  TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   role          TEXT NOT NULL DEFAULT 'admin',
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen     TEXT
 );
 
 -- Password reset tokens (SHA-256 hashed, single-use, 30-min expiry)
@@ -275,7 +299,8 @@ CREATE TABLE IF NOT EXISTS drone_jobs (
   error           TEXT,
   started_at      TEXT,
   completed_at    TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  job_type        TEXT
 );
 
 -- Shared concepts (characters, styles, rulesets, etc. that flow between projects)
@@ -452,7 +477,10 @@ CREATE TABLE IF NOT EXISTS approvals (
   executed_at     TEXT,
   project_id      TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  risk_tier       TEXT NOT NULL DEFAULT 'medium',
+  required_approvals INTEGER NOT NULL DEFAULT 1,
+  current_approvals  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
@@ -473,7 +501,8 @@ CREATE TABLE IF NOT EXISTS operators (
   last_seen_at    TEXT,
   away_message    TEXT NOT NULL DEFAULT '',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  primary_team_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_operators_role ON operators(role);
 CREATE INDEX IF NOT EXISTS idx_operators_status ON operators(status);
@@ -823,3 +852,65 @@ CREATE INDEX IF NOT EXISTS idx_plan_steps_assignee ON plan_steps(assignee);
 CREATE INDEX IF NOT EXISTS idx_messages_status_type ON messages(status, msg_type);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_context_history_changed ON context_history(changed_at);
+
+-- Indexes on columns that were historically added via ALTER migrations
+-- (now native CREATE TABLE columns above). Kept here so a fresh schema.sql
+-- is self-sufficient; initDB still creates these idempotently for old DBs.
+CREATE INDEX IF NOT EXISTS idx_tasks_blocked ON tasks(blocked_by);
+CREATE INDEX IF NOT EXISTS idx_tasks_approval ON tasks(needs_approval);
+CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(msg_type);
+CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id);
+CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority);
+
+-- =============== Plugin-owned tables ===============
+-- These tables are also declared by plugin schema.sql files (applied via
+-- server/plugins.js when a plugin loads), but are mirrored here so a fresh
+-- core initDB() produces a schema that matches the live DB oracle even before
+-- any plugin has loaded. CREATE TABLE IF NOT EXISTS keeps both paths idempotent:
+-- on old DBs the plugin already created the table, so this is a no-op, and the
+-- plugin's own IF NOT EXISTS becomes a no-op on fresh DBs. Keep these in sync
+-- with server/plugins/<plugin>/schema.sql.
+
+-- x-posting plugin: queued/published X (Twitter) posts
+CREATE TABLE IF NOT EXISTS x_posts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id      TEXT NOT NULL DEFAULT '',
+  tweet_text      TEXT NOT NULL,
+  tweet_id        TEXT,
+  tweet_url       TEXT,
+  thread_id       TEXT,
+  thread_position INTEGER,
+  source          TEXT NOT NULL DEFAULT 'manual',
+  source_id       TEXT,
+  status          TEXT NOT NULL DEFAULT 'draft',
+  error           TEXT,
+  posted_by       TEXT NOT NULL DEFAULT '',
+  posted_at       TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_x_posts_status ON x_posts(status);
+CREATE INDEX IF NOT EXISTS idx_x_posts_thread ON x_posts(thread_id);
+CREATE INDEX IF NOT EXISTS idx_x_posts_source ON x_posts(source, source_id);
+
+-- build-in-public plugin: social content drafts pending operator approval
+CREATE TABLE IF NOT EXISTS bip_drafts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  trigger_event   TEXT NOT NULL DEFAULT '',         -- 'task_completed', 'plan_step_completed', etc.
+  trigger_data    TEXT NOT NULL DEFAULT '{}',       -- the event payload that triggered this
+  title           TEXT NOT NULL DEFAULT '',         -- headline (e.g. "macbook-claude shipped operator inbox")
+  content         TEXT NOT NULL DEFAULT '',         -- draft post content
+  platforms       TEXT NOT NULL DEFAULT '["twitter"]',
+  status          TEXT NOT NULL DEFAULT 'pending',  -- 'pending','approved','rejected','published','skipped'
+  approval_id     INTEGER,                          -- linked approvals entry
+  inbox_item_id   TEXT NOT NULL DEFAULT '[]',       -- JSON array of linked operator_inbox ids
+  rejection_note  TEXT NOT NULL DEFAULT '',
+  posted_at       TEXT,
+  post_ids        TEXT NOT NULL DEFAULT '{}',       -- platform -> post id
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bip_drafts_status ON bip_drafts(status);
+CREATE INDEX IF NOT EXISTS idx_bip_drafts_event ON bip_drafts(trigger_event);
+CREATE INDEX IF NOT EXISTS idx_bip_drafts_created ON bip_drafts(created_at DESC);

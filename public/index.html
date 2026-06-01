@@ -232,10 +232,22 @@ const A={ // fractional anchors (desktop)
   s1card:[.30,.46], s1panel:[.68,.44], s1copy:[.5,.16],
   s2chat:[.30,.74], ag0:[.5,.30], ag1:[.69,.42], ag2:[.5,.58], s2copy:[.5,.13], finale:[.5,.5]
 };
-const A_M={ // mobile: everything centered — beats show one at a time, never overlap
-  s1card:[.5,.5], s1panel:[.5,.5], s1copy:[.5,.27],
-  s2chat:[.5,.5], ag0:[.5,.5], ag1:[.5,.5], ag2:[.5,.5], s2copy:[.5,.27], finale:[.5,.5]
-};
+// mobile: beats shown one at a time, but placed in a vertical zigzag so the
+// connective wire between consecutive beats has real direction to travel.
+// Each beat is its own MBEATS entry: [id, anchorX, anchorY, lo, hi, color].
+// The card renders near its anchor; a glowing wire grows from the previous
+// beat's anchor to this one as the scroll crosses the gap between them.
+const MBEATS=[
+  ['s1copy', .50,.20, .06,.19, 'bright'],
+  ['s1card', .32,.40, .19,.32, 'bright'],
+  ['s1panel',.66,.46, .32,.45, 'cyan'  ],
+  ['s2copy', .50,.22, .45,.56, 'bright'],
+  ['s2chat', .34,.46, .56,.65, 'teal'  ],
+  ['ag0',    .66,.40, .65,.73, 'bright'],
+  ['ag1',    .34,.52, .73,.81, 'green' ],
+  ['ag2',    .64,.44, .81,.88, 'teal'  ],
+];
+const A_M=Object.fromEntries(MBEATS.map(b=>[b[0],[b[1],b[2]]]).concat([['s2copy',[.5,.22]],['finale',[.5,.5]]]));
 let layoutDone=false, mobile=innerWidth<=640;
 function layout(){const AA=mobile?A_M:A;for(const k in AA)if($(k))pos($(k),AA[k][0],AA[k][1]);layoutDone=true;}
 // mobile crossfade: trapezoid 0→1→0 over [lo,hi] so only one beat is visible at a time
@@ -243,11 +255,40 @@ function seg(lo,hi){const d=(hi-lo)*0.28;return clamp(Math.min((sp-lo)/d,(hi-sp)
 function mobileBeats(){
   $('hint').classList.toggle('show',sp<0.04);
   squad(1-ease(band(sp,0,.06)));
-  ['s1copy','s1card','s1panel','s2copy','s2chat','ag0','ag1','ag2'].forEach(id=>show($(id),0,.95));
-  const B=[['s1copy',.06,.19],['s1card',.19,.32],['s1panel',.32,.45],['s2copy',.45,.56],
-           ['s2chat',.56,.65],['ag0',.65,.73],['ag1',.73,.81],['ag2',.81,.88]];
-  B.forEach(([id,lo,hi])=>{const o=seg(lo,hi);if(o>0)show($(id),o,.92+.08*o);});
-  show($('finale'),ease(clamp(band(sp,.88,.99),0,1)),.94+.06*ease(clamp(band(sp,.88,.99),0,1)));
+  // hide all DOM beats, then reveal the active one (crossfade)
+  MBEATS.forEach(b=>show($(b[0]),0,.95));
+  show($('s2copy'),0,.95);
+  MBEATS.forEach(([id,ax,ay,lo,hi])=>{const o=seg(lo,hi);if(o>0)show($(id),o,.92+.08*o);});
+  // ---- connective wires + nodes. Each node fades IN only as its incoming
+  // wire arrives, stays while its card is up, then fades OUT once you scroll
+  // past — so nothing floats behind the squad intro or lingers into the finale.
+  for(let i=0;i<MBEATS.length;i++){
+    const [,ax,ay,lo,hi,col]=MBEATS[i];
+    const here=P(ax,ay), c=C[col];
+    // node envelope: rise just before this beat's window, fall just after.
+    // never always-on (the old .35 floor made every node visible at sp=0).
+    const nIn=band(sp,lo-.04,lo+.01), nOut=1-band(sp,hi-.01,hi+.04);
+    const na=nIn*nOut*(.5+.5*seg(lo,hi));
+    if(na>.01) node(here.x,here.y,6,c,na);
+    // wire from previous beat → this one: grows across the boundary as the
+    // beat arrives, then fades out once you leave the beat (never persists).
+    if(i>0){
+      const prev=MBEATS[i-1], there=P(prev[1],prev[2]);
+      const grow=band(sp,lo-.05,lo+.04);                          // travels in as the beat arrives
+      const wa=band(sp,lo-.06,lo-.01)*(1-band(sp,hi-.01,hi+.04)); // appears at the gap, gone after the beat
+      if(grow>0&&wa>.01) wireSeg(there,here,grow,c,wa);
+    }
+  }
+  // finale: last beat converges to center; the wire + center node fully fade
+  // to ZERO before the "$0 / on your Mac" headline settles in.
+  const wIn=band(sp,.85,.90), wOut=1-band(sp,.90,.95), wv=wIn*wOut;
+  if(wv>.01){
+    const last=MBEATS[MBEATS.length-1], lp=P(last[1],last[2]), ctr=P(.5,.5);
+    wireSeg(lp,ctr,wIn,C.green,wv);
+    node(ctr.x,ctr.y,9,C.green,wv);
+  }
+  const fv=ease(band(sp,.88,.99));
+  show($('finale'),fv,.94+.06*fv);
 }
 
 function P(fx,fy){return{x:fx*W,y:fy*H};} // anchor → canvas point

@@ -59,8 +59,12 @@ def safe_resolve(root, rel_path):
     # Normalize: strip leading slash, convert forward slashes
     clean = rel_path.lstrip("/").replace("/", os.sep)
     target = os.path.realpath(os.path.join(root, clean))
-    # Must be within root
-    if not target.startswith(root):
+    # Must be within root - use commonpath to prevent directory traversal
+    try:
+        if os.path.commonpath([root, target]) != root:
+            return None
+    except ValueError:
+        # If paths are on different drives (Windows), commonpath raises ValueError
         return None
     return target
 

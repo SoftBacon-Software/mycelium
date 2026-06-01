@@ -17,3 +17,9 @@ public/studio/index.html
 
 # Internal release-prep notes (not for public consumption)
 release-readiness/
+
+# hygiene (m5Max steward 2026-06-01)
+__pycache__/
+*.pyc
+*.log
+tools/logs/
