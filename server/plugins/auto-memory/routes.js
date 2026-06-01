@@ -15,7 +15,7 @@ export default function (core) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var facts = db.listFacts({
-      agent_id: req.query.agent_id,
+      agent_id: who,
       project_id: req.query.project_id,
       category: req.query.category,
       min_confidence: req.query.min_confidence ? parseFloat(req.query.min_confidence) : undefined,
@@ -57,7 +57,7 @@ export default function (core) {
     }
 
     try {
-      var facts = await extractFacts(db, config, text, agent_id || who, project_id);
+      var facts = await extractFacts(db, config, text, who, project_id);
       res.json({ ok: true, facts_extracted: facts.length, facts: facts });
     } catch (e) {
       return apiError(res, 500, 'Extraction failed: ' + e.message);

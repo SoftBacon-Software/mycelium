@@ -102,7 +102,7 @@ export default function (core) {
     var gate = core.checkApprovalGate(req, who, 'x_publish');
     if (gate && !gate.ok) {
       return apiError(res, 403, gate.soft
-        ? 'X publishing requires approval. Use mycelium_request_approval with action_type=x_publish first.'
+        ? 'X publishing requires approval. Drafts created via mycelium_x_post auto-file a pending approval; have an operator approve it in the Approvals dashboard and the server will auto-publish. Direct invocation of this endpoint requires admin auth (X-Admin-Key).'
         : (gate.error || 'Publishing not permitted'), { approval_required: true });
     }
 
@@ -132,6 +132,17 @@ export default function (core) {
           tweet_url: tweetUrl,
           posted_at: new Date().toISOString()
         });
+        
+        // Find the approval for this post_id (most recent pending one)
+        var approval = core.db.prepare(
+          "SELECT id FROM approvals WHERE action_type = 'x_publish' AND status = 'pending' AND json_extract(payload, '$.post_id') = ? ORDER BY id DESC LIMIT 1"
+        ).get(post.id);
+        if (approval) {
+          core.db.prepare(
+            "UPDATE approvals SET status = 'executed', decided_by = ?, decided_at = datetime('now'), executed_at = datetime('now'), reason = 'Admin direct-publish via mycelium_x_publish', updated_at = datetime('now') WHERE id = ?"
+          ).run(who, approval.id);
+        }
+        
         core.emitEvent('x_tweet_published', who, post.project_id,
           'Tweet published', { post_id: post.id, tweet_id: tweetId, tweet_url: tweetUrl });
         res.json({ ok: true, tweet_id: tweetId, tweet_url: tweetUrl });

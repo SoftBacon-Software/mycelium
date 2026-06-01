@@ -19,7 +19,10 @@ export function bucketMemory(ruleset, platform, memoryGb) {
 export function modelClass(model) {
   const m = model.toLowerCase();
   if (/a3b|moe/.test(m)) return '30B-A3B (MoE)';
-  if (/\b(7b|8b)\b/.test(m)) return '7-8B';
+  // Mistral-Nemo ships as a date-name ("Mistral-Nemo-Instruct-2407") with no
+  // size token — it's a 12B, classify by name.
+  if (/mistral-nemo/.test(m)) return '12-14B';
+  if (/\b(7b|8b|9b)\b/.test(m)) return '7-8B';   // gemma-2-9b sits with the small tier
   if (/\b(12b|13b|14b)\b/.test(m)) return '12-14B';
   if (/\b32b\b/.test(m)) return '32B dense';
   if (/\b(65b|70b|72b)\b/.test(m)) return '70B dense';
@@ -33,10 +36,29 @@ export function estimateTPS(ruleset, model) {
   return ruleset.tps_guidance.by_model_class[cls] ?? null;
 }
 
+// Canonical Ollama library tags for the NVIDIA/CPU family-name picks — every
+// one HF/ollama-verified (HTTP 200 at ollama.com/library/<name>) 2026-05-31.
+// Apple picks are mlx-community repo ids (MLX, not GGUF) so they get NO tag.
+// The 1M-context variants are intentionally absent: ollama's standard library
+// ships 128k-max, not the -1M weights, so those fall back to a family-name
+// search rather than a wrong `ollama pull`.
+const OLLAMA_TAGS = {
+  'Qwen2.5-Coder-7B-Instruct':  'qwen2.5-coder:7b',
+  'Qwen2.5-Coder-14B-Instruct': 'qwen2.5-coder:14b',
+  'Qwen2.5-Coder-32B-Instruct': 'qwen2.5-coder:32b',
+  'Qwen2.5-14B-Instruct':       'qwen2.5:14b',
+  'Qwen2.5-32B-Instruct':       'qwen2.5:32b',
+  'Qwen3-Coder-30B-A3B-Instruct':'qwen3-coder:30b',
+  'Llama-3.1-8B-Instruct':      'llama3.1:8b',
+  'Llama-3.3-70B-Instruct':     'llama3.3:70b',
+  'gemma-2-9b-it':              'gemma2:9b',
+  'Mistral-Nemo-Instruct-2407': 'mistral-nemo:12b',
+};
+
 // Resolve ONE opinionated recommendation from the ruleset.
 // input: { platform, memoryGb, task, priority?, comfort? }
 // returns: { platform, memoryGb, bucket, task, model, quant, format, runner,
-//            agenticTool, priorityNote, warning, tpsRange }
+//            agenticTool, priorityNote, warning, tpsRange, ollamaTag }
 export function resolve(ruleset, input) {
   const platform = input.platform;
   const task = input.task;
@@ -53,8 +75,11 @@ export function resolve(ruleset, input) {
     throw new Error(`no pick for task=${task} at ${platform}/${bucket}`);
   }
 
-  // Quant: default unless the model string already declares a bit-depth, e.g. "(6-bit)".
-  const quant = /\(\d+-bit\)/.test(model) ? '' : ruleset.default_quant;
+  // Quant: default unless the model string already declares a bit-depth — either
+  // the legacy "(6-bit)" label OR the bit-depth embedded in an mlx-community repo id
+  // (e.g. "...-4bit", "...-8bit"). When embedded, leave quant blank so the line
+  // doesn't double up ("...-4bit, 4-bit MLX").
+  const quant = /\(\d+-bit\)|-\d+bit\b/.test(model) ? '' : ruleset.default_quant;
 
   const backend = ruleset.backends[platform];
   const format = backend.format;
@@ -64,9 +89,11 @@ export function resolve(ruleset, input) {
   const priorityNote = ruleset.priority_modifiers[priority];
   const warning = cell.warning || null;
   const tpsRange = estimateTPS(ruleset, model);
+  // Ollama pull tag for non-Apple (GGUF) picks only; Apple is an mlx repo id.
+  const ollamaTag = platform === 'apple_silicon' ? null : (OLLAMA_TAGS[model] || null);
 
   return { platform, memoryGb: input.memoryGb, bucket, task,
-           model, quant, format, runner, agenticTool, priorityNote, warning, tpsRange };
+           model, quant, format, runner, agenticTool, priorityNote, warning, tpsRange, ollamaTag };
 }
 
 // Build human-facing lines from a resolved pick. Pure string assembly.
