@@ -1,7 +1,7 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useDashboardStore } from '../stores/dashboardStore'
 import { useAuthStore } from '../stores/authStore'
-import { castVote, resolveApproval, updateTask } from '../api/endpoints'
+import { castVote, resolveApproval, updateTask, fetchApprovals } from '../api/endpoints'
 import { getSenderDisplay } from '../utils/sender'
 import type { Approval, Task } from '../api/types'
 import RiskBadge from '../components/approvals/RiskBadge'
@@ -62,13 +62,50 @@ export default function ApprovalsPage() {
   const [taskApproving, setTaskApproving] = useState<string | null>(null)
   const [taskError, setTaskError] = useState<string | null>(null)
 
-  // Build a combined list of all approvals across states.
-  // The store only provides pendingApprovals directly; for resolved ones
-  // we filter from the same array (API may return all statuses).
+  // The dashboard overview only carries the pending queue (getOverview hard-codes
+  // status='pending'), so resolved-state tabs cannot be derived from it. For the
+  // non-pending tabs we fetch directly from GET /approvals with the matching
+  // stored status. The UI 'rejected' tab maps to the stored value 'denied'
+  // (the server stores denials as status='denied'); the 'all' tab passes no
+  // status filter. The pending tab keeps using the 10s-polled store so it stays
+  // live without an extra request.
+  const [resolvedApprovals, setResolvedApprovals] = useState<Approval[]>([])
+  const [approvalsError, setApprovalsError] = useState<string | null>(null)
+  const [approvalsLoading, setApprovalsLoading] = useState(false)
+
+  useEffect(() => {
+    if (filter === 'pending') {
+      setApprovalsError(null)
+      return
+    }
+    let cancelled = false
+    const status = filter === 'rejected' ? 'denied' : filter === 'all' ? undefined : filter
+    setApprovalsLoading(true)
+    setApprovalsError(null)
+    fetchApprovals({ status, limit: 50 })
+      .then((rows) => {
+        if (!cancelled) setResolvedApprovals(rows)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setResolvedApprovals([])
+          setApprovalsError(err instanceof Error ? err.message : 'Failed to load approvals')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setApprovalsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [filter])
+
   const filteredApprovals = useMemo(() => {
-    if (filter === 'all') return pendingApprovals
-    return pendingApprovals.filter((a) => a.status === filter)
-  }, [pendingApprovals, filter])
+    if (filter === 'pending') {
+      return pendingApprovals.filter((a) => a.status === 'pending')
+    }
+    return resolvedApprovals
+  }, [filter, pendingApprovals, resolvedApprovals])
 
   const pendingCount = useMemo(
     () => pendingApprovals.filter((a) => a.status === 'pending').length,
@@ -155,7 +192,15 @@ export default function ApprovalsPage() {
 
       {/* Approval cards */}
       <section>
-        {filteredApprovals.length === 0 ? (
+        {approvalsError ? (
+          <div className="bg-surface rounded-lg p-8 text-center">
+            <p className="text-red text-sm">{approvalsError}</p>
+          </div>
+        ) : approvalsLoading && filter !== 'pending' ? (
+          <div className="bg-surface rounded-lg p-8 text-center">
+            <p className="text-text-muted text-sm">Loading approvals…</p>
+          </div>
+        ) : filteredApprovals.length === 0 ? (
           <div className="bg-surface rounded-lg p-8 text-center">
             <p className="text-text-muted text-sm">
               {filter === 'pending'

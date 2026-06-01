@@ -5566,7 +5566,8 @@ router.get('/approvals', asyncHandler(function (req, res) {
     status: req.query.status || undefined,
     action_type: req.query.action_type || undefined,
     requested_by: req.query.requested_by || undefined,
-    project: req.query.project || undefined,
+    // listApprovals reads filters.project_id (db.js); accept either query key
+    project_id: req.query.project_id || req.query.project || undefined,
     limit: parseLimit(req.query.limit, 50)
   };
   var approvals = listApprovals(filters);
