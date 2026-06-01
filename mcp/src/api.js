@@ -16,7 +16,25 @@ function resolveKey() {
   return envKey;
 }
 
-const API_URL = process.env.MYCELIUM_API_URL || 'https://mycelium.fyi/api/mycelium';
+// Read URL from settings.json as ground truth — symmetric with resolveKey().
+// Without this, an empty/stale process.env.MYCELIUM_API_URL silently fell through
+// to the .fyi literal while the key still resolved from settings.json, so requests
+// authenticated fine but hit the wrong host (substrate-separation bug). Same
+// precedence as resolveKey: settings.json wins, then env, then the .fyi default.
+// opts ({ home, env }) makes the function directly unit-testable without import games.
+function resolveUrl(opts) {
+  var home = (opts && opts.home) || homedir();
+  var env = (opts && opts.env) || process.env;
+  try {
+    var settingsPath = join(home, '.claude', 'settings.json');
+    var settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    var mcpEnv = settings.mcpServers && settings.mcpServers.mycelium && settings.mcpServers.mycelium.env;
+    if (mcpEnv && mcpEnv.MYCELIUM_API_URL) return mcpEnv.MYCELIUM_API_URL;
+  } catch {}
+  return env.MYCELIUM_API_URL || 'https://mycelium.fyi/api/mycelium';
+}
+
+const API_URL = resolveUrl();
 const API_KEY = resolveKey();
 const ROLE = process.env.MYCELIUM_ROLE || 'admin';
 const AGENT_ID = process.env.MYCELIUM_AGENT_ID || '';
@@ -54,4 +72,4 @@ export function apiGet(path) { return request('GET', path); }
 export function apiPost(path, body) { return request('POST', path, body); }
 export function apiPut(path, body) { return request('PUT', path, body); }
 export function apiDelete(path) { return request('DELETE', path); }
-export { API_URL, API_KEY, ROLE };
+export { API_URL, API_KEY, ROLE, resolveUrl };
