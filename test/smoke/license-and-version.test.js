@@ -7,12 +7,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..', '..')
 
 describe('repo metadata', () => {
-  test('LICENSE file exists and declares AGPL-3.0', () => {
+  test('LICENSE file exists and declares Apache-2.0', () => {
     const licensePath = join(REPO_ROOT, 'LICENSE')
     expect(existsSync(licensePath)).toBe(true)
     const text = readFileSync(licensePath, 'utf8')
-    expect(text).toMatch(/GNU AFFERO GENERAL PUBLIC LICENSE/i)
-    expect(text).toMatch(/Version 3/i)
+    expect(text).toMatch(/Apache License/i)
+    expect(text).toMatch(/Version 2\.0/i)
   })
 
   test('package.json version is valid semver', () => {
@@ -26,7 +26,7 @@ describe('repo metadata', () => {
     const pkg = JSON.parse(
       readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
     )
-    expect(pkg.license).toBe('AGPL-3.0-only')
+    expect(pkg.license).toBe('Apache-2.0')
   })
 
   test('SECURITY.md and CONTRIBUTING.md exist (OSS hygiene)', () => {

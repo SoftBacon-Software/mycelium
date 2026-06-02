@@ -461,6 +461,6 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](LICENSE) for full terms.
+Apache-2.0. See [LICENSE](LICENSE) for full terms.
 
 The SDK (`@mycelium/sdk`) is licensed under MIT for maximum compatibility.

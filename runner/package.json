@@ -8,7 +8,7 @@
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.70"
   }

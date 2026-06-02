@@ -13,7 +13,7 @@
   },
   "keywords": ["mycelium", "3d-printer", "drone", "bambu", "octoprint", "moonraker", "klipper"],
   "author": "SoftBacon Software",
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/SoftBacon-Software/mycelium",
