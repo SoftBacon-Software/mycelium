@@ -1631,6 +1631,50 @@ export function getTeamProjectIdsForAgent(agentId) {
 }
 
 // Build a prioritized work queue: what should this agent do next?
+// --- Capability-aware routing (planner-triage-first) -----------------------
+// A "planner" is any agent advertising the `reasoning_planning` capability.
+// Unassigned bugs are planner-shaped work (triage → author a plan, or delegate
+// a single-shot task), so we route them to the planner instead of letting
+// whichever agent polls first single-shot them. Safe fallback: if there is no
+// ONLINE planner in scope, behave exactly as before (offer to all) — solo /
+// non-squad / public deployments are unaffected, and a planner being offline
+// can't starve the bug queue.
+function _capsHave(caps, name) {
+  if (!caps) return false;
+  try {
+    var arr = typeof caps === 'string' ? JSON.parse(caps) : caps;
+    return Array.isArray(arr) && arr.indexOf(name) !== -1;
+  } catch (e) { return false; }
+}
+
+function agentIsPlanner(agentId) {
+  try {
+    var row = db.prepare('SELECT capabilities FROM agents WHERE id = ?').get(agentId);
+    return !!(row && _capsHave(row.capabilities, 'reasoning_planning'));
+  } catch (e) { return false; }
+}
+
+// Is there an ONLINE planner (heartbeat within 30m) whose visibility overlaps
+// this agent's scope — so unassigned bugs there are the planner's to triage?
+// Mirrors the same project/team/legacy scoping the bug-visibility filter uses.
+function scopeHasOnlinePlanner(agentId, projectId, teamProjIds) {
+  try {
+    var planners = db.prepare(
+      "SELECT id, project_id FROM agents " +
+      "WHERE capabilities LIKE '%reasoning_planning%' AND id != ? " +
+      "AND last_heartbeat > datetime('now','-30 minutes')"
+    ).all(agentId);
+    var noTeam = !teamProjIds || teamProjIds.length === 0;
+    for (var p of planners) {
+      if (!p.project_id) return true;                                  // unscoped planner sees all
+      if (p.project_id === projectId) return true;                     // same project
+      if (!noTeam && teamProjIds.indexOf(p.project_id) !== -1) return true; // same team
+      if (noTeam) return true;                                         // legacy: this agent sees all → any planner counts
+    }
+    return false;
+  } catch (e) { return false; }
+}
+
 export function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
   var queue = [];
 
@@ -1690,9 +1734,16 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     }
   }
 
-  // Priority 9: Unassigned bugs for this agent's project/team
+  // Priority 9: Unassigned bugs for this agent's project/team.
+  // Planner-triage-first: an unassigned bug is planner-shaped work, so route
+  // it to the planner for triage rather than letting whichever agent polls
+  // first single-shot it. A non-planner is shown unassigned bugs ONLY when no
+  // online planner is in scope (fallback so solo/public deployments and a
+  // planner-offline situation still get bugs picked up).
   var teamProjIds = getTeamProjectIdsForAgent(agentId);
-  var unassignedBugs = bugs.filter(function (b) {
+  var deferToPlanner = !agentIsPlanner(agentId)
+    && scopeHasOnlinePlanner(agentId, projectId, teamProjIds);
+  var unassignedBugs = deferToPlanner ? [] : bugs.filter(function (b) {
     if (b.assignee) return false;
     if (!b.project_id) return true; // unscoped bugs visible to everyone
     if (b.project_id === projectId) return true;
