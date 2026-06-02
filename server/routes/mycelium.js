@@ -178,6 +178,7 @@ import {
   getAgentProfile, ensureAgentProfile, updateAgentProfile, incrementProfileCounter,
   listAgentProfiles, getAgentLeaderboard,
   getStaleAgents, getStaleTasks, getStaleRequests, getStaleDrones, getStalePlanSteps,
+  getReconciliationCandidates,
   createAgentTemplate, getAgentTemplate, listAgentTemplates, updateAgentTemplate, deleteAgentTemplate
 } from '../db.js';
 import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, registerEventHook, getWorkerStatus } from '../plugins.js';
@@ -265,9 +266,20 @@ function apiError(res, status, message, extra) {
 
 // Validate an enum field. Returns true if valid, sends 400 via apiError and returns false if not.
 // Exposed via core.validateEnum so plugins share this implementation.
+//
+// Reject-with-reason (A7): the 400 body now carries a machine-readable shape
+// ({ error, code, field, value, allowed }) so consumers (SDK, bridges) can
+// branch on `code === 'invalid_enum'` and surface the allowed-list instead of
+// scraping the human string. The human `error` message is unchanged, so
+// existing string-matching callers keep working — this is additive.
 function validateEnum(res, value, allowed, fieldName) {
   if (value !== undefined && allowed.indexOf(value) === -1) {
-    apiError(res, 400, fieldName + ' must be one of: ' + allowed.join(', '));
+    apiError(res, 400, fieldName + ' must be one of: ' + allowed.join(', '), {
+      code: 'invalid_enum',
+      field: fieldName,
+      value: value,
+      allowed: allowed
+    });
     return false;
   }
   return true;
@@ -281,13 +293,58 @@ function parseLimit(val, def) {
   return Math.min(isNaN(n) || n < 1 ? (def || 50) : n, MAX_PAGE_LIMIT);
 }
 
-var AGENT_STATUSES = ['online', 'offline', 'idle', 'busy'];
-var TASK_STATUSES = ['open', 'in_progress', 'review', 'done', 'cancelled'];
+// ======================== CANONICAL STATUS ENUMS ========================
+// SINGLE SOURCE OF TRUTH for every status/lifecycle enum the API enforces.
+// Previously these were scattered as loose `var X_STATUSES = [...]` lines;
+// consolidating them here (A7) means there is exactly one place to read or
+// extend the legal lifecycle for each record type. The named `var`s below are
+// thin aliases into STATUS_ENUMS so the ~15 existing validateEnum() call sites
+// keep working unchanged — do NOT redefine the arrays inline elsewhere.
+//
+// Enforcement is GRADUAL by design: validateEnum() hard-rejects clearly-illegal
+// values with a machine-readable reason (code:'invalid_enum'), but we do NOT
+// (yet) reject questionable *transitions* (e.g. closed -> open) — those are
+// log-warned via warnSuspectTransition() so currently-lenient consumers
+// (older SDK/bridges) are not hard-broken. Tighten transitions later.
+var STATUS_ENUMS = {
+  agent:     ['online', 'offline', 'idle', 'busy'],
+  task:      ['open', 'in_progress', 'review', 'done', 'cancelled'],
+  asset:     ['requested', 'in_progress', 'ready', 'delivered', 'cancelled'],
+  plan:      ['draft', 'active', 'completed', 'cancelled'],
+  plan_step: ['pending', 'in_progress', 'completed', 'blocked'],
+  bug:       ['open', 'in_progress', 'fixed', 'closed'],
+  channel:   ['active', 'archived'],
+  drone_job: ['pending', 'claimed', 'done', 'completed', 'failed', 'cancelled', 'dismissed']
+};
+// Suspect (non-fatal) transitions: log-warn only, never reject. Keyed by enum
+// type -> { fromStatus: [disallowedNextStatuses] }. Empty by default; this is
+// the seam where transition discipline can be tightened without touching the
+// reject path. Currently we only flag "re-opening" a terminal state.
+var SUSPECT_TRANSITIONS = {
+  bug:  { fixed: ['open', 'in_progress'], closed: ['open', 'in_progress'] },
+  task: { done: ['open', 'in_progress'] },
+  plan: { completed: ['draft', 'active'] }
+};
+
+// Log-warn (do not reject) when a status change looks like an illegal
+// transition out of a terminal state. Keeps tightening observable before it is
+// enforced. `current` may be undefined (record had no prior status) — skip then.
+function warnSuspectTransition(enumType, current, next) {
+  if (current === undefined || next === undefined || current === next) return;
+  var rules = SUSPECT_TRANSITIONS[enumType];
+  if (rules && rules[current] && rules[current].indexOf(next) !== -1) {
+    console.warn('[enum] suspect transition on ' + enumType + ': ' + current + ' -> ' + next +
+      ' (allowed but flagged; not rejected)');
+  }
+}
+
+var AGENT_STATUSES = STATUS_ENUMS.agent;
+var TASK_STATUSES = STATUS_ENUMS.task;
 var TASK_PRIORITIES = ['low', 'normal', 'high'];
-var ASSET_STATUSES = ['requested', 'in_progress', 'ready', 'delivered', 'cancelled'];
-var PLAN_STATUSES = ['draft', 'active', 'completed', 'cancelled'];
-var PLAN_STEP_STATUSES = ['pending', 'in_progress', 'completed', 'blocked'];
-var BUG_STATUSES = ['open', 'in_progress', 'fixed', 'closed'];
+var ASSET_STATUSES = STATUS_ENUMS.asset;
+var PLAN_STATUSES = STATUS_ENUMS.plan;
+var PLAN_STEP_STATUSES = STATUS_ENUMS.plan_step;
+var BUG_STATUSES = STATUS_ENUMS.bug;
 var BUG_SEVERITIES = ['low', 'normal', 'high', 'critical'];
 var DEFAULT_BUG_CATEGORIES = ['bug', 'feature', 'ui', 'crash', 'api', 'infrastructure', 'other'];
 
@@ -303,8 +360,8 @@ function getBugCategories(projectId) {
   }
   return DEFAULT_BUG_CATEGORIES;
 }
-var CHANNEL_STATUSES = ['active', 'archived'];
-var DRONE_JOB_STATUSES = ['pending', 'claimed', 'done', 'completed', 'failed', 'cancelled', 'dismissed'];
+var CHANNEL_STATUSES = STATUS_ENUMS.channel;
+var DRONE_JOB_STATUSES = STATUS_ENUMS.drone_job;
 
 // Sanitize input: ensure string type, trim, handle null/undefined.
 // HTML entity escaping — defense in depth. Dashboard uses textContent (XSS-safe),
@@ -1615,6 +1672,7 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
   if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
   if (!validateEnum(res, req.body.status, TASK_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.priority, TASK_PRIORITIES, 'priority')) return;
+  warnSuspectTransition('task', task.status, req.body.status);
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -2982,6 +3040,7 @@ router.put('/plans/:id', asyncHandler(function (req, res) {
   if (!plan) return res.status(404).json({ error: 'Plan not found' });
   if (!checkProjectScope(req, res, plan.project_id)) return;
   if (!validateEnum(res, req.body.status, PLAN_STATUSES, 'status')) return;
+  warnSuspectTransition('plan', plan.status, req.body.status);
   var fields = {};
   if (req.body.title !== undefined) fields.title = escapeHtml(req.body.title);
   if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
@@ -4623,6 +4682,7 @@ router.put('/bugs/:id', asyncHandler(function (req, res) {
   if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
   if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
   if (!validateEnum(res, req.body.severity, BUG_SEVERITIES, 'severity')) return;
+  warnSuspectTransition('bug', bug.status, req.body.status);
   var updates = {};
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.assignee !== undefined) updates.assignee = req.body.assignee;
@@ -4664,6 +4724,26 @@ router.delete('/bugs/:id', asyncHandler(function (req, res) {
   deleteBug(bug.id);
   emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
   res.json({ ok: true, id: bug.id });
+}));
+
+// ======== RECONCILIATION (A7 — state-desync visibility) ========
+// Read-only. Surfaces records (bugs, tasks, plan_steps) sitting in_progress
+// whose OWN updated_at is older than ?threshold_minutes (default 24h) — the
+// silently-stuck candidates where platform state may have drifted from reality
+// (e.g. a bug fixed-in-code but never moved off in_progress). Does NOT mutate;
+// the operator decides what to reconcile. Admin-only.
+//
+// GET /reconciliation?threshold_minutes=1440 (or ?threshold_hours=24)
+router.get('/reconciliation', asyncHandler(function (req, res) {
+  if (!checkAdmin(req, res)) return;
+  var minutes;
+  if (req.query.threshold_minutes !== undefined) {
+    minutes = parseInt(req.query.threshold_minutes, 10);
+  } else if (req.query.threshold_hours !== undefined) {
+    minutes = parseInt(req.query.threshold_hours, 10) * 60;
+  }
+  if (minutes === undefined || isNaN(minutes) || minutes < 1) minutes = 24 * 60;
+  res.json(getReconciliationCandidates(minutes));
 }));
 
 // ======== TEAM CHAT (human-only) ========

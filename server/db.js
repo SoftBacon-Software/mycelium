@@ -4164,6 +4164,48 @@ export function getAgentLeaderboard(limit) {
 
 // -- Health Patrol --
 
+// Reconciliation read-surface (A7 — state-desync visibility).
+//
+// Health Patrol's getStaleTasks/getStalePlanSteps key staleness off the
+// ASSIGNEE'S heartbeat — they answer "is the worker gone?". Reconciliation
+// answers a different question: "has this RECORD itself drifted from reality?"
+// i.e. it has sat in_progress past a threshold with no edits, regardless of
+// whether any agent is online. That's the silently-stuck case — e.g. all 12
+// bugs sitting in_progress including #10 (fixed-in-code) — that corrupts
+// greenlight decisions and training labels.
+//
+// READ-ONLY. Returns candidate records; never mutates. The operator decides
+// what to reconcile. thresholdMinutes defaults to 24h (1440).
+export function getReconciliationCandidates(thresholdMinutes) {
+  thresholdMinutes = thresholdMinutes || (24 * 60);
+  var cutoffClause = "updated_at < datetime('now', '-' || ? || ' minutes')";
+
+  var bugs = db.prepare(
+    "SELECT id, project_id, title, status, assignee, updated_at FROM bugs " +
+    "WHERE status = 'in_progress' AND " + cutoffClause + " ORDER BY updated_at ASC"
+  ).all(thresholdMinutes);
+
+  var tasks = db.prepare(
+    "SELECT id, project_id, title, status, assignee, updated_at FROM tasks " +
+    "WHERE status = 'in_progress' AND " + cutoffClause + " ORDER BY updated_at ASC"
+  ).all(thresholdMinutes);
+
+  var planSteps = db.prepare(
+    "SELECT s.id, s.plan_id, s.title, s.status, s.assignee, s.updated_at FROM plan_steps s " +
+    "WHERE s.status = 'in_progress' AND s." + cutoffClause + " ORDER BY s.updated_at ASC"
+  ).all(thresholdMinutes);
+
+  return {
+    threshold_minutes: thresholdMinutes,
+    generated_at: db.prepare("SELECT datetime('now') as now").get().now,
+    counts: { bugs: bugs.length, tasks: tasks.length, plan_steps: planSteps.length,
+              total: bugs.length + tasks.length + planSteps.length },
+    bugs: bugs,
+    tasks: tasks,
+    plan_steps: planSteps
+  };
+}
+
 export function getStaleAgents(thresholdMinutes) {
   thresholdMinutes = thresholdMinutes || 15;
   return db.prepare(
