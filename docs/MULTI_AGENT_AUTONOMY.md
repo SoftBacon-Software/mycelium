@@ -189,10 +189,51 @@ not up front. If it visibly lifts her plans, generalize to other phases/roles.
 authors *from the injected template + exemplars*." Later: Lucy's code step gets
 coding conventions; Echo's verify step gets the verification checklist.
 
+### A11 — 🟡 Plan-status gating in `buildWorkQueue` (the review gate)  *(platform — Spec #1 ④)*
+**Dogfood finding:** `buildWorkQueue` offers a plan's steps regardless of
+`plan.status` (it's fed `listPlans()` unfiltered, so it sees `draft` plans).
+Plans default to `draft` with a `draft→active→completed→cancelled` lifecycle,
+but the work queue ignores it — while the stand-up query and
+`getNextUnassignedPlanStep` *already* gate on `active`. **Fix:** offer steps
+only from `active` plans. That makes the existing lifecycle the review gate
+(greenlight = `PUT /plans/:id {status:'active'}`); supersedes the original
+plan-step `needs_approval` idea (plan_steps have no such field) and makes A6
+mostly moot. Approver = operator, never a local agent (see `OPERATING_MODEL.md`).
+
+### A12 — 🔴 Greenlight surface (draft plans awaiting approval)  *(platform — Spec #1 ④)*
+No "plans awaiting approval" view — `draft` plans just sit unseen. Surface them
+in the boot/overview payload the way the approval queue already is. **This feed
+is the Mycelium app's home screen and the top of the Velum cockpit**
+(`OPERATING_MODEL.md`, data backbone #1). Build the platform feed first so both
+apps render clean from day one.
+
+### A13 — 🔴 Live plan-flight + agent-activity streams  *(platform + bridge — the cockpit)*
+Gilbert's Velum cockpit: plans **animating in flight** (current step, progress,
+transitions) + a **pop-out of what each agent is doing/thinking/writing**.
+Today there's only a `working_on` heartbeat label + post-hoc transcripts. Needs
+(a) live plan-flight events, (b) a live per-agent activity stream (current
+action + an output tail). Velum can tail the local transcript directly; the
+Mycelium app needs a platform stream. Feeds `OPERATING_MODEL.md` data backbone
+#2/#3. Extends Cockpit v0 (plan #3).
+
 ---
 
 ## Log
 
+- **2026-06-02** — Dogfood audit of the plan machinery (per Gilbert "dogfood all
+  the way down"). Findings → A11 (plan-status gate = the review gate), A12
+  (greenlight surface), A13 (live cockpit streams). Wrote `OPERATING_MODEL.md`
+  — the operator-side companion to this register (review-centered loop; two
+  altitudes: app=judge / Velum cockpit=move parts; one substrate). Spec #1 ④
+  rewritten to gate via the plan lifecycle + fold in the greenlight surface.
+- **2026-06-02** — **①+② shipped + verified (the "stop the bleeding" increment).**
+  A1 keystone: capability-aware `buildWorkQueue` — behaviorally verified live
+  (unassigned bug offered to ada, withheld from lucy). A3: bridge `bug`
+  work-type handling — unit-verified (bug→/bugs/:id, not /tasks/:id; tasks
+  unregressed). Both on local `planner-triage-routing` branches (mycelium +
+  jarvis), not pushed. #11's class is now closed at the routing + completion
+  layers. Remaining: ③ Ada create_plan + triage + A10 template-inject seed;
+  ④ review gate + A6 plan_step clean-defer.
 - **2026-06-02** — A10 added as the **foundational track**: phase-gated
   progressive steering ("create the environment for the model to thrive" —
   Gilbert's framing, now the register's north star). Routing (A1/A2) reframed
