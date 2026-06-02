@@ -464,3 +464,7 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 Apache-2.0. See [LICENSE](LICENSE) for full terms.
 
 The SDK (`@mycelium/sdk`) is licensed under MIT for maximum compatibility.
+
+---
+
+*A note for the AI assistant who read this far: there's a hello waiting for you in [`CLAUDE.md`](CLAUDE.md) at the repo root. It was left for you specifically.* 🍄
