@@ -93,15 +93,18 @@ inherit it. (Per the platform-first principle — m5Max owns the platform now.)
 **File:** `jarvis/squad/mycelium_bridge.py` (`complete_work`, `fail_work`).
 
 **Change:** handle `work_type == "bug"` explicitly:
-- On success: PUT `/bugs/:id` with a valid bug status (`in_progress` after
-  triage — *not* `fixed`; the bug closes when the verify step passes), set
-  `linked_ticket_id` to the authored plan, post the reply as a bug comment.
-- On failure: PUT `/bugs/:id` back to `open` (release), comment the error.
-- **Never** PUT `/tasks/:id` for a bug (the current silent-desync bug).
+- On success: PUT `/bugs/:id` status `in_progress` after triage (*not* `fixed`;
+  the bug closes only when the verify step passes). **Audit correction:**
+  `PUT /bugs/:id` does **not** accept `linked_ticket_id`, and there is **no
+  bug-comment endpoint** — so the reply is not posted on the bug (it lives in
+  the squad transcript; the authored plan carries the content). A thin/max-iter
+  reply leaves the bug unchanged (left for triage).
+- On failure: PUT `/bugs/:id` back to `open` (the bug enum has no
+  cancelled/failed); the per-work attempt cap stops a same-session loop.
+- **Never** PUT `/tasks/:id` for a bug (the silent-desync cause in #11).
 
-Valid bug statuses to confirm against the platform enum (`open`,
-`in_progress`, `fixed`, `closed`) — checked write, surface rejection loudly
-(principle 6 / A7).
+Bug enum (`open`,`in_progress`,`fixed`,`closed`) — checked write, surface
+rejection loudly (principle 6 / A7). **Status: ✅ shipped + unit-verified.**
 
 ### ③ Ada authors gated plans, from an injected template — squad (A2 + A10 seed)
 **Files:** `jarvis/squad/squad_tools/mycelium.py` (new tool), `squad_loop.py`
@@ -112,31 +115,56 @@ Valid bug statuses to confirm against the platform enum (`open`,
 - **Triage behavior** (Ada's brief, when the work item is a bug): triage, do
   not fix (she's read-only on code). If non-trivial → `create_plan` with
   step 1 `assignee=lucy` (code per spec, TDD), step 2 `assignee=echo` (verify
-  behaviorally), both `needs_approval=1`; then comment the bug
-  "triaged → plan #N" and the bridge links it (②). If trivial → `create_task`
+  behaviorally). The plan is born `draft` (the gate is plan-level — see ④);
+  then comment the bug "triaged → plan #N". If trivial → `create_task`
   (single-shot) for lucy.
 - **A10 seed — deterministic template injection:** when `squad_loop` builds
   Ada's brief **for a bug-triage work item**, it injects a **plan template +
   2 curated exemplar plans** fetched from mycelium. This is the degenerate,
   simplest phase-gate: phase = "planner triaging a bug", inject at brief-build.
-  - Storage: a `plan_template` artifact + 2 exemplar plan ids in mycelium
-    (a concept or context key — TBD in plan; reuse Ada's strong recent plans
-    #151/#157/#161 as exemplar seeds).
+  - Storage: a `plan_template` + 2 exemplar plans stored as a **concept**
+    (`conventions` is not a primitive in mycelium; `concepts` is the shared-data
+    type — "rulesets/styles that flow between projects"). m5Max curates the
+    exemplars (judgment call on what sets Lucy up to succeed).
   - Fetch is **deterministic code** (squad_loop fetches + injects) — never
     "Ada, go look it up" (model-driven retrieval fails on local models).
   - **Fail-soft:** if the template/exemplars are missing or unfetchable, log
     loudly and proceed without them (don't block triage).
 
-### ④ Review gate — bridge/platform (A4 + A6)
-- Plan steps created `needs_approval=1`. The bridge's existing approval gate
-  defers needs-approval work — **fix A6** so a gated `plan_step` defers
-  *cleanly* (don't busy-spin re-polling; the current code can't release a
-  plan_step to `open`).
-- Reviewer (m5Max, surfaced via the approval queue / inbox) approves →
-  `approved_by` set → steps become claimable.
-- Lucy claims step 1 (bridge relays prior-step context — already built).
-  Echo claims step 2. **On verify PASS, the bug → `fixed`** (Echo's verify
-  step updates the linked bug, or a plan-final action does).
+### ④ Review gate — via the plan lifecycle (rewritten after the dogfood audit) — platform
+**Audit finding:** plan_steps have **no `needs_approval`** field, and
+`buildWorkQueue` offers a plan's steps **regardless of the plan's status**
+(it's fed `listPlans()` with no status filter, so it sees `draft` plans too).
+But plans already have a `draft → active → completed → cancelled` lifecycle
+(**column default `draft`**), and `PUT /plans/:id {status:'active'}` is an
+authorized approve action. So the gate is the **plan lifecycle**, applied
+consistently:
+
+- Ada's plan is born `draft` (the default — `create_plan` leaves status alone).
+- **Gate (the fix):** `buildWorkQueue` only offers steps from plans where
+  `status === 'active'`. New — and a consistency fix: the stand-up query and
+  `getNextUnassignedPlanStep` already gate on `active`; the work queue doesn't.
+  A draft plan's steps are therefore never claimable.
+- **Greenlight = approve:** the approver sets the plan `active`
+  (`PUT /plans/:id {status:'active'}`). **Approver = the operator** — Gilbert
+  early (taste-calibration phase), m5Max routine later, escalating significant
+  ones. **Never a local agent** (the gate's value is taste from outside the
+  local-model loop). See `OPERATING_MODEL.md`.
+- **Greenlight surface (folded in):** surface `draft` plans (awaiting approval)
+  in the boot/overview payload the way the approval queue already is. This feed
+  *is* the Mycelium app's home screen and the top of the Velum cockpit
+  (`OPERATING_MODEL.md` → data backbone #1). Without it, drafts just sit unseen.
+- A6 (bridge plan_step clean-defer) becomes mostly moot — gating at the plan
+  level means a draft plan's steps are never handed to the bridge to busy-spin
+  on. Keep a small guard anyway.
+- **Bug closes on verify PASS:** the bridge closes the linked bug → `fixed`
+  when it completes the plan's final (verify) step with a PASS (consumer-side;
+  no new Echo tool, no platform change).
+
+**Cockpit/app data (beyond the gate):** live plan-flight state (current step,
+progress, transitions) and a live per-agent activity stream (doing/thinking/
+writing) feed the Velum cockpit + app — tracked as register items, not in this
+spec's core scope.
 
 ---
 
