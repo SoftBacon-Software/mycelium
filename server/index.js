@@ -187,6 +187,11 @@ if (fs.existsSync(advisorPath)) {
   app.use('/advisor', express.static(advisorPath));
 }
 
+// ---- mycelium.fyi static site (multi-page: landing + Field Notes + Programs) ----
+// Serve the built static export from public/ so /, /notes/, /programs/, and the
+// /_next/ assets all resolve. (Was a single-file landing; now a full static site.)
+app.use(express.static(publicPath));
+
 // Landing page at GET / (after static so it doesn't shadow favicon/assets above)
 if (fs.existsSync(landingPage)) {
   app.get('/', function (req, res) {
