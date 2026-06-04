@@ -1,2 +1,0 @@
-:HL["/_next/static/chunks/04kojd7m7to-p.css","style"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"notes","param":null,"prefetchHints":0,"slots":{"children":{"name":"slug","param":{"type":"d","key":"2026-06-02-lucy-levels-up","siblings":null},"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}}}},"staleTime":300,"buildId":"FCF3ktSXgvmOrh5-_Ro7s"}

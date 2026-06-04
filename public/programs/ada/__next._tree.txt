@@ -1,3 +1,0 @@
-:HL["/_next/static/chunks/04kojd7m7to-p.css","style"]
-:HL["/squad/ada/ada-hero.jpg","image",{"imageSrcSet":"/squad/ada/ada-hero.jpg 1x, /squad/ada/ada-hero@2x.jpg 2x","imageSizes":"(min-width: 1024px) 400px, 340px"}]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"programs","param":null,"prefetchHints":0,"slots":{"children":{"name":"ada","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}}}},"staleTime":300,"buildId":"FCF3ktSXgvmOrh5-_Ro7s"}
