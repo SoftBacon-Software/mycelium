@@ -1294,6 +1294,36 @@ router.get('/work/:agentId', asyncHandler(function (req, res) {
   res.json({ ok: true, queue: queue });
 }));
 
+// ======== REASONING STREAM ========
+
+// An agent (squad_loop) posts its reasoning chain as it works a task: thinking
+// (<think>), tool_call, result, done, error. ONE stream → the operator app's
+// sidecar back-half + training corpus + cockpit shimmer colour. Persisted (it's
+// training data, unlike heartbeats) and SSE-broadcast to the operator app.
+// Contract: mycelium-app/docs/specs/2026-06-06-reasoning-stream.md
+router.post('/reasoning', agentWriteLimiter, asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body || {};
+  var agent = b.agent || who;
+  var step = String(b.step || 'thinking');
+  if (['thinking', 'tool_call', 'result', 'done', 'error'].indexOf(step) === -1) {
+    return apiError(res, 400, 'invalid step');
+  }
+  var data = {
+    task_id: (b.task_id != null) ? b.task_id : null,
+    turn:    (b.turn != null) ? b.turn : null,
+    step:    step,
+    text:    (typeof b.text === 'string') ? b.text : '',
+    tool:    b.tool || null
+  };
+  var summary = agent + ' · ' + step
+    + (b.tool && b.tool.name ? ' · ' + b.tool.name : '')
+    + (b.task_id != null ? ' (task #' + b.task_id + ')' : '');
+  var id = emitEvent('agent_reasoning', agent, req._authProjectId || null, summary, data);
+  res.json({ ok: true, id: id });
+}));
+
 // ======== AGENTS ========
 
 router.post('/agents/heartbeat', asyncHandler(function (req, res) {
