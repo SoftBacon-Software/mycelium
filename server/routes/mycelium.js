@@ -13,7 +13,7 @@ import multer from 'multer';
 import fs from 'fs';
 import nodePath from 'path';
 import https from 'https';
-import { sendEmail, isEmailEnabled, templateWaitlistConfirmation, templatePasswordReset, templateOperatorAlert, templateTicketConfirmation, templateTicketResolution } from '../email.js';
+import { sendEmail, isEmailEnabled, templatePasswordReset, templateOperatorAlert, templateTicketConfirmation, templateTicketResolution } from '../email.js';
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
@@ -61,8 +61,6 @@ var loginLimiter = rateLimit(function (req) { return 'login:' + (req.ip || req.c
 // Agent key validation: 30 failed attempts per minute per IP (enforced inline in checkAgent)
 // Admin write operations: 30 per minute per IP
 var adminWriteLimiter = rateLimit(function (req) { return 'admin_write:' + (req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
-// Waitlist: 5 signups per 15 minutes per IP
-var waitlistLimiter = rateLimit(function (req) { return 'waitlist:' + (req.ip || req.connection.remoteAddress); }, 5, 15 * 60 * 1000);
 // Agent write operations: 30 per minute per agent
 var agentWriteLimiter = rateLimit(function (req) { return 'agent_write:' + (req.headers['x-agent-key'] || req.ip || req.connection.remoteAddress); }, 30, 60 * 1000);
 
@@ -727,7 +725,7 @@ function notifyOperators(alertTitle, alertBodyHtml, actionUrl) {
     var operators = listOperators();
     for (var op of operators) {
       if (op.email && op.status === 'active') {
-        sendEmail(templateOperatorAlert(op.email, op.display_name, alertTitle, alertBodyHtml, actionUrl || 'https://mycelium.fyi/studio/'));
+        sendEmail(templateOperatorAlert(op.email, op.display_name, alertTitle, alertBodyHtml, actionUrl || 'https://mycelium.fyi/'));
       }
     }
   } catch (e) {
@@ -962,46 +960,8 @@ var router = Router();
 // Apply project_id normalization (backward compat: accept project/game too)
 router.use(normalizeProjectField);
 
-// ======== WAITLIST ========
-
-// POST /waitlist — public, no auth. Captures landing page signups.
-// Creates inbox item for greatness operator so they get notified.
-router.post('/waitlist', waitlistLimiter, asyncHandler(async function (req, res) {
-  var { name, email, subdomain, use_case } = req.body;
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return apiError(res, 400, 'Valid email is required');
-  var db = getDB();
-  // Ensure table exists (created on first use if migration hasn't run yet)
-  db.prepare(`CREATE TABLE IF NOT EXISTS waitlist (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL DEFAULT '',
-    email       TEXT NOT NULL,
-    subdomain   TEXT NOT NULL DEFAULT '',
-    use_case    TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  )`).run();
-  var result = db.prepare(
-    'INSERT INTO waitlist (name, email, subdomain, use_case) VALUES (?, ?, ?, ?)'
-  ).run(name || '', email, subdomain || '', use_case || '');
-  var waitlistId = result.lastInsertRowid;
-  // Create inbox item for all operators
-  try {
-    createInboxItemForAllOperators(
-      'message',
-      'waitlist',
-      String(waitlistId),
-      'New instance request: ' + (name || email),
-      (name ? name + ' (' + email + ')' : email) + (subdomain ? ' wants subdomain: ' + subdomain : '') + (use_case ? ' — ' + use_case : ''),
-      { waitlist_id: waitlistId, name, email, subdomain, use_case },
-      'urgent'
-    );
-  } catch (e) { /* non-fatal — still confirm signup */ }
-  emitEvent('waitlist_signup', '__system__', null, 'New waitlist signup: ' + email, { waitlist_id: waitlistId, email, subdomain });
-  // Fire-and-forget: waitlist confirmation + operator alert emails
-  sendEmail(templateWaitlistConfirmation(name || '', email));
-  notifyOperators('New Waitlist Signup', '<p><strong>' + escapeHtml(name || 'Someone') + '</strong> (' + escapeHtml(email) + ') just signed up for the waitlist.' + (subdomain ? ' Requested subdomain: <strong>' + escapeHtml(subdomain) + '</strong>' : '') + (use_case ? '<br>Use case: ' + escapeHtml(use_case) : '') + '</p>', 'https://mycelium.fyi/studio/waitlist');
-  res.json({ ok: true, message: "You're on the list. We'll be in touch shortly." });
-}));
+// (WAITLIST route retired 2026-06-05 with the .fyi product surface — the
+// research site no longer has a signup form. Operator auth lives in /studio/* API.)
 
 // GET /stats/public — no auth, anonymized aggregate stats for landing page + investor demos
 router.get('/stats/public', asyncHandler(function (req, res) {
@@ -1160,41 +1120,8 @@ router.get('/public/activity', asyncHandler(function (req, res) {
   }
 }));
 
-// GET /waitlist — admin only, list all signups
-router.get('/waitlist', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  try {
-    var items = getDB().prepare('SELECT * FROM waitlist ORDER BY created_at DESC').all();
-    res.json(items);
-  } catch (e) {
-    res.json([]);
-  }
-}));
-
-// PUT /waitlist/:id — admin only, update waitlist entry status/notes
-router.put('/waitlist/:id', function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var db = getDB();
-  // Ensure notes column exists (added after initial schema)
-  try { db.prepare('ALTER TABLE waitlist ADD COLUMN notes TEXT DEFAULT ""').run(); } catch (e) { /* already exists */ }
-  var row = db.prepare('SELECT * FROM waitlist WHERE id = ?').get(req.params.id);
-  if (!row) return apiError(res, 404, 'Waitlist entry not found');
-  var allowed = ['status', 'notes'];
-  var sets = [];
-  var vals = [];
-  for (var key of allowed) {
-    if (req.body[key] !== undefined) {
-      sets.push(key + ' = ?');
-      vals.push(req.body[key]);
-    }
-  }
-  if (sets.length === 0) return apiError(res, 400, 'No valid fields to update');
-  vals.push(req.params.id);
-  db.prepare('UPDATE waitlist SET ' + sets.join(', ') + ' WHERE id = ?').run(...vals);
-  var updated = db.prepare('SELECT * FROM waitlist WHERE id = ?').get(req.params.id);
-  emitEvent('waitlist_updated', req.headers['x-admin-key'] ? '__admin__' : '__system__', null, 'Waitlist #' + req.params.id + ' updated', { waitlist_id: req.params.id, status: updated.status });
-  res.json(updated);
-});
+// (Admin waitlist routes GET/PUT /waitlist retired 2026-06-05 with the .fyi
+// product surface. The `waitlist` table is left intact for historical data.)
 
 // ======== BOOT ========
 
