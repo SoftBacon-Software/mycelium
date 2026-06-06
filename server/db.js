@@ -548,6 +548,23 @@ export function deleteTaskComment(commentId) {
   return result.changes > 0;
 }
 
+// -- Task Deliverables --
+// The agent's final output, distinct from the task_comments status thread.
+// Append-only; getTaskDeliverables returns all attempts oldest-first.
+
+export function addTaskDeliverable(taskId, author, kind, format, content, flags) {
+  var result = db.prepare(
+    "INSERT INTO task_deliverables (task_id, author, kind, format, content, flags) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+  ).get(taskId, author, kind || 'report', format || 'markdown', content, flags || '');
+  return result;
+}
+
+export function getTaskDeliverables(taskId) {
+  return db.prepare(
+    "SELECT * FROM task_deliverables WHERE task_id = ? ORDER BY created_at ASC, id ASC"
+  ).all(taskId);
+}
+
 export function deleteTask(id) {
   db.prepare("DELETE FROM task_comments WHERE task_id = ?").run(id);
   var result = db.prepare("DELETE FROM tasks WHERE id = ?").run(id);

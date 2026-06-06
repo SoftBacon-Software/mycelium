@@ -138,6 +138,7 @@ import {
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
   assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
   addTaskComment, getTaskComments, getTaskComment, deleteTaskComment, deleteTask,
+  addTaskDeliverable, getTaskDeliverables,
   addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
@@ -1780,6 +1781,38 @@ router.post('/tasks/:id/comments', asyncHandler(function (req, res) {
   var comment = addTaskComment(task.id, author, content);
   emitEvent('task_comment', who, task.project_id, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
   res.json(comment);
+}));
+
+// ======== TASK DELIVERABLES ========
+// An agent's final output (typed, raw markdown). Distinct from the comment
+// thread; a deliverable row existing == the task produced real output.
+
+router.get('/tasks/:id/deliverables', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(getTaskDeliverables(task.id));
+}));
+
+router.post('/tasks/:id/deliverable', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var author = escapeHtml(req.body.author || who);
+  var kind = escapeHtml(req.body.kind || 'report');
+  var format = escapeHtml(req.body.format || 'markdown');
+  var flags = escapeHtml(req.body.flags || '');
+  // content is stored RAW markdown — NOT escapeHtml'd (comments escape because
+  // they render as HTML; deliverables render through a markdown view in Phase 2,
+  // where escaping would corrupt code blocks). The Phase-2 renderer must treat
+  // this as markdown, never raw-inject it as HTML.
+  var content = req.body.content;
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  var deliverable = addTaskDeliverable(task.id, author, kind, format, content, flags);
+  emitEvent('task_deliverable', who, task.project_id, who + ' delivered task #' + task.id + ' (' + kind + ')', { task_id: task.id, deliverable_id: deliverable.id, kind: kind });
+  res.json(deliverable);
 }));
 
 router.delete('/tasks/:id', asyncHandler(function (req, res) {
