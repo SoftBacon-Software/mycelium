@@ -1678,10 +1678,15 @@ function scopeHasOnlinePlanner(agentId, projectId, teamProjIds) {
 export function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
   var queue = [];
 
-  // Priority 1: Blocking directives (MUST respond first)
-  for (var d of directives) {
-    queue.push({ priority: 0, type: 'directive', id: d.id, title: 'DIRECTIVE from ' + d.from_agent, summary: (d.content || '').substring(0, 200), status: d.status, from_agent: d.from_agent, content: d.content });
-  }
+  // Directives are DEPRECATED (2026-06-05) — no longer served as work.
+  // They were a top-priority item used to push work AND "keep agents awake,"
+  // but a worker can't reliably CLOSE a bare directive, so it re-claims and
+  // re-runs it every poll (~170x/sec). That loop, times an event-per-heartbeat,
+  // flooded the events table to 18M rows / 3GB and pegged the server. Aligning
+  // to the OpenJarvis model: work is PULL-claimed via tasks/plan-steps below,
+  // liveness is an ephemeral last-seen timestamp, and there is no keep-awake
+  // nudge. Not serving directives here means no source can ever loop a worker.
+  void directives;
 
   // Priority 2: Pending requests (respond before new work)
   for (var r of requests) {

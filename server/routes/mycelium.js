@@ -687,7 +687,14 @@ var sseClients = new Set();
 // ---- Event helper ----
 
 function emitEvent(type, agentId, projectId, summary, data) {
-  var id = createEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
+  // Heartbeats are high-frequency liveness pings (~1/agent/poll), NOT history —
+  // aliveness lives on the agent row (last_seen/status), updated by the heartbeat
+  // handler. Persisting one event per heartbeat previously flooded the events
+  // table to 18M rows / 3GB (a stuck work item drove ~170 writes/sec). Match the
+  // OpenJarvis model: broadcast liveness live, never persist it.
+  var id = (type === 'agent_heartbeat')
+    ? null
+    : createEvent(type, agentId || '', projectId || null, summary || '', JSON.stringify(data || {}));
   var eventObj = {
     id: id, type: type, agent: agentId || '',
     project_id: projectId || null, summary: summary || '',
@@ -710,6 +717,7 @@ function emitEvent(type, agentId, projectId, summary, data) {
   }
   // Notify plugin event hooks (async-safe: handlers are synchronous by convention)
   callEventHooks(type, eventObj);
+  return id;
 }
 
 // ---- Operator email alerts (fire-and-forget) ----
@@ -912,8 +920,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
     if (step) {
       // Assign plan step
       updatePlanStep(step.id, { assignee: agent.id, status: 'pending' });
-      var content = 'AUTO-DISPATCH: Plan step assigned. Plan: "' + step.plan_title + '", Step: "' + step.title + '" (step #' + step.id + ', plan #' + step.plan_id + '). Claim and start working.';
-      createMessage('__system__', agent.id, null, null, content, JSON.stringify({ auto_dispatch: true, plan_step_id: step.id, plan_id: step.plan_id, trigger: triggerContext }), 'directive', null);
+      // Directives deprecated (2026-06-05): the assignment above IS the dispatch.
+      // The agent pull-claims this step from /work on its next poll — no directive.
       emitEvent('auto_dispatch', '__system__', null, 'Auto-dispatched plan step "' + step.title + '" to ' + agent.id, { agent_id: agent.id, plan_step_id: step.id, trigger: triggerContext });
       dispatched.push({ agent: agent.id, type: 'plan_step', id: step.id, title: step.title });
       continue;
@@ -926,8 +934,8 @@ function dispatchWorkToIdleAgents(triggerContext) {
       // Assign task
       updateTask(task.id, { assignee: agent.id });
       claimedTaskIds.push(task.id);
-      var content = 'AUTO-DISPATCH: Task #' + task.id + ' assigned: "' + task.title + '". ' + (task.description || '').substring(0, 300);
-      createMessage('__system__', agent.id, null, task.project_id, content, JSON.stringify({ auto_dispatch: true, task_id: task.id, trigger: triggerContext }), 'directive', null);
+      // Directives deprecated (2026-06-05): assigning the task IS the dispatch.
+      // The agent pull-claims it from /work (myTasks tier) next poll — no directive.
       emitEvent('auto_dispatch', '__system__', task.project_id, 'Auto-dispatched task #' + task.id + ' to ' + agent.id, { agent_id: agent.id, task_id: task.id, trigger: triggerContext });
       dispatched.push({ agent: agent.id, type: 'task', id: task.id, title: task.title });
       continue;
@@ -1452,11 +1460,9 @@ router.post('/agents/heartbeat', asyncHandler(function (req, res) {
     }
     if (needsStandup) {
       var calibration = buildCalibrationBlock(agentId);
-      // On critical drift, create a directive so the agent must acknowledge
-      if (calibration && calibration.status === 'critical') {
-        var driftDetails = calibration.drift.filter(function (d) { return d.level === 'critical'; }).map(function (d) { return d.detail; }).join('; ');
-        createMessage('__system__', agentId, null, null, 'CALIBRATION DRIFT (critical): ' + driftDetails + '. Review your CLAUDE.md and remove blocked terms.', '{}', 'directive', null, 'urgent');
-      }
+      // Directives deprecated (2026-06-05): critical drift is surfaced in the
+      // calibration block of the boot/standup payload (which the agent reads on
+      // pull), not pushed as a "must-acknowledge" directive. No keep-awake nudge.
     }
   } catch (e) { /* non-critical — don't break heartbeat */ }
 
@@ -2641,8 +2647,9 @@ router.post('/events', asyncHandler(function (req, res) {
   var type = req.body.type || 'custom';
   var projectId = req.body.project_id || null;
   var summary = escapeHtml(req.body.summary || '');
-  var data = req.body.data ? JSON.stringify(req.body.data) : '{}';
-  var id = createEvent(type, agentId, projectId, summary, data);
+  // Broadcast to live SSE subscribers in real time (not just persist), so
+  // operator-emitted events like display/* reach connected clients at once.
+  var id = emitEvent(type, agentId, projectId, summary, req.body.data || {});
   res.json({ id: id });
 }));
 
@@ -3558,15 +3565,10 @@ router.put('/admin/sleep', asyncHandler(function (req, res) {
     }), who);
 
     var autonomous = isNetworkAutonomous();
-    if (autonomous && directive) {
-      // Broadcast night directive only when all operators are away — don't interrupt if others are working
-      var agents = listAgents();
-      for (var agent of agents) {
-        if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, null, 'AUTONOMOUS MODE ACTIVE — Night directive from ' + who + ': ' + directive, '{}', 'directive');
-        }
-      }
-    }
+    // Directives deprecated (2026-06-05): the night/sleep "directive" text is
+    // retained in sleep_mode config for the morning summary, but we no longer
+    // broadcast per-agent directives to "keep agents awake" (the failed
+    // experiment). Agents pull work from /work; the scheduler/poll is the nudge.
 
     emitEvent('sleep_mode_on', who, null, who + ' activated sleep mode' + (autonomous ? ' (network autonomous)' : ''));
     res.json({ ok: true, sleep_mode: config, autonomous: autonomous, auto_away_operators: autoAwayOps });
@@ -3744,14 +3746,9 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
   // Transition to autonomous
   if (!wasBefore && isNow) {
     var sleepConfig = getSleepMode();
-    if (sleepConfig.active && sleepConfig.directive) {
-      var agents = listAgents();
-      for (var agent of agents) {
-        if (agent.status === 'online' || agent.status === 'idle') {
-          createMessage('__system__', agent.id, null, null, 'All operators are now away. Night directive: ' + sleepConfig.directive, '{}', 'directive');
-        }
-      }
-    }
+    // Directives deprecated (2026-06-05): no per-agent "night directive"
+    // broadcast on autonomous transition. Sleep config retains the directive
+    // text for the morning summary; agents pull work, they aren't nudged awake.
     emitEvent('autonomous_mode_on', who, null, 'All operators away — network is autonomous');
   }
 
