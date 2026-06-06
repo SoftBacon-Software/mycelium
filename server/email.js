@@ -124,30 +124,11 @@ function muted(text) {
 //   TRANSACTIONAL (exempt from most requirements): password reset, ticket
 //   confirmation/resolution, instance ready, payment failed, suspended,
 //   operator alerts.
-//   COMMERCIAL/MIXED: waitlist confirmation (includes unsubscribe opt-out).
 //   END-OF-RELATIONSHIP: archived, data deleted (purely informational,
 //   no promotional content).
 // All emails include physical postal address in footer (CAN-SPAM §7704).
 
-/** Waitlist confirmation email */
-export function templateWaitlistConfirmation(name, email) {
-  var safeName = escapeHtml(name);
-  var greeting = safeName ? ('Hi ' + safeName + ',') : 'Hi there,';
-  var html = emailWrapper('Welcome to the Waitlist', `
-    <p>${greeting}</p>
-    <p>Thanks for signing up for Mycelium. We received your request and you're on the list.</p>
-    <p>We're onboarding customers one at a time to ensure a great experience. We'll reach out as soon as your instance is ready.</p>
-    <p style="color:${COLORS.primary};font-weight:500;">What happens next:</p>
-    <ul style="color:${COLORS.text};padding-left:20px;">
-      <li>We review your request (usually within 24 hours)</li>
-      <li>We'll provision your dedicated Mycelium instance</li>
-      <li>You'll get an email with your dashboard URL and login credentials</li>
-    </ul>
-    ${muted("If you didn't sign up for Mycelium, you can safely ignore this email.")}
-    ${muted('To remove yourself from the waitlist, reply to this email with "unsubscribe".')}
-  `);
-  return { to: email, subject: "You're on the Mycelium waitlist", html: html };
-}
+// (Waitlist confirmation email retired 2026-06-05 with the .fyi product surface.)
 
 /** Instance ready notification */
 export function templateInstanceReady(name, email, domain, dashboardUrl, username, tempPassword) {

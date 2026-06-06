@@ -171,21 +171,15 @@ app.use(function (req, res, next) {
 var publicPath = path.join(__dirname, '..', 'public');
 var landingPage = path.join(publicPath, 'index.html');
 
-// ---- Mycelium Dashboard ----
-// Primary: /studio/ — also serves root paths so absolute asset URLs (/assets/*, /favicon.svg) work.
-var dashboardPath = path.join(__dirname, '..', 'public', 'studio');
-if (fs.existsSync(dashboardPath)) {
-  // Serve at /studio/
-  app.use('/studio', express.static(dashboardPath));
-  // Also serve studio assets at root so the Vite-built SPA absolute paths resolve
-  app.use('/', express.static(dashboardPath, { index: false }));
-}
+// ---- Old web "studio" dashboard: RETIRED (2026-06-05) ----
+// The Vite SPA dashboard at /studio (incl. its /studio/login page) was a remnant
+// of the .fyi product era. The operator console is now the Mycelium app + MCP.
+// Operator auth (studio JWT) is UNAFFECTED — it lives in the API at
+// /api/mycelium/studio/*. We no longer serve the static dashboard, nor leak its
+// assets onto / (which used to shadow the research site). The /studio/* SPA
+// catch-all is removed below too.
 
-// ---- Local LLM Advisor (public, static) — the web acquisition funnel ----
-var advisorPath = path.join(__dirname, '..', 'public', 'advisor');
-if (fs.existsSync(advisorPath)) {
-  app.use('/advisor', express.static(advisorPath));
-}
+// ---- Local LLM Advisor funnel: RETIRED (2026-06-05) — .fyi product-era remnant. ----
 
 // ---- mycelium.fyi static site (multi-page: landing + Field Notes + Programs) ----
 // Serve the built static export from public/ so /, /notes/, /programs/, and the
@@ -207,13 +201,8 @@ if (fs.existsSync(installScript)) {
   });
 }
 
-// ---- Live activity dashboard (public, no auth) ----
-var livePage = path.join(publicPath, 'live.html');
-if (fs.existsSync(livePage)) {
-  app.get('/live', function (req, res) {
-    res.sendFile(livePage);
-  });
-}
+// ---- /live dashboard: RETIRED (2026-06-05) — an old-era page that linked to the
+// retired /studio + /advisor; the live view is the Mycelium app/cockpit now. ----
 
 // ---- Health check (public, no auth) ----
 var serverStartTime = Date.now();
@@ -291,12 +280,7 @@ app.get('/api/voice/turn-credentials', function (req, res) {
   });
 });
 
-// Dashboard SPA catch-all: only for /studio/* paths
-if (fs.existsSync(dashboardPath)) {
-  app.get('/studio/*', function (req, res) {
-    res.sendFile(path.join(dashboardPath, 'index.html'));
-  });
-}
+// (Old /studio/* SPA catch-all removed 2026-06-05 with the retired web dashboard.)
 
 // ---- Global error handler ----
 // Catches unhandled errors from sync and async route handlers.
