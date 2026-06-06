@@ -1,11 +1,6 @@
-FROM node:22-slim AS builder
-WORKDIR /app
-COPY studio-react/package*.json studio-react/
-RUN cd studio-react && npm ci
-COPY studio-react/ studio-react/
-COPY public/ public/
-RUN cd studio-react && npx vite build
-
+# Single-stage build. The old web "studio" dashboard (studio-react/) was retired
+# 2026-06-05, so there is no front-end build step anymore — public/ already holds
+# the pre-built research site (mycelium.fyi static export) and is shipped as-is.
 FROM node:22-slim
 WORKDIR /app
 COPY package*.json ./
@@ -16,6 +11,6 @@ RUN npm ci --production
 COPY server/ server/
 COPY tools/ tools/
 COPY printer-drone/ printer-drone/
-COPY --from=builder /app/public/ public/
+COPY public/ public/
 EXPOSE 3002
 CMD ["node", "server/boot.js"]
