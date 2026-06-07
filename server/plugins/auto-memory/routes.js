@@ -129,13 +129,15 @@ export default function (core) {
 // ---- Extraction ----
 
 var EXTRACTION_PROMPT = `Given this agent activity, extract durable knowledge facts.
-Only extract facts that would be useful across sessions — preferences, decisions, patterns, architecture choices, conventions.
+Only extract facts useful across sessions — preferences, decisions, patterns, architecture choices, conventions.
 Do NOT extract: temporary status, in-progress work, timestamps, routine heartbeats.
+
+Each fact's "category" MUST be exactly ONE word from this set: preference, decision, pattern, architecture, convention, insight. Output a single word, never the whole list.
 
 Activity:
 {content}
 
-Return a JSON array only (no markdown, no explanation): [{ "category": "preference|decision|pattern|architecture|convention|insight", "fact_text": "...", "confidence": 0.0-1.0 }]`;
+Return ONLY a JSON array (no markdown, no prose). Each item: {"category":"<one word>","fact_text":"...","confidence":0.0-1.0}`;
 
 export async function extractFacts(db, config, text, agentId, projectId) {
   if (!text || text.length < 20) return [];
