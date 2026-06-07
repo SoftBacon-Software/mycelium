@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS projects (
   description     TEXT NOT NULL DEFAULT '',
   org_id          TEXT NOT NULL DEFAULT '',
   repo_url        TEXT NOT NULL DEFAULT '',
+  repo_path       TEXT NOT NULL DEFAULT '',  -- local checkout root; agents working this project's tasks resolve relative paths here (squad-loop repo resolution)
   type            TEXT NOT NULL DEFAULT 'software',
   status          TEXT NOT NULL DEFAULT 'active',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
