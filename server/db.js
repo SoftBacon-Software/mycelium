@@ -1692,6 +1692,20 @@ function scopeHasOnlinePlanner(agentId, projectId, teamProjIds) {
   } catch (e) { return false; }
 }
 
+// Step ordering (durable rule): a plan step is "ready" to claim only when every
+// EARLIER step in its plan (lower step_order) is completed. Plan steps are
+// sequential by design — verify follows code, deploy follows build — so a later
+// step is never offered for claim before its predecessors finish. Enforced
+// wherever a step is offered (here + getNextUnassignedPlanStep's SQL). Today
+// step_order IS the dependency order; an explicit parallel/dependency model
+// would generalize this later.
+function _planPriorsComplete(plan, step) {
+  var order = step.step_order;
+  return (plan.steps || []).every(function (s) {
+    return s.step_order >= order || s.status === 'completed';
+  });
+}
+
 export function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
   var queue = [];
 
@@ -1720,7 +1734,7 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
       }
     }
     for (var step of plan.steps) {
-      if (step.assignee === agentId && step.status === 'pending') {
+      if (step.assignee === agentId && step.status === 'pending' && _planPriorsComplete(plan, step)) {
         queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
       }
     }
@@ -1750,7 +1764,7 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
   for (var plan of plans) {
     if (!plan.steps) continue;
     for (var step of plan.steps) {
-      if (!step.assignee && step.status === 'pending') {
+      if (!step.assignee && step.status === 'pending' && _planPriorsComplete(plan, step)) {
         queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
       }
     }
@@ -1833,6 +1847,18 @@ export function getNextUnassignedPlanStep(teamProjectIds) {
      WHERE p.status = 'active'
        AND s.status = 'pending'
        AND (s.assignee IS NULL OR s.assignee = '')
+       -- Step ordering (durable): a plan step is not claimable until ALL earlier
+       -- steps in its plan (lower step_order) are completed. Plan steps are
+       -- sequential by design — a verify step must not run before the code step
+       -- it checks; a deploy not before its build. Enforced here AND in
+       -- buildWorkQueue (the assigned-claim path) so out-of-order execution
+       -- cannot happen regardless of how the steps were assigned.
+       AND NOT EXISTS (
+         SELECT 1 FROM plan_steps prior
+         WHERE prior.plan_id = s.plan_id
+           AND prior.step_order < s.step_order
+           AND prior.status != 'completed'
+       )
        ${teamScope}
      ORDER BY s.step_order ASC
      LIMIT 1`
@@ -1915,7 +1941,7 @@ export function listPlans(filters) {
   if (plans.length > 0) {
     var planIds = plans.map(function (p) { return p.id; });
     var placeholders = planIds.map(function () { return '?'; }).join(',');
-    var allSteps = db.prepare("SELECT plan_id, id, status, title, assignee FROM plan_steps WHERE plan_id IN (" + placeholders + ") ORDER BY step_order ASC").all(...planIds);
+    var allSteps = db.prepare("SELECT plan_id, id, status, title, assignee, step_order FROM plan_steps WHERE plan_id IN (" + placeholders + ") ORDER BY step_order ASC").all(...planIds);
     var stepsByPlan = {};
     for (var s of allSteps) {
       if (!stepsByPlan[s.plan_id]) stepsByPlan[s.plan_id] = [];

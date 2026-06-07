@@ -459,6 +459,14 @@ function checkProjectScope(req, res, resourceProjectId, assignee) {
   if (req.method === 'GET') return true; // agents can read across projects (shared swarm context)
   if (req._authProjectId === resourceProjectId) return true;
   if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
+  // Team-scope (durable): an agent may write to any project owned by a team it
+  // belongs to. This makes write-scope match DISPATCH-scope — auto-dispatch
+  // already routes team-project work to the agent via getTeamProjectIdsForAgent —
+  // so an agent can't be handed a team-project step yet 403 when recording its
+  // result or creating a plan there.
+  try {
+    if (getTeamProjectIdsForAgent(req._authAgentId).indexOf(resourceProjectId) !== -1) return true;
+  } catch (e) { /* fall through to 403 */ }
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
   return false;
 }
