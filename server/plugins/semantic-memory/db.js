@@ -1,6 +1,7 @@
 // Semantic Memory DB helpers
 
 import { cosineSimilarity } from './embeddings.js';
+import * as sqliteVec from 'sqlite-vec';
 
 var _vecAvailable = null;
 
@@ -8,7 +9,7 @@ export default function createMemoryDB(db) {
   // Try to load sqlite-vec extension on first use
   if (_vecAvailable === null) {
     try {
-      db.loadExtension('vec0');
+      sqliteVec.load(db);
       _vecAvailable = true;
       console.log('[semantic-memory] sqlite-vec loaded — vector search enabled');
     } catch (e) {
