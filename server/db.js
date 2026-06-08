@@ -100,6 +100,8 @@ export function initDB() {
     // working its tasks resolve relative paths in the right repo (not the
     // agent's CWD). Any squad sets this per project.
     ["projects", "repo_path", "TEXT NOT NULL DEFAULT ''"],
+    // Bounded self-heal: how many auto-retries a plan step has spent (retry policy).
+    ["plan_steps", "attempt_count", "INTEGER NOT NULL DEFAULT 0"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -1993,6 +1995,42 @@ export function updatePlanStep(stepId, fields) {
   // Update parent plan's updated_at
   var step = db.prepare("SELECT plan_id FROM plan_steps WHERE id = ?").get(stepId);
   if (step) db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(step.plan_id);
+}
+
+// Bounded self-heal for a FAILED plan step. If the step still has retry budget,
+// reopen it + the phase it guards (the immediately-prior step_order) to 'pending'
+// and attach the failure `critique` to those reopened steps, so the work re-cycles
+// with the verifier's reasons fed forward. Returns {action:'retried'|'exhausted'|'none'}.
+// Runtime-agnostic: it only moves platform rows; the reopened steps flow through the
+// normal work queue to whatever agent/runner is assigned. The caller decides what to
+// do on 'exhausted' (block + escalate). maxAttempts is the caller's policy knob.
+export function autoRetryOrEscalatePlanStep(planId, stepId, maxAttempts, critique) {
+  var failed = db.prepare("SELECT id, step_order, attempt_count FROM plan_steps WHERE id = ? AND plan_id = ?").get(stepId, planId);
+  if (!failed) return { action: 'none' };
+  var attempts = failed.attempt_count || 0;
+  if (attempts >= maxAttempts) return { action: 'exhausted', attempts: attempts };
+  var nextAttempt = attempts + 1;
+  var steps = db.prepare("SELECT id, step_order, status FROM plan_steps WHERE plan_id = ?").all(planId);
+  // The phase this step guards = the greatest step_order below it (re-run the impl
+  // a verify step checks). Reopen those completed steps + the failed step itself.
+  var priorOrders = steps.map(function (s) { return s.step_order; }).filter(function (o) { return o < failed.step_order; });
+  var priorOrder = priorOrders.length ? Math.max.apply(null, priorOrders) : null;
+  var toReopen = steps.filter(function (s) {
+    return s.id === stepId || (priorOrder !== null && s.step_order === priorOrder && s.status === 'completed');
+  });
+  var tx = db.transaction(function () {
+    for (var s of toReopen) {
+      db.prepare("UPDATE plan_steps SET status = 'pending', completed_at = NULL, updated_at = datetime('now') WHERE id = ?").run(s.id);
+      if (critique && s.id !== stepId) {
+        addPlanStepComment(s.id, planId, '__system__',
+          '[auto-retry ' + nextAttempt + '/' + maxAttempts + '] Prior verification FAILED — fix before re-submitting:\n' + critique);
+      }
+    }
+    db.prepare("UPDATE plan_steps SET attempt_count = ?, updated_at = datetime('now') WHERE id = ?").run(nextAttempt, stepId);
+    db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
+  });
+  tx();
+  return { action: 'retried', attempt: nextAttempt, max: maxAttempts, reopened: toReopen.length };
 }
 
 export function deletePlanStep(stepId) {
