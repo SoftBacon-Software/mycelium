@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS projects (
   description     TEXT NOT NULL DEFAULT '',
   org_id          TEXT NOT NULL DEFAULT '',
   repo_url        TEXT NOT NULL DEFAULT '',
+  repo_path       TEXT NOT NULL DEFAULT '',  -- local checkout root; agents working this project's tasks resolve relative paths here (squad-loop repo resolution)
   type            TEXT NOT NULL DEFAULT 'software',
   status          TEXT NOT NULL DEFAULT 'active',
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -334,6 +335,22 @@ CREATE TABLE IF NOT EXISTS task_comments (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id);
+
+-- Task deliverables: an agent's final OUTPUT (typed, raw markdown), distinct
+-- from the task_comments status/discussion thread. Append-only, so re-runs and
+-- review->revise cycles preserve every attempt (clean spec->deliverable pairs
+-- for the training loop). Invariant: a row here == the task produced real output.
+CREATE TABLE IF NOT EXISTS task_deliverables (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  author     TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'report',
+  format     TEXT NOT NULL DEFAULT 'markdown',
+  content    TEXT NOT NULL,
+  flags      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_deliverables_task ON task_deliverables(task_id);
 
 -- Support tickets (customer support)
 CREATE TABLE IF NOT EXISTS support_tickets (
