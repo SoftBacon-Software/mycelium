@@ -236,6 +236,7 @@ CREATE TABLE IF NOT EXISTS plan_steps (
   linked_branch  TEXT,
   linked_pr_url  TEXT,
   completed_at   TEXT,
+  attempt_count  INTEGER NOT NULL DEFAULT 0,  -- bounded self-heal: auto-retries spent on this step
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
