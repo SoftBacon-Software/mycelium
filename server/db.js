@@ -96,6 +96,10 @@ export function initDB() {
     // Smart Memory — access tracking for context keys
     ["context_keys", "access_count", "INTEGER NOT NULL DEFAULT 0"],
     ["context_keys", "last_accessed_at", "TEXT"],
+    // Squad-loop repo resolution — a project's local checkout root so agents
+    // working its tasks resolve relative paths in the right repo (not the
+    // agent's CWD). Any squad sets this per project.
+    ["projects", "repo_path", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -430,7 +434,7 @@ export function updateProject(id, fields) {
   if (fields.bug_categories !== undefined && typeof fields.bug_categories !== 'string') {
     fields = Object.assign({}, fields, { bug_categories: JSON.stringify(fields.bug_categories) });
   }
-  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
+  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'repo_path', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
 }
 
 export function deleteProject(id) {
@@ -546,6 +550,23 @@ export function getTaskComment(commentId) {
 export function deleteTaskComment(commentId) {
   var result = db.prepare("DELETE FROM task_comments WHERE id = ?").run(commentId);
   return result.changes > 0;
+}
+
+// -- Task Deliverables --
+// The agent's final output, distinct from the task_comments status thread.
+// Append-only; getTaskDeliverables returns all attempts oldest-first.
+
+export function addTaskDeliverable(taskId, author, kind, format, content, flags) {
+  var result = db.prepare(
+    "INSERT INTO task_deliverables (task_id, author, kind, format, content, flags) VALUES (?, ?, ?, ?, ?, ?) RETURNING *"
+  ).get(taskId, author, kind || 'report', format || 'markdown', content, flags || '');
+  return result;
+}
+
+export function getTaskDeliverables(taskId) {
+  return db.prepare(
+    "SELECT * FROM task_deliverables WHERE task_id = ? ORDER BY created_at ASC, id ASC"
+  ).all(taskId);
 }
 
 export function deleteTask(id) {
@@ -1675,6 +1696,20 @@ function scopeHasOnlinePlanner(agentId, projectId, teamProjIds) {
   } catch (e) { return false; }
 }
 
+// Step ordering (durable rule): a plan step is "ready" to claim only when every
+// EARLIER step in its plan (lower step_order) is completed. Plan steps are
+// sequential by design — verify follows code, deploy follows build — so a later
+// step is never offered for claim before its predecessors finish. Enforced
+// wherever a step is offered (here + getNextUnassignedPlanStep's SQL). Today
+// step_order IS the dependency order; an explicit parallel/dependency model
+// would generalize this later.
+function _planPriorsComplete(plan, step) {
+  var order = step.step_order;
+  return (plan.steps || []).every(function (s) {
+    return s.step_order >= order || s.status === 'completed';
+  });
+}
+
 export function buildWorkQueue(agentId, projectId, directives, requests, tasks, bugs, plans) {
   var queue = [];
 
@@ -1699,12 +1734,12 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     if (!plan.steps) continue;
     for (var step of plan.steps) {
       if (step.assignee === agentId && step.status === 'in_progress') {
-        queue.push({ priority: 2, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+        queue.push({ priority: 2, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
     for (var step of plan.steps) {
-      if (step.assignee === agentId && step.status === 'pending') {
-        queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+      if (step.assignee === agentId && step.status === 'pending' && _planPriorsComplete(plan, step)) {
+        queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
   }
@@ -1733,8 +1768,8 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
   for (var plan of plans) {
     if (!plan.steps) continue;
     for (var step of plan.steps) {
-      if (!step.assignee && step.status === 'pending') {
-        queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+      if (!step.assignee && step.status === 'pending' && _planPriorsComplete(plan, step)) {
+        queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
   }
@@ -1816,6 +1851,18 @@ export function getNextUnassignedPlanStep(teamProjectIds) {
      WHERE p.status = 'active'
        AND s.status = 'pending'
        AND (s.assignee IS NULL OR s.assignee = '')
+       -- Step ordering (durable): a plan step is not claimable until ALL earlier
+       -- steps in its plan (lower step_order) are completed. Plan steps are
+       -- sequential by design — a verify step must not run before the code step
+       -- it checks; a deploy not before its build. Enforced here AND in
+       -- buildWorkQueue (the assigned-claim path) so out-of-order execution
+       -- cannot happen regardless of how the steps were assigned.
+       AND NOT EXISTS (
+         SELECT 1 FROM plan_steps prior
+         WHERE prior.plan_id = s.plan_id
+           AND prior.step_order < s.step_order
+           AND prior.status != 'completed'
+       )
        ${teamScope}
      ORDER BY s.step_order ASC
      LIMIT 1`
@@ -1898,7 +1945,7 @@ export function listPlans(filters) {
   if (plans.length > 0) {
     var planIds = plans.map(function (p) { return p.id; });
     var placeholders = planIds.map(function () { return '?'; }).join(',');
-    var allSteps = db.prepare("SELECT plan_id, id, status, title, assignee FROM plan_steps WHERE plan_id IN (" + placeholders + ") ORDER BY step_order ASC").all(...planIds);
+    var allSteps = db.prepare("SELECT plan_id, id, status, title, assignee, step_order FROM plan_steps WHERE plan_id IN (" + placeholders + ") ORDER BY step_order ASC").all(...planIds);
     var stepsByPlan = {};
     for (var s of allSteps) {
       if (!stepsByPlan[s.plan_id]) stepsByPlan[s.plan_id] = [];

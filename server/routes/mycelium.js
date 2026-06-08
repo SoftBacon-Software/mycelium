@@ -138,6 +138,7 @@ import {
   createDroneProfile, getDroneProfile, listDroneProfiles, updateDroneProfile, deleteDroneProfile,
   assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
   addTaskComment, getTaskComments, getTaskComment, deleteTaskComment, deleteTask,
+  addTaskDeliverable, getTaskDeliverables,
   addPlanStepComment, getPlanStepComments,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
@@ -309,7 +310,7 @@ var STATUS_ENUMS = {
   task:      ['open', 'in_progress', 'review', 'done', 'cancelled'],
   asset:     ['requested', 'in_progress', 'ready', 'delivered', 'cancelled'],
   plan:      ['draft', 'active', 'completed', 'cancelled'],
-  plan_step: ['pending', 'in_progress', 'completed', 'blocked'],
+  plan_step: ['pending', 'in_progress', 'completed', 'blocked', 'failed'], // 'failed' = terminal: a worker couldn't complete it (max-iter / gate fail). Leaves the work queue (never re-dispatched) + surfaces; later steps gate on prior 'completed' so it can't false-advance. Added 2026-06-07 to stop fail-loops.
   bug:       ['open', 'in_progress', 'fixed', 'closed'],
   channel:   ['active', 'archived'],
   drone_job: ['pending', 'claimed', 'done', 'completed', 'failed', 'cancelled', 'dismissed']
@@ -458,6 +459,14 @@ function checkProjectScope(req, res, resourceProjectId, assignee) {
   if (req.method === 'GET') return true; // agents can read across projects (shared swarm context)
   if (req._authProjectId === resourceProjectId) return true;
   if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
+  // Team-scope (durable): an agent may write to any project owned by a team it
+  // belongs to. This makes write-scope match DISPATCH-scope — auto-dispatch
+  // already routes team-project work to the agent via getTeamProjectIdsForAgent —
+  // so an agent can't be handed a team-project step yet 403 when recording its
+  // result or creating a plan there.
+  try {
+    if (getTeamProjectIdsForAgent(req._authAgentId).indexOf(resourceProjectId) !== -1) return true;
+  } catch (e) { /* fall through to 403 */ }
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
   return false;
 }
@@ -1294,6 +1303,36 @@ router.get('/work/:agentId', asyncHandler(function (req, res) {
   res.json({ ok: true, queue: queue });
 }));
 
+// ======== REASONING STREAM ========
+
+// An agent (squad_loop) posts its reasoning chain as it works a task: thinking
+// (<think>), tool_call, result, done, error. ONE stream → the operator app's
+// sidecar back-half + training corpus + cockpit shimmer colour. Persisted (it's
+// training data, unlike heartbeats) and SSE-broadcast to the operator app.
+// Contract: mycelium-app/docs/specs/2026-06-06-reasoning-stream.md
+router.post('/reasoning', agentWriteLimiter, asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var b = req.body || {};
+  var agent = b.agent || who;
+  var step = String(b.step || 'thinking');
+  if (['thinking', 'tool_call', 'result', 'done', 'error'].indexOf(step) === -1) {
+    return apiError(res, 400, 'invalid step');
+  }
+  var data = {
+    task_id: (b.task_id != null) ? b.task_id : null,
+    turn:    (b.turn != null) ? b.turn : null,
+    step:    step,
+    text:    (typeof b.text === 'string') ? b.text : '',
+    tool:    b.tool || null
+  };
+  var summary = agent + ' · ' + step
+    + (b.tool && b.tool.name ? ' · ' + b.tool.name : '')
+    + (b.task_id != null ? ' (task #' + b.task_id + ')' : '');
+  var id = emitEvent('agent_reasoning', agent, req._authProjectId || null, summary, data);
+  res.json({ ok: true, id: id });
+}));
+
 // ======== AGENTS ========
 
 router.post('/agents/heartbeat', asyncHandler(function (req, res) {
@@ -1750,6 +1789,38 @@ router.post('/tasks/:id/comments', asyncHandler(function (req, res) {
   var comment = addTaskComment(task.id, author, content);
   emitEvent('task_comment', who, task.project_id, who + ' commented on task #' + task.id, { task_id: task.id, comment_id: comment.id });
   res.json(comment);
+}));
+
+// ======== TASK DELIVERABLES ========
+// An agent's final output (typed, raw markdown). Distinct from the comment
+// thread; a deliverable row existing == the task produced real output.
+
+router.get('/tasks/:id/deliverables', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(getTaskDeliverables(task.id));
+}));
+
+router.post('/tasks/:id/deliverable', asyncHandler(function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var task = getTask(parseIntParam(req.params.id));
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  var author = escapeHtml(req.body.author || who);
+  var kind = escapeHtml(req.body.kind || 'report');
+  var format = escapeHtml(req.body.format || 'markdown');
+  var flags = escapeHtml(req.body.flags || '');
+  // content is stored RAW markdown — NOT escapeHtml'd (comments escape because
+  // they render as HTML; deliverables render through a markdown view in Phase 2,
+  // where escaping would corrupt code blocks). The Phase-2 renderer must treat
+  // this as markdown, never raw-inject it as HTML.
+  var content = req.body.content;
+  if (!content) return res.status(400).json({ error: 'content is required' });
+  var deliverable = addTaskDeliverable(task.id, author, kind, format, content, flags);
+  emitEvent('task_deliverable', who, task.project_id, who + ' delivered task #' + task.id + ' (' + kind + ')', { task_id: task.id, deliverable_id: deliverable.id, kind: kind });
+  res.json(deliverable);
 }));
 
 router.delete('/tasks/:id', asyncHandler(function (req, res) {
@@ -3059,6 +3130,14 @@ router.put('/plans/:id/steps/:stepId', asyncHandler(function (req, res) {
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  // A FAILED step is terminal — surface it loudly. It stalls its plan by design
+  // (later steps gate on prior 'completed'), so it never false-advances; it needs
+  // a retry/re-plan rather than silently re-dispatching.
+  if (fields.status === 'failed') {
+    emitEvent('plan_step_failed', agentId, plan ? plan.project_id : null,
+      agentId + ' FAILED step #' + stepStepId + ' on plan #' + stepPlanId + (planStep ? (': ' + planStep.title) : ''),
+      { plan_id: stepPlanId, step_id: stepStepId });
+  }
   // Route operator_input assignments to all operators' inboxes
   if (fields.assignee === 'operator_input') {
     var stepTitle = planStep ? planStep.title : ('Step #' + stepStepId);
