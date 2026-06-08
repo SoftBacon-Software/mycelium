@@ -268,6 +268,20 @@ export function getAgentByKeyHash(apiKeyHash) {
   return stmt('dvGetAgentByKey', 'SELECT * FROM agents WHERE api_key_hash = ?').get(apiKeyHash);
 }
 
+// Resolve an assignee to a canonical agent id. Accepts an agent id OR display
+// name, case-insensitively — so the app, a human, or a script can assign by name
+// ("Ada") and it still matches the agent whose id is "ada". Unmatched assignees
+// (operator names, not-yet-registered agents, "", null) pass through unchanged.
+export function resolveAssignee(assignee) {
+  if (typeof assignee !== 'string') return assignee;
+  var a = assignee.trim();
+  if (!a) return assignee;
+  var row = stmt('dvResolveAssignee',
+    'SELECT id FROM agents WHERE id = ? COLLATE NOCASE OR name = ? COLLATE NOCASE LIMIT 1'
+  ).get(a, a);
+  return row ? row.id : assignee;
+}
+
 export function listAgents() {
   return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM agents WHERE project_id != 'drone' ORDER BY created_at").all();
 }
@@ -472,6 +486,7 @@ export function listTasks(filters) {
 export function updateTask(id, fields) {
   // Pre-process transformed fields
   var f = Object.assign({}, fields);
+  if (f.assignee !== undefined && f.assignee !== null) f.assignee = resolveAssignee(f.assignee);
   if (f.needs_approval !== undefined) f.needs_approval = f.needs_approval ? 1 : 0;
   if (f.blocked_by !== undefined) f.blocked_by = JSON.stringify(f.blocked_by);
   if (f.blocks !== undefined) f.blocks = JSON.stringify(f.blocks);
@@ -1980,6 +1995,7 @@ export function deletePlan(id) {
 }
 
 export function createPlanStep(planId, title, description, assignee, phase) {
+  assignee = resolveAssignee(assignee);
   var maxOrder = db.prepare("SELECT MAX(step_order) as m FROM plan_steps WHERE plan_id = ?").get(planId);
   var order = (maxOrder && maxOrder.m !== null) ? maxOrder.m + 1 : 0;
   var result = db.prepare(
@@ -1990,6 +2006,7 @@ export function createPlanStep(planId, title, description, assignee, phase) {
 }
 
 export function updatePlanStep(stepId, fields) {
+  if (fields.assignee !== undefined && fields.assignee !== null) fields.assignee = resolveAssignee(fields.assignee);
   var extra = fields.status === 'completed' ? ["completed_at = datetime('now')"] : [];
   buildUpdate('plan_steps', stepId, fields, ['title', 'description', 'status', 'assignee', 'linked_task_id', 'linked_branch', 'linked_pr_url', 'phase', 'step_order'], { updatedAt: true, extraSets: extra });
   // Update parent plan's updated_at
