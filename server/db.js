@@ -96,6 +96,10 @@ export function initDB() {
     // Smart Memory — access tracking for context keys
     ["context_keys", "access_count", "INTEGER NOT NULL DEFAULT 0"],
     ["context_keys", "last_accessed_at", "TEXT"],
+    // Squad-loop repo resolution — a project's local checkout root so agents
+    // working its tasks resolve relative paths in the right repo (not the
+    // agent's CWD). Any squad sets this per project.
+    ["projects", "repo_path", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (var [table, col, def] of migrations) {
@@ -430,7 +434,7 @@ export function updateProject(id, fields) {
   if (fields.bug_categories !== undefined && typeof fields.bug_categories !== 'string') {
     fields = Object.assign({}, fields, { bug_categories: JSON.stringify(fields.bug_categories) });
   }
-  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
+  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'repo_path', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
 }
 
 export function deleteProject(id) {
@@ -1730,12 +1734,12 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     if (!plan.steps) continue;
     for (var step of plan.steps) {
       if (step.assignee === agentId && step.status === 'in_progress') {
-        queue.push({ priority: 2, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+        queue.push({ priority: 2, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
     for (var step of plan.steps) {
       if (step.assignee === agentId && step.status === 'pending' && _planPriorsComplete(plan, step)) {
-        queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+        queue.push({ priority: 3, type: 'plan_step', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
   }
@@ -1765,7 +1769,7 @@ export function buildWorkQueue(agentId, projectId, directives, requests, tasks, 
     if (!plan.steps) continue;
     for (var step of plan.steps) {
       if (!step.assignee && step.status === 'pending' && _planPriorsComplete(plan, step)) {
-        queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status });
+        queue.push({ priority: 7, type: 'plan_step_unassigned', id: step.id, plan_id: plan.id, plan_title: plan.title, title: step.title, status: step.status, project_id: plan.project_id });
       }
     }
   }

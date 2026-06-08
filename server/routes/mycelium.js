@@ -310,7 +310,7 @@ var STATUS_ENUMS = {
   task:      ['open', 'in_progress', 'review', 'done', 'cancelled'],
   asset:     ['requested', 'in_progress', 'ready', 'delivered', 'cancelled'],
   plan:      ['draft', 'active', 'completed', 'cancelled'],
-  plan_step: ['pending', 'in_progress', 'completed', 'blocked'],
+  plan_step: ['pending', 'in_progress', 'completed', 'blocked', 'failed'], // 'failed' = terminal: a worker couldn't complete it (max-iter / gate fail). Leaves the work queue (never re-dispatched) + surfaces; later steps gate on prior 'completed' so it can't false-advance. Added 2026-06-07 to stop fail-loops.
   bug:       ['open', 'in_progress', 'fixed', 'closed'],
   channel:   ['active', 'archived'],
   drone_job: ['pending', 'claimed', 'done', 'completed', 'failed', 'cancelled', 'dismissed']
@@ -3130,6 +3130,14 @@ router.put('/plans/:id/steps/:stepId', asyncHandler(function (req, res) {
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
+  // A FAILED step is terminal — surface it loudly. It stalls its plan by design
+  // (later steps gate on prior 'completed'), so it never false-advances; it needs
+  // a retry/re-plan rather than silently re-dispatching.
+  if (fields.status === 'failed') {
+    emitEvent('plan_step_failed', agentId, plan ? plan.project_id : null,
+      agentId + ' FAILED step #' + stepStepId + ' on plan #' + stepPlanId + (planStep ? (': ' + planStep.title) : ''),
+      { plan_id: stepPlanId, step_id: stepStepId });
+  }
   // Route operator_input assignments to all operators' inboxes
   if (fields.assignee === 'operator_input') {
     var stepTitle = planStep ? planStep.title : ('Step #' + stepStepId);
