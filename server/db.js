@@ -4316,7 +4316,7 @@ export function getReconciliationCandidates(thresholdMinutes) {
 export function getStaleAgents(thresholdMinutes) {
   thresholdMinutes = thresholdMinutes || 15;
   return db.prepare(
-    "SELECT id, name, status, working_on, last_heartbeat FROM agents WHERE status IN ('online', 'idle') AND last_heartbeat < datetime('now', '-' || ? || ' minutes') AND role != 'drone'"
+    "SELECT id, name, status, working_on, last_heartbeat FROM agents WHERE status IN ('online', 'idle', 'busy') AND last_heartbeat < datetime('now', '-' || ? || ' minutes') AND role != 'drone'"
   ).all(thresholdMinutes);
 }
 
