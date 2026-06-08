@@ -139,7 +139,7 @@ import {
   assignDroneProfile, unassignDroneProfile, getDroneProfileAssignments, markProfileSetupDone, getDronesWithProfile,
   addTaskComment, getTaskComments, getTaskComment, deleteTaskComment, deleteTask,
   addTaskDeliverable, getTaskDeliverables,
-  addPlanStepComment, getPlanStepComments,
+  addPlanStepComment, getPlanStepComments, autoRetryOrEscalatePlanStep,
   GATED_ACTIONS, createApproval, getApproval, listApprovals, decideApproval,
   markApprovalExecuted, countPendingApprovals, listPendingApprovalsByAgent,
   castApprovalVote, getApprovalVotes, countApprovalVotes,
@@ -3130,13 +3130,36 @@ router.put('/plans/:id/steps/:stepId', asyncHandler(function (req, res) {
   }
   emitEvent('plan_step_updated', agentId, plan ? plan.project_id : null, agentId + ' updated step #' + stepStepId + ' on plan #' + stepPlanId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
   dispatchWebhook('plan_step_updated', agentId, { plan_id: stepPlanId, step_id: stepStepId, fields: fields });
-  // A FAILED step is terminal — surface it loudly. It stalls its plan by design
-  // (later steps gate on prior 'completed'), so it never false-advances; it needs
-  // a retry/re-plan rather than silently re-dispatching.
+  // A FAILED step triggers the platform's bounded SELF-HEAL: reopen the step + the
+  // phase it guards (with the failure critique) for another attempt; after RETRY_MAX
+  // attempts, finalize as terminal-failed → block the plan → escalate to operators.
+  // Runtime-agnostic: reopened steps flow through the normal work queue to whoever's
+  // assigned — no orchestrator/runtime/agent assumptions live here. (Worker may pass
+  // an optional `critique` in the PUT body; the failed step's own comment otherwise.)
   if (fields.status === 'failed') {
-    emitEvent('plan_step_failed', agentId, plan ? plan.project_id : null,
-      agentId + ' FAILED step #' + stepStepId + ' on plan #' + stepPlanId + (planStep ? (': ' + planStep.title) : ''),
-      { plan_id: stepPlanId, step_id: stepStepId });
+    var RETRY_MAX = 2; // resilient default; first knob to lift to per-scope config
+    var critique = req.body.critique || null;
+    var rr = autoRetryOrEscalatePlanStep(stepPlanId, stepStepId, RETRY_MAX, critique);
+    if (rr.action === 'retried') {
+      emitEvent('plan_step_retry', agentId, plan ? plan.project_id : null,
+        agentId + ' — step #' + stepStepId + ' failed; auto-retry ' + rr.attempt + '/' + rr.max +
+        ' (reopened ' + rr.reopened + ' step(s) with the critique)',
+        { plan_id: stepPlanId, step_id: stepStepId, attempt: rr.attempt });
+    } else {
+      emitEvent('plan_step_failed', agentId, plan ? plan.project_id : null,
+        agentId + ' FAILED step #' + stepStepId + ' on plan #' + stepPlanId +
+        (planStep ? (': ' + planStep.title) : '') + ' (auto-retries exhausted)',
+        { plan_id: stepPlanId, step_id: stepStepId });
+      updatePlan(stepPlanId, { status: 'blocked' });
+      createInboxItemForAllOperators('approval', 'plan_step', stepStepId,
+        'Plan step failed after retries: ' + (planStep ? planStep.title : ('#' + stepStepId)),
+        'Plan #' + stepPlanId + ' — ' + (plan ? (plan.title || '') : '') + '. Step #' + stepStepId +
+        ' exhausted ' + RETRY_MAX + ' auto-retries and was blocked for review.',
+        { plan_id: stepPlanId, step_id: stepStepId }, 'high');
+      emitEvent('plan_blocked', agentId, plan ? plan.project_id : null,
+        'Plan #' + stepPlanId + ' blocked — step #' + stepStepId + ' failed after ' + RETRY_MAX + ' auto-retries',
+        { plan_id: stepPlanId });
+    }
   }
   // Route operator_input assignments to all operators' inboxes
   if (fields.assignee === 'operator_input') {
