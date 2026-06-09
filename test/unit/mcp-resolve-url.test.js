@@ -87,9 +87,11 @@ describe('resolveUrl() — symmetric with resolveKey()', () => {
     expect(url).toBe(LOCAL)
   })
 
-  test('falls back to the .fyi literal only when neither settings nor env provide a URL', () => {
+  test('falls back to the localhost literal only when neither settings nor env provide a URL', () => {
+    // Sovereignty default (2026-06-09): a self-hosting stranger who forgets the env
+    // var must land on their own instance, never the deprecated hosted .fyi.
     const url = api.resolveUrl({ home: tmpHome, env: {} })
-    expect(url).toBe(FYI)
+    expect(url).toBe(LOCAL)
   })
 
   test('exported API_URL reflects resolveUrl of the process env at import time', () => {
