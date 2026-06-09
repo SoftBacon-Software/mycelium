@@ -3252,8 +3252,12 @@ export function ensurePluginRecord(manifest) {
       WHERE name = ?`).run(manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.routePrefix || '', manifest.mcpToolCount || 0, manifest.name);
     return { ...existing, updated: true };
   }
+  // First insert honors the manifest's declared initial state (a plugin that
+  // ships enabled:true loads on first boot); thereafter the existing-record
+  // path above preserves the operator's enable/disable override. Manifests
+  // without an explicit enabled flag still default to disabled (safe).
   stmt('dvInsertPlugin', `INSERT INTO plugins (name, display_name, description, version, author, enabled, route_prefix, mcp_tool_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(manifest.name, manifest.displayName || '', manifest.description || '', manifest.version || '1.0.0', manifest.author || '', manifest.enabled === true ? 1 : 0, manifest.routePrefix || '', manifest.mcpToolCount || 0);
   return { name: manifest.name, created: true };
 }
 
