@@ -67,6 +67,13 @@ export default function (core) {
       });
     }
 
+    // Strip raw vectors from the response — 768 floats per result is pure
+    // payload waste for every consumer (scores already carry the signal).
+    results = results.map(function (r) {
+      var { embedding, ...rest } = r;
+      return rest;
+    });
+
     res.json({ results: results, mode: mode, query: query, count: results.length });
   });
 
