@@ -10,6 +10,23 @@ export default function (core) {
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError, parseIntParam } = core;
 
+  // Fire-and-forget embedding after route-level indexing — same flow as the
+  // event handlers. (POST /index used to store NULL embeddings forever; that
+  // was the bulk of the unembedded backlog.)
+  function autoEmbed(sourceType, sourceId, contentText, chunkIndex) {
+    var config = db.getAllConfig();
+    if (!config.embedding_provider || config.embedding_provider === 'none') return;
+    generateEmbedding(config, contentText, {
+      db: core.db, sourceType: sourceType, sourceId: sourceId, chunkIndex: chunkIndex || 0
+    }).then(function (embedding) {
+      if (embedding) {
+        db.updateEmbedding(sourceType, sourceId, chunkIndex || 0, embedding, config.embedding_model || config.embedding_provider);
+      }
+    }).catch(function (e) {
+      console.error('[semantic-memory] auto-embed failed for ' + sourceType + ':' + sourceId + ':', e.message);
+    });
+  }
+
   // POST /memory/search — hybrid search
   router.post('/search', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
@@ -50,6 +67,13 @@ export default function (core) {
       });
     }
 
+    // Strip raw vectors from the response — 768 floats per result is pure
+    // payload waste for every consumer (scores already carry the signal).
+    results = results.map(function (r) {
+      var { embedding, ...rest } = r;
+      return rest;
+    });
+
     res.json({ results: results, mode: mode, query: query, count: results.length });
   });
 
@@ -66,6 +90,7 @@ export default function (core) {
       chunk_index: chunk_index || 0,
       metadata: metadata
     });
+    autoEmbed(source_type, source_id, content_text, chunk_index || 0);
     core.emitEvent('memory_indexed', who, null,
       who + ' indexed ' + source_type + ':' + source_id, { source_type: source_type, source_id: source_id });
     res.json({ ok: true, source_type: source_type, source_id: source_id });
@@ -87,6 +112,30 @@ export default function (core) {
     }
 
     var count = db.bulkIndex(items);
+
+    // Fire-and-forget embed for items that didn't bring their own embedding.
+    // generateEmbeddingBatch is sequential for ollama, so this won't stampede.
+    var toEmbed = items.filter(function (it) { return !it.embedding; });
+    if (toEmbed.length > 0) {
+      var config = db.getAllConfig();
+      if (config.embedding_provider && config.embedding_provider !== 'none') {
+        generateEmbeddingBatch(config, toEmbed.map(function (it) { return it.content_text; }), {
+          db: core.db,
+          items: toEmbed.map(function (it) {
+            return { source_type: it.source_type, source_id: it.source_id, chunk_index: it.chunk_index || 0 };
+          })
+        }).then(function (embeddings) {
+          for (var i = 0; i < toEmbed.length; i++) {
+            if (embeddings[i]) {
+              db.updateEmbedding(toEmbed[i].source_type, toEmbed[i].source_id, toEmbed[i].chunk_index || 0, embeddings[i], config.embedding_model || config.embedding_provider);
+            }
+          }
+        }).catch(function (e) {
+          console.error('[semantic-memory] bulk auto-embed failed:', e.message);
+        });
+      }
+    }
+
     res.json({ ok: true, indexed: count });
   });
 
@@ -203,6 +252,75 @@ export default function (core) {
       errors: errors,
       remaining: remaining > 0,
       stats: db.stats()
+    });
+  });
+
+  // POST /memory/backfill-embeddings — embed rows stored with NULL embeddings.
+  // Safely re-runnable (only touches embedding IS NULL rows) and bounded per
+  // call: ?limit= rows max (default 200, cap 1000), embedded in batches of 20.
+  // Returns { processed, embedded, failed, queued, remaining } where remaining
+  // is the total count of docs still lacking embeddings after this call.
+  router.post('/backfill-embeddings', async function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+
+    var config = db.getAllConfig();
+    if (!config.embedding_provider || config.embedding_provider === 'none') {
+      return apiError(res, 400, 'No embedding provider configured. Set via PUT /memory/config');
+    }
+
+    var limit = parseIntParam(req.query.limit) || (req.body && parseIntParam(req.body.limit)) || 200;
+    limit = Math.min(Math.max(limit, 1), 1000);
+
+    // Fetch the working set once — failed rows stay NULL, and re-querying
+    // inside the loop would spin on them forever.
+    var rows = db.getUnembedded(limit);
+    var processed = 0;
+    var embedded = 0;
+    var failed = 0;
+    var queued = 0;
+
+    if (config.embedding_provider === 'drone') {
+      // Drone provider: queue async jobs; vectors arrive later via callback
+      for (var row of rows) {
+        try {
+          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
+          queued++;
+        } catch (e) {
+          failed++;
+          console.error('[semantic-memory] backfill drone queue failed:', e.message);
+        }
+        processed++;
+      }
+    } else {
+      var BATCH = 20;
+      for (var start = 0; start < rows.length; start += BATCH) {
+        var batch = rows.slice(start, start + BATCH);
+        var embeddings = await generateEmbeddingBatch(config, batch.map(function (r) { return r.content_text; }));
+        for (var i = 0; i < batch.length; i++) {
+          if (embeddings[i]) {
+            try {
+              db.updateEmbedding(batch[i].source_type, batch[i].source_id, batch[i].chunk_index, embeddings[i], config.embedding_model || config.embedding_provider);
+              embedded++;
+            } catch (e) {
+              failed++;
+              console.error('[semantic-memory] backfill embed update failed:', e.message);
+            }
+          } else {
+            failed++;
+          }
+          processed++;
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      processed: processed,
+      embedded: embedded,
+      failed: failed,
+      queued: queued,
+      remaining: db.countUnembedded()
     });
   });
 
