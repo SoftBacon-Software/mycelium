@@ -22,9 +22,19 @@ export default function createMemoryDB(db) {
     vecAvailable() { return _vecAvailable; },
 
     // -- Config --
+    // Two stores: sm_config (PUT /memory/config) is canonical; the platform's
+    // plugin_config table (PUT /plugins/semantic-memory/config) is the fallback
+    // so config set through the platform plugin surface is honored too.
+    // Reads happen per-call, so either route applies live — no restart needed.
     getConfig(key) {
       var row = db.prepare('SELECT value FROM sm_config WHERE key = ?').get(key);
-      return row ? row.value : null;
+      if (row) return row.value;
+      try {
+        var prow = db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'semantic-memory' AND key = ?").get(key);
+        return prow ? prow.value : null;
+      } catch (e) {
+        return null; // plugin_config may not exist (plugin-only DBs, tests)
+      }
     },
 
     setConfig(key, value) {
@@ -32,8 +42,12 @@ export default function createMemoryDB(db) {
     },
 
     getAllConfig() {
-      var rows = db.prepare('SELECT key, value FROM sm_config').all();
       var config = {};
+      try {
+        var prows = db.prepare("SELECT key, value FROM plugin_config WHERE plugin_name = 'semantic-memory'").all();
+        for (var p of prows) config[p.key] = p.value;
+      } catch (e) { /* plugin_config may not exist (plugin-only DBs, tests) */ }
+      var rows = db.prepare('SELECT key, value FROM sm_config').all();
       for (var r of rows) config[r.key] = r.value;
       return config;
     },
@@ -78,6 +92,12 @@ export default function createMemoryDB(db) {
       });
       txn(items);
       return items.length;
+    },
+
+    getDoc(sourceType, sourceId, chunkIndex) {
+      return db.prepare(
+        'SELECT * FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
+      ).get(sourceType, sourceId, chunkIndex || 0);
     },
 
     remove(sourceType, sourceId) {
@@ -210,6 +230,10 @@ export default function createMemoryDB(db) {
       return db.prepare(
         'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL ORDER BY updated_at DESC LIMIT ?'
       ).all(limit || 50);
+    },
+
+    countUnembedded() {
+      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
     },
 
     searchHybrid(query, opts, queryEmbedding) {
