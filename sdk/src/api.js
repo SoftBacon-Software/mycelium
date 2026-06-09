@@ -1,7 +1,8 @@
 // HTTP client for the Mycelium API — zero dependencies
 
 export function createClient(opts) {
-  var apiUrl = opts.apiUrl || 'https://mycelium.fyi/api/mycelium'
+  // Sovereignty default: your own local instance, never a hosted third party (mycelium.fyi is deprecated)
+  var apiUrl = opts.apiUrl || 'http://localhost:3002/api/mycelium'
   var apiKey = opts.apiKey
   var role = opts.role || 'agent'
   var agentId = opts.agentId || ''

@@ -18,9 +18,9 @@ function resolveKey() {
 
 // Read URL from settings.json as ground truth — symmetric with resolveKey().
 // Without this, an empty/stale process.env.MYCELIUM_API_URL silently fell through
-// to the .fyi literal while the key still resolved from settings.json, so requests
-// authenticated fine but hit the wrong host (substrate-separation bug). Same
-// precedence as resolveKey: settings.json wins, then env, then the .fyi default.
+// to a hardcoded host literal while the key still resolved from settings.json, so
+// requests authenticated fine but hit the wrong host (substrate-separation bug). Same
+// precedence as resolveKey: settings.json wins, then env, then the localhost default.
 // opts ({ home, env }) makes the function directly unit-testable without import games.
 function resolveUrl(opts) {
   var home = (opts && opts.home) || homedir();
@@ -31,7 +31,8 @@ function resolveUrl(opts) {
     var mcpEnv = settings.mcpServers && settings.mcpServers.mycelium && settings.mcpServers.mycelium.env;
     if (mcpEnv && mcpEnv.MYCELIUM_API_URL) return mcpEnv.MYCELIUM_API_URL;
   } catch {}
-  return env.MYCELIUM_API_URL || 'https://mycelium.fyi/api/mycelium';
+  // Sovereignty default: your own local instance, never a hosted third party (mycelium.fyi is deprecated)
+  return env.MYCELIUM_API_URL || 'http://localhost:3002/api/mycelium';
 }
 
 const API_URL = resolveUrl();
