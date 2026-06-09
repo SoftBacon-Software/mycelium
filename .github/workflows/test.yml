@@ -27,3 +27,18 @@ jobs:
 
       - name: Run vitest
         run: npm test
+
+      # Plugin suites use node:test and live outside vitest's include glob
+      # (test/**/*.test.js) — run them explicitly so they're CI-protected.
+      - name: Run plugin tests (node:test)
+        run: |
+          shopt -s nullglob
+          files=(server/plugins/*/test.js)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No plugin test files found — skipping"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "=== node --test $f ==="
+            node --test "$f"
+          done

@@ -581,9 +581,11 @@ function displayName(id) {
 
 // Either agent or admin — returns display name / agent ID
 function checkAgentOrAdmin(req, res) {
-  // Try studio JWT first
+  // Try studio JWT first — operators authenticate, but only admin-role
+  // users carry the admin flag (mirrors checkAdmin/checkAdminOrOperator;
+  // any-JWT-means-admin was a privilege-flattening hole)
   var user = getStudioUser(req);
-  if (user) { req._authIsAdmin = true; return user.displayName || user.username; }
+  if (user) { req._authIsAdmin = user.role === 'admin'; return user.displayName || user.username; }
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
   if (isAdminKey(adminKey)) {
@@ -1355,6 +1357,11 @@ router.post('/agents/heartbeat', asyncHandler(function (req, res) {
   if (req.body.llm_model !== undefined) agentUpdates.llm_model = req.body.llm_model;
   if (req.body.agent_type !== undefined) agentUpdates.agent_type = req.body.agent_type;
   if (req.body.runtime !== undefined) agentUpdates.runtime = req.body.runtime;
+  if (req.body.system_diagnostics !== undefined) {
+    agentUpdates.system_diagnostics = typeof req.body.system_diagnostics === 'string'
+      ? req.body.system_diagnostics
+      : JSON.stringify(req.body.system_diagnostics);
+  }
   if (Object.keys(agentUpdates).length > 0) updateAgent(agentId, agentUpdates);
   // Read previous state to craft a meaningful event summary
   var prev = getAgent(agentId);
