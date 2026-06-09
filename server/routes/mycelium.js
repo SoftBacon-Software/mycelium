@@ -581,9 +581,11 @@ function displayName(id) {
 
 // Either agent or admin — returns display name / agent ID
 function checkAgentOrAdmin(req, res) {
-  // Try studio JWT first
+  // Try studio JWT first — operators authenticate, but only admin-role
+  // users carry the admin flag (mirrors checkAdmin/checkAdminOrOperator;
+  // any-JWT-means-admin was a privilege-flattening hole)
   var user = getStudioUser(req);
-  if (user) { req._authIsAdmin = true; return user.displayName || user.username; }
+  if (user) { req._authIsAdmin = user.role === 'admin'; return user.displayName || user.username; }
   // Try admin key
   var adminKey = req.headers['x-admin-key'];
   if (isAdminKey(adminKey)) {
