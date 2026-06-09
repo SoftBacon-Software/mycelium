@@ -1,0 +1,79 @@
+[
+  {
+    "name": "mycelium_fire_workflow",
+    "description": "Fire a workflow: a DAG of agent invocations (fan-out, pipeline, or custom) that a dormant runner claims and executes under RAM admit-control. Pass FULLY-EXPANDED invocations: [{id, agent, model, brief, deps:[id,...]}]. Workers have deps:[]; a verifier/synthesizer lists every worker id in deps to receive their results.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["name", "invocations"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable workflow name (shows in the app/cockpit)"
+        },
+        "invocations": {
+          "type": "array",
+          "description": "The DAG: [{id:'w0', agent:'scout', model:'', brief:'...', deps:[]}, ..., {id:'verify', agent:'echo', deps:['w0','w1']}]"
+        },
+        "shape": {
+          "type": "string",
+          "description": "Display label: fanout | pipeline | repair | custom (default custom)"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Project to attribute the workflow to"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/workflows"
+    }
+  },
+  {
+    "name": "mycelium_list_workflows",
+    "description": "List workflows. Filter by status (pending|claimed|running|cancelling|completed|failed|cancelled) and project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "description": "Filter by status" },
+        "project_id": { "type": "string", "description": "Filter by project" },
+        "limit": { "type": "integer", "description": "Max rows (default 50)" }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/workflows",
+      "queryMap": { "status": "status", "project_id": "project_id", "limit": "limit" }
+    }
+  },
+  {
+    "name": "mycelium_workflow_status",
+    "description": "Get one workflow with all its invocations (statuses + results) and recent lifecycle events.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "description": "Workflow id" }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/workflows/{id}"
+    }
+  },
+  {
+    "name": "mycelium_cancel_workflow",
+    "description": "Cancel a workflow. Pending/claimed are cancelled immediately; a running workflow goes to 'cancelling' and the runner stops cooperatively after the current wave.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "integer", "description": "Workflow id" }
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/workflows/{id}/cancel"
+    }
+  }
+]

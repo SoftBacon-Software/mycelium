@@ -1,0 +1,12 @@
+{
+  "name": "workflows",
+  "version": "1.0.0",
+  "displayName": "Workflows",
+  "description": "Workflow intent surface — fire a DAG of agent invocations (fan-out / pipeline / custom), a dormant runner claims and executes it under residency admit-control, results and events stream back. The initiation seam for workflow-initiated (not perpetual-pull) agent networks.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/workflows",
+  "schema": "schema.sql",
+  "gatedActions": [],
+  "mcpTools": "mcp-tools.json"
+}
