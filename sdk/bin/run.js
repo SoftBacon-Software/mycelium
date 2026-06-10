@@ -4,7 +4,9 @@
 // Environment variables:
 //   MYCELIUM_AGENT_ID  — agent identifier (required)
 //   MYCELIUM_API_KEY   — agent API key (required)
-//   MYCELIUM_API_URL   — API base URL (default: https://mycelium.fyi/api/mycelium)
+//   MYCELIUM_API_URL   — API base URL (default: http://localhost:3002/api/mycelium)
+//                        Sovereignty default: your own local instance, never a
+//                        hosted third party (mycelium.fyi is deprecated)
 //   MYCELIUM_HANDLER   — path to JS module with work/message handlers (optional)
 //
 // The handler module should export:
@@ -27,7 +29,7 @@ if (!agentId || !apiKey) {
   console.error('  MYCELIUM_API_KEY   — Your agent API key')
   console.error('')
   console.error('Optional:')
-  console.error('  MYCELIUM_API_URL   — API base URL (default: https://mycelium.fyi/api/mycelium)')
+  console.error('  MYCELIUM_API_URL   — API base URL (default: http://localhost:3002/api/mycelium)')
   console.error('  MYCELIUM_HANDLER   — Path to JS module with handler functions')
   process.exit(1)
 }
