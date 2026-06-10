@@ -35,7 +35,7 @@ package.json      # mycelium-mcp v1.2.0
 
 - **Transport**: stdio (standard MCP pattern)
 - **Two modes**: `admin` (full access, X-Admin-Key) and `agent` (scoped, X-Agent-Key, auto-heartbeat)
-- **API target**: Defaults to `https://mycelium.fyi/api/mycelium`. Configurable via `MYCELIUM_API_URL`.
+- **API target**: Defaults to `http://localhost:3002/api/mycelium` — sovereignty default: your own local instance, never a hosted third party (mycelium.fyi is deprecated). Configurable via `MYCELIUM_API_URL`.
 - **Tool naming**: All tools registered with `mycelium_*` prefix. Legacy `studio_*` aliases also registered.
 - **Auto-heartbeat**: In agent mode, sends heartbeat every 5 minutes. Clears `working_on` on shutdown.
 
@@ -46,7 +46,7 @@ package.json      # mycelium-mcp v1.2.0
 | `MYCELIUM_API_KEY` | Yes | Admin key or agent key |
 | `MYCELIUM_ROLE` | No | `admin` (default) or `agent` |
 | `MYCELIUM_AGENT_ID` | Agent mode | Agent identifier (e.g. `greatness-claude`) |
-| `MYCELIUM_API_URL` | No | API base URL (default: `https://mycelium.fyi/api/mycelium`) |
+| `MYCELIUM_API_URL` | No | API base URL (default: `http://localhost:3002/api/mycelium`) |
 
 ## Configuration
 
@@ -59,7 +59,7 @@ Add to `~/.claude/settings.json`:
       "command": "node",
       "args": ["/path/to/mycelium-mcp/index.js"],
       "env": {
-        "MYCELIUM_API_URL": "https://mycelium.fyi/api/mycelium",
+        "MYCELIUM_API_URL": "http://localhost:3002/api/mycelium",
         "MYCELIUM_ROLE": "admin",
         "MYCELIUM_API_KEY": "<admin-key>"
       }
