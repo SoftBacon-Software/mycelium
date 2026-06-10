@@ -37,7 +37,7 @@
     "mcp"
   ],
   "author": "SoftBacon Software <hello@mycelium.fyi> (https://mycelium.fyi)",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SoftBacon-Software/mycelium.git",
