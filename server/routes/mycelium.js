@@ -2678,7 +2678,10 @@ router.get('/events/stream', asyncHandler(function (req, res) {
   if (token) {
     try {
       var decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-      if (decoded && decoded.studioUser) { req._authIsAdmin = true; authOk = true; }
+      // Any studio JWT may stream, but only admin-role users carry the admin
+      // flag (mirrors checkAgentOrAdmin — any-JWT-means-admin was a
+      // privilege-flattening hole)
+      if (decoded && decoded.studioUser) { req._authIsAdmin = decoded.role === 'admin'; authOk = true; }
     } catch (e) { /* invalid token, fall through to header auth */ }
   }
 
