@@ -17,6 +17,7 @@ import Database from 'better-sqlite3';
 import createRoutes from './routes.js';
 import createMemoryDB from './db.js';
 import { registerHooks } from './handlers.js';
+import { chunkText } from './chunking.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -378,4 +379,236 @@ test('auth: unauthenticated backfill and index get 401, nothing written', async 
   assert.equal(r2.status, 401);
   var afterCount = db.prepare('SELECT COUNT(*) AS n FROM sm_embeddings').get().n;
   assert.equal(afterCount, beforeCount);
+});
+
+// ---- chunked embedding (#228): docs past the model's window split into
+// chunk rows that embed independently ----
+
+// Build paragraph-y text where every paragraph carries a marker token
+function makeBigText(token, paras) {
+  var out = [];
+  for (var i = 0; i < paras; i++) {
+    out.push(token + ' section ' + i + ': ' + 'the squad loop is the work and the substrate is identity. '.repeat(4).trim());
+  }
+  return out.join('\n\n');
+}
+
+function getChunkRows(sourceType, sourceId) {
+  return db.prepare(
+    'SELECT * FROM sm_embeddings WHERE source_type = ? AND source_id = ? ORDER BY chunk_index'
+  ).all(sourceType, String(sourceId));
+}
+
+test('chunker: lossless boundary-preferring split, hard fallback, small untouched', function () {
+  var text = makeBigText('chunkertest', 14);
+  var chunks = chunkText(text, 600);
+  assert.ok(chunks.length > 1, 'oversized text split');
+  assert.equal(chunks.join(''), text, 'lossless partition');
+  for (var c of chunks) assert.ok(c.length <= 600, 'chunk within limit');
+  for (var j = 0; j < chunks.length - 1; j++) {
+    assert.match(chunks[j], /\n$/, 'cuts land on clean line boundaries');
+  }
+  // hard split fallback: no separators anywhere
+  var blob = 'x'.repeat(1500);
+  var hard = chunkText(blob, 600);
+  assert.deepEqual(hard.map(function (h) { return h.length; }), [600, 600, 300]);
+  assert.equal(hard.join(''), blob);
+  // small text untouched
+  assert.deepEqual(chunkText('small doc', 600), ['small doc']);
+});
+
+test('routes: oversized doc auto-chunks on index, every chunk embeds', async function () {
+  mem.setConfig('chunk_size', '600'); // sm_config wins — deterministic for the chunk tests
+  var big = makeBigText('oversizeindex', 8);
+  assert.ok(big.length > 1200, 'doc spans multiple chunks');
+
+  var r = await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'big-doc-1', content_text: big,
+    namespace: 'memories', metadata: { topic: 'chunking' }
+  });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.chunks > 1, 'reported multiple chunks');
+
+  var rows = getChunkRows('m5max_memory', 'big-doc-1');
+  assert.equal(rows.length, r.body.chunks);
+  assert.deepEqual(
+    rows.map(function (x) { return x.chunk_index; }),
+    rows.map(function (_, i) { return i; }),
+    'contiguous chunk_index 0..N'
+  );
+  assert.equal(rows.map(function (x) { return x.content_text; }).join(''), big, 'chunks reassemble the doc');
+  for (var row of rows) {
+    assert.ok(row.content_text.length <= 600, 'each chunk fits the window');
+    assert.equal(row.namespace, 'memories', 'namespace carried to every chunk');
+    assert.match(row.metadata, /chunking/, 'metadata carried to every chunk');
+  }
+
+  var ok = await waitFor(function () {
+    var rs = getChunkRows('m5max_memory', 'big-doc-1');
+    return rs.length > 1 && rs.every(function (x) { return x.embedding; });
+  });
+  assert.ok(ok, 'every chunk embedded');
+});
+
+test('routes: small doc stays a single row at chunk_index 0', async function () {
+  var r = await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'small-doc-1',
+    content_text: 'a small doc stays one row'
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.chunks, 1);
+  var rows = getChunkRows('m5max_memory', 'small-doc-1');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].chunk_index, 0);
+  assert.equal(rows[0].content_text, 'a small doc stays one row');
+});
+
+test('routes: re-index replaces chunk rows — no orphans either direction', async function () {
+  var big = makeBigText('reindexorphan', 10);
+  await call('POST', '/memory/index', { source_type: 'm5max_memory', source_id: 'reindex-1', content_text: big });
+  var n1 = getChunkRows('m5max_memory', 'reindex-1').length;
+  assert.ok(n1 > 2, 'first index produced several chunks');
+
+  // shrink to fewer (but still multiple) chunks — extra rows must go
+  var smallerBig = makeBigText('reindexorphan', 5);
+  await call('POST', '/memory/index', { source_type: 'm5max_memory', source_id: 'reindex-1', content_text: smallerBig });
+  var rows2 = getChunkRows('m5max_memory', 'reindex-1');
+  assert.ok(rows2.length < n1, 'fewer chunks after shrinking');
+  assert.equal(rows2.map(function (x) { return x.content_text; }).join(''), smallerBig, 'no stale chunk content');
+
+  // shrink to a small doc — exactly one row left
+  await call('POST', '/memory/index', { source_type: 'm5max_memory', source_id: 'reindex-1', content_text: 'now a small doc again' });
+  var rows3 = getChunkRows('m5max_memory', 'reindex-1');
+  assert.equal(rows3.length, 1, 'single row after small re-index — no orphans');
+  assert.equal(rows3[0].chunk_index, 0);
+  assert.equal(rows3[0].content_text, 'now a small doc again');
+});
+
+test('routes: bulk index chunks oversized items, small items single-row', async function () {
+  var big = makeBigText('bulkoversize', 8);
+  var r = await call('POST', '/memory/index/bulk', { items: [
+    { source_type: 'm5max_memory', source_id: 'bulk-big-1', content_text: big },
+    { source_type: 'm5max_memory', source_id: 'bulk-small-1', content_text: 'small bulk item rides along' }
+  ] });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.indexed, 2, 'indexed counts docs');
+  assert.ok(r.body.rows > 3, 'rows counts post-chunking rows');
+
+  var bigRows = getChunkRows('m5max_memory', 'bulk-big-1');
+  assert.ok(bigRows.length > 1, 'oversized bulk item chunked');
+  assert.equal(bigRows.map(function (x) { return x.content_text; }).join(''), big);
+  assert.equal(getChunkRows('m5max_memory', 'bulk-small-1').length, 1);
+
+  var ok = await waitFor(function () {
+    var rs = getChunkRows('m5max_memory', 'bulk-big-1');
+    var small = getChunkRows('m5max_memory', 'bulk-small-1');
+    return rs.every(function (x) { return x.embedding; }) && small[0] && small[0].embedding;
+  });
+  assert.ok(ok, 'every bulk chunk embedded');
+});
+
+test('handler: oversized content chunks via indexAndEmbed, unchanged skip still holds', async function () {
+  var big = makeBigText('handleroversize', 8);
+  fire('context_key_updated', { agent: 'tester', data: { namespace: 'ops', key: 'bigkey', value: big } });
+
+  var rows = getChunkRows('context_key', 'ops:bigkey');
+  assert.ok(rows.length > 1, 'handler-indexed doc chunked');
+  assert.equal(rows.map(function (x) { return x.content_text; }).join(''), big, 'chunks reassemble the doc');
+
+  var ok = await waitFor(function () {
+    var rs = getChunkRows('context_key', 'ops:bigkey');
+    return rs.length > 1 && rs.every(function (x) { return x.embedding; });
+  });
+  assert.ok(ok, 'all handler chunks embedded');
+
+  // Re-fire with identical content — must not re-index or re-embed
+  var callsBefore = embedCalls;
+  var rowCountBefore = getChunkRows('context_key', 'ops:bigkey').length;
+  fire('context_key_updated', { agent: 'tester', data: { namespace: 'ops', key: 'bigkey', value: big } });
+  await new Promise(function (r) { setTimeout(r, 50); });
+  assert.equal(embedCalls, callsBefore, 'unchanged chunked doc not re-embedded');
+  assert.equal(getChunkRows('context_key', 'ops:bigkey').length, rowCountBefore, 'row count unchanged');
+});
+
+test('backfill: oversized NULL row is chunked and embedded instead of failing', async function () {
+  // Seed the way the live backlog looks: one un-chunked oversized row,
+  // NULL embedding (indexed before chunking existed)
+  var big = makeBigText('legacybacklog', 8);
+  mem.index('m5max_memory', 'legacy-big-1', big, { namespace: 'memories', metadata: { legacy: true } });
+  var seeded = getChunkRows('m5max_memory', 'legacy-big-1');
+  assert.equal(seeded.length, 1);
+  assert.ok(seeded[0].content_text.length > 600, 'seeded row is oversized');
+  assert.equal(seeded[0].embedding, null);
+
+  // Let in-flight fire-and-forget embeds from earlier tests land first
+  await waitFor(function () { return mem.countUnembedded() === 1; });
+
+  var r = await call('POST', '/memory/backfill-embeddings?limit=50');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.failed, 0, 'no failures — oversized doc chunked instead');
+  assert.ok(r.body.embedded > 1, 'embedded one vector per chunk');
+  assert.equal(r.body.remaining, 0);
+
+  var rows = getChunkRows('m5max_memory', 'legacy-big-1');
+  assert.ok(rows.length > 1, 'row replaced by chunk rows');
+  assert.equal(rows.map(function (x) { return x.content_text; }).join(''), big, 'chunks reassemble the doc');
+  for (var row of rows) {
+    assert.ok(row.embedding, 'every chunk embedded');
+    assert.equal(row.namespace, 'memories', 'namespace preserved through backfill chunking');
+    assert.match(row.metadata, /legacy/, 'metadata preserved through backfill chunking');
+  }
+});
+
+test('backfill: already-chunked doc with an oversized chunk re-chunks from the FULL doc', async function () {
+  // Live failure shape (2026-06-09): a chunk cut at an older, larger
+  // threshold still exceeds the model's window. Re-chunk must rebuild from
+  // ALL chunk rows — re-chunking one chunk's slice would drop the rest.
+  mem.setConfig('chunk_size', '600');
+  var big = makeBigText('thresholdshift', 8);
+  await call('POST', '/memory/index', { source_type: 'm5max_memory', source_id: 'shift-1', content_text: big });
+  await waitFor(function () {
+    var rs = getChunkRows('m5max_memory', 'shift-1');
+    return rs.length > 1 && rs.every(function (x) { return x.embedding; });
+  });
+  var before = getChunkRows('m5max_memory', 'shift-1');
+
+  // Threshold drops; one existing chunk is now oversized and unembedded
+  mem.setConfig('chunk_size', '300');
+  db.prepare(
+    "UPDATE sm_embeddings SET embedding = NULL WHERE source_type='m5max_memory' AND source_id='shift-1' AND chunk_index = 0"
+  ).run();
+
+  var r = await call('POST', '/memory/backfill-embeddings?limit=50');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.failed, 0);
+  assert.equal(r.body.remaining, 0);
+
+  var after = getChunkRows('m5max_memory', 'shift-1');
+  assert.ok(after.length > before.length, 're-chunked at the smaller threshold');
+  assert.equal(after.map(function (x) { return x.content_text; }).join(''), big, 'no content lost in re-chunk');
+  for (var row of after) {
+    assert.ok(row.content_text.length <= 300, 'chunks fit the new threshold');
+    assert.ok(row.embedding, 'every re-chunked chunk embedded');
+  }
+  mem.setConfig('chunk_size', '600'); // restore for later tests
+});
+
+test('search: multi-chunk doc collapses to its best chunk', async function () {
+  var big = makeBigText('zebrafish', 8); // every chunk carries the marker token
+  await call('POST', '/memory/index', { source_type: 'm5max_memory', source_id: 'collapse-big', content_text: big });
+  await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'collapse-small',
+    content_text: 'zebrafish appears once in this small doc'
+  });
+  await waitFor(function () { return mem.countUnembedded() === 0; });
+
+  for (var mode of ['keyword', 'hybrid']) {
+    var r = await call('POST', '/memory/search', { query: 'zebrafish', mode: mode, limit: 10 });
+    assert.equal(r.status, 200);
+    var bigHits = r.body.results.filter(function (x) { return x.source_id === 'collapse-big'; });
+    var smallHits = r.body.results.filter(function (x) { return x.source_id === 'collapse-small'; });
+    assert.equal(bigHits.length, 1, mode + ': multi-chunk doc collapsed to one result');
+    assert.equal(smallHits.length, 1, mode + ': other matching docs still surface');
+    assert.equal(bigHits[0].embedding, undefined, mode + ': raw vectors stripped');
+  }
 });
