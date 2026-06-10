@@ -21,3 +21,7 @@ __pycache__/
 *.pyc
 *.log
 tools/logs/
+
+# Deployment-local agent avatars (crew faces are instance data, never shipped in the public repo)
+public/avatars/*
+!public/avatars/README.md
