@@ -85,15 +85,30 @@ export default function (core) {
     if (!source_type || !source_id || !content_text) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
-    db.index(source_type, source_id, content_text, {
-      namespace: namespace,
-      chunk_index: chunk_index || 0,
-      metadata: metadata
-    });
-    autoEmbed(source_type, source_id, content_text, chunk_index || 0);
+    var chunkCount = 1;
+    if (chunk_index) {
+      // Explicit chunk_index = caller-managed chunking — store the row as-is
+      db.index(source_type, source_id, content_text, {
+        namespace: namespace,
+        chunk_index: chunk_index,
+        metadata: metadata
+      });
+      autoEmbed(source_type, source_id, content_text, chunk_index);
+    } else {
+      // Chunk-aware: oversized content splits into chunk rows, and stale
+      // chunks from a previous (larger) version of the doc are removed
+      var chunks = db.indexDoc(source_type, source_id, content_text, {
+        namespace: namespace,
+        metadata: metadata
+      });
+      chunkCount = chunks.length;
+      for (var ci = 0; ci < chunks.length; ci++) {
+        autoEmbed(source_type, source_id, chunks[ci], ci);
+      }
+    }
     core.emitEvent('memory_indexed', who, null,
       who + ' indexed ' + source_type + ':' + source_id, { source_type: source_type, source_id: source_id });
-    res.json({ ok: true, source_type: source_type, source_id: source_id });
+    res.json({ ok: true, source_type: source_type, source_id: source_id, chunks: chunkCount });
   });
 
   // POST /memory/index/bulk — bulk index
@@ -111,18 +126,20 @@ export default function (core) {
       }
     }
 
-    var count = db.bulkIndex(items);
+    // bulkIndex is chunk-aware — oversized items split into chunk rows;
+    // it returns the rows actually written so each one embeds separately.
+    var rows = db.bulkIndex(items);
 
-    // Fire-and-forget embed for items that didn't bring their own embedding.
+    // Fire-and-forget embed for rows that didn't bring their own embedding.
     // generateEmbeddingBatch is sequential for ollama, so this won't stampede.
-    var toEmbed = items.filter(function (it) { return !it.embedding; });
+    var toEmbed = rows.filter(function (r) { return !r.embedding; });
     if (toEmbed.length > 0) {
       var config = db.getAllConfig();
       if (config.embedding_provider && config.embedding_provider !== 'none') {
-        generateEmbeddingBatch(config, toEmbed.map(function (it) { return it.content_text; }), {
+        generateEmbeddingBatch(config, toEmbed.map(function (r) { return r.content_text; }), {
           db: core.db,
-          items: toEmbed.map(function (it) {
-            return { source_type: it.source_type, source_id: it.source_id, chunk_index: it.chunk_index || 0 };
+          items: toEmbed.map(function (r) {
+            return { source_type: r.source_type, source_id: r.source_id, chunk_index: r.chunk_index || 0 };
           })
         }).then(function (embeddings) {
           for (var i = 0; i < toEmbed.length; i++) {
@@ -136,7 +153,7 @@ export default function (core) {
       }
     }
 
-    res.json({ ok: true, indexed: count });
+    res.json({ ok: true, indexed: items.length, rows: rows.length });
   });
 
   // DELETE /memory/index/:sourceType/:sourceId — remove from index
@@ -186,6 +203,38 @@ export default function (core) {
     res.json({ ok: true, config: db.getAllConfig() });
   });
 
+  // Oversized NULL-embedding rows can never embed whole — the provider
+  // rejects them. Covers both legacy un-chunked docs AND docs whose chunks
+  // were cut at a larger (since-lowered) threshold. The full doc is rebuilt
+  // from ALL its chunk rows (chunking is lossless, so the join IS the
+  // original) and re-chunked at the current threshold — re-chunking from a
+  // single chunk's slice would drop sibling chunk content. Returns the
+  // expanded work list of rows to embed.
+  function expandOversizedRows(rows) {
+    var work = [];
+    var rechunked = {}; // source_type:source_id — re-chunk each doc once
+    for (var row of rows) {
+      var key = row.source_type + ':' + row.source_id;
+      if (rechunked[key]) continue;
+      if (row.content_text.length > db.getChunkSize()) {
+        rechunked[key] = true;
+        var docRows = db.getDocChunks(row.source_type, row.source_id);
+        var fullText = docRows.map(function (c) { return c.content_text; }).join('');
+        var meta = null;
+        try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
+        var chunks = db.indexDoc(row.source_type, row.source_id, fullText, {
+          namespace: docRows[0].namespace, metadata: meta
+        });
+        for (var ci = 0; ci < chunks.length; ci++) {
+          work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });
+        }
+      } else {
+        work.push(row);
+      }
+    }
+    return work;
+  }
+
   // POST /memory/reindex — batch-embed all unembedded content (admin, async)
   router.post('/reindex', async function (req, res) {
     var who = checkAdmin(req, res);
@@ -202,6 +251,9 @@ export default function (core) {
     if (unembedded.length === 0) {
       return res.json({ ok: true, message: 'All content already embedded', embedded: 0, stats: db.stats() });
     }
+
+    // Chunk-split oversized rows so each piece fits the embedding window
+    unembedded = expandOversizedRows(unembedded);
 
     // Drone provider: queue async jobs instead of embedding synchronously
     if (config.embedding_provider === 'drone') {
@@ -273,8 +325,10 @@ export default function (core) {
     limit = Math.min(Math.max(limit, 1), 1000);
 
     // Fetch the working set once — failed rows stay NULL, and re-querying
-    // inside the loop would spin on them forever.
-    var rows = db.getUnembedded(limit);
+    // inside the loop would spin on them forever. Oversized rows (the
+    // persistently-failing legacy docs) are chunk-split before embedding,
+    // so processed/embedded count post-chunking rows.
+    var rows = expandOversizedRows(db.getUnembedded(limit));
     var processed = 0;
     var embedded = 0;
     var failed = 0;
