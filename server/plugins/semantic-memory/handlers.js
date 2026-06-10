@@ -23,29 +23,38 @@ export function registerHooks(core) {
   // Fire-and-forget embedding after indexing content
   // For drone provider: queues async job (embedding arrives later via callback)
   // For ollama/openai: embeds synchronously and stores immediately
-  function autoEmbed(sourceType, sourceId, contentText) {
+  function autoEmbed(sourceType, sourceId, contentText, chunkIndex) {
     var config = getEmbeddingConfig();
     if (!config.embedding_provider || config.embedding_provider === 'none') return;
     generateEmbedding(config, contentText, {
-      db: core.db, sourceType: sourceType, sourceId: sourceId, chunkIndex: 0
+      db: core.db, sourceType: sourceType, sourceId: sourceId, chunkIndex: chunkIndex || 0
     }).then(function (embedding) {
       if (embedding) {
-        db.updateEmbedding(sourceType, sourceId, 0, embedding, config.embedding_model || config.embedding_provider);
+        db.updateEmbedding(sourceType, sourceId, chunkIndex || 0, embedding, config.embedding_model || config.embedding_provider);
       }
     }).catch(function (e) {
       console.error('[semantic-memory] auto-embed failed for ' + sourceType + ':' + sourceId + ':', e.message);
     });
   }
 
-  // Index + embed in one step. Skips when the indexed content is unchanged AND
-  // already embedded (heartbeats re-fire with the same savepoint — don't
-  // re-embed what hasn't moved). Note db.index's upsert NULLs the embedding,
-  // so indexing without re-embedding would silently lose vectors.
+  // Index + embed in one step, chunk-aware (oversized content splits into
+  // chunk rows that each embed inside the model's window). Skips when the
+  // indexed content is unchanged AND every chunk is already embedded
+  // (heartbeats re-fire with the same savepoint — don't re-embed what
+  // hasn't moved); chunking is lossless, so the chunks reassemble the doc
+  // for comparison. Note db.index's upsert NULLs the embedding, so indexing
+  // without re-embedding would silently lose vectors.
   function indexAndEmbed(sourceType, sourceId, contentText, opts) {
-    var existing = db.getDoc(sourceType, sourceId, 0);
-    if (existing && existing.content_text === contentText && existing.embedding) return;
-    db.index(sourceType, sourceId, contentText, opts);
-    autoEmbed(sourceType, sourceId, contentText);
+    var existing = db.getDocChunks(sourceType, sourceId);
+    if (existing.length > 0) {
+      var joined = existing.map(function (c) { return c.content_text; }).join('');
+      var allEmbedded = existing.every(function (c) { return c.embedding; });
+      if (joined === contentText && allEmbedded) return;
+    }
+    var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
+    for (var i = 0; i < chunks.length; i++) {
+      autoEmbed(sourceType, sourceId, chunks[i], i);
+    }
   }
 
   // Auto-index context key updates
