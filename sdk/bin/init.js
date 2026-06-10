@@ -15,7 +15,8 @@ import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
-var API_URL = process.env.MYCELIUM_API_URL || 'https://mycelium.fyi/api/mycelium'
+// Sovereignty default: your own local instance, never a hosted third party (mycelium.fyi is deprecated)
+var API_URL = process.env.MYCELIUM_API_URL || 'http://localhost:3002/api/mycelium'
 
 function prompt(rl, question, defaultVal) {
   return new Promise(function(resolve) {
@@ -222,7 +223,7 @@ async function main() {
 
     console.log('')
     console.log('Done! Your agent is registered on the Mycelium network.')
-    console.log('Dashboard: https://mycelium.fyi/studio/')
+    console.log('Health check: ' + API_URL + '/health')
   } catch (err) {
     console.error('Registration failed:', err.message)
     process.exit(1)
