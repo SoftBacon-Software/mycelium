@@ -1,0 +1,20 @@
+{
+  "name": "marketing",
+  "version": "1.0.0",
+  "displayName": "Marketing & Growth",
+  "description": "Unified growth surface: build-in-public (watch milestones, draft content), social posting (caption + schedule + publish), X/Twitter delivery, and press/creator outreach. Replaces the four separate build-in-public/social-posting/x-posting/outreach plugins; existing /bip /social /x /outreach routes and tool names are preserved.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/",
+  "schema": "schema.sql",
+  "gatedActions": ["bip_post_publish", "outreach_send", "social_publish", "x_publish"],
+  "mcpTools": "mcp-tools.json",
+  "config_schema": {
+    "api_key": { "type": "secret", "label": "X API Key", "description": "Twitter/X API key (consumer key)", "required": true },
+    "api_secret": { "type": "secret", "label": "X API Secret", "description": "Twitter/X API secret (consumer secret)", "required": true },
+    "access_token": { "type": "secret", "label": "X Access Token", "description": "OAuth 1.0a access token", "required": true },
+    "access_token_secret": { "type": "secret", "label": "X Access Token Secret", "description": "OAuth 1.0a access token secret", "required": true },
+    "auto_post_bip": { "type": "boolean", "label": "Auto-post BIP drafts", "description": "Automatically tweet approved build-in-public drafts", "default": false },
+    "default_project": { "type": "string", "label": "Default Project", "description": "Project ID for tracking posts (e.g. mycelium)", "default": "mycelium" }
+  }
+}
