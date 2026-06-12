@@ -87,10 +87,6 @@ export function initDB() {
     ["agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
     ["drone_jobs", "job_type", "TEXT"],
     // Support ticket tiered routing
-    ["support_tickets", "tier", "TEXT NOT NULL DEFAULT 'L2'"],
-    ["support_tickets", "assigned_agent", "TEXT"],
-    ["support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
-    ["support_tickets", "draft_response", "TEXT"],
     // Plan #62 — multi-runtime agent support
     ["agents", "runtime", "TEXT NOT NULL DEFAULT ''"],
     // Smart Memory — access tracking for context keys
@@ -3150,7 +3146,6 @@ export function getOverview(userId) {
     drone_jobs: listDroneJobs({ limit: 50 }),
     plugins: listPluginRecords(),
     active_operators: getActiveStudioUsers(5),
-    instances: listInstances({}),
   };
 }
 
@@ -3596,40 +3591,6 @@ export function getFeedbackSummary() {
   ).all();
   var recent = db.prepare('SELECT * FROM feedback ORDER BY created_at DESC LIMIT 5').all();
   return { total, avg_rating: avgRating, by_agent: byAgent, by_type: byType, rating_dist: ratingDist, recent };
-}
-
-// ---- Support Tickets ----
-export function createSupportTicket(data) {
-  var result = db.prepare(
-    'INSERT INTO support_tickets (instance_id, subject, description, category, priority, reporter_email, reporter_name) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *'
-  ).get(data.instance_id || '', data.subject, data.description || '', data.category || 'general', data.priority || 'normal', data.reporter_email || '', data.reporter_name || '');
-  return result;
-}
-
-export function getSupportTicket(id) {
-  return db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(id);
-}
-
-export function listSupportTickets(filters) {
-  var where = [];
-  var params = [];
-  if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters && filters.instance_id) { where.push('instance_id = ?'); params.push(filters.instance_id); }
-  if (filters && filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
-  var limit = parseInt((filters && filters.limit) || 100) || 100;
-  params.push(limit);
-  var sql = 'SELECT * FROM support_tickets' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ?';
-  return db.prepare(sql).all.apply(db.prepare(sql), params);
-}
-
-export function updateSupportTicket(id, updates) {
-  var changed = buildUpdate('support_tickets', id, updates, ['subject', 'description', 'category', 'priority', 'status', 'assignee', 'resolution', 'tier', 'assigned_agent', 'requires_approval', 'draft_response'], { updatedAt: true });
-  if (!changed) return getSupportTicket(id);
-  return getSupportTicket(id);
-}
-
-export function deleteSupportTicket(id) {
-  return db.prepare('DELETE FROM support_tickets WHERE id = ?').run(id);
 }
 
 // =============== NODE PROFILES — Stand Up Calibration ===============
@@ -4169,45 +4130,6 @@ export function getTeamProjects(teamId) {
   return db.prepare('SELECT * FROM projects WHERE team_id = ?').all(teamId);
 }
 
-// =============== CUSTOMER INSTANCES ===============
-
-export function createInstance(data) {
-  var result = db.prepare(
-    'INSERT INTO customer_instances (org_id, railway_project_id, railway_service_id, railway_environment_id, domain, cloudflare_record_id, status, admin_username, customer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *'
-  ).get(
-    data.org_id,
-    data.railway_project_id || null,
-    data.railway_service_id || null,
-    data.railway_environment_id || null,
-    data.domain || null,
-    data.cloudflare_record_id || null,
-    data.status || 'provisioning',
-    data.admin_username || null,
-    data.customer_email || null
-  );
-  return result;
-}
-
-export function getInstance(id) {
-  return db.prepare('SELECT * FROM customer_instances WHERE id = ?').get(id);
-}
-
-export function getInstanceByOrg(orgId) {
-  return db.prepare('SELECT * FROM customer_instances WHERE org_id = ? ORDER BY created_at DESC LIMIT 1').get(orgId);
-}
-
-export function getInstanceByDomain(domain) {
-  return db.prepare('SELECT * FROM customer_instances WHERE domain = ?').get(domain);
-}
-
-export function listInstances(filters) {
-  var where = [];
-  var params = [];
-  if (filters && filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters && filters.org_id) { where.push('org_id = ?'); params.push(filters.org_id); }
-  var sql = 'SELECT * FROM customer_instances' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY created_at DESC LIMIT ' + ((filters && filters.limit) || 100);
-  return db.prepare(sql).all.apply(db.prepare(sql), params);
-}
 
 // -- Agent Profiles --
 
@@ -4352,11 +4274,6 @@ export function getStalePlanSteps(thresholdMinutes) {
   ).all(thresholdMinutes);
 }
 
-export function updateInstance(id, updates) {
-  var changed = buildUpdate('customer_instances', id, updates, ['railway_project_id', 'railway_service_id', 'railway_environment_id', 'domain', 'cloudflare_record_id', 'status', 'version', 'health_status', 'last_health_check', 'admin_username', 'customer_email', 'suspended_at', 'archived_at', 'snapshot_url'], { updatedAt: true });
-  if (!changed) return getInstance(id);
-  return getInstance(id);
-}
 
 // ---- Agent Templates ----
 

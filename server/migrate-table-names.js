@@ -24,7 +24,6 @@ const TABLE_RENAMES = [
   ['dv_concepts', 'concepts'],
   ['dv_project_concepts', 'project_concepts'],
   ['dv_task_comments', 'task_comments'],
-  ['dv_support_tickets', 'support_tickets'],
   ['dv_plugins', 'plugins'],
   ['dv_plugin_migrations', 'plugin_migrations'],
   ['dv_approvals', 'approvals'],
@@ -44,12 +43,10 @@ const TABLE_RENAMES = [
   ['dv_plugin_config', 'plugin_config'],
   ['dv_runner_spawns', 'runner_spawns'],
   ['dv_node_profiles', 'node_profiles'],
-  ['dv_customer_instances', 'customer_instances'],
   ['dv_message_reads', 'message_reads'],
   ['dv_team_settings', 'team_settings'],
 
   // Plugin tables (24)
-  ['dv_subscriptions', 'subscriptions'],
   ['dv_bip_drafts', 'bip_drafts'],
   ['dv_cost_entries', 'cost_entries'],
   ['dv_cost_daily', 'cost_daily'],

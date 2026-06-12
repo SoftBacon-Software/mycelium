@@ -66,10 +66,6 @@ function extractMigrations() {
     ["agents", "system_diagnostics", "TEXT NOT NULL DEFAULT '{}'"],
     ["drone_jobs", "job_type", "TEXT"],
     // Support ticket tiered routing
-    ["support_tickets", "tier", "TEXT NOT NULL DEFAULT 'L2'"],
-    ["support_tickets", "assigned_agent", "TEXT"],
-    ["support_tickets", "requires_approval", "INTEGER NOT NULL DEFAULT 0"],
-    ["support_tickets", "draft_response", "TEXT"],
     // Plan #62 — multi-runtime agent support
     ["agents", "runtime", "TEXT NOT NULL DEFAULT ''"],
     // Smart Memory — access tracking for context keys
