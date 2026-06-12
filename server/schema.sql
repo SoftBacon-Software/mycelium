@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS organizations (
   name            TEXT NOT NULL,
   description     TEXT NOT NULL DEFAULT '',
   owner_id        TEXT NOT NULL DEFAULT '',
-  plan            TEXT NOT NULL DEFAULT 'free',
   status          TEXT NOT NULL DEFAULT 'active',
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -354,26 +353,6 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
 CREATE INDEX IF NOT EXISTS idx_task_deliverables_task ON task_deliverables(task_id);
 
 -- Support tickets (customer support)
-CREATE TABLE IF NOT EXISTS support_tickets (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  instance_id     TEXT NOT NULL DEFAULT '',
-  subject         TEXT NOT NULL,
-  description     TEXT NOT NULL DEFAULT '',
-  category        TEXT NOT NULL DEFAULT 'general',
-  priority        TEXT NOT NULL DEFAULT 'normal',
-  status          TEXT NOT NULL DEFAULT 'open',
-  reporter_email  TEXT NOT NULL DEFAULT '',
-  reporter_name   TEXT NOT NULL DEFAULT '',
-  assignee        TEXT,
-  resolution      TEXT NOT NULL DEFAULT '',
-  linked_bug_id   INTEGER,
-  tier            TEXT NOT NULL DEFAULT 'L2',
-  assigned_agent  TEXT,
-  requires_approval INTEGER NOT NULL DEFAULT 0,
-  draft_response  TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -730,9 +709,6 @@ CREATE TABLE IF NOT EXISTS runner_spawns (
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_runner_spawns_status ON runner_spawns(status);
-CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
-CREATE INDEX IF NOT EXISTS idx_support_tickets_instance ON support_tickets(instance_id);
-CREATE INDEX IF NOT EXISTS idx_support_tickets_priority ON support_tickets(priority);
 
 -- Node profiles: Stand Up calibration system for agent/drone/admin behavior rules
 CREATE TABLE IF NOT EXISTS node_profiles (
@@ -752,31 +728,6 @@ CREATE TABLE IF NOT EXISTS node_profiles (
 );
 CREATE INDEX IF NOT EXISTS idx_node_profiles_layer ON node_profiles(layer);
 CREATE INDEX IF NOT EXISTS idx_node_profiles_node_type ON node_profiles(node_type);
-
--- Customer instances (links billing to provisioning to deploys to churn)
-CREATE TABLE IF NOT EXISTS customer_instances (
-  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id                TEXT NOT NULL,
-  railway_project_id    TEXT,
-  railway_service_id    TEXT,
-  railway_environment_id TEXT,
-  domain                TEXT,
-  cloudflare_record_id  TEXT,
-  status                TEXT NOT NULL DEFAULT 'provisioning',
-  version               TEXT,
-  health_status         TEXT DEFAULT 'unknown',
-  last_health_check     TEXT,
-  admin_username        TEXT,
-  customer_email        TEXT,
-  suspended_at          TEXT,
-  archived_at           TEXT,
-  snapshot_url          TEXT,
-  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_instances_org ON customer_instances(org_id);
-CREATE INDEX IF NOT EXISTS idx_instances_status ON customer_instances(status);
-CREATE INDEX IF NOT EXISTS idx_instances_domain ON customer_instances(domain);
 
 -- Message read tracking (agent ↔ message acknowledgment)
 CREATE TABLE IF NOT EXISTS message_reads (
