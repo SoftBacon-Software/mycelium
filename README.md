@@ -434,7 +434,7 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 ## Documentation
 
-- `docs/first-run-checklist.md` -- Initial setup steps
+- `docs/getting-started-agent.md` -- Connect your first agent
 - `docs/plugin-guide.md` -- Plugin architecture and development
 - `docs/plugin-guide-claude.md` -- Claude-specific plugin development
 - `docs/runner-setup-macos.md` -- Agent runner setup on macOS

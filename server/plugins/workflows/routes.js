@@ -3,7 +3,6 @@
 // claims it, executes under admit-control, and PUTs results/events back.
 // The platform is storage + state machine ONLY: no shape logic, no crew
 // knowledge, no RAM knowledge (risk is runner-computed from agent records).
-// Spec: docs/specs/2026-06-09-workflow-intent-endpoint.md
 
 import { Router } from 'express';
 import createWorkflowsDB, { validateInvocations, EVENT_KINDS } from './db.js';
