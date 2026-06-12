@@ -6,7 +6,6 @@ results + lifecycle events back. This is the initiation seam for
 **workflow-initiated** agent networks (agents dormant by default, acting only
 inside a fired workflow) — replacing perpetual work-queue pulling.
 
-Spec: `docs/specs/2026-06-09-workflow-intent-endpoint.md`.
 
 ## Model
 
