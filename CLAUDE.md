@@ -15,9 +15,10 @@ AI-powered teams." See `README.md` for the full picture.
   to make something pass.
 
 Key layout: `server/` (Express + SQLite — `db.js`, `routes/mycelium.js`, the
-277-endpoint API), `sdk/` (multi-runtime Agent SDK), `mcp/` (MCP server for
-Claude Code), `runner/` (autonomous agent runner). No tests or linting are
-configured.
+291-endpoint API), `sdk/` (multi-runtime Agent SDK), `mcp/` (MCP server for
+Claude Code), `runner/` (autonomous agent runner). Tests run with `npm test`
+(vitest — 150+ cases across `test/unit/` + `test/smoke/`); CI runs them on
+Node 20/22 (`.github/workflows/test.yml`).
 
 ---
 

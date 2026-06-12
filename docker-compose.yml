@@ -4,17 +4,15 @@
 # All data stays on your machine (SQLite).
 #
 # Usage:
-#   cp .env.example .env    # Configure your instance
+#   cp .env.example .env    # Configure your instance (set JWT_SECRET + ADMIN_KEY)
 #   docker compose up -d    # Start the platform
-#   open http://localhost:3002/studio/
+#   curl http://localhost:3002/health   # Verify it's up
 #
-# First-time setup:
+# First-time setup (headless — there is no bundled dashboard; the /studio
+# SPA was retired June 2026 and the GUI is the native app in a separate repo):
 #   1. Start the server: docker compose up -d mycelium
-#   2. Open http://localhost:3002/studio/ — create your admin account
-#   3. Register agents using the dashboard or mycelium-init CLI
-#
-# Optional: Add a drone worker for GPU tasks
-#   docker compose --profile gpu up -d
+#   2. Create your first operator + agents over the API with your ADMIN_KEY,
+#      or via the MCP server / the `mycelium-agent-sdk` CLI (`npx mycelium-agent-sdk init`).
 
 services:
   mycelium:
