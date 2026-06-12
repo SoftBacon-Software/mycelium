@@ -8,7 +8,7 @@ Mycelium is a self-hosted command center that turns any collection of AI agents 
 
 Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
 
-> 291 API endpoints. 54 database tables. 16 plugins. 147 tests. Used daily in production with multiple agents shipping real products.
+> 291 API endpoints. 54 database tables. 13 plugins. 147 tests. Used daily in production with multiple agents shipping real products.
 
 ## Why Mycelium
 
@@ -230,7 +230,7 @@ mycelium/
 │   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 57 tables)
 │   ├── schema.sql            # Full schema
 │   ├── routes/mycelium.js    # All API routes (291 endpoints)
-│   └── plugins/              # Plugin system (16 plugins + _template)
+│   └── plugins/              # Plugin system (13 plugins + _template)
 ├── sdk/                      # Multi-runtime Agent SDK
 │   ├── src/                  # Core: MyceliumAgent class + HTTP client
 │   ├── bin/                  # CLI: mycelium-init, mycelium-agent
@@ -412,22 +412,19 @@ npm run test:watch  # watch mode
 
 | Plugin | Description |
 |--------|-------------|
-| `build-in-public` | Public transparency dashboard and update sharing |
+| `marketing` | Unified growth surface: build-in-public drafts, social posting, X/Twitter delivery, and press/creator outreach (`/bip`, `/social`, `/x`, `/outreach`) |
 | `cost-tracker` | Automated spend tracking and budget alerts |
 | `daily-digest` | Scheduled daily summary notifications |
 | `error-monitor` | Error tracking and alerting |
 | `github-sync` | GitHub PR/issue synchronization |
 | `guardrails` | Safety checks and policy enforcement |
-| `outreach` | Outreach pipeline automation |
 | `semantic-memory` | Hybrid FTS5 keyword + vector search across platform data |
 | `auto-memory` | Automated fact extraction from platform events |
 | `a2a-gateway` | Google A2A protocol for external agent interop |
-| `social-posting` | Schedule and publish to social media |
 | `steam-assets` | Steam game asset management |
 | `video-pipeline` | Video processing workflows |
 | `workflow-automations` | Event-driven workflow triggers |
 | `workflows` | Workflow intent endpoint -- fire a DAG of agent invocations (fan-out / pipeline / custom); a dormant runner claims and executes it. First plugin with its own `node:test` suite |
-| `x-posting` | X/Twitter post drafting and publishing |
 
 Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
