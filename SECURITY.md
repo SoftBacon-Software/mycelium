@@ -77,15 +77,6 @@ the `.env.example` shows how to generate them.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
-### Customer-instance provisioning
-
-The `provisioning.js` module can spin up Railway-hosted instances on
-behalf of paying customers (used by SoftBacon to run mycelium.fyi).
-This code path is only active if `RAILWAY_TOKEN` and
-`CLOUDFLARE_TOKEN` are set. If you're self-hosting your own
-instance, leave these unset and the customer-provisioning routes
-return 503.
-
 ### Third-party plugins
 
 Plugins run in the same process as the core server. Only install

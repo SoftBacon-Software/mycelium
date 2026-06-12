@@ -1,8 +1,8 @@
 # Contributing to Mycelium
 
 Thanks for being here. Mycelium is small enough that one good
-contributor makes a real difference, and big enough (~277 endpoints,
-17 plugins, dashboard + SDK + MCP + runner) that there's plenty of
+contributor makes a real difference, and big enough (~291 endpoints,
+16 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
@@ -117,8 +117,8 @@ server/plugins/my-plugin/
   README.md         # what the plugin does
 ```
 
-See existing plugins (e.g. `server/plugins/billing/`,
-`server/plugins/cost-tracker/`) for reference patterns. The plugin
+See existing plugins (e.g. `server/plugins/cost-tracker/`,
+`server/plugins/video-pipeline/`) for reference patterns. The plugin
 loader docs are in `server/plugins.js`.
 
 ## SDK contributions
