@@ -6,8 +6,8 @@
 # Hammers the platform's messaging, context storage, task lifecycle,
 # and channel systems to verify data persistence under load.
 #
-# Usage: bash tools/stress-test.sh [--local]
-#   --local  run against localhost:3002 instead of production
+# Usage: ADMIN_KEY=<your-admin-key> bash tools/stress-test.sh
+#   Optional: MYCELIUM_URL=https://your-instance  (default: http://localhost:3002)
 #
 # What it tests:
 #   1. Message flood — 50 rapid messages, verify all persisted
@@ -24,15 +24,10 @@
 
 set -euo pipefail
 
-AH="X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk"
+AH="X-Admin-Key: ${ADMIN_KEY:?set ADMIN_KEY to your instance admin key}"
 
-if [[ "${1:-}" == "--local" ]]; then
-  BASE="http://localhost:3002/api/mycelium"
-  echo "[stress] Running against LOCAL (localhost:3002)"
-else
-  BASE="https://mycelium.fyi/api/mycelium"
-  echo "[stress] Running against PRODUCTION (mycelium.fyi)"
-fi
+BASE="${MYCELIUM_URL:-http://localhost:3002}/api/mycelium"
+echo "[stress] Running against $BASE"
 
 PASS=0
 FAIL=0
@@ -57,7 +52,7 @@ MSG_IDS=()
 for i in $(seq 1 50); do
   R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/messages" \
     -d "{\"content\":\"STRESS-MSG-$i-$(date +%s%N)\",\"to_agent\":\"dev-claude\",\"from_agent\":\"greatness-claude\"}")
-  ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+  ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
   if [ -n "$ID" ] && [ "$ID" != "" ]; then
     MSG_IDS+=("$ID")
   fi
@@ -67,7 +62,7 @@ echo "  Sent 50 messages in $((T1_END-T1_START))s"
 
 # Verify all persisted — use high limit, filter STRESS-MSG pattern
 R=$(curl -s -H "$AH" "$BASE/messages?limit=200")
-FOUND=$(echo "$R" | python -c "import sys,json; msgs=json.load(sys.stdin); print(sum(1 for m in msgs if 'STRESS-MSG-' in m.get('content','')))" 2>/dev/null)
+FOUND=$(echo "$R" | python3 -c "import sys,json; msgs=json.load(sys.stdin); print(sum(1 for m in msgs if 'STRESS-MSG-' in m.get('content','')))" 2>/dev/null)
 if [ "${FOUND:-0}" -ge 50 ]; then
   pass "All 50 messages persisted (found $FOUND)"
 else
@@ -82,7 +77,7 @@ REQ_IDS=()
 for i in $(seq 1 20); do
   R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/requests" \
     -d "{\"content\":\"STRESS-REQ-$i\",\"to_agent\":\"dev-claude\"}")
-  ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+  ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
   if [ -n "$ID" ] && [ "$ID" != "" ]; then
     REQ_IDS+=("$ID")
   fi
@@ -108,7 +103,7 @@ fi
 
 # Verify resolved status persisted
 R=$(curl -s -H "$AH" "$BASE/messages?to=dev-claude&limit=30&type=request")
-RESOLVED_COUNT=$(echo "$R" | python -c "
+RESOLVED_COUNT=$(echo "$R" | python3 -c "
 import sys,json
 msgs=json.load(sys.stdin)
 print(sum(1 for m in msgs if 'STRESS-REQ-' in m.get('content','') and m.get('status')=='resolved'))
@@ -142,7 +137,7 @@ echo "  Wrote $WRITE_OK/100 keys in $((T3_MID-T3_START))s ($WRITE_FAIL failed)"
 
 # Read all back via namespace list — this is the real persistence check
 R=$(curl -s -H "$AH" "$BASE/context/keys/$NS")
-KEY_COUNT=$(echo "$R" | python -c "
+KEY_COUNT=$(echo "$R" | python3 -c "
 import sys,json
 data=json.load(sys.stdin)
 if isinstance(data, list):
@@ -196,7 +191,7 @@ done
 wait
 
 R=$(curl -s -H "$AH" "$BASE/context/keys/$RACE_NS/contested")
-FINAL=$(echo "$R" | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',''))" 2>/dev/null)
+FINAL=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',''))" 2>/dev/null)
 if echo "$FINAL" | grep -q "version-"; then
   pass "Overwrite race: final value is $FINAL (some version won)"
 else
@@ -212,7 +207,7 @@ TASK_IDS=()
 for i in $(seq 1 30); do
   R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/tasks" \
     -d "{\"title\":\"STRESS-TASK-$i\",\"description\":\"Stress test task\",\"project_id\":\"mycelium\"}")
-  ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+  ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
   if [ -n "$ID" ] && [ "$ID" != "" ]; then
     TASK_IDS+=("$ID")
   fi
@@ -240,7 +235,7 @@ fi
 
 # Verify persistence
 R=$(curl -s -H "$AH" "$BASE/tasks?status=done&limit=40")
-FOUND=$(echo "$R" | python -c "
+FOUND=$(echo "$R" | python3 -c "
 import sys,json
 data=json.load(sys.stdin)
 tasks = data if isinstance(data, list) else data.get('done', data.get('tasks', []))
@@ -272,7 +267,7 @@ echo "  Sent $CHAN_OK channel messages in $((T6_MID-T6_START))s"
 
 # Read back
 R=$(curl -s -H "$AH" "$BASE/channels/1/messages?limit=60")
-CHAN_FOUND=$(echo "$R" | python -c "
+CHAN_FOUND=$(echo "$R" | python3 -c "
 import sys,json
 msgs=json.load(sys.stdin)
 print(sum(1 for m in msgs if 'STRESS-CHAN-' in m.get('content','')))
@@ -311,7 +306,7 @@ fi
 RECV_OK=0
 for TO in "${AGENTS[@]}"; do
   R=$(curl -s -H "$AH" "$BASE/messages?to=$TO&limit=20")
-  RECV=$(echo "$R" | python -c "
+  RECV=$(echo "$R" | python3 -c "
 import sys,json
 msgs=json.load(sys.stdin)
 print(sum(1 for m in msgs if m.get('content','').startswith('CROSS-') and m.get('to_agent')=='$TO'))
@@ -353,7 +348,7 @@ fi
 echo ""
 echo "--- Test 9: Large Payload (10KB context value) ---"
 # Generate 10KB of data
-LARGE=$(python -c "print('X' * 10240)")
+LARGE=$(python3 -c "print('X' * 10240)")
 R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" \
   "$BASE/context/keys/stress-large/big-value" -d "{\"data\":\"$LARGE\"}")
 if echo "$R" | grep -q '"ok":true'; then
@@ -363,7 +358,7 @@ else
 fi
 
 R=$(curl -s -H "$AH" "$BASE/context/keys/stress-large/big-value")
-SIZE=$(echo "$R" | python -c "import sys,json; d=json.load(sys.stdin); print(len(str(d.get('data',''))))" 2>/dev/null)
+SIZE=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(str(d.get('data',''))))" 2>/dev/null)
 if [ "${SIZE:-0}" -ge 10000 ]; then
   pass "10KB value read back intact (${SIZE} chars)"
 else
@@ -390,7 +385,7 @@ NS_OK=0
 NS_TOTAL=0
 for ns in stress-ns-1 stress-ns-2 stress-ns-3 stress-ns-4 stress-ns-5; do
   R=$(curl -s -H "$AH" "$BASE/context/keys/$ns")
-  COUNT=$(echo "$R" | python -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d,list) else len(d.keys()) if isinstance(d,dict) else 0)" 2>/dev/null)
+  COUNT=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d) if isinstance(d,list) else len(d.keys()) if isinstance(d,dict) else 0)" 2>/dev/null)
   NS_TOTAL=$((NS_TOTAL+1))
   if [ "${COUNT:-0}" -ge 20 ]; then
     NS_OK=$((NS_OK+1))

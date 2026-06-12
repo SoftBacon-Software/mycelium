@@ -1,7 +1,10 @@
 #!/bin/bash
 # Mycelium QA Test Suite
-AH="X-Admin-Key: KPeO7ZspKsAQotZsrvnZ2vYk"
-BASE="https://mycelium.fyi/api/mycelium"
+#
+# Usage: ADMIN_KEY=<your-admin-key> bash tools/qa-test.sh
+#   Optional: MYCELIUM_URL=https://your-instance  (default: http://localhost:3002)
+AH="X-Admin-Key: ${ADMIN_KEY:?set ADMIN_KEY to your instance admin key}"
+BASE="${MYCELIUM_URL:-http://localhost:3002}/api/mycelium"
 PASS=0
 FAIL=0
 
@@ -37,7 +40,7 @@ echo "$R" | grep -q "api_key_hash" && { echo "FAIL: T2.3b api_key_hash EXPOSED";
 echo ""
 echo "--- Phase 3: Tasks ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/tasks" -d '{"title":"QA Test Task","description":"QA","project_id":"mycelium"}')
-TASK_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+TASK_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T3.1 Create task" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/tasks?limit=3")
@@ -53,7 +56,7 @@ check "T3.4 Complete task" "$R" '"ok":true'
 echo ""
 echo "--- Phase 4: Messages ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/messages" -d '{"content":"QA test msg","to_agent":"greatness-claude","from_agent":"__admin__"}')
-MSG_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+MSG_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T4.1 Send message (content)" "$R" '"id"'
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/messages" -d '{"body":"wrong","to_agent":"greatness-claude","from_agent":"__admin__"}')
@@ -63,7 +66,7 @@ R=$(curl -s -H "$AH" "$BASE/messages?to=greatness-claude&limit=3")
 check "T4.3 Read messages" "$R" "QA test msg"
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/requests" -d '{"content":"QA request","to_agent":"greatness-claude"}')
-REQ_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+REQ_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T4.4 Send request" "$R" '"id"'
 
 R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/messages/$REQ_ID/resolve" -d '{"response":"QA resolved"}')
@@ -73,11 +76,11 @@ check "T4.5 Resolve request" "$R" '"ok":true'
 echo ""
 echo "--- Phase 5: Plans ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/plans" -d '{"title":"QA Test Plan","description":"QA","project_id":"mycelium"}')
-PLAN_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+PLAN_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T5.1 Create plan" "$R" '"id"'
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/plans/$PLAN_ID/steps" -d '{"title":"QA Step 1","assignee":"greatness-claude"}')
-STEP_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+STEP_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T5.2 Add step" "$R" '"id"'
 
 R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/plans/$PLAN_ID/steps/$STEP_ID" -d '{"status":"completed"}')
@@ -90,7 +93,7 @@ check "T5.4 Get plan" "$R" '"steps"'
 echo ""
 echo "--- Phase 6: Bugs ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/bugs" -d '{"title":"QA Bug","description":"QA","project_id":"mycelium","severity":"low"}')
-BUG_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+BUG_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T6.1 File bug" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/bugs?status=open")
@@ -118,7 +121,7 @@ check "T7.4 Delete context" "$R" '"ok":true'
 echo ""
 echo "--- Phase 8: Approvals ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deploy","risk_tier":"medium","required_approvals":1,"payload":"{}"}')
-APPR_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+APPR_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T8.1 Create approval" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/approvals?status=pending")
@@ -129,7 +132,7 @@ check "T8.3 Approve (quorum=1)" "$R" "approved"
 
 # Deny test
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/approvals" -d '{"action_type":"deploy","title":"QA Deny","required_approvals":3,"payload":"{}"}')
-APPR2_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+APPR2_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 R=$(curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/approvals/$APPR2_ID/vote" -d '{"vote":"deny","voter_id":"greatness","voter_type":"operator"}')
 check "T8.4 Deny (instant)" "$R" "denied"
 
@@ -137,7 +140,7 @@ check "T8.4 Deny (instant)" "$R" "denied"
 echo ""
 echo "--- Phase 9: Concepts ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/concepts" -d '{"name":"QA Character","type":"character","description":"Test"}')
-CONCEPT_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+CONCEPT_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T9.1 Create concept" "$R" '"id"'
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/concepts/$CONCEPT_ID/link" -d '{"project_id":"mycelium"}')
@@ -213,7 +216,7 @@ R=$(curl -s -H "$AH" "$BASE/drones")
 check "T15.1 List drones" "$R" "["
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/drones/jobs" -d '{"title":"QA Job","command":"echo test","requires":["cpu"]}')
-JOB_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+JOB_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T15.2 Queue job" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/drones/jobs?status=pending")
@@ -293,7 +296,7 @@ R=$(curl -s -H "$AH" "$BASE/teams")
 check "T29.1 List teams" "$R" '"teams"'
 
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/teams" -d '{"id":"qa-team","name":"QA Team","org_id":"softbacon","description":"QA test team"}')
-QA_TEAM_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+QA_TEAM_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T29.2 Create team" "$R" '"id":"qa-team"'
 
 R=$(curl -s -H "$AH" "$BASE/teams/qa-team")
@@ -394,7 +397,7 @@ check "T31.5 History exists" "$R" "version-1"
 check "T31.6 History has v2" "$R" "version-2"
 
 # Get history ID for rollback — history is DESC, so last entry = oldest (v1)
-HIST_ID=$(echo "$R" | python -c "import sys,json; d=json.load(sys.stdin); entries=d if isinstance(d,list) else d.get('history',[]); print(entries[-1]['id'] if len(entries)>0 else '')" 2>/dev/null)
+HIST_ID=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); entries=d if isinstance(d,list) else d.get('history',[]); print(entries[-1]['id'] if len(entries)>0 else '')" 2>/dev/null)
 
 if [ -n "$HIST_ID" ] && [ "$HIST_ID" != "" ]; then
   R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/context/keys/rollback/$HIST_ID")
@@ -429,7 +432,7 @@ check "T32.3 Per-agent spend" "$R" "["
 echo ""
 echo "--- Phase 33: Widgets ---"
 R=$(curl -s -X POST -H "$AH" -H "Content-Type: application/json" "$BASE/widgets" -d '{"title":"QA Widget","widget_type":"status","data":{"status":"healthy","message":"QA test"},"agent_id":"dev-claude","project_id":"mycelium"}')
-WIDGET_ID=$(echo "$R" | python -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+WIDGET_ID=$(echo "$R" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 check "T33.1 Create widget" "$R" '"id"'
 
 R=$(curl -s -H "$AH" "$BASE/widgets")
@@ -556,7 +559,7 @@ echo "PASS: T41.1b Cleaned QA skill"
 PASS=$((PASS+1))
 
 # Delete leftover QA widgets
-for WID in $(curl -s -H "$AH" "$BASE/widgets" | python -c "import sys,json; [print(w['id']) for w in json.load(sys.stdin) if 'QA' in w.get('title','')]" 2>/dev/null); do
+for WID in $(curl -s -H "$AH" "$BASE/widgets" | python3 -c "import sys,json; [print(w['id']) for w in json.load(sys.stdin) if 'QA' in w.get('title','')]" 2>/dev/null); do
   curl -s -X DELETE -H "$AH" "$BASE/widgets/$WID" > /dev/null 2>&1
 done
 echo "PASS: T41.1c Cleaned QA widgets"
@@ -583,7 +586,7 @@ else
 fi
 
 # Close QA support ticket bugs
-for BID in $(curl -s -H "$AH" "$BASE/bugs?status=open" | python -c "import sys,json; [print(b['id']) for b in json.load(sys.stdin).get('bugs',[]) if 'QA Ticket' in b.get('title','')]" 2>/dev/null); do
+for BID in $(curl -s -H "$AH" "$BASE/bugs?status=open" | python3 -c "import sys,json; [print(b['id']) for b in json.load(sys.stdin).get('bugs',[]) if 'QA Ticket' in b.get('title','')]" 2>/dev/null); do
   curl -s -X PUT -H "$AH" -H "Content-Type: application/json" "$BASE/bugs/$BID" -d '{"status":"fixed","notes":"QA test artifact cleanup"}' > /dev/null 2>&1
 done
 echo "PASS: T41.4 Cleaned QA support tickets"
