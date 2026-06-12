@@ -81,6 +81,12 @@ export default function (core) {
 
   // ---- JSON-RPC 2.0 Handler ----
   router.post('/rpc', function (req, res) {
+    // tasks/send injects real tasks + directives consumed by shell-executing
+    // runners — require a valid agent/admin key (the apiKey scheme this
+    // gateway's own Agent Card advertises). checkAgentOrAdmin sends the 401.
+    var caller = checkAgentOrAdmin(req, res);
+    if (!caller) return;
+
     var body = req.body;
     if (!body || body.jsonrpc !== '2.0' || !body.method) {
       return res.json({
