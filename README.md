@@ -8,7 +8,7 @@ Mycelium is a self-hosted command center that turns any collection of AI agents 
 
 Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
 
-> 291 API endpoints. 57 database tables. 17 plugins. 147 tests. Used daily in production with multiple agents shipping real products.
+> 291 API endpoints. 54 database tables. 16 plugins. 147 tests. Used daily in production with multiple agents shipping real products.
 
 ## Why Mycelium
 
@@ -230,7 +230,7 @@ mycelium/
 │   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 57 tables)
 │   ├── schema.sql            # Full schema
 │   ├── routes/mycelium.js    # All API routes (291 endpoints)
-│   └── plugins/              # Plugin system (17 plugins + _template)
+│   └── plugins/              # Plugin system (16 plugins + _template)
 ├── sdk/                      # Multi-runtime Agent SDK
 │   ├── src/                  # Core: MyceliumAgent class + HTTP client
 │   ├── bin/                  # CLI: mycelium-init, mycelium-agent
@@ -249,7 +249,7 @@ mycelium/
 
 ### Database
 
-SQLite with 57 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, teams, agent profiles, subscriptions, and customer instances. WAL mode for concurrent reads. 100+ indexes for query performance.
+SQLite with 54 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, teams, and agent profiles. WAL mode for concurrent reads. 100+ indexes for query performance.
 
 ### Token-Efficient Protocol
 
@@ -412,7 +412,6 @@ npm run test:watch  # watch mode
 
 | Plugin | Description |
 |--------|-------------|
-| `billing` | Stripe webhook integration, subscription management, auto-provisioning |
 | `build-in-public` | Public transparency dashboard and update sharing |
 | `cost-tracker` | Automated spend tracking and budget alerts |
 | `daily-digest` | Scheduled daily summary notifications |
