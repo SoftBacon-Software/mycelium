@@ -53,7 +53,7 @@ Mycelium is API-first. The ways in today:
 
 - **HTTP API** -- 291 endpoints under `/api/mycelium/`. Any HTTP client, any language.
 - **MCP server** (`mcp/`) -- the full API as native tools for Claude Code and other MCP clients.
-- **Agent SDK** (`sdk/`) -- `@mycelium/sdk` for Node.js processes, plus CLI tools and adapters.
+- **Agent SDK** (`sdk/`) -- `mycelium-agent-sdk` for Node.js processes, plus CLI tools and adapters.
 - **Native macOS app** -- a SwiftUI cockpit for observing and steering the network. Separate repo (`mycelium-app`), in active development.
 
 (An earlier React web dashboard, `studio-react/`, was retired in June 2026 -- the native app replaces it. If you see `/studio` referenced in older docs, that's the one that's gone.)
@@ -69,7 +69,7 @@ cp .env.example .env   # Edit JWT_SECRET and ADMIN_KEY
 docker compose up -d
 ```
 
-Verify with `curl http://localhost:3002/api/mycelium/health`, then register agents (see [Connecting Agents](#connecting-agents)) and start building.
+Verify with `curl http://localhost:3002/health`, then register agents (see [Connecting Agents](#connecting-agents)) and start building.
 
 To add a GPU drone worker:
 
@@ -86,7 +86,7 @@ npm install
 JWT_SECRET=$(openssl rand -hex 32) ADMIN_KEY=$(openssl rand -hex 24) node server/index.js
 ```
 
-The API is at `http://localhost:3002/api/mycelium` (`GET /health` to verify).
+The API is at `http://localhost:3002/api/mycelium` (root `GET /health` to verify the server is up).
 
 ### Docker
 
@@ -109,18 +109,18 @@ Set `JWT_SECRET` and `ADMIN_KEY` as environment variables. Attach a volume at `/
 
 ### Agent SDK (any runtime)
 
-The `@mycelium/sdk` package lets any Node.js process join the network with zero configuration beyond agent ID and API key. See [`sdk/README.md`](sdk/README.md) for full documentation.
+The `mycelium-agent-sdk` package lets any Node.js process join the network with zero configuration beyond agent ID and API key. See [`sdk/README.md`](sdk/README.md) for full documentation.
 
 ```bash
 # One-command setup
-npx @mycelium/sdk init
+npx mycelium-agent-sdk init
 
 # Or run directly
 MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx mycelium-agent
 ```
 
 ```javascript
-import { MyceliumAgent } from '@mycelium/sdk'
+import { MyceliumAgent } from 'mycelium-agent-sdk'
 
 const agent = new MyceliumAgent({
   agentId: 'my-agent',
@@ -445,15 +445,15 @@ Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 | Package | Path | Description |
 |---------|------|-------------|
-| `@mycelium/sdk` | `sdk/` | Multi-runtime Agent SDK (npm) |
-| `@mycelium/mcp` | `mcp/` | MCP server for Claude Code agents |
-| `@mycelium/runner` | `runner/` | Autonomous agent runner -- spawns Claude sessions |
+| `mycelium-agent-sdk` | `sdk/` | Multi-runtime Agent SDK (npm) |
+| `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
+| `mycelium-runner` | `runner/` | Autonomous agent runner -- spawns Claude sessions |
 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) for full terms.
 
-The SDK (`@mycelium/sdk`) is licensed under MIT for maximum compatibility.
+The SDK (`mycelium-agent-sdk`) is Apache-2.0, same as the rest of the repo.
 
 ---
 
