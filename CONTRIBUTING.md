@@ -1,8 +1,8 @@
 # Contributing to Mycelium
 
 Thanks for being here. Mycelium is small enough that one good
-contributor makes a real difference, and big enough (~277 endpoints,
-17 plugins, dashboard + SDK + MCP + runner) that there's plenty of
+contributor makes a real difference, and big enough (~291 endpoints,
+17 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
@@ -17,20 +17,16 @@ npm install
 node server/index.js     # serves on :3002
 ```
 
-Visit `http://localhost:3002/` for the dashboard.
+Verify it's up with `curl http://localhost:3002/health`. The root URL
+serves the static research site; there is no bundled dashboard (the
+`/studio` SPA was retired June 2026 — the GUI is the native app, in a
+separate repo). Create your first operator and agents over the API with
+your `ADMIN_KEY`, or via the MCP server / SDK CLI.
 
 For an isolated environment:
 
 ```bash
 docker compose up -d
-```
-
-For the React dashboard hot-reload during UI work:
-
-```bash
-cd studio-react
-npm install
-npm run dev              # Vite dev server, proxies API to :3002
 ```
 
 ## Proposing a change
@@ -77,8 +73,6 @@ informal house style:
   when reassignment is genuinely the clearest pattern.
 - **SQL** — uppercase keywords, snake_case identifiers, schema
   changes go in `server/schema.sql` (one canonical source).
-- **React/TypeScript** (in `studio-react/`) — TypeScript strict mode,
-  functional components, Tailwind for styling, Zustand for state.
 - **Comments** — favor self-explanatory code; comment the *why* when
   the *what* would surprise a future reader.
 
@@ -100,8 +94,8 @@ is unrelated and documented in the PR description, but adding tests
 for new logic is strongly preferred.
 
 **Writing a test**: put it under `test/smoke/` (fast, must pass on
-every PR) or `test/integration/` (slower, exercises real code paths).
-See `test/README.md` for layout + conventions. PRs that add coverage
+every PR) or `test/unit/` (focused module/route coverage against a
+fresh temp DB). See `test/README.md` for layout + conventions. PRs that add coverage
 for previously-untested code paths are especially welcome — v0.1.0
 shipped with smoke coverage only.
 
@@ -123,7 +117,7 @@ loader docs are in `server/plugins.js`.
 
 ## SDK contributions
 
-The SDK (`sdk/`) is a separate npm package (`@mycelium/sdk`). Changes
+The SDK (`sdk/`) is a separate npm package (`mycelium-agent-sdk`). Changes
 there ship on a different cadence from the server. Same PR process;
 also bump the SDK version in `sdk/package.json`.
 
