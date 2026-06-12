@@ -2,7 +2,7 @@
 
 Thanks for being here. Mycelium is small enough that one good
 contributor makes a real difference, and big enough (~291 endpoints,
-16 plugins, SDK + MCP + runner) that there's plenty of
+13 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
