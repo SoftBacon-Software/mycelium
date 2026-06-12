@@ -293,9 +293,9 @@ Every event handler receives:
 ```javascript
 {
   type: 'task_completed',         // Event type string
-  agent: 'dev-claude',            // Who triggered it
+  agent: 'my-agent',              // Who triggered it
   project_id: 'my-project',      // Project context (may be null)
-  summary: 'dev-claude completed task #42: Setup README',
+  summary: 'my-agent completed task #42: Setup README',
   data: { task_id: 42 },         // Event-specific payload
   created_at: '2026-03-03T...'   // ISO timestamp
 }

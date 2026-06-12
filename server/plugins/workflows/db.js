@@ -1,6 +1,5 @@
 // Workflows plugin DB helpers.
 // State machine + atomic claim live HERE so every route shares one guard.
-// Spec: docs/specs/2026-06-09-workflow-intent-endpoint.md
 
 export var RESULT_CAP = 32000;
 export var TRUNCATION_MARKER = '\n...[truncated at ' + RESULT_CAP + ' chars]';

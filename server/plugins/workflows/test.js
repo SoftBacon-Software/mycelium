@@ -2,7 +2,6 @@
 // Run from server/:  node --test plugins/workflows/test.js
 // Real schema.sql + real routes on an in-memory better-sqlite3 DB; core
 // helpers faked faithfully (same shapes as routes/mycelium.js).
-// Spec: docs/specs/2026-06-09-workflow-intent-endpoint.md
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
