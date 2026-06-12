@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import createSocialDB from './db.js';
-import { createDroneJob, getDroneJob } from '../../db.js';
+import { createDroneJob, getDroneJob } from '../../../db.js';
 
 var POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed'];
 

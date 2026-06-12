@@ -1,0 +1,723 @@
+[
+  {
+    "name": "mycelium_bip_list",
+    "description": "List build-in-public drafts. Returns pending drafts awaiting operator approval, approved drafts ready to post, and recently published posts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "published",
+            "skipped"
+          ],
+          "description": "Filter by draft status. Omit to get all."
+        },
+        "trigger_event": {
+          "type": "string",
+          "description": "Filter by the event that triggered the draft (e.g. task_completed)"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max number of drafts to return"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_bip_draft",
+    "description": "Manually create a build-in-public draft. Use when you want to announce something specific (a launch, a milestone, a demo) that wasn't automatically triggered by an event.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "title",
+        "content"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short headline for the post (what was shipped/achieved)"
+        },
+        "content": {
+          "type": "string",
+          "description": "Draft post content (1-4 lines, Twitter-appropriate)"
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "twitter",
+              "instagram",
+              "tiktok"
+            ]
+          },
+          "default": [
+            "twitter"
+          ],
+          "description": "Platforms to post to when approved"
+        },
+        "trigger_event": {
+          "type": "string",
+          "default": "manual",
+          "description": "Event type label for categorization"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_bip_approve",
+    "description": "Approve a build-in-public draft for publishing. After approval, the content is ready to hand off to the social-posting plugin.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "draft_id"
+      ],
+      "properties": {
+        "draft_id": {
+          "type": "integer",
+          "description": "ID of the draft to approve"
+        },
+        "approval_id": {
+          "type": "integer",
+          "description": "Optional: pre-obtained approval gate ID (from mycelium_request_approval with action_type=bip_post_publish)"
+        }
+      }
+    }
+  },
+  {
+    "name": "mycelium_outreach_status",
+    "description": "Get outreach pipeline status for a project — contact counts per status, active campaigns.",
+    "schema": {
+      "project": {
+        "type": "string",
+        "description": "Project ID (e.g. my-game)",
+        "required": true
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/outreach/status",
+      "queryMap": {
+        "project": "project_id"
+      }
+    }
+  },
+  {
+    "name": "mycelium_outreach_contacts",
+    "description": "List outreach contacts. Filter by project, status, type.",
+    "schema": {
+      "project": {
+        "type": "string",
+        "description": "Filter by project"
+      },
+      "status": {
+        "type": "string",
+        "description": "Filter by status (discovered, researched, draft_ready, approved, sent, followed_up, replied, covered, closed)"
+      },
+      "type": {
+        "type": "string",
+        "description": "Filter by type (creator, press)"
+      },
+      "limit": {
+        "type": "number",
+        "description": "Max results (default 50)"
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/outreach/contacts",
+      "queryMap": {
+        "project": "project_id",
+        "status": "status",
+        "type": "type",
+        "limit": "limit"
+      }
+    }
+  },
+  {
+    "name": "mycelium_outreach_campaign",
+    "description": "Create or update an outreach campaign for a project.",
+    "schema": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "create",
+          "update"
+        ],
+        "description": "create or update",
+        "required": true
+      },
+      "project": {
+        "type": "string",
+        "description": "Project ID (required for create)"
+      },
+      "name": {
+        "type": "string",
+        "description": "Campaign name (required for create)"
+      },
+      "campaign_id": {
+        "type": "number",
+        "description": "Campaign ID (required for update)"
+      },
+      "persona_prompt": {
+        "type": "string",
+        "description": "System prompt for Claude pitch generation"
+      },
+      "project_facts": {
+        "type": "string",
+        "description": "Project facts for Claude to reference"
+      },
+      "templates": {
+        "type": "string",
+        "description": "JSON string of email templates"
+      },
+      "config": {
+        "type": "string",
+        "description": "JSON string of campaign config (API keys, search queries, limits)"
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/campaigns"
+    }
+  },
+  {
+    "name": "mycelium_outreach_discover",
+    "description": "Run contact discovery for a campaign — searches YouTube for creators and Hunter.io for press contacts.",
+    "schema": {
+      "campaign_id": {
+        "type": "number",
+        "description": "Campaign ID to run discovery for",
+        "required": true
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/discover"
+    }
+  },
+  {
+    "name": "mycelium_outreach_research",
+    "description": "Research a contact — fetch their latest YouTube video or press article.",
+    "schema": {
+      "contact_id": {
+        "type": "number",
+        "description": "Contact ID to research",
+        "required": true
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/research/:contact_id"
+    }
+  },
+  {
+    "name": "mycelium_outreach_personalize",
+    "description": "Generate a Claude-personalized pitch for a contact using their campaign persona and templates.",
+    "schema": {
+      "contact_id": {
+        "type": "number",
+        "description": "Contact ID to personalize pitch for",
+        "required": true
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/personalize/:contact_id"
+    }
+  },
+  {
+    "name": "mycelium_outreach_approve",
+    "description": "Approve a draft pitch for sending. Optionally edit subject/body.",
+    "schema": {
+      "contact_id": {
+        "type": "number",
+        "description": "Contact ID to approve",
+        "required": true
+      },
+      "pitch_subject": {
+        "type": "string",
+        "description": "Override subject (optional)"
+      },
+      "pitch_body": {
+        "type": "string",
+        "description": "Override body (optional)"
+      }
+    },
+    "endpoint": {
+      "method": "PUT",
+      "path": "/outreach/approve/:contact_id"
+    }
+  },
+  {
+    "name": "mycelium_outreach_send",
+    "description": "Send an approved pitch to a contact via Gmail. Set dry_run=false to actually send.",
+    "schema": {
+      "contact_id": {
+        "type": "number",
+        "description": "Contact ID to send pitch to",
+        "required": true
+      },
+      "dry_run": {
+        "type": "boolean",
+        "description": "If true (default), simulate without sending"
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/send/:contact_id"
+    }
+  },
+  {
+    "name": "mycelium_outreach_followup",
+    "description": "Send a follow-up email to a contact whose pitch was sent but not replied to.",
+    "schema": {
+      "contact_id": {
+        "type": "number",
+        "description": "Contact ID to follow up with",
+        "required": true
+      },
+      "dry_run": {
+        "type": "boolean",
+        "description": "If true (default), simulate without sending"
+      }
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/outreach/followup/:contact_id"
+    }
+  },
+  {
+    "name": "mycelium_social_generate_caption",
+    "description": "Generate a character-voiced social media caption prompt for a gameplay highlight clip. Returns system prompt + user prompt to send to Claude API.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "event_type": {
+          "type": "string",
+          "description": "Highlight event type (perfect_roll, mythic_drop, player_death, etc.)"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Event metadata (quality_score, item_name, damage, floor, etc.)"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "tiktok",
+            "instagram",
+            "twitter",
+            "youtube_shorts"
+          ],
+          "description": "Target platform"
+        }
+      },
+      "required": [
+        "event_type",
+        "platform"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/social/captions/generate",
+      "bodyMap": {
+        "event_type": "event_type",
+        "metadata": "metadata",
+        "platform": "platform"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_create_post",
+    "description": "Create a social media post (draft or scheduled). Link to a video pipeline clip for full tracking.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "tiktok",
+            "instagram",
+            "twitter",
+            "youtube_shorts"
+          ]
+        },
+        "caption": {
+          "type": "string",
+          "description": "Post caption text"
+        },
+        "media_url": {
+          "type": "string",
+          "description": "URL of the video/image to post"
+        },
+        "clip_id": {
+          "type": "string",
+          "description": "Video pipeline clip ID (for tracking)"
+        },
+        "video_session_id": {
+          "type": "integer",
+          "description": "Video pipeline session ID"
+        },
+        "event_type": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "S",
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "scheduled"
+          ],
+          "description": "Initial status (default: draft)"
+        },
+        "scheduled_at": {
+          "type": "string",
+          "description": "ISO timestamp for scheduled posting"
+        }
+      },
+      "required": [
+        "project_id",
+        "platform"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/social/posts",
+      "bodyMap": {
+        "project_id": "project_id",
+        "platform": "platform",
+        "caption": "caption",
+        "media_url": "media_url",
+        "clip_id": "clip_id",
+        "video_session_id": "video_session_id",
+        "event_type": "event_type",
+        "tier": "tier",
+        "status": "status",
+        "scheduled_at": "scheduled_at"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_list_posts",
+    "description": "List social media posts with optional filters.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "scheduled",
+            "publishing",
+            "posted",
+            "failed"
+          ]
+        },
+        "video_session_id": {
+          "type": "integer"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/social/posts",
+      "queryMap": {
+        "project_id": "project_id",
+        "platform": "platform",
+        "status": "status",
+        "video_session_id": "video_session_id"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_schedule_post",
+    "description": "Schedule a draft post for publishing. Auto-selects next available time window if no scheduled_at provided.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "post_id": {
+          "type": "integer",
+          "description": "Post ID to schedule"
+        },
+        "scheduled_at": {
+          "type": "string",
+          "description": "ISO timestamp (optional — auto-schedules if omitted)"
+        }
+      },
+      "required": [
+        "post_id"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/social/posts/{post_id}/schedule",
+      "bodyMap": {
+        "scheduled_at": "scheduled_at"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_publish_post",
+    "description": "Publish a post to its platform via drone job. Requires caption and media_url. Uses Buffer API for TikTok/Twitter or Instagram Graph API. Gated action: social_publish.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "post_id": {
+          "type": "integer",
+          "description": "Post ID to publish"
+        },
+        "priority": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "post_id"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/social/posts/{post_id}/publish",
+      "bodyMap": {
+        "priority": "priority"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_stats",
+    "description": "Get posting statistics by platform and status.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Project ID"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/social/stats",
+      "queryMap": {
+        "project_id": "project_id"
+      }
+    }
+  },
+  {
+    "name": "mycelium_social_history",
+    "description": "Get recent post history for scheduling decisions.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "days": {
+          "type": "integer",
+          "description": "Number of days of history (default: 7)"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/social/history",
+      "queryMap": {
+        "project_id": "project_id",
+        "platform": "platform",
+        "days": "days"
+      }
+    }
+  },
+  {
+    "name": "mycelium_x_post",
+    "description": "Create a tweet draft. Text must be 280 characters or less. Use source='bip' and source_id to link to a BIP draft.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Tweet text (max 280 chars)"
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Project ID for tracking"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source of the tweet (manual, bip, automation)"
+        },
+        "source_id": {
+          "type": "string",
+          "description": "ID of the source item (e.g. BIP draft ID)"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/x/posts",
+      "bodyMap": {
+        "text": "text",
+        "project_id": "project_id",
+        "source": "source",
+        "source_id": "source_id"
+      }
+    }
+  },
+  {
+    "name": "mycelium_x_publish",
+    "description": "Publish a tweet draft. NORMAL FLOW: a draft created via mycelium_x_post auto-files a pending approval; once an operator approves it in the Approvals dashboard, the server auto-publishes via the approval_approved hook — agents should NOT call this tool in that flow. ADMIN ONLY: callers authenticated with X-Admin-Key may invoke this tool to bypass the gate. Requires x-posting plugin credentials configured.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "post_id": {
+          "type": "integer",
+          "description": "X post ID to publish"
+        }
+      },
+      "required": [
+        "post_id"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/x/posts/{post_id}/publish"
+    }
+  },
+  {
+    "name": "mycelium_x_thread",
+    "description": "Create a tweet thread (multiple tweets). Each tweet max 280 chars. Returns thread_id and post IDs.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tweets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of tweet texts in order"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tweets"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/x/thread",
+      "bodyMap": {
+        "tweets": "tweets",
+        "project_id": "project_id",
+        "source": "source",
+        "source_id": "source_id"
+      }
+    }
+  },
+  {
+    "name": "mycelium_x_publish_thread",
+    "description": "Publish an entire thread to X/Twitter. Tweets are posted sequentially, each replying to the previous. Gated action: x_publish.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "description": "Thread ID to publish"
+        }
+      },
+      "required": [
+        "thread_id"
+      ]
+    },
+    "endpoint": {
+      "method": "POST",
+      "path": "/x/thread/{thread_id}/publish"
+    }
+  },
+  {
+    "name": "mycelium_x_list",
+    "description": "List X/Twitter posts with optional filters.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "publishing",
+            "published",
+            "failed"
+          ]
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/x/posts",
+      "queryMap": {
+        "status": "status",
+        "project_id": "project_id",
+        "source": "source"
+      }
+    }
+  },
+  {
+    "name": "mycelium_x_stats",
+    "description": "Get X/Twitter posting stats by status.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        }
+      }
+    },
+    "endpoint": {
+      "method": "GET",
+      "path": "/x/stats",
+      "queryMap": {
+        "project_id": "project_id"
+      }
+    }
+  }
+]
