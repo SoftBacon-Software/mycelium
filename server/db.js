@@ -279,7 +279,7 @@ export function resolveAssignee(assignee) {
 }
 
 export function listAgents() {
-  return stmt('dvListAgents3', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, created_at FROM agents WHERE project_id != 'drone' ORDER BY created_at").all();
+  return stmt('dvListAgents4', "SELECT id, name, project_id, status, working_on, last_heartbeat, capabilities, avatar_url, role, operator_id, project, llm_backend, llm_model, runtime, system_diagnostics, agent_type, primary_team_id, created_at FROM agents WHERE project_id != 'drone' ORDER BY created_at").all();
 }
 
 export function listAllAgentsIncludingDrones() {
