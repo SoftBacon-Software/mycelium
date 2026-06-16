@@ -86,6 +86,18 @@ try {
   process.stdout.write('[boot] context_keys migration note: ' + e.message + '\n');
 }
 
+// Migrate: add review_metadata column to tasks if missing (Slice-2a landing data)
+try {
+  var _tdb = getDB();
+  var _tcols = _tdb.pragma('table_info(tasks)').map(function(c) { return c.name; });
+  if (!_tcols.includes('review_metadata')) {
+    _tdb.prepare("ALTER TABLE tasks ADD COLUMN review_metadata TEXT NOT NULL DEFAULT '{}'").run();
+    process.stdout.write('[boot] migrated tasks: added review_metadata column\n');
+  }
+} catch (e) {
+  process.stdout.write('[boot] tasks review_metadata migration note: ' + e.message + '\n');
+}
+
 // Purge expired context keys on boot
 var purged = purgeExpiredContextKeys();
 if (purged > 0) process.stdout.write('[boot] purged ' + purged + ' expired context keys\n');

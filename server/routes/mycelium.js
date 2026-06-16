@@ -1570,6 +1570,7 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
   if (req.body.branch !== undefined) fields.branch = req.body.branch;
   if (req.body.pr_url !== undefined) fields.pr_url = req.body.pr_url;
   if (req.body.repo !== undefined) fields.repo = req.body.repo;
+  if (req.body.review_metadata !== undefined) fields.review_metadata = typeof req.body.review_metadata === 'string' ? req.body.review_metadata : JSON.stringify(req.body.review_metadata);
   updateTask(task.id, fields);
 
   var result = { ok: true, id: task.id };

@@ -486,7 +486,7 @@ export function updateTask(id, fields) {
   if (f.needs_approval !== undefined) f.needs_approval = f.needs_approval ? 1 : 0;
   if (f.blocked_by !== undefined) f.blocked_by = JSON.stringify(f.blocked_by);
   if (f.blocks !== undefined) f.blocks = JSON.stringify(f.blocks);
-  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo'], { updatedAt: true });
+  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo', 'review_metadata'], { updatedAt: true });
 }
 
 // -- Task dependencies --

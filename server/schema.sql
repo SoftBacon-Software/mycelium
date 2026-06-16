@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   request_id      INTEGER,
   branch          TEXT,
   pr_url          TEXT,
-  repo            TEXT
+  repo            TEXT,
+  review_metadata TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Per-project context snapshots (legacy)
