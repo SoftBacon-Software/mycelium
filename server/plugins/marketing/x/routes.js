@@ -133,9 +133,11 @@ export default function (core) {
           posted_at: new Date().toISOString()
         });
         
-        // Find the approval for this post_id (most recent pending one)
+        // Find the approval for this post_id — pending OR already-approved-but-not-
+        // executed. Bug #1: a 'pending'-only match stranded an approval that was
+        // approved first and then direct-published, leaving it orphaned at 'approved'.
         var approval = core.db.prepare(
-          "SELECT id FROM approvals WHERE action_type = 'x_publish' AND status = 'pending' AND json_extract(payload, '$.post_id') = ? ORDER BY id DESC LIMIT 1"
+          "SELECT id FROM approvals WHERE action_type = 'x_publish' AND status IN ('pending','approved') AND json_extract(payload, '$.post_id') = ? ORDER BY id DESC LIMIT 1"
         ).get(post.id);
         if (approval) {
           core.db.prepare(
@@ -227,6 +229,16 @@ export default function (core) {
                 tweet_url: tweetUrl,
                 posted_at: new Date().toISOString()
               });
+              // Bug #1: flip any pending/approved approval for this tweet so a thread
+              // direct-publish doesn't orphan it (the single-post path does this too).
+              var threadAppr = core.db.prepare(
+                "SELECT id FROM approvals WHERE action_type = 'x_publish' AND status IN ('pending','approved') AND json_extract(payload, '$.post_id') = ? ORDER BY id DESC LIMIT 1"
+              ).get(tweet.id);
+              if (threadAppr) {
+                core.db.prepare(
+                  "UPDATE approvals SET status = 'executed', decided_by = ?, decided_at = datetime('now'), executed_at = datetime('now'), reason = 'Admin direct-publish (thread)', updated_at = datetime('now') WHERE id = ?"
+                ).run(who, threadAppr.id);
+              }
               results.push({ id: tweet.id, tweet_id: tweetId, tweet_url: tweetUrl });
               return tweetId;
             } else {

@@ -63,7 +63,15 @@ export function registerHooks(core) {
 
       var post = db.getPost(postId);
       if (!post || !post.tweet_text) return;
-      if (post.status === 'published') return;
+      if (post.status === 'published') {
+        // Post already published (e.g. via direct-publish before this fired) — the
+        // approval is fulfilled, so mark it executed instead of stranding it at
+        // 'approved' (bug #1).
+        core.db.prepare(
+          "UPDATE approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status != 'executed'"
+        ).run(approvalId);
+        return;
+      }
 
       var creds = getCredentials(core.db);
       if (!creds.api_key || !creds.api_secret || !creds.access_token || !creds.access_token_secret) {
