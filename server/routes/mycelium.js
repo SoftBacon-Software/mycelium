@@ -1966,11 +1966,14 @@ router.get('/spend', asyncHandler(function (req, res) {
 
 // Open a run. Squad writes (agent key); operator/admin pass too. Returns the row.
 router.post('/runs', asyncHandler(function (req, res) {
-  var agentId = checkAgentOrAdmin(req, res);
-  if (!agentId) return;
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  // Bind the run to the AUTHENTICATED agent — a non-admin can't attribute a run to
+  // another agent. Admin (e.g. the bridge recording on behalf of an agent) may set it.
+  var ownerAgent = req._authIsAdmin ? (req.body.agent_id || who) : (req._authAgentId || who);
   var run = createRun({
     id: req.body.id || crypto.randomUUID(),
-    agent_id: req.body.agent_id || agentId,
+    agent_id: ownerAgent,
     model: req.body.model,
     project_id: req.body.project_id,
     workflow_id: req.body.workflow_id || null,
@@ -1982,9 +1985,14 @@ router.post('/runs', asyncHandler(function (req, res) {
 
 // Close/update a run with telemetry (turns/tokens/energy/artifacts/result/finished_at).
 router.put('/runs/:id', asyncHandler(function (req, res) {
-  var agentId = checkAgentOrAdmin(req, res);
-  if (!agentId) return;
-  if (!getRun(req.params.id)) return res.status(404).json({ error: 'Run not found' });
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  var existing = getRun(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Run not found' });
+  // Only the run's OWN agent, the worker that claimed it, or an admin may report telemetry.
+  if (!req._authIsAdmin && existing.agent_id !== req._authAgentId && existing.claimed_by !== req._authAgentId) {
+    return res.status(403).json({ error: 'Forbidden — not your run' });
+  }
   var fields = {};
   ['model', 'status', 'turns', 'tool_calls', 'tokens_in', 'tokens_out',
    'energy_joules', 'artifacts', 'result', 'finished_at', 'duration_ms'].forEach(function (k) {
@@ -2002,8 +2010,11 @@ router.put('/runs/:id', asyncHandler(function (req, res) {
 router.post('/runs/claim', asyncHandler(function (req, res) {
   var workerId = checkAgentOrAdmin(req, res);
   if (!workerId) return;
-  releaseStaleClaimedRuns(req.body.stale_minutes);
-  var run = claimRun(req.body.worker_id || workerId, { agent_id: req.body.agent_id });
+  // Stale-reap window is a SERVER constant — never client-controlled (a client could pass
+  // 0 to fail every in-flight run). The worker is the authenticated principal, not
+  // client-supplied (no claiming as another worker).
+  releaseStaleClaimedRuns();   // default 60-min window
+  var run = claimRun(workerId, { agent_id: req.body.agent_id });
   if (!run) return res.status(204).end();
   res.json(run);
 }));
@@ -2034,7 +2045,7 @@ router.get('/runs/:id', asyncHandler(function (req, res) {
 // run that's part of a COLLECTION (workflow_id set) defaults to re-firing the WHOLE
 // workflow instead — that lives in the workflow layer, not here.
 router.post('/runs/:id/rerun', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
+  var who = checkAdminOrOperator(req, res);   // rerun is an operator action — not arbitrary agents
   if (!who) return;
   var orig = getRun(req.params.id);
   if (!orig) return res.status(404).json({ error: 'Run not found' });
