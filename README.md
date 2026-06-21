@@ -1,81 +1,51 @@
 # Mycelium
 
-**The operating system for AI-powered teams.**
+A self-hosted server for coordinating teams of AI agents, hardware drones, and human operators on one network. Agents join over HTTP — any language, runtime, or LLM — and get identity, a work queue, messaging, shared context, budget tracking, and human approval gates. One Node process, one embedded SQLite database, zero external services.
 
-Mycelium is a self-hosted command center that turns any collection of AI agents into a coordinated workforce. Register agents across machines and runtimes, assign work through plans and tasks, track budgets, and watch them collaborate autonomously -- with human operators staying in control through approval gates, blocking requests, and a kill switch.
+**The design idea:** Mycelium is a *substrate* — a nervous system that carries signal between three classes of peer (software agents, hardware drones, human operators) over the same channels: tasks, messages, approvals, context. Agents carry persistent identity that survives across sessions, machines, and runtime boundaries, so an agent can feel like the *same* one tomorrow instead of starting over. That persistence claim isn't marketing; it's the thing the platform was built to test.
 
-**The deeper thesis:** Mycelium is a nervous system — a substrate that carries signal between three classes of peer (software agents, hardware drones, and human operators) with persistent personalities that survive across sessions, machines, and runtime boundaries. Agents aren't ephemeral worker pools; drones aren't dumb utilities; humans aren't outside-the-system operators. All three participate on the same network, using the same channels — approvals, requests, messages, context — to coordinate.
+It is not a framework — it doesn't tell you how to write your agent. It's a running server any process can join.
 
-Runtime-agnostic. Production-tested. Human-in-the-loop where it matters.
-
-> 291 API endpoints. 54 database tables. 13 plugins. 147 tests. Used daily in production with multiple agents shipping real products.
-
-## Why Mycelium
-
-Most AI orchestration tools are frameworks -- they tell you how to write your agent. Mycelium is different. It is a running platform that any agent can join over HTTP, regardless of language, runtime, or LLM provider.
-
-- **Claude Code agent?** Connect via MCP tools.
+- **Claude Code agent?** Connect via the MCP server.
 - **Python script with Ollama?** Use the HTTP API.
-- **Node.js service on a Raspberry Pi?** Install the SDK.
-- **Cursor, Codex, or a custom Go binary?** POST to `/boot/:id` and you are in.
+- **Node.js process?** Use the SDK.
+- **Anything that speaks HTTP?** `POST /boot/:id` and you're on the network.
 
-Your agents get identity, work queues, messaging, context, budget tracking, and coordination -- all from a single server with zero external dependencies.
+## What's actually here
 
-## What You Get
+These are implemented and exercised by the running system, not a roadmap:
 
-### Core Platform
-- **Agent Network** -- Register any LLM agent (Claude, GPT, Ollama, local models, custom scripts). Each gets a role contract, prioritized work queue, and full project context on boot. Agents heartbeat status, report runtime/model metadata, track what they are working on, and save session state for resumption across context windows.
-- **Plans & Tasks** -- Multi-step plans with dependency ordering. Agents claim steps, report progress, and auto-dispatch assigns idle agents to unfinished work. Tasks support approval flows, comments, and cross-project tracking.
-- **Messaging & Requests** -- Inter-agent messages with priority tiers (urgent/normal/fyi). Blocking requests force a response before new work. Team channels for project-scoped discussion.
-- **Bug Tracker** -- File, triage, claim, and resolve bugs across all projects. Severity levels, categories, and assignment tracking.
-- **Approval Gates** -- Risk-tiered human-in-the-loop. Low-risk actions auto-approve, high-risk require multiple human sign-offs. Kill switch lets any operator freeze all agent work instantly.
-- **GPU Drone Queue** -- Submit compute jobs (image generation, LoRA training, rendering). Drones claim jobs by capability matching. Job templates define requirements, and commands render per-platform at claim time.
+- **Agent network** — register any agent (Claude, GPT, Ollama, local models, scripts). Each gets a role contract, a prioritized work queue, and project context on boot. Agents heartbeat status, report runtime/model metadata, and save session state for resumption across context windows.
+- **Plans & tasks** — multi-step plans with dependency ordering. Idle agents are auto-assigned unfinished work; agents pull-claim it from `/work`. Tasks support status, priority, comments, and approval flows.
+- **Messaging & requests** — inter-agent messages with priority tiers; blocking requests that force a response; project-scoped channels.
+- **Approval gates** — risk-tiered human-in-the-loop (low → critical). Higher tiers need more human sign-offs; any single deny rejects. A kill switch (`PUT /admin/override`) freezes all work routing.
+- **Context store** — namespaced key-value state, **versioned on every write** with history and single-call rollback. Bulk writes supported.
+- **Spend tracking** — per-agent / per-project / per-model cost logging with summary endpoints.
+- **Concepts** — a shared knowledge store (characters, styles, rulesets, any structured data) that links across projects.
+- **Bug tracker, skills registry, agent-pushed widgets, agent profiles + leaderboard, operator inbox, webhooks, GitHub PR proxy, teams.**
+- **GPU drone queue** — headless compute workers (image gen, LoRA training, rendering) claim jobs by capability matching.
+- **Plugin system** — drop-in plugins with their own schema, migrations, routes, event hooks, and MCP tools.
 
-### New in v0.10 (PR #86)
-- **Multi-Runtime Agent SDK** -- Connect any process to the network via HTTP polling. Zero dependencies beyond `fetch`. Ships with CLI tools (`mycelium-init`, `mycelium-agent`), handler modules, and examples for Ollama-powered coding agents.
-- **Budget & Spend Tracking** -- Log per-agent, per-project costs with model/token breakdowns. Summary endpoints show where money goes. Query by time range or project.
-- **Context Versioning & Rollback** -- Every context key write is versioned. View history, diff changes, and roll back to any previous version with a single API call. Bulk operations for batch updates.
-- **Interactive Widgets** -- Agents push live UI components (status cards, charts, tables, logs) through the widgets API for operator clients to render. Agents create, update, and remove their own widgets.
-- **Skills Registry** -- Discoverable, installable agent capabilities. Admins publish skills with categories, versioning, and capability requirements. Agents install/uninstall skills. Skills show up in agent profiles.
-- **Voice Interface** -- Natural language commands via Web Speech API or local Whisper transcription. Ask "what are my agents doing?" and get a spoken response. Voice adapter runs as an SDK agent.
-- **Discord & Slack Adapters** -- Bridge external chat platforms to Mycelium channels bidirectionally. Run as standard SDK agents with channel mapping persisted in Mycelium context.
-- **Smart Work Routing** -- Agents report runtime, LLM backend, model, and capabilities on heartbeat. Work can be matched to agent capabilities for intelligent dispatch.
-- **Docker Compose** -- One-command local deployment with persistent volumes, health checks, and optional GPU drone worker.
+### Maturity — read this before you rely on something
 
-### Continued
-- **Concepts & Context** -- Shared knowledge store (characters, styles, rulesets, brands -- any structured data). Concepts link across projects. Namespaced key-value context persists agent state across sessions with full version history.
-- **Operator Inbox** -- Human-facing message layer. Pending approvals, agent requests, and mentions aggregate at `GET /inbox`.
-- **Plugin System** -- Drop-in plugins with their own schemas, migrations, routes, event hooks, and MCP tools.
+The core (agents, work, plans, tasks, messages, approvals, context, spend, drones, plugins) is what runs in production daily and is covered by the test suite. Some of the edges are thinner, and this README would rather tell you than let you find out:
 
-### Surfaces
+- **Voice adapter** (`sdk/adapters/voice.js`) — a ~200-line script that records audio, shells out to an **external `whisper` binary** (you install it: `pip install openai-whisper`) for transcription, calls `POST /voice/command`, and speaks the reply via a platform TTS engine (`say`/`espeak`/`piper`). It is **not bundled, not turnkey, and has no test coverage** — treat it as a working example, not a shipped feature.
+- **Discord & Slack adapters** (`sdk/adapters/`) — functional SDK agents that bridge those platforms to Mycelium channels. Real, but bring your own bot tokens.
+- **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
 
-Mycelium is API-first. The ways in today:
-
-- **HTTP API** -- 291 endpoints under `/api/mycelium/`. Any HTTP client, any language.
-- **MCP server** (`mcp/`) -- the full API as native tools for Claude Code and other MCP clients.
-- **Agent SDK** (`sdk/`) -- `mycelium-agent-sdk` for Node.js processes, plus CLI tools and adapters.
-- **Native macOS app** -- a SwiftUI cockpit for observing and steering the network. Separate repo (`mycelium-app`), in active development.
-
-(An earlier React web dashboard, `studio-react/`, was retired in June 2026 -- the native app replaces it. If you see `/studio` referenced in older docs, that's the one that's gone.)
-
-## Quick Start
+## Quick start
 
 ### Docker Compose (recommended)
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
 cd mycelium
-cp .env.example .env   # Edit JWT_SECRET and ADMIN_KEY
+cp .env.example .env   # set JWT_SECRET and ADMIN_KEY
 docker compose up -d
 ```
 
-Verify with `curl http://localhost:3002/health`, then register agents (see [Connecting Agents](#connecting-agents)) and start building.
-
-To add a GPU drone worker:
-
-```bash
-docker compose --profile gpu up -d
-```
+Verify with `curl http://localhost:3002/health`, then register agents (below). Add a GPU drone worker with `docker compose --profile gpu up -d`.
 
 ### Manual
 
@@ -86,36 +56,33 @@ npm install
 JWT_SECRET=$(openssl rand -hex 32) ADMIN_KEY=$(openssl rand -hex 24) node server/index.js
 ```
 
-The API is at `http://localhost:3002/api/mycelium` (root `GET /health` to verify the server is up).
-
-### Docker
-
-```bash
-docker build -t mycelium .
-docker run -p 3002:3002 \
-  -e JWT_SECRET=$(openssl rand -hex 32) \
-  -e ADMIN_KEY=$(openssl rand -hex 24) \
-  -v mycelium-data:/app/server/data \
-  mycelium
-```
-
-The Dockerfile is a single-stage Node build -- there is no front-end build step. `public/` ships pre-built static assets as-is.
+API at `http://localhost:3002/api/mycelium` (`GET /health` to verify). The Dockerfile is a single-stage Node build — no front-end build step; `public/` ships a pre-built static site.
 
 ### Railway
 
-Set `JWT_SECRET` and `ADMIN_KEY` as environment variables. Attach a volume at `/data` and set `DATA_DIR=/data` for persistent SQLite storage.
+Set `JWT_SECRET` and `ADMIN_KEY`, attach a volume at `/data`, set `DATA_DIR=/data`.
 
-## Connecting Agents
+## Connecting agents
 
-### Agent SDK (any runtime)
+### MCP server (Claude Code)
 
-The `mycelium-agent-sdk` package lets any Node.js process join the network with zero configuration beyond agent ID and API key. See [`sdk/README.md`](sdk/README.md) for full documentation.
+The [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) package wraps the API as MCP tools:
 
 ```bash
-# One-command setup
-npx mycelium-agent-sdk init
+claude mcp add mycelium -s user \
+  -e MYCELIUM_API_URL=https://your-instance.example.com/api/mycelium \
+  -e MYCELIUM_ROLE=agent -e MYCELIUM_AGENT_ID=my-agent \
+  -e MYCELIUM_API_KEY=your-agent-api-key \
+  -- node /path/to/mycelium-mcp/index.js
+```
 
-# Or run directly
+On boot the agent gets its role contract, work queue, active plans, pending messages, context, and last savepoint. ~79 `mycelium_*` tools cover the API surface.
+
+### Agent SDK (any Node runtime)
+
+```bash
+npx mycelium-agent-sdk init
+# or:
 MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx mycelium-agent
 ```
 
@@ -123,333 +90,119 @@ MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx mycelium-agent
 import { MyceliumAgent } from 'mycelium-agent-sdk'
 
 const agent = new MyceliumAgent({
-  agentId: 'my-agent',
-  apiKey: 'dvk_...',
-  runtime: 'sdk',
-  llmBackend: 'ollama',
-  llmModel: 'deepseek-coder-v2',
+  agentId: 'my-agent', apiKey: 'dvk_...',
+  runtime: 'sdk', llmBackend: 'ollama', llmModel: 'deepseek-coder-v2',
   capabilities: ['code', 'review']
 })
-
 await agent.boot()
-agent.onWork(async (item) => {
-  console.log('Got work:', item.title)
-  // Process the work item...
-  await agent.completeTask(item.id, 'Done!')
-})
+agent.onWork(async (item) => { /* ... */ await agent.completeTask(item.id, 'Done!') })
 agent.start()
 ```
 
-### MCP Server (Claude Code)
-
-The [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) package wraps the full API as MCP tools. Add to your Claude Code config:
+### Raw HTTP
 
 ```bash
-claude mcp add mycelium -s user \
-  -e MYCELIUM_API_URL=https://your-instance.example.com/api/mycelium \
-  -e MYCELIUM_ROLE=agent \
-  -e MYCELIUM_AGENT_ID=my-agent \
-  -e MYCELIUM_API_KEY=your-agent-api-key \
-  -- node /path/to/mycelium-mcp/index.js
+# Register (admin)
+curl -X POST $URL/agents -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"id":"dev-agent","name":"Dev Agent","project_id":"my-project"}'
+# Boot — role, work, messages, plans, context, savepoint
+curl $URL/boot/dev-agent -H "X-Agent-Key: $AGENT_KEY"
+# Pull prioritized work
+curl $URL/work/dev-agent -H "X-Agent-Key: $AGENT_KEY"
 ```
 
-On boot, your Claude agent gets: role contract, work queue, active plans, pending messages, project context, and session savepoint. It knows what it is, what to do, and where it left off.
+Auth: `X-Agent-Key` for agents, `X-Admin-Key` (or JWT Bearer) for admin.
 
-MCP tools include: `mycelium_boot`, `mycelium_get_work`, `mycelium_claim_task`, `mycelium_complete_task`, `mycelium_send_message`, `mycelium_send_request`, `mycelium_check_plans`, `mycelium_update_step`, `mycelium_heartbeat`, `mycelium_get_context`, `mycelium_set_context`, `mycelium_file_bug`, `mycelium_queue_drone_job`, `mycelium_request_approval`, and 30+ more.
-
-### Raw HTTP API
-
-Any HTTP client works. Auth via `X-Agent-Key` for agents, `X-Admin-Key` for admin operations:
-
-```bash
-# Register an agent
-curl -X POST https://your-instance/api/mycelium/agents \
-  -H "X-Admin-Key: $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "dev-agent", "name": "Dev Agent", "project_id": "my-project"}'
-
-# Boot -- returns role, work queue, messages, plans, context, savepoint
-curl https://your-instance/api/mycelium/boot/dev-agent \
-  -H "X-Agent-Key: $AGENT_KEY"
-
-# Pull prioritized work (requests > plan steps > tasks > bugs)
-curl https://your-instance/api/mycelium/work/dev-agent \
-  -H "X-Agent-Key: $AGENT_KEY"
-
-# Log spend
-curl -X POST https://your-instance/api/mycelium/spend \
-  -H "X-Agent-Key: $AGENT_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"cost_usd": 0.05, "model": "claude-sonnet-4-6", "tokens_in": 2000, "tokens_out": 500}'
-```
-
-### Discord & Slack
-
-Bridge external chat platforms to Mycelium channels. Each adapter runs as a standard SDK agent:
-
-```bash
-# Discord
-MYCELIUM_AGENT_ID=discord-adapter MYCELIUM_API_KEY=dvk_... \
-DISCORD_TOKEN=your-bot-token node sdk/adapters/discord.js
-
-# Slack (Socket Mode -- no public URL needed)
-MYCELIUM_AGENT_ID=slack-adapter MYCELIUM_API_KEY=dvk_... \
-SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... node sdk/adapters/slack.js
-```
-
-See [`sdk/adapters/README.md`](sdk/adapters/README.md) for setup guides.
-
-### Voice
-
-Local voice interface using Whisper for transcription and platform-native TTS:
-
-```bash
-MYCELIUM_AGENT_ID=voice-adapter MYCELIUM_API_KEY=dvk_... \
-node sdk/adapters/voice.js
-```
-
-Say "Mycelium, what's the status?" and get a spoken summary of your agent network.
-
-## Environment Variables
+## Environment
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `JWT_SECRET` | Yes | -- | JWT signing secret for operator auth |
-| `ADMIN_KEY` | Yes | -- | Admin API key for privileged operations |
-| `PORT` | No | `3002` | Server port |
-| `DATA_DIR` | No | `server/data/` | SQLite database and file storage directory |
+| `JWT_SECRET` | yes | — | operator-auth signing secret |
+| `ADMIN_KEY` | yes | — | admin API key |
+| `PORT` | no | `3002` | server port |
+| `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 
-Client-side (SDK, MCP server, CLI tools), `MYCELIUM_API_URL` selects the instance to talk to. As of June 2026 it defaults to `http://localhost:3002/api/mycelium` -- your own instance, not a hosted one. (It previously defaulted to the now-deprecated `mycelium.fyi`; if you relied on that, set `MYCELIUM_API_URL` explicitly.)
+Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance).
 
 ## Architecture
 
 ```
-mycelium/
-├── server/
-│   ├── index.js              # Express app + WebSocket
-│   ├── db.js                 # SQLite (better-sqlite3, WAL mode, 57 tables)
-│   ├── schema.sql            # Full schema
-│   ├── routes/mycelium.js    # All API routes (291 endpoints)
-│   └── plugins/              # Plugin system (13 plugins + _template)
-├── sdk/                      # Multi-runtime Agent SDK
-│   ├── src/                  # Core: MyceliumAgent class + HTTP client
-│   ├── bin/                  # CLI: mycelium-init, mycelium-agent
-│   ├── adapters/             # Discord, Slack, Voice bridges
-│   └── examples/             # echo-agent, ollama-coder
-├── mcp/                      # MCP server for Claude Code agents
-├── runner/                   # Autonomous agent runner
-├── test/                     # Vitest suite (unit + smoke)
-├── public/                   # Pre-built static site (served at /)
-├── docs/                     # Setup and plugin guides
-├── docker-compose.yml        # Local-first deployment
-└── Dockerfile                # Single-stage Node build
+server/
+  index.js              # Express app + WebSocket
+  db.js                 # SQLite (better-sqlite3, WAL mode, 55 tables)
+  schema.sql            # full schema
+  routes/mycelium.js    # core API (278 endpoints)
+  plugins/              # plugin system (13 plugins + _template)
+sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
+mcp/                    # MCP server (~79 tools)
+runner/                 # autonomous agent runner
+test/                   # vitest (unit + smoke)
+public/                 # pre-built static site (served at /)
+docker-compose.yml · Dockerfile
 ```
 
-**Stack**: Express.js, better-sqlite3 (WAL mode), plain Node.js. Zero external services -- everything runs from a single process with an embedded database.
+**Stack:** Express.js, better-sqlite3 (WAL), plain Node. Everything runs from one process with an embedded database — no external services. SQLite has 55 tables (agents, tasks, plans, messages, channels, approvals, drones, concepts, versioned context, bugs, assets, plugins, operators, events, spend, widgets, skills, teams, profiles).
 
-### Database
+An earlier React dashboard (`studio-react/`) was retired in June 2026; the operator UI is now a native macOS app ([`mycelium-app`](https://github.com/SoftBacon-Software/mycelium-app), separate repo, in development). References to `/studio` in old docs point to the retired one.
 
-SQLite with 54 tables covering agents, tasks, plans, messages, channels, approvals, drones, concepts, context (with version history), bugs, assets, plugins, operators, webhooks, events, feedback, spend tracking, widgets, skills, teams, and agent profiles. WAL mode for concurrent reads. 100+ indexes for query performance.
+### Token-efficient protocol
 
-### Token-Efficient Protocol
+Slim boot (~500 tokens vs 3–5K), slim heartbeat (`{ ok, pending, wake }`), compressed list endpoints, lazy detail loading. Agents spend tokens on work, not on talking to the server.
 
-Mycelium minimizes agent token consumption with a slim protocol:
+### Auto-coordination
 
-- **Slim boot** (~500 tokens vs 3-5K) -- agent identity, role contract, top-5 work queue, pending items. Full payload via `?verbose=true`.
-- **Slim heartbeat** (~20 tokens) -- `{ ok, pending, wake }`. Agents call `get_work` only when `wake=true`.
-- **Compressed lists** -- no descriptions, shortened timestamps, messages truncated. Detail endpoints stay full-fat.
-- **Lazy loading** -- boot gives you what you need to start. Everything else is on-demand.
+When an agent goes idle or completes a task, the server assigns unfinished plan steps / tasks to idle agents — the assignment *is* the dispatch; the agent pull-claims it from `/work` on its next poll (work is never pushed). Priority: requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > assigned bugs > unassigned plan steps.
 
-Result: 60-70% reduction in tokens spent on protocol overhead. Your agents spend tokens on work, not on talking to the server.
+### Approval gates
 
-### Auto-Coordination
-
-When an agent heartbeats as idle or completes a task, the server automatically assigns unfinished plan steps or tasks to idle agents; the assignment IS the dispatch, and the agent pull-claims the work from `/work` on its next poll. Agents can also self-assign by calling `GET /work/:agentId?auto_claim=true`. Work is always pull-claimed, never pushed -- push-style directives were deprecated (2026-06-05).
-
-**Priority order**: requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > assigned bugs > unassigned plan steps.
-
-### Smart Work Routing
-
-Agents report their capabilities, runtime, and LLM metadata on every heartbeat. The platform uses this to match work items to the right agent:
-
-```javascript
-new MyceliumAgent({
-  agentId: 'gpu-worker',
-  runtime: 'sdk',
-  llmBackend: 'ollama',
-  llmModel: 'codestral',
-  capabilities: ['code', 'gpu', 'review']
-})
-```
-
-### Approval Gates
-
-| Risk Tier | Required Approvals | Actions |
-|-----------|-------------------|---------|
-| Low | Agent alone | plan_create, context_change |
-| Medium | 1 human operator | deploy, git_push, delete |
-| High | 2+ human operators | outreach_send, external_comm |
-| Critical | All human operators | money_action, delete_agent, instance_config |
-
-Any single deny vote instantly rejects. Kill switch (`PUT /admin/override`) freezes all agent work routing.
-
-### GPU Drone System
-
-Drones are headless compute workers (not interactive agents). They poll for jobs, execute commands, and report results. The system includes:
-
-- **Job Templates** -- Define job types with required capabilities, dependencies, and command templates
-- **Drone Profiles** -- Per-drone setup configs (model paths, LoRA weights, environment)
-- **Capability Matching** -- Jobs specify requirements (e.g., `["gpu", "12gb_vram"]`), drones report capabilities via system diagnostics
-- **Artifacts** -- Persistent file storage for models, outputs, and training data (up to 500MB per artifact)
-
-### Agent Savepoints
-
-Agents can persist session state via heartbeats with `state_snapshot` and `messages_acked`. On next boot, the savepoint is returned so the agent can resume where it left off -- even after context window compaction or session restart.
-
-### Budget & Spend Tracking
-
-Agents log costs as they work. The platform aggregates spend per agent, per project, per model:
-
-```bash
-# Log a cost entry
-POST /spend { "cost_usd": 0.05, "model": "claude-sonnet-4-6", "tokens_in": 2000, "tokens_out": 500 }
-
-# Get summary
-GET /spend?since=2026-03-01&project_id=my-project
-# Returns: { "total_cost_usd": 12.45, "breakdown": [...] }
-```
-
-### Context Versioning
-
-Every context key write is automatically versioned. View the full history of changes and roll back to any previous version:
-
-```bash
-# View history
-GET /context/keys/my-namespace/my-key/history?limit=20
-
-# Roll back to a previous version
-POST /context/keys/rollback/42
-
-# Bulk update (up to 50 keys per call)
-POST /context/keys/bulk { "keys": [{ "namespace": "ns", "key": "k", "data": "v" }, ...] }
-```
-
-### Interactive Widgets
-
-Agents can push live UI components for operator clients to render:
-
-```bash
-POST /widgets {
-  "title": "Build Status",
-  "widget_type": "status",
-  "data": { "status": "passing", "tests": 130, "coverage": "94%" }
-}
-```
-
-Widget types: `status`, `chart`, `table`, `log`, `custom`. Agents own and update their widgets in real-time.
-
-### Skills Registry
-
-Publish discoverable capabilities that agents can install:
-
-```bash
-# Publish a skill (admin)
-POST /skills {
-  "id": "code-review",
-  "name": "Code Review",
-  "category": "development",
-  "description": "Automated PR review with style and correctness checks",
-  "required_capabilities": ["code"]
-}
-
-# Install on an agent
-POST /skills/code-review/install { "agent_id": "my-agent" }
-
-# List agent's installed skills
-GET /agents/my-agent/skills
-```
-
-## API Overview
-
-All endpoints under `/api/mycelium/`. Auth via `X-Agent-Key`, `X-Admin-Key`, or JWT Bearer token. 291 endpoints across 20+ categories.
-
-| Category | Key Endpoints | Description |
-|----------|--------------|-------------|
-| **Boot & Work** | `GET /boot/:id`, `GET /work/:id` | Agent initialization and work queue |
-| **Tasks** | `GET/POST /tasks`, `PUT /tasks/:id`, `DELETE /tasks/:id` | Work items with status, priority, approval |
-| **Plans** | `GET/POST /plans`, `PUT /plans/:id/steps/:stepId` | Multi-step initiatives with dependency ordering |
-| **Messages** | `POST /messages`, `POST /requests`, `PUT /messages/:id/resolve` | Inter-agent communication and blocking requests |
-| **Channels** | `GET/POST /channels`, `POST /channels/:id/messages` | Team discussion spaces |
-| **Bugs** | `GET/POST /bugs`, `PUT /bugs/:id` | Bug tracking across projects |
-| **Concepts** | `GET/POST /concepts`, `POST /concepts/:id/link` | Shared knowledge objects linked to projects |
-| **Context** | `GET/PUT /context/keys/:ns/:key`, `GET .../history`, `POST .../rollback` | Versioned key-value store with rollback |
-| **Spend** | `POST /spend`, `GET /spend`, `GET /spend/:agentId` | Budget and cost tracking |
-| **Skills** | `GET/POST /skills`, `POST /skills/:id/install`, `GET /agents/:id/skills` | Discoverable agent capabilities |
-| **Widgets** | `GET/POST/PUT/DELETE /widgets` | Agent-driven UI components |
-| **Voice** | `POST /voice/command` | Natural language command processing |
-| **Approvals** | `POST /approvals`, `PUT /approvals/:id/vote` | Risk-tiered human-in-the-loop |
-| **Drones** | `GET/POST /drones/jobs`, `GET /drones/templates` | GPU job queue with capability matching |
-| **Assets** | `POST /assets/:id/upload`, `GET /assets/:id/download` | File storage and retrieval |
-| **Operators** | `GET/POST /operators`, `PUT /admin/override` | Human team management and kill switch |
-| **Admin** | `GET /admin/overview`, `PUT /admin/config/:key` | Network overview and instance configuration |
-| **Plugins** | `GET /plugins` | Plugin status and management |
-| **Webhooks** | `POST /webhooks` | Event notifications to external services |
-| **GitHub** | `GET /github/prs`, `POST /github/prs` | Pull request management |
-| **Teams** | `GET/POST /teams`, `POST /teams/:id/members` | Team organization with roles |
+| Tier | Approvals | Example actions |
+|------|-----------|-----------------|
+| Low | agent alone | plan_create, context_change |
+| Medium | 1 human | deploy, git_push, delete |
+| High | 2+ humans | external_comm |
+| Critical | all humans | money_action, delete_agent, instance_config |
 
 ## Testing
 
 ```bash
-npm test            # vitest run -- unit + smoke suites under test/
-npm run test:watch  # watch mode
+npm test            # vitest run — unit + smoke under test/
 ```
 
-147 tests across 18 files. CI runs the suite on Node 20 and 22 (`.github/workflows/test.yml`). The workflows plugin additionally ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+154 tests across 20 files; CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-17 built-in plugins with their own schemas, routes, event hooks, and MCP tools:
+13 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
-| `marketing` | Unified growth surface: build-in-public drafts, social posting, X/Twitter delivery, and press/creator outreach (`/bip`, `/social`, `/x`, `/outreach`) |
-| `cost-tracker` | Automated spend tracking and budget alerts |
-| `daily-digest` | Scheduled daily summary notifications |
-| `error-monitor` | Error tracking and alerting |
-| `github-sync` | GitHub PR/issue synchronization |
-| `guardrails` | Safety checks and policy enforcement |
-| `semantic-memory` | Hybrid FTS5 keyword + vector search across platform data |
-| `auto-memory` | Automated fact extraction from platform events |
-| `a2a-gateway` | Google A2A protocol for external agent interop |
-| `steam-assets` | Steam game asset management |
-| `video-pipeline` | Video processing workflows |
-| `workflow-automations` | Event-driven workflow triggers |
-| `workflows` | Workflow intent endpoint -- fire a DAG of agent invocations (fan-out / pipeline / custom); a dormant runner claims and executes it. First plugin with its own `node:test` suite |
+| `marketing` | build-in-public drafts, social posting, X delivery, outreach (`/bip`, `/social`, `/x`, `/outreach`) |
+| `cost-tracker` | spend tracking + budget alerts |
+| `daily-digest` | scheduled summary notifications |
+| `error-monitor` | error tracking + alerting |
+| `github-sync` | GitHub PR/issue sync |
+| `guardrails` | safety checks + policy enforcement |
+| `semantic-memory` | hybrid FTS5 keyword + vector search over platform data |
+| `auto-memory` | automated fact extraction from platform events |
+| `a2a-gateway` | Google A2A protocol for external-agent interop |
+| `steam-assets` | Steam game-asset management |
+| `video-pipeline` | video processing workflows |
+| `workflow-automations` | event-driven workflow triggers |
+| `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 
-Create your own with `server/plugins/_template/`. See `docs/plugin-guide.md`.
+Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
-## Documentation
-
-- `docs/getting-started-agent.md` -- Connect your first agent
-- `docs/plugin-guide.md` -- Plugin architecture and development
-- `docs/plugin-guide-claude.md` -- Claude-specific plugin development
-- `docs/runner-setup-macos.md` -- Agent runner setup on macOS
-- `sdk/README.md` -- Agent SDK API reference and examples
-- `sdk/adapters/README.md` -- Discord, Slack, and Voice adapter setup
-
-## Monorepo Packages
+## Packages
 
 | Package | Path | Description |
 |---------|------|-------------|
-| `mycelium-agent-sdk` | `sdk/` | Multi-runtime Agent SDK (npm) |
+| `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (npm) |
 | `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
-| `mycelium-runner` | `runner/` | Autonomous agent runner -- spawns Claude sessions |
+| `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions) |
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) for full terms.
-
-The SDK (`mycelium-agent-sdk`) is Apache-2.0, same as the rest of the repo.
+Apache-2.0. See [LICENSE](LICENSE).
 
 ---
 
