@@ -174,6 +174,39 @@ CREATE TABLE IF NOT EXISTS agent_spend (
 CREATE INDEX IF NOT EXISTS idx_agent_spend_agent ON agent_spend(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_spend_project ON agent_spend(project_id);
 
+-- The run-log: one row per agent run (workflow-fired OR ad-hoc), with the
+-- telemetry the Engine Room renders. energy_joules is NULLABLE so a backend that
+-- doesn't measure power leaves it null — keeps the contract substrate-agnostic.
+-- tool_calls / artifacts are JSON strings. Squad writes (agent key); operator reads.
+CREATE TABLE IF NOT EXISTS runs (
+  id            TEXT PRIMARY KEY,
+  agent_id      TEXT NOT NULL,
+  model         TEXT NOT NULL DEFAULT '',
+  project_id    TEXT NOT NULL DEFAULT '',
+  workflow_id   TEXT,                                -- set if fired by a workflow; NULL = ad-hoc
+  brief         TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'running',     -- pending|claimed|running|completed|failed|timeout
+  claimed_by    TEXT,                                -- worker that claimed it (drone_jobs.drone_id analog)
+  turns         INTEGER NOT NULL DEFAULT 0,
+  tool_calls    TEXT NOT NULL DEFAULT '[]',          -- JSON [{name,count}]
+  tokens_in     INTEGER NOT NULL DEFAULT 0,
+  tokens_out    INTEGER NOT NULL DEFAULT 0,
+  energy_joules REAL,                                 -- NULL if the backend doesn't measure power
+  artifacts     TEXT NOT NULL DEFAULT '[]',           -- JSON [{name,kind}]
+  result        TEXT,
+  error         TEXT,                                -- failure reason, kept separate from result (drone convention)
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),  -- record/queue time (always set)
+  started_at    TEXT,                                -- EXECUTION start: set on claim, or at create when status=running
+  finished_at   TEXT,
+  duration_ms   INTEGER,
+  rerun_of      TEXT                                  -- run id this re-ran (NULL = original)
+);
+CREATE INDEX IF NOT EXISTS idx_runs_agent ON runs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);          -- the claim query (WHERE status='pending')
+CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);     -- the run-log ordering
+CREATE INDEX IF NOT EXISTS idx_runs_workflow ON runs(workflow_id);
+
 -- Agent-generated dashboard widgets
 CREATE TABLE IF NOT EXISTS widgets (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
