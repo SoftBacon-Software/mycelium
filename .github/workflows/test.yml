@@ -6,6 +6,10 @@ on:
   push:
     branches: [master]
 
+# Least-privilege: this workflow only checks out + runs tests (no writes).
+permissions:
+  contents: read
+
 jobs:
   test:
     name: vitest (Node ${{ matrix.node }})
