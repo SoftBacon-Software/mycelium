@@ -54,12 +54,8 @@ var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.jso
 var APP_VERSION = pkgJson.version || '0.0.0';
 
 // ---- Startup validation ----
-if (!process.env.JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET environment variable is required.');
-  process.exit(1);
-}
-if (!process.env.ADMIN_KEY) {
-  console.error('FATAL: ADMIN_KEY environment variable is required.');
+if (!process.env.ADMIN_KEY || !process.env.JWT_SECRET) {
+  console.error('FATAL: ADMIN_KEY and JWT_SECRET must be set');
   process.exit(1);
 }
 if (!process.env.TURN_SECRET) {

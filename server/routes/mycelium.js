@@ -185,7 +185,8 @@ import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 function isAdminKey(key) {
-  return key && key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY));
+  if (!ADMIN_KEY || !key) return false;
+  return key.length === ADMIN_KEY.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(ADMIN_KEY));
 }
 var JWT_SECRET = process.env.JWT_SECRET;
 var STUDIO_JWT_EXPIRY = '7d';
@@ -6102,6 +6103,8 @@ export async function initPlugins() {
   };
   await loadPlugins(pluginCore, router);
 }
+
+export { isAdminKey };
 
 // ── GitHub Proxy Routes ────────────────────────────────────────
 // Proxies GitHub API via server-side GITHUB_TOKEN so agents don't need their own tokens.
