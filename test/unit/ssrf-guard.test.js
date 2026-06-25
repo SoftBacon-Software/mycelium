@@ -119,3 +119,15 @@ test('assertPublicHost handles IPv6 addresses properly', async () => {
   await expect(assertPublicHost('http://[::1]/test', { allowLoopback: false }))
     .rejects.toThrow(SSRFBlockedError);
 });
+
+test('assertPublicHost fails CLOSED when DNS resolution fails', async () => {
+  // .invalid is reserved to never resolve — an unresolvable host must be rejected, not dispatched
+  await expect(assertPublicHost('http://nonexistent-host-xyz.invalid/test', { allowLoopback: false }))
+    .rejects.toThrow(SSRFBlockedError);
+});
+
+test('assertPublicHost blocks IPv4-mapped IPv6 private addresses', async () => {
+  // ::ffff:10.0.0.1 maps to a private v4 — must be blocked
+  await expect(assertPublicHost('http://[::ffff:10.0.0.1]/test', { allowLoopback: false }))
+    .rejects.toThrow(SSRFBlockedError);
+});
