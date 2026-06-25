@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import migrateTableNames from './migrate-table-names.js';
+import { assertPublicHost, SSRFBlockedError } from './lib/ssrf-guard.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -2236,7 +2237,7 @@ export function deleteWebhook(id) {
   db.prepare("DELETE FROM webhooks WHERE id = ?").run(id);
 }
 
-export function dispatchWebhook(event, agentId, data) {
+export async function dispatchWebhook(event, agentId, data) {
   // Query webhooks for the target agent AND __global__ (admin-claude receives all events)
   var webhooks = db.prepare(
     "SELECT * FROM webhooks WHERE active = 1 AND (agent_id = ? OR agent_id = '__global__')"
@@ -2246,6 +2247,34 @@ export function dispatchWebhook(event, agentId, data) {
     var events = [];
     try { events = JSON.parse(wh.events); } catch (e) { console.warn('[mycelium] JSON parse failed for webhook.events (webhook: ' + wh.id + '):', e.message); continue; }
     if (events.indexOf(event) === -1 && events.indexOf('*') === -1) continue;
+
+    // SSRF Guard: validate the webhook URL before making the request
+    try {
+      // Allow loopback if MYCELIUM_WEBHOOK_ALLOW_LOOPBACK is set to '1'
+      const allowLoopback = process.env.MYCELIUM_WEBHOOK_ALLOW_LOOPBACK === '1';
+      await assertPublicHost(wh.url, { allowLoopback });
+    } catch (ssrfError) {
+      if (ssrfError instanceof SSRFBlockedError) {
+        // Log the SSRF attempt and skip delivery
+        console.warn('[webhook] SSRF attempt blocked for webhook ' + wh.id + ':', ssrfError.message);
+        // Record the event for monitoring
+        try {
+          const payload = JSON.stringify({
+            event: event,
+            agent_id: agentId,
+            data: data,
+            timestamp: new Date().toISOString()
+          });
+          logWebhookDelivery(wh.id, event, agentId, payload, null, null, 'SSRF blocked: ' + ssrfError.message, 0);
+        } catch (logError) {
+          console.error('[webhook] Failed to log SSRF attempt:', logError.message);
+        }
+        continue; // Skip this webhook delivery
+      } else {
+        // Re-throw if it's not an SSRF error
+        throw ssrfError;
+      }
+    }
 
     var payload = JSON.stringify({
       event: event,
