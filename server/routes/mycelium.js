@@ -6144,7 +6144,7 @@ router.get('/github/prs/:owner/:repo', asyncHandler(function (req, res) {
 router.post('/github/prs/:owner/:repo/:number/merge', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   // Enforcement rules check
-  var who = resolveAgentId(req);
+  var who = getAdminDisplayName(req);
   var enforcement = checkEnforcementRules('merge_pr', { owner: req.params.owner, repo: req.params.repo, number: req.params.number }, who);
   if (!enforcement.allowed) {
     return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
