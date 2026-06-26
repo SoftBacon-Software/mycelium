@@ -9,7 +9,8 @@ export var TRUNCATION_MARKER = '\n...[truncated at ' + RESULT_CAP + ' chars]';
 var TRANSITIONS = {
   pending:    ['claimed', 'cancelled'],
   claimed:    ['running', 'failed', 'cancelled'],
-  running:    ['completed', 'failed', 'cancelling'],
+  running:    ['completed', 'failed', 'cancelling', 'awaiting_approval'],
+  awaiting_approval: ['running', 'failed', 'cancelled'],
   cancelling: ['cancelled', 'completed', 'failed'],
   completed:  [],
   failed:     [],
@@ -19,6 +20,7 @@ var TRANSITIONS = {
 export var EVENT_KINDS = [
   'created', 'claimed', 'risk_assessed', 'wave_started',
   'invocation_started', 'invocation_finished', 'invocation_failed',
+  'awaiting_approval', 'resumed',
   'completed', 'failed', 'cancelled'
 ];
 
@@ -86,6 +88,10 @@ function parseInvocation(row) {
 }
 
 export default function createWorkflowsDB(db) {
+  // Migration: the approval-gate link — an awaiting_approval workflow references
+  // the approval it's paused on. Idempotent (no-op once the column exists).
+  try { db.exec('ALTER TABLE workflows ADD COLUMN approval_id INTEGER'); } catch (e) { /* column exists */ }
+
   function addEvent(workflowId, kind, payload) {
     return db.prepare(
       'INSERT INTO workflow_events (workflow_id, kind, payload) VALUES (?, ?, ?) RETURNING id'
@@ -182,12 +188,19 @@ export default function createWorkflowsDB(db) {
       }
       if (fields.risk !== undefined) { sets.push('risk = ?'); values.push(fields.risk); }
       if (fields.error !== undefined) { sets.push('error = ?'); values.push(fields.error); }
+      // The approval-gate link: set when pausing on a gate, cleared (null) on resume.
+      if (fields.approval_id !== undefined) { sets.push('approval_id = ?'); values.push(fields.approval_id); }
       if (sets.length === 0) return { ok: true, workflow: wf };
       values.push(id);
       db.prepare('UPDATE workflows SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
-      if (newStatus && newStatus !== wf.status &&
-          ['completed', 'failed', 'cancelled'].indexOf(newStatus) !== -1) {
-        addEvent(id, newStatus, fields.error ? { error: fields.error } : {});
+      if (newStatus && newStatus !== wf.status) {
+        if (['completed', 'failed', 'cancelled'].indexOf(newStatus) !== -1) {
+          addEvent(id, newStatus, fields.error ? { error: fields.error } : {});
+        } else if (newStatus === 'awaiting_approval') {
+          addEvent(id, 'awaiting_approval', { approval_id: fields.approval_id });
+        } else if (newStatus === 'running' && wf.status === 'awaiting_approval') {
+          addEvent(id, 'resumed', {});
+        }
       }
       return { ok: true, workflow: api.getWorkflow(id) };
     },

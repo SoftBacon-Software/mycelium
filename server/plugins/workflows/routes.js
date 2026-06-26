@@ -90,12 +90,13 @@ export default function (core) {
     var wf = getWorkflowOr404(req, res);
     if (!wf) return;
     var r = db.updateWorkflowStatus(wf.id, req.body.status,
-      { risk: req.body.risk, error: req.body.error });
+      { risk: req.body.risk, error: req.body.error, approval_id: req.body.approval_id });
     if (!r.ok) return apiError(res, 400, r.error, { from: r.from });
-    if (req.body.status && ['completed', 'failed', 'cancelled'].indexOf(req.body.status) !== -1) {
+    if (req.body.status &&
+        ['completed', 'failed', 'cancelled', 'awaiting_approval'].indexOf(req.body.status) !== -1) {
       core.emitEvent('workflow_' + req.body.status, who, wf.project_id || '',
         'workflow #' + wf.id + ' (' + wf.name + ') ' + req.body.status,
-        { workflow_id: wf.id, error: req.body.error });
+        { workflow_id: wf.id, error: req.body.error, approval_id: req.body.approval_id });
     }
     res.json({ ok: true, workflow: r.workflow });
   });

@@ -169,6 +169,33 @@ test('status: transition guard', async function () {
   assert.equal(undead.status, 400);
 });
 
+// 4b. Approval gate: running -> awaiting_approval (linked to an approval) -> running.
+test('gate: running -> awaiting_approval (approval link) -> running, surfaced on the stream', async function () {
+  var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
+  await call('POST', '/workflows/' + wf.id + '/claim', {});
+  await call('PUT', '/workflows/' + wf.id, { status: 'running' });
+
+  // pause on a gate, linking the approval the workflow waits on
+  var pause = await call('PUT', '/workflows/' + wf.id, { status: 'awaiting_approval', approval_id: 42 });
+  assert.equal(pause.status, 200);
+  assert.equal(pause.body.workflow.status, 'awaiting_approval');
+  assert.equal(pause.body.workflow.approval_id, 42, 'approval link set on the workflow');
+  assert.ok(emitted.some(function (e) {
+    return e.type === 'workflow_awaiting_approval' && e.data && e.data.workflow_id === wf.id;
+  }), 'awaiting_approval surfaced on the stream so the app can prompt');
+
+  // a gate is not terminal: cannot jump straight to completed
+  var jump = await call('PUT', '/workflows/' + wf.id, { status: 'completed' });
+  assert.equal(jump.status, 400);
+
+  // resume on approve, then it can complete normally
+  var resume = await call('PUT', '/workflows/' + wf.id, { status: 'running' });
+  assert.equal(resume.status, 200);
+  assert.equal(resume.body.workflow.status, 'running');
+  var done = await call('PUT', '/workflows/' + wf.id, { status: 'completed' });
+  assert.equal(done.status, 200);
+});
+
 // 5. Result > 32000 chars stored capped with a LOUD truncation marker.
 test('invocation: result capped loudly, lifecycle stamps set', async function () {
   var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
