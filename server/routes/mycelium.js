@@ -5681,7 +5681,21 @@ router.get('/plugins/workers', asyncHandler(function (req, res) {
 // ---- Marketplace ----
 
 var registryCache = { data: null, fetched: 0 };
-var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/main/registry.json';
+// SECURITY: pin the plugin registry to a specific commit SHA, never a moving
+// branch (main/master/HEAD). A moving ref would let a compromised branch on
+// SoftBacon-Software/mycelium-plugins push arbitrary plugin manifests to every
+// install. BUMP PROCEDURE:
+//   1. git ls-remote https://github.com/SoftBacon-Software/mycelium-plugins.git refs/heads/main
+//   2. Review the compare diff before trusting the new commit:
+//      https://github.com/SoftBacon-Software/mycelium-plugins/compare/<OLD_SHA>...<NEW_SHA>
+//   3. Update REGISTRY_COMMIT below to the new 40-char SHA.
+var REGISTRY_COMMIT = '972a3b351c952d6b39a8e47f62a12cb8aa9c465b';
+var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/' + REGISTRY_COMMIT + '/registry.json';
+// Fail fast at module load if REGISTRY_URL is ever reverted to a moving ref.
+if (!/\/[0-9a-f]{40}\//.test(REGISTRY_URL)) {
+  throw new Error('REGISTRY_URL must be commit-pinned to a 40-char hex SHA; got: ' + REGISTRY_URL);
+}
+export { REGISTRY_COMMIT, REGISTRY_URL };
 var REGISTRY_TTL = 3600000; // 1 hour
 
 router.get('/plugins/registry', asyncHandler(function (req, res) {
