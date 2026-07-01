@@ -292,7 +292,11 @@ export default function createMemoryDB(db) {
       }
 
       scored.sort(function (a, b) { return b.score - a.score; });
-      var topIds = scored.slice(0, limit);
+      // Collapse chunked docs to their best chunk BEFORE slicing to the page
+      // limit — otherwise one multi-chunk doc floods the results. Mirrors
+      // searchKeyword (collapse then slice). scored rows carry source_type +
+      // source_id, so collapseChunks keys them directly.
+      var topIds = this.collapseChunks(scored).slice(0, limit);
 
       // Fetch full rows only for top results
       return topIds.map(function (s) {

@@ -721,3 +721,106 @@ test('db: updateEmbedding(null) keeps row as SQL NULL, not the string "null"', f
   ).get('test', 'null-embed-test').c;
   assert.strictEqual(unembedded, 1, 'row still backfill-visible (embedding IS NULL)');
 });
+
+// ---- 3 P1 correctness fixes: searchVector chunk-collapse, task_completed
+// content preservation, and the getChunkSize N+1 hoist ----
+
+// P1 fix 1: searchVector collapses chunked docs to their best chunk BEFORE
+// slicing to the page limit (mirrors searchKeyword). Pre-fix a single
+// multi-chunk doc could occupy every slot on the result page.
+test('db: searchVector collapses multi-chunk docs to one result per document', function () {
+  mem.setConfig('chunk_size', '600');
+  var big = makeBigText('vcollapse', 10);
+  var chunks = mem.indexDoc('test', 'vec-multi', big);
+  assert.ok(chunks.length > 1, 'doc split into multiple chunks');
+  // A distinct embedding vector makes this doc the unique top match; every
+  // other doc in the shared DB carries FAKE_VECTOR (lower cosine sim).
+  var V = [1, 0, 0];
+  for (var i = 0; i < chunks.length; i++) {
+    mem.updateEmbedding('test', 'vec-multi', i, V, 'test-model');
+  }
+  var results = mem.searchVector(V, { limit: 3 });
+  var hits = results.filter(function (r) { return r.source_id === 'vec-multi'; });
+  assert.equal(hits.length, 1, 'multi-chunk doc collapsed to a single vector result');
+  var ids = results.map(function (r) { return r.source_type + ':' + r.source_id; });
+  assert.equal(ids.length, new Set(ids).size, 'no duplicate docs across the vector page');
+});
+
+// P1 fix 2: task_completed re-indexes with COMPLETED: + summary but PRESERVES
+// the task's original title + description. indexAndEmbed upserts (replacing
+// the doc), so pre-fix a completed task became unfindable by its own title.
+test('handler: task_completed preserves original task title + description', function () {
+  fire('task_created', {
+    agent: 'tester',
+    data: { task_id: 501, title: 'Refactor the embedding pipeline', description: 'Split generate and batch paths for clarity', project_id: 'mycelium' }
+  });
+  var before = getDoc('task', '501');
+  assert.ok(before, 'task indexed on creation');
+  assert.match(before.content_text, /Refactor the embedding pipeline/);
+  assert.match(before.content_text, /Split generate and batch paths/);
+
+  fire('task_completed', { agent: 'lucy', summary: 'shipped the refactor', data: { task_id: 501 }, project_id: 'mycelium' });
+  var after = getDoc('task', '501');
+  assert.ok(after, 'task still indexed after completion');
+  assert.match(after.content_text, /^COMPLETED: shipped the refactor/, 'completion marker + summary prepended');
+  assert.match(after.content_text, /Refactor the embedding pipeline/, 'original title preserved');
+  assert.match(after.content_text, /Split generate and batch paths/, 'original description preserved');
+});
+
+// P1 fix 3: expandOversizedRows hoists getChunkSize() above the loop (one
+// call per request, not one per row). A Proxy over the isolated db counts
+// getConfig('chunk_size') SELECTs — the only such caller during backfill is
+// getChunkSize (embeddings.js calls neither). indexDoc also calls it once
+// per re-chunked doc, so the post-hoist total is 1 + N; pre-hoist it was N + N.
+test('routes: expandOversizedRows calls getChunkSize once per request, not per row', async function () {
+  var iso = new Database(':memory:');
+  iso.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  iso.exec(PLATFORM_TABLES);
+
+  var chunkSizeCalls = 0;
+  var countingDb = new Proxy(iso, {
+    get: function (target, prop) {
+      var val = target[prop];
+      if (prop === 'prepare') {
+        return function (sql) {
+          if (sql === 'SELECT value FROM sm_config WHERE key = ?') chunkSizeCalls++;
+          return target.prepare(sql);
+        };
+      }
+      return typeof val === 'function' ? val.bind(target) : val;
+    }
+  });
+
+  var isoMem = createMemoryDB(iso);
+  isoMem.setConfig('embedding_provider', 'ollama');
+  isoMem.setConfig('embedding_url', 'http://localhost:11434');
+  isoMem.setConfig('embedding_model', 'nomic-embed-text');
+  isoMem.setConfig('chunk_size', '600');
+
+  var N = 4;
+  var big = makeBigText('nplusone', 8);
+  for (var i = 0; i < N; i++) {
+    isoMem.index('m5max_memory', 'nq-' + i, big, { metadata: { t: i } });
+  }
+  assert.equal(isoMem.countUnembedded(), N, 'seeded N oversized NULL rows');
+
+  var isoCore = makeCore(countingDb);
+  var isoApp = express();
+  isoApp.use(express.json({ limit: '10mb' }));
+  isoApp.use('/memory', createRoutes(isoCore));
+  var isoServer = http.createServer(isoApp);
+  await new Promise(function (r) { isoServer.listen(0, '127.0.0.1', r); });
+  var isoBase = 'http://127.0.0.1:' + isoServer.address().port;
+
+  var res = await realFetch(isoBase + '/memory/backfill-embeddings?limit=50', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }
+  });
+  var rj = await res.json();
+  isoServer.close();
+  iso.close();
+
+  assert.equal(res.status, 200);
+  assert.equal(rj.failed, 0, 'all oversized docs chunked + embedded');
+  // Post-hoist: 1 (loop) + N (indexDoc re-chunks). Pre-hoist: N (loop) + N.
+  assert.equal(chunkSizeCalls, 1 + N, 'getChunkSize hoisted above the loop (1 + N), not called per row (2N)');
+});
