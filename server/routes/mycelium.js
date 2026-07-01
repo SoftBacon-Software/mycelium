@@ -607,6 +607,16 @@ function checkAgentOrAdmin(req, res) {
   return checkAgent(req, res);
 }
 
+// Auth guard for upload routes. checkAgentOrAdmin authenticates and writes the
+// 401/403 response itself on failure; here we simply halt the chain (return)
+// before next() — and therefore before upload.single() runs — so an
+// unauthenticated request is rejected before any bytes hit disk.
+function requireAuth(req, res, next) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return; // response already sent (401/403)
+  next();
+}
+
 
 // ---- SSE clients registry ----
 // Each entry: { res, filters: { project_id, type, agent } }
@@ -2584,7 +2594,7 @@ router.put('/assets/:id', asyncHandler(function (req, res) {
   res.json({ ok: true, id: asset.id });
 }));
 
-router.post('/assets/:id/upload', upload.single('file'), asyncHandler(function (req, res) {
+router.post('/assets/:id/upload', requireAuth, upload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   var asset = getAsset(parseIntParam(req.params.id));
@@ -2868,11 +2878,21 @@ router.post('/messages', agentWriteLimiter, asyncHandler(function (req, res) {
     return res.status(403).json({ error: enforcement.blocks[0].message, enforcement_rule: enforcement.blocks[0].rule_id });
   }
 
-  // Only admin and operators can send directives
+  // Only admin and operators can send directives — privilege is derived from
+  // AUTH (req._authIsAdmin flag + the caller's role), NEVER from the
+  // client-supplied req.body.from, which is trivially spoofable (e.g. a regular
+  // agent posting from: '__admin__' used to sail straight through).
   var msgType = req.body.msg_type || 'message';
   if (msgType === 'directive') {
-    var sender = req.body.from || agentId;
-    if (sender !== '__admin__' && sender.indexOf('-claude') !== -1) {
+    var directiveStudioUser = getStudioUser(req);
+    var callerIsOperator = false;
+    if (directiveStudioUser) {
+      callerIsOperator = directiveStudioUser.role === 'operator';
+    } else {
+      var callerAgent = getAgent(agentId);
+      callerIsOperator = !!(callerAgent && callerAgent.role === 'operator');
+    }
+    if (!req._authIsAdmin && !callerIsOperator) {
       return res.status(403).json({ error: 'Only admin or operators can send directives' });
     }
   }
@@ -4466,7 +4486,7 @@ setInterval(function () {
 // POST /files — upload a temp file (multipart form, field name: "file")
 // curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://mycelium.fyi/api/mycelium/files
 // Files auto-delete after 24 hours. Download with wget/curl before then.
-router.post('/files', upload.single('file'), asyncHandler(function (req, res) {
+router.post('/files', requireAuth, upload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
@@ -5387,7 +5407,7 @@ router.post('/drones/profiles/:profileId/setup-complete', asyncHandler(function 
 // Must be before /drones/:id to prevent :id from catching "artifacts"
 
 // Upload a drone artifact (persistent, no TTL) — admin or drone agents
-router.post('/drones/artifacts', artifactUpload.single('file'), asyncHandler(function (req, res) {
+router.post('/drones/artifacts', requireAuth, artifactUpload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });
