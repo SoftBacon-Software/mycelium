@@ -1615,7 +1615,48 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
   if (fields.status === 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
     try { incrementProfileCounter(agentId, 'total_tasks_completed'); } catch (e) { /* non-critical */ }
-    var unblocked = resolveTaskDependencies(task.id);
+
+    // Wrap the done-cascade DB side-effects in a transaction so a mid-cascade
+    // failure rolls back cleanly (dependencies, asset delivery, plan steps, and
+    // request resolution are all-or-nothing). Event emissions and dispatch run
+    // AFTER commit — a rollback must never notify of side-effects that didn't
+    // happen, nor dispatch work for a task whose cascade failed.
+    var cascadeResult = { unblocked: [], planResult: { steps_completed: 0, plans_completed: [] }, requestResolved: false };
+    try {
+      cascadeResult = getDB().transaction(function () {
+        var acc = { unblocked: [], planResult: { steps_completed: 0, plans_completed: [] }, requestResolved: false };
+
+        // 1. Resolve blocked tasks
+        acc.unblocked = resolveTaskDependencies(task.id);
+
+        // 2. Auto-deliver linked asset
+        if (task.linked_asset_id) {
+          updateAsset(task.linked_asset_id, { status: 'delivered' });
+        }
+
+        // 3. Auto-complete linked plan steps
+        acc.planResult = completeLinkedPlanSteps(task.id);
+
+        // 4. Auto-resolve linked request
+        if (task.request_id) {
+          try {
+            var linkedReq = getMessage(task.request_id);
+            if (linkedReq && linkedReq.status !== 'resolved') {
+              resolveMessage(task.request_id, agentId);
+              acc.requestResolved = true;
+            }
+          } catch (e) { /* non-critical */ }
+        }
+
+        return acc;
+      })();
+    } catch (e) {
+      console.error('[tasks] done-cascade transaction failed:', e.message);
+      return res.status(500).json({ error: 'Failed to complete task cascade: ' + e.message });
+    }
+
+    // Emit cascade events (outside the transaction — fire-and-forget notifications)
+    var unblocked = cascadeResult.unblocked;
     if (unblocked.length > 0) {
       result.unblocked = unblocked;
       for (var uid of unblocked) {
@@ -1624,11 +1665,10 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
     }
     // Auto-deliver linked asset
     if (task.linked_asset_id) {
-      updateAsset(task.linked_asset_id, { status: 'delivered' });
       emitEvent('asset_delivered', agentId, task.project_id, 'Asset #' + task.linked_asset_id + ' auto-delivered (task #' + task.id + ' done)', { asset_id: task.linked_asset_id, task_id: task.id });
     }
     // Auto-complete linked plan steps
-    var planResult = completeLinkedPlanSteps(task.id);
+    var planResult = cascadeResult.planResult;
     if (planResult.steps_completed > 0) {
       result.plan_steps_completed = planResult.steps_completed;
       emitEvent('plan_step_completed', agentId, task.project_id, planResult.steps_completed + ' plan step(s) auto-completed by task #' + task.id, { task_id: task.id, steps: planResult.steps_completed });
@@ -1640,16 +1680,10 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
       result.plans_completed = planResult.plans_completed;
     }
     // Auto-resolve linked request
-    if (task.request_id) {
-      try {
-        var linkedReq = getMessage(task.request_id);
-        if (linkedReq && linkedReq.status !== 'resolved') {
-          resolveMessage(task.request_id, agentId);
-          emitEvent('request_resolved', agentId, task.project_id, 'Request #' + task.request_id + ' auto-resolved (task #' + task.id + ' done)', { message_id: task.request_id, task_id: task.id });
-        }
-      } catch (e) { /* non-critical */ }
+    if (cascadeResult.requestResolved) {
+      emitEvent('request_resolved', agentId, task.project_id, 'Request #' + task.request_id + ' auto-resolved (task #' + task.id + ' done)', { message_id: task.request_id, task_id: task.id });
     }
-    // Auto-dispatch: push work to any idle agents
+    // Auto-dispatch: push work to any idle agents (AFTER commit — has non-DB SSE emissions)
     try {
       var dispatched = dispatchWorkToIdleAgents('task_completed:#' + task.id);
       if (dispatched.length > 0) result.auto_dispatched = dispatched;
@@ -2070,6 +2104,7 @@ router.post('/runs/:id/rerun', asyncHandler(function (req, res) {
   if (!who) return;
   var orig = getRun(req.params.id);
   if (!orig) return res.status(404).json({ error: 'Run not found' });
+  if (!checkProjectScope(req, res, orig.project_id)) return;
   var fresh = createRun({
     id: crypto.randomUUID(),
     agent_id: orig.agent_id,
@@ -5598,6 +5633,7 @@ router.put('/approvals/:id', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var approval = getApproval(parseIntParam(req.params.id));
   if (!approval) return res.status(404).json({ error: 'Approval not found' });
+  if (!checkProjectScope(req, res, approval.project_id || approval.project)) return;
   if (approval.status !== 'pending') return res.status(400).json({ error: 'Approval already ' + approval.status });
   var newStatus = req.body.status;
   if (newStatus !== 'approved' && newStatus !== 'denied') {
