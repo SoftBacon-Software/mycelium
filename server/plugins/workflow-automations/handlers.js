@@ -2,6 +2,7 @@
 // Subscribes to all platform events and evaluates automation rules.
 
 import createAutomationDB from './db.js';
+import { assertPublicHost, SSRFBlockedError } from '../../lib/ssrf-guard.js';
 
 function evaluateConditions(conditions, eventData) {
   var data = eventData.data || {};
@@ -83,28 +84,28 @@ function executeAction(action, eventData, core) {
       return { type: 'assign_agent', skipped: true };
     }
     case 'send_webhook': {
-      // SSRF protection: block internal/private URLs
+      // SSRF protection: guard with the canonical ssrf-guard (DNS-aware).
+      // executeAction is synchronous and runs from a sync event hook
+      // (callEventHooks does not await handlers), so guard+fetch run inside a
+      // self-contained async IIFE whose .catch swallows any rejection.
       var webhookUrl = action.url || '';
-      try {
-        var parsed = new URL(webhookUrl);
-        var host = parsed.hostname.toLowerCase();
-        var blocked = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
-          host === '::1' || host === '[::1]' || host === '169.254.169.254' ||
-          host.endsWith('.internal') || host.endsWith('.local') ||
-          host.startsWith('10.') || host.startsWith('192.168.') ||
-          /^172\.(1[6-9]|2\d|3[01])\./.test(host);
-        if (blocked || parsed.protocol === 'file:') {
-          console.warn('[workflow-automations] Blocked SSRF attempt to:', webhookUrl);
-          return { type: 'send_webhook', blocked: true, reason: 'Internal/private URL not allowed' };
+      (async function () {
+        try {
+          await assertPublicHost(webhookUrl);
+        } catch (ssrfErr) {
+          if (ssrfErr instanceof SSRFBlockedError) {
+            console.warn('[workflow-automations] Blocked SSRF attempt to:', webhookUrl, '—', ssrfErr.message);
+          } else {
+            console.error('[workflow-automations] Webhook URL validation failed:', ssrfErr.message);
+          }
+          return;
         }
-      } catch (e) {
-        return { type: 'send_webhook', blocked: true, reason: 'Invalid URL' };
-      }
-      fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event: eventData.type, agent: agent, data: data, summary: eventData.summary })
-      }).catch(function (e) { console.error('[workflow-automations] Webhook failed:', e.message); });
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: eventData.type, agent: agent, data: data, summary: eventData.summary })
+        }).catch(function (e) { console.error('[workflow-automations] Webhook failed:', e.message); });
+      })().catch(function (e) { console.error('[workflow-automations] Webhook guard failed:', e.message); });
       return { type: 'send_webhook', url: webhookUrl };
     }
     case 'inbox_notify': {
