@@ -218,10 +218,11 @@ export default function (core) {
   function expandOversizedRows(rows) {
     var work = [];
     var rechunked = {}; // source_type:source_id — re-chunk each doc once
+    var chunkSize = db.getChunkSize(); // hoisted — static per request, not per row (N+1)
     for (var row of rows) {
       var key = row.source_type + ':' + row.source_id;
       if (rechunked[key]) continue;
-      if (row.content_text.length > db.getChunkSize()) {
+      if (row.content_text.length > chunkSize) {
         rechunked[key] = true;
         var docRows = db.getDocChunks(row.source_type, row.source_id);
         var fullText = docRows.map(function (c) { return c.content_text; }).join('');

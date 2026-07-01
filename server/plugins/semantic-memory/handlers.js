@@ -180,7 +180,15 @@ export function registerHooks(core) {
     try {
       var data = parseEventData(eventData);
       var taskId = data.task_id || data.id || '';
-      var text = 'COMPLETED: ' + (eventData.summary || '');
+      // Preserve the task's previously-indexed title + description so it
+      // stays searchable after completion. indexAndEmbed upserts (replacing
+      // the doc), so dropping the prior content would make a completed task
+      // unfindable by its original title/description.
+      var existing = db.getDocChunks('task', String(taskId));
+      var priorContent = existing.length > 0
+        ? existing.map(function (c) { return c.content_text; }).join('')
+        : '';
+      var text = 'COMPLETED: ' + (eventData.summary || '') + '\n' + priorContent;
       if (text.length < 10) return;
 
       indexAndEmbed('task', String(taskId), text, {
