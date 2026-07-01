@@ -2962,10 +2962,20 @@ export function renderJobForDrone(templateId, droneId, inputData) {
     null_dev: nullDev,
     path_sep: pathSep,
   };
-  // Merge inputData vars
+  // Merge inputData vars. These are user-supplied and get interpolated into a
+  // command executed on the drone, so reject shell metacharacters (C-2): $ and
+  // backtick do command substitution even inside quotes; ; | & < > chain and
+  // redirect. Blocking them stops injection cross-OS without touching normal
+  // prompt text (letters, spaces, commas, apostrophes, parens all pass).
+  var SHELL_META = /[$`;|&<>\n\r\0]/;
   if (inputData && typeof inputData === 'object') {
     for (var k of Object.keys(inputData)) {
-      if (!k.startsWith('_')) vars[k] = inputData[k];
+      if (k.startsWith('_')) continue;
+      var v = inputData[k];
+      if (typeof v === 'string' && SHELL_META.test(v)) {
+        return { error: 'Input value for "' + k + '" contains disallowed shell characters ($ ` ; | & < > newline)' };
+      }
+      vars[k] = v;
     }
   }
   var command = template.command_template;
