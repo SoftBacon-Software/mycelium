@@ -1,0 +1,9 @@
+{
+  "name": "residency",
+  "version": "0.1.0",
+  "displayName": "Residency",
+  "description": "Model-residency state map: nodes, RAM budgets, resident model sets, and seat routes. P1 = state + GET map + co-reside/swap policy (no actuation).",
+  "enabled": true,
+  "routePrefix": "/residency",
+  "schema": "schema.sql"
+}

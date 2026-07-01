@@ -216,6 +216,43 @@ test('invocation: result capped loudly, lifecycle stamps set', async function ()
   assert.equal(badStatus.status, 400);
 });
 
+// 5b. Invocation update emits workflow_invocation_finished/failed on terminal
+// status, nothing on non-terminal (live cockpit animation).
+test('invocation: terminal status emits event for live cockpit animation', async function () {
+  var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
+  emitted = []; // clear from create
+
+  // non-terminal (running) -> no emit
+  await call('PUT', '/workflows/' + wf.id + '/invocations/w0', { status: 'running' });
+  assert.equal(emitted.length, 0, 'running does not emit');
+
+  // completed -> workflow_invocation_finished
+  var fin = await call('PUT', '/workflows/' + wf.id + '/invocations/w0',
+    { status: 'completed', result: 'done' });
+  assert.equal(fin.status, 200);
+  var finishedEvt = emitted.find(function (e) { return e.type === 'workflow_invocation_finished'; });
+  assert.ok(finishedEvt, 'completed emits workflow_invocation_finished');
+  assert.equal(finishedEvt.data.workflow_id, wf.id);
+  assert.equal(finishedEvt.data.inv_id, 'w0');
+  assert.equal(finishedEvt.data.status, 'completed');
+
+  // failed -> workflow_invocation_failed
+  var fail = await call('PUT', '/workflows/' + wf.id + '/invocations/w1',
+    { status: 'failed', result: 'boom' });
+  assert.equal(fail.status, 200);
+  var failedEvt = emitted.find(function (e) { return e.type === 'workflow_invocation_failed'; });
+  assert.ok(failedEvt, 'failed emits workflow_invocation_failed');
+  assert.equal(failedEvt.data.inv_id, 'w1');
+  assert.equal(failedEvt.data.status, 'failed');
+
+  // skipped -> workflow_invocation_finished (same bucket as completed)
+  var skip = await call('PUT', '/workflows/' + wf.id + '/invocations/verify',
+    { status: 'skipped' });
+  assert.equal(skip.status, 200);
+  var skippedEvt = emitted.find(function (e) { return e.type === 'workflow_invocation_finished' && e.data.status === 'skipped'; });
+  assert.ok(skippedEvt, 'skipped emits workflow_invocation_finished');
+});
+
 // 6. Cancel: running -> cancelling (cooperative); runner marks cancelled; events flow.
 test('cancel: cooperative stop + event log', async function () {
   var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
@@ -240,6 +277,7 @@ test('cancel: cooperative stop + event log', async function () {
   assert.ok(kinds.includes('created'));
   assert.ok(kinds.includes('claimed'));
   assert.ok(kinds.includes('wave_started'));
+  assert.ok(kinds.includes('cancelling'), 'running->cancelling transition logged as event');
   assert.ok(kinds.includes('cancelled'));
 
   // pending workflows cancel immediately
@@ -275,4 +313,53 @@ test('validateInvocations: unit', function () {
   assert.match(validateInvocations([]), /non-empty/);
   assert.match(validateInvocations([{ id: 'a' }]), /agent/);
   assert.match(validateInvocations([{ id: 'a', agent: 'x', deps: 'w0' }]), /array/);
+});
+
+// (a) getWorkflowFull: event payloads come back as parsed objects, not escaped
+// JSON strings (events are stored JSON.stringify(payload) in addEvent).
+test('getWorkflowFull: event payloads parsed as objects', async function () {
+  var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
+  var full = (await call('GET', '/workflows/' + wf.id)).body;
+  var createdEvt = full.events.find(function (e) { return e.kind === 'created'; });
+  assert.ok(createdEvt, 'created event exists');
+  assert.equal(typeof createdEvt.payload, 'object', 'payload is parsed object, not string');
+  assert.notEqual(createdEvt.payload, null, 'payload is not null');
+  assert.equal(createdEvt.payload.name, wf.name, 'payload.name accessible');
+  assert.equal(typeof createdEvt.payload.invocations, 'number', 'payload.invocations is number');
+});
+
+// (b) The approval_id migration is idempotent and does not blanket-swallow
+// errors: PRAGMA-check first, ALTER only if the column is missing.
+test('migration: approval_id column added safely, idempotent on re-open', async function () {
+  var db2 = new Database(':memory:');
+  db2.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  var dbApi = createWorkflowsDB(db2);
+  assert.ok(dbApi, 'createWorkflowsDB succeeds on fresh schema');
+  var cols = db2.prepare('PRAGMA table_info(workflows)').all();
+  assert.ok(cols.some(function (c) { return c.name === 'approval_id'; }), 'approval_id column present');
+  // Re-creating on the same DB must not throw (idempotent — no blanket ALTER).
+  var dbApi2 = createWorkflowsDB(db2);
+  assert.ok(dbApi2, 'createWorkflowsDB idempotent on existing column');
+});
+
+// (c) updateWorkflowStatus: terminal-state workflows reject ALL mutations,
+// including field-only updates (a PUT {risk:'red'} with no status used to
+// bypass the transition guard because newStatus was falsy).
+test('status: terminal workflow rejects field-only mutation', async function () {
+  var wf = (await call('POST', '/workflows', FANOUT)).body.workflow;
+  await call('POST', '/workflows/' + wf.id + '/claim', {});
+  await call('PUT', '/workflows/' + wf.id, { status: 'running' });
+  await call('PUT', '/workflows/' + wf.id, { status: 'completed' });
+
+  var mutate = await call('PUT', '/workflows/' + wf.id, { risk: 'red' });
+  assert.equal(mutate.status, 400);
+  assert.match(mutate.body.error, /terminal/);
+
+  var wf2 = (await call('POST', '/workflows', FANOUT)).body.workflow;
+  await call('POST', '/workflows/' + wf2.id + '/claim', {});
+  await call('PUT', '/workflows/' + wf2.id, { status: 'running' });
+  await call('PUT', '/workflows/' + wf2.id, { status: 'failed' });
+  var mutate2 = await call('PUT', '/workflows/' + wf2.id, { error: 'new error' });
+  assert.equal(mutate2.status, 400);
+  assert.match(mutate2.body.error, /terminal/);
 });

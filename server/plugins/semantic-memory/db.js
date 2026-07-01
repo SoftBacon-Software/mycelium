@@ -4,9 +4,12 @@ import { cosineSimilarity } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import * as sqliteVec from 'sqlite-vec';
 
-var _vecAvailable = null;
-
 export default function createMemoryDB(db) {
+  // Per-instance flag: whether THIS db loaded the sqlite-vec extension.
+  // Was module-level — a singleton whose first-call result leaked to every
+  // later instance, even against a db that couldn't load the extension.
+  var _vecAvailable = null;
+
   // Try to load sqlite-vec extension on first use
   if (_vecAvailable === null) {
     try {
@@ -128,7 +131,7 @@ export default function createMemoryDB(db) {
       var rows = [];
       var txn = db.transaction(function (items) {
         for (var item of items) {
-          if (item.chunk_index) {
+          if (item.chunk_index !== undefined && item.chunk_index !== null) {
             self.index(item.source_type, item.source_id, item.content_text, {
               namespace: item.namespace, chunk_index: item.chunk_index,
               metadata: item.metadata, embedding: item.embedding,
@@ -302,7 +305,10 @@ export default function createMemoryDB(db) {
     },
 
     updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model) {
-      var embeddingStr = JSON.stringify(embedding);
+      // A null embedding must NOT be stored as the string "null" — that
+      // escapes `embedding IS NULL` and orphans the row from backfill.
+      if (embedding == null) return;
+      var embeddingStr = embedding == null ? null : JSON.stringify(embedding);
       db.prepare(
         "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
       ).run(embeddingStr, model, sourceType, sourceId, chunkIndex || 0);
