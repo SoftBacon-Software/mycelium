@@ -5,10 +5,12 @@ resident on which nodes, each node's RAM budget, and which backend each seat
 prefers. It is the foundation for a residency-aware router that keeps the right
 models warm on the right backends.
 
-**Status — P1 (foundation).** State model + read API + co-reside/swap policy.
-There is **no actuator and no actuation** in P1: this plugin describes residency
-and *decides* what should happen, it does not yet load or evict models. That
-comes in P2.
+**Status — P1 + decision endpoint.** State model, read API, and the
+co-reside/swap policy — **and the policy is now served over HTTP** via
+`POST /api/mycelium/residency/decide`. There is still **no actuator and no
+actuation**: this plugin describes residency, *decides* what should happen, and
+exposes that decision; it does not yet load or evict models. That actuator
+remains future work.
 
 ---
 
@@ -23,9 +25,10 @@ Three tables hold the live picture:
 - **seat_routes** — which backend + kind a given seat (e.g. an agent role)
   prefers, plus an optional mode preference.
 
-A single read endpoint, `GET /api/mycelium/residency`, returns the whole map as
-JSON. A pure policy function, `decideResidency()`, answers "can this model
-co-reside, or must we swap?".
+A read endpoint, `GET /api/mycelium/residency`, returns the whole map as JSON.
+A decision endpoint, `POST /api/mycelium/residency/decide`, runs the pure policy
+function `decideResidency()` to answer "can this model co-reside, or must we
+swap?" and returns the decision.
 
 ## Schema
 
@@ -72,9 +75,32 @@ Returns the live map. No request parameters.
 }
 ```
 
-P1 exposes this single read endpoint. State is seeded through the `db.js`
-helpers (`upsertNode`, `upsertModel`, `upsertRoute`, …) — today by tests,
-tomorrow by an ingestion/actuator step.
+### `POST /api/mycelium/residency/decide`
+
+Runs the residency policy for a candidate model against a node's current
+resident set, given a RAM budget. Authenticated (agent or admin).
+
+```json
+// request
+{ "resident_set": ["default-api"], "candidate": "default-local", "ram_budget_gb": 64 }
+
+// 200 response
+{
+  "ok": true,
+  "decision": {
+    "action": "co-reside",
+    "reason": "resident set 0GB + default-local 8GB = 8GB ≤ budget 64GB; co-reside",
+    "total_gb": 8
+  }
+}
+```
+
+`action` is `co-reside` (the candidate fits within the budget alongside the
+resident set) or `swap` (the resident set must be evicted first, or the budget
+is invalid). Missing or invalid fields return `400`.
+
+State is seeded through the `db.js` helpers (`upsertNode`, `upsertModel`,
+`upsertRoute`, …) — today by tests, tomorrow by an ingestion/actuator step.
 
 ## Policy
 
@@ -109,38 +135,52 @@ from the future actuator, the endpoint, or any caller.
 | --------------- | --------------------------------------------------------------------- |
 | `schema.sql`    | table DDL (applied by the platform loader)                            |
 | `db.js`         | `createResidencyDB(db)` — better-sqlite3 CRUD + `getMap()` (JS core)  |
-| `src/policy.ts` | `decideResidency()` + `modelRssLookup` + `estimateRss()` (pure, TS)   |
-| `src/index.ts`  | `createResidencyPlugin(dbPath)` factory — self-contained, testable (TS) |
+| `src/policy.js` | `decideResidency()` + `modelRssLookup` + `estimateRss()` (pure, JS)   |
+| `src/index.js`  | `createResidencyPlugin(dbPath)` factory — self-contained, testable (JS) |
 | `routes.js`     | Express adapter mounted by the platform loader under `/residency`     |
 | `plugin.json`   | manifest (`routePrefix: /residency`)                                  |
 
-> **Why the split?** The typed, testable surface (`src/index.ts`, `src/policy.ts`)
-> is TypeScript. The DB core (`db.js`) and the platform adapter (`routes.js`)
-> stay JavaScript because the platform loader (`server/plugins.js`) imports
-> `routes.js` in plain Node, which cannot load `.ts` directly. `src/index.ts`
-> imports `db.js`, so both the typed factory and the platform share one DB core.
+> **Why the split?** `routes.js` is the platform's mounted adapter: the loader
+> (`server/plugins.js`) imports it in plain Node and calls the default export
+> with the shared `core` (the live mycelium DB connection + `core.auth`). It is
+> what actually serves `/api/mycelium/residency`. `src/index.js`
+> (`createResidencyPlugin`) is a self-contained, testable factory that opens its
+> own DB connection and exposes a `{ routes }` array of `{ method, path, handler }`
+> — the unit suite exercises it without spinning up Express. Both share one DB
+> core (`db.js`) and one policy core (`src/policy.js`).
 
 Two entry points share the same core:
 
-- **`createResidencyPlugin(dbPath)`** (in `src/index.ts`) opens its own DB
+- **`createResidencyPlugin(dbPath)`** (in `src/index.js`) opens its own DB
   connection and returns `{ name, version, schema, init, routes, cleanup }`.
-  This is what the test suite uses.
+  This is what the unit suite uses to test the handler surface directly.
 - **`routes.js`** is the platform's directory-plugin adapter: the loader passes
-  it the shared `core.db` and mounts it at `/api/mycelium/residency`.
+  it the shared `core.db` and mounts it at `/api/mycelium/residency`. It serves
+  both `GET /` (the map) and `POST /decide` (the policy decision).
+
+### Auth
+
+`routes.js` uses **imperative** auth, not Express middleware. Each handler calls
+`core.auth.checkAgentOrAdmin(req, res)` inline: on success it returns the
+authenticated principal; on failure it sends a `401`/`403` itself and returns a
+falsy value (the handler then bails). It never calls `next()`, so it **must not**
+be used as `router.get('/', authMiddleware, handler)` — doing so hangs every
+authenticated request (the handler never runs). This mirrors the auth pattern
+used throughout `server/routes/mycelium.js`.
 
 ## How to extend
 
-### Add a node actuator (P2)
+### Add a node actuator (future)
 
 1. Populate `actuator_kind` / `actuator_url` on the node (via `upsertNode`).
 2. Add an actuator module that, given a `swap` decision, performs the
    load/evict against that backend and updates `residency_models.state`.
-3. Wire new actuation endpoints in `routes.js` (POST/PATCH). P1 intentionally
-   exposes none.
+3. Wire new actuation endpoints in `routes.js` (POST/PATCH). The decision
+   endpoint (`POST /decide`) is served; load/evict actuation endpoints are not.
 
 ### Add / tune a policy
 
-- **Tune weights:** edit `modelRssLookup` in `src/policy.ts`, or pass explicit
+- **Tune weights:** edit `modelRssLookup` in `src/policy.js`, or pass explicit
   `rss_gb` on resident/model entries (telemetry overrides the lookup).
 - **New policy:** add a function alongside `decideResidency` (e.g. one that
   prefers evicting the least-recently-used resident instead of the whole set)
@@ -166,4 +206,6 @@ npm test -- residency
 ```
 
 The suite (`test/unit/residency.test.js`) covers schema CRUD, the GET map
-shape, and the co-reside/swap policy decisions.
+shape, the co-reside/swap policy decisions, **and the mounted routes via
+supertest** (unauth → 401, agent/admin auth → 200, `POST /decide` → 200/400) —
+the regression class for the auth-hang bug.

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import os from 'os';
 import fs from 'fs';
@@ -209,5 +209,107 @@ describe('residency policy — decideResidency', () => {
     expect(modelRssLookup).toMatchObject({
       ds4: 80, 'squad-glm': 27, 'oMLX-Lucy-30B': 30, 'default-local': 8, 'default-api': 0
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mounted routes (supertest) — the regression class for the auth-hang bug.
+//
+// routes.js is the Express adapter the platform loader mounts at
+// /api/mycelium/residency. It used core.auth.checkAgentOrAdmin as Express
+// MIDDLEWARE, but that helper is imperative (sends 401/403 itself, returns the
+// principal, never calls next()) — so every AUTHENTICATED request hung. These
+// tests exercise the real mounted adapter with the shared mycelium core
+// (auth + db) and prove: unauth → 401 (responds, no hang), auth → 200 + map,
+// POST /decide runs the policy engine. Harness mirrors auth-roles.test.js.
+// ---------------------------------------------------------------------------
+describe('residency mounted routes (supertest)', () => {
+  let app;
+  let request;
+  let tmpDir;
+  const ADMIN_KEY = 'test-admin-key-0123456789abcdef0123456789abcdef';
+  const AGENT_KEY = 'dvk_' + 'a'.repeat(48);
+
+  beforeAll(async () => {
+    const crypto = await import('node:crypto');
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'residency-mount-'));
+    process.env.DATA_DIR = tmpDir;
+    process.env.ADMIN_KEY = ADMIN_KEY;
+    process.env.JWT_SECRET = 'test-jwt-secret';
+
+    // Shared mycelium DB connection (initDB opens it from DATA_DIR).
+    const db = await import('../../server/db.js');
+    db.initDB();
+
+    // Seed an agent whose key authenticates via the X-Agent-Key header.
+    const hash = crypto.createHash('sha256').update(AGENT_KEY).digest('hex');
+    db.createAgent('residency-agent', 'Residency Agent', 'residency-proj', hash, '["code"]');
+
+    // Seed residency data on the SAME connection the mounted route reads.
+    const store = createResidencyDB(db.getDB());
+    store.upsertNode({ node_id: 'mac', ram_total_gb: 128, ram_budget_gb: 96 });
+    store.upsertRoute({ seat: 'seat-1', backend: 'mac', kind: 'local', mode_pref: 'ollama' });
+
+    // Import the mycelium router AFTER env is set, mount it, then initPlugins()
+    // so the platform loader mounts residency at /residency on that router.
+    const express = (await import('express')).default;
+    const mycelium = await import('../../server/routes/mycelium.js');
+    app = express();
+    app.use(express.json());
+    app.use('/api/mycelium', mycelium.default);
+    await mycelium.initPlugins();
+
+    request = (await import('supertest')).default;
+  });
+
+  afterAll(() => {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+    }
+  });
+
+  test('GET /residency without auth → 401 (responds, does not hang)', async () => {
+    const res = await request(app).get('/api/mycelium/residency');
+    expect(res.status).toBe(401);
+  });
+
+  test('GET /residency with agent key → 200 + residency map shape', async () => {
+    const res = await request(app)
+      .get('/api/mycelium/residency')
+      .set('X-Agent-Key', AGENT_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(Array.isArray(res.body.residency.nodes)).toBe(true);
+    expect(Array.isArray(res.body.residency.seat_routes)).toBe(true);
+    expect(res.body.residency.nodes.length).toBeGreaterThan(0);
+  });
+
+  test('GET /residency with admin key → 200', async () => {
+    const res = await request(app)
+      .get('/api/mycelium/residency')
+      .set('X-Admin-Key', ADMIN_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  test('POST /residency/decide with valid body → 200 + decision shape', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/residency/decide')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ resident_set: ['default-api'], candidate: 'default-local', ram_budget_gb: 64 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(['co-reside', 'swap']).toContain(res.body.decision.action);
+    expect(typeof res.body.decision.total_gb).toBe('number');
+    expect(typeof res.body.decision.reason).toBe('string');
+  });
+
+  test('POST /residency/decide with missing fields → 400', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/residency/decide')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ resident_set: ['default-api'] }); // missing candidate + ram_budget_gb
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeTruthy();
   });
 });
