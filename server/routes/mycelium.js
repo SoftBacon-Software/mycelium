@@ -428,8 +428,24 @@ var AGENT_KEY_CACHE_MAX = 1000;
 var AGENT_KEY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 var agentKeyCache = new Map();
 
+// Lazily-computed flag: are there ANY agents whose api_key_hash is a legacy
+// bcrypt ($2b$/$2a$) hash? null = not yet computed. When false, checkAgent skips
+// the O(N_agents) bcrypt fallback sweep entirely, so a forged X-Agent-Key header
+// cannot burn O(N x bcrypt_cost) CPU per request (DoS). Invalidated by
+// clearAgentKeyCache (called on key rotation / auto-migrate) so it re-checks.
+var HAS_LEGACY_BCRYPT_AGENTS = null;
+
+function hasLegacyBcryptAgents() {
+  if (HAS_LEGACY_BCRYPT_AGENTS === null) {
+    var row = getDB().prepare("SELECT COUNT(*) AS c FROM agents WHERE api_key_hash LIKE '$2b$%' OR api_key_hash LIKE '$2a$%'").get();
+    HAS_LEGACY_BCRYPT_AGENTS = !!(row && row.c > 0);
+  }
+  return HAS_LEGACY_BCRYPT_AGENTS;
+}
+
 function clearAgentKeyCache() {
   agentKeyCache.clear();
+  HAS_LEGACY_BCRYPT_AGENTS = null; // re-check legacy presence on next cache miss
 }
 
 function getFromAgentKeyCache(keyHash) {
@@ -517,18 +533,22 @@ function checkAgent(req, res) {
     req._authProjectId = directMatch.project_id || null;
     return directMatch.id;
   }
-  // Fallback: scan for legacy bcrypt hashes and auto-migrate
-  var agents = listAllAgentsIncludingDrones();
-  for (var a of agents) {
-    var full = getAgent(a.id);
-    if (!full || !full.api_key_hash) continue;
-    if ((full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) && bcrypt.compareSync(key, full.api_key_hash)) {
-      updateAgentKey(a.id, keyHash);
-      clearAgentKeyCache();
-      setInAgentKeyCache(keyHash, { id: a.id, project_id: full.project_id || null });
-      req._authAgentId = a.id;
-      req._authProjectId = full.project_id || null;
-      return a.id;
+  // Fallback: scan for legacy bcrypt hashes and auto-migrate.
+  // Guarded: skip the O(N) bcrypt sweep entirely when no legacy hashes exist, so
+  // a forged key can't trigger a full bcrypt comparison pass (DoS).
+  if (hasLegacyBcryptAgents()) {
+    var agents = listAllAgentsIncludingDrones();
+    for (var a of agents) {
+      var full = getAgent(a.id);
+      if (!full || !full.api_key_hash) continue;
+      if ((full.api_key_hash.startsWith('$2b$') || full.api_key_hash.startsWith('$2a$')) && bcrypt.compareSync(key, full.api_key_hash)) {
+        updateAgentKey(a.id, keyHash);
+        clearAgentKeyCache();
+        setInAgentKeyCache(keyHash, { id: a.id, project_id: full.project_id || null });
+        req._authAgentId = a.id;
+        req._authProjectId = full.project_id || null;
+        return a.id;
+      }
     }
   }
   // Track failed attempt for rate limiting
@@ -1541,7 +1561,7 @@ router.post('/tasks', agentWriteLimiter, asyncHandler(function (req, res) {
   if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
   if (!validateStringLength(res, req.body.description, MAX_DESCRIPTION, 'description')) return;
   var description = escapeHtml(req.body.description || '');
-  var projectId = escapeHtml(req.body.project_id || '');
+  var projectId = req.body.project_id || '';
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
   var id = createTask(title, description, projectId, agentId, priority, tags);
@@ -3087,7 +3107,7 @@ router.post('/plans', asyncHandler(function (req, res) {
   if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
   if (!validateStringLength(res, req.body.description, MAX_DESCRIPTION, 'description')) return;
   var description = escapeHtml(req.body.description || '');
-  var projectId = escapeHtml(req.body.project_id || '');
+  var projectId = req.body.project_id || '';
   var owner = escapeHtml(req.body.owner || '');
   var priority = req.body.priority || 'normal';
   var tags = req.body.tags ? JSON.stringify(req.body.tags) : '[]';
@@ -3138,7 +3158,7 @@ router.put('/plans/:id', asyncHandler(function (req, res) {
   if (req.body.owner !== undefined) fields.owner = escapeHtml(req.body.owner);
   if (req.body.priority !== undefined) fields.priority = req.body.priority;
   if (req.body.tags !== undefined) fields.tags = req.body.tags;
-  if (req.body.project_id !== undefined) fields.project_id = escapeHtml(req.body.project_id);
+  if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
   updatePlan(plan.id, fields);
   if (fields.status) {
     emitEvent('plan_' + fields.status, agentId, plan.project_id, agentId + ' set plan #' + plan.id + ' to ' + fields.status, { plan_id: plan.id });
@@ -6203,6 +6223,7 @@ export async function initPlugins() {
 }
 
 export { isAdminKey };
+export { hasLegacyBcryptAgents, clearAgentKeyCache };
 
 // ── GitHub Proxy Routes ────────────────────────────────────────
 // Proxies GitHub API via server-side GITHUB_TOKEN so agents don't need their own tokens.
