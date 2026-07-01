@@ -2,28 +2,8 @@
 
 import { cosineSimilarity } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
-import * as sqliteVec from 'sqlite-vec';
-
 export default function createMemoryDB(db) {
-  // Per-instance flag: whether THIS db loaded the sqlite-vec extension.
-  // Was module-level — a singleton whose first-call result leaked to every
-  // later instance, even against a db that couldn't load the extension.
-  var _vecAvailable = null;
-
-  // Try to load sqlite-vec extension on first use
-  if (_vecAvailable === null) {
-    try {
-      sqliteVec.load(db);
-      _vecAvailable = true;
-      console.log('[semantic-memory] sqlite-vec loaded — vector search enabled');
-    } catch (e) {
-      _vecAvailable = false;
-      console.log('[semantic-memory] sqlite-vec not available — FTS5-only mode');
-    }
-  }
-
   return {
-    vecAvailable() { return _vecAvailable; },
 
     // -- Config --
     // Two stores: sm_config (PUT /memory/config) is canonical; the platform's
@@ -384,7 +364,7 @@ export default function createMemoryDB(db) {
         embedding_coverage: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
         by_source_type: byType,
         by_namespace: byNamespace,
-        vec_available: _vecAvailable
+        vector_scan_capped: withEmbedding > 5000
       };
     }
   };

@@ -45,6 +45,7 @@ function makeCore(db) {
     auth: {
       checkAgentOrAdmin: function (req, res) {
         if (req.headers['x-test-deny']) { res.status(401).json({ error: 'Authentication required' }); return false; }
+        if (req.headers['x-test-admin']) req._authIsAdmin = true;
         return req.headers['x-acting-as'] || 'tester';
       },
       checkAdmin: function (req, res) {
@@ -411,6 +412,38 @@ test('auth: unauthenticated backfill and index get 401, nothing written', async 
   assert.equal(afterCount, beforeCount);
 });
 
+test('routes: drone-key embed callback succeeds for the owning drone and is scoped', async function () {
+  // drone_jobs isn't part of the plugin schema; create a minimal stand-in so
+  // the scoping linkage is "available" for this test. drone-A has claimed an
+  // embed job for note:scoped-note chunk 0.
+  db.exec("CREATE TABLE IF NOT EXISTS drone_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, input_data TEXT, requires TEXT, requester TEXT, priority INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', drone_id TEXT, job_type TEXT)");
+  db.prepare("INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text) VALUES ('note', 'scoped-note', 0, 'pre-embed')").run();
+  db.prepare("INSERT INTO drone_jobs (title, input_data, requires, requester, job_type, status, drone_id) VALUES (?, ?, ?, ?, 'embed', 'claimed', 'drone-A')").run(
+    'Embed: note:scoped-note',
+    JSON.stringify({ source_type: 'note', source_id: 'scoped-note', chunk_index: 0, text: 'pre-embed', model: 'nomic-embed-text', callback_path: '/api/mycelium/memory/embeddings/note/scoped-note' }),
+    JSON.stringify(['ollama']),
+    'semantic-memory'
+  );
+
+  // Owning drone: 200 and the vector lands.
+  var ok = await call('PUT', '/memory/embeddings/note/scoped-note', { embedding: [0.9, 0.8, 0.7], model: 'nomic-embed-text', chunk_index: 0 }, { 'x-acting-as': 'drone-A' });
+  assert.equal(ok.status, 200, 'owning drone may store its embedding');
+  var row = db.prepare("SELECT embedding FROM sm_embeddings WHERE source_type='note' AND source_id='scoped-note' AND chunk_index=0").get();
+  assert.ok(row && row.embedding, 'embedding was written for the owning drone');
+
+  // A different drone is scoped out (403) and must not overwrite the vector.
+  var denied = await call('PUT', '/memory/embeddings/note/scoped-note', { embedding: [0.1, 0.1, 0.1], model: 'nomic-embed-text', chunk_index: 0 }, { 'x-acting-as': 'drone-B' });
+  assert.equal(denied.status, 403, 'non-owning drone is scoped out');
+
+  // An admin bypasses the scoping (no claimed job required).
+  var admin = await call('PUT', '/memory/embeddings/note/scoped-note', { embedding: [0.5, 0.5, 0.5], model: 'admin-vec', chunk_index: 0 }, { 'x-acting-as': 'admin-1', 'x-test-admin': '1' });
+  assert.equal(admin.status, 200, 'admin bypasses drone scoping');
+
+  // cleanup so the shared db stays clean for the rest of the suite
+  db.prepare("DELETE FROM drone_jobs WHERE job_type='embed' AND drone_id='drone-A'");
+  db.prepare("DELETE FROM sm_embeddings WHERE source_type='note' AND source_id='scoped-note'");
+});
+
 // ---- chunked embedding (#228): docs past the model's window split into
 // chunk rows that embed independently ----
 
@@ -643,32 +676,30 @@ test('search: multi-chunk doc collapses to its best chunk', async function () {
   }
 });
 
-// ---- 3 bounded correctness fixes: per-instance _vecAvailable, chunk_index:0,
-// and null-embedding stringification ----
+// ---- stats() no longer reports the dead sqlite-vec flag; vector_scan_capped
+// flags when the embedded row count exceeds the JS-cosine scan cap (5000) ----
 
-// Fix (a): _vecAvailable is per-instance, not a module-level singleton.
-// Each createMemoryDB() independently determines whether ITS db can load
-// sqlite-vec — the first instance no longer poisons every later one.
-test('db: vecAvailable is per-instance, not a module-level singleton', function () {
-  var db1 = new Database(':memory:');
-  db1.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-  var mem1 = createMemoryDB(db1);
+test('db: stats() drops vec_available, reports vector_scan_capped past 5000 embedded', function () {
+  var tdb = new Database(':memory:');
+  tdb.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  var tmem = createMemoryDB(tdb);
 
-  var db2 = new Database(':memory:');
-  db2.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-  var mem2 = createMemoryDB(db2);
+  // The dead sqlite-vec flag no longer leaks into stats().
+  assert.strictEqual(tmem.stats().vec_available, undefined, 'vec_available removed from stats()');
 
-  // Both instances independently settle to a boolean (ran their own check,
-  // not a cached module-level value left at null).
-  assert.strictEqual(typeof mem1.vecAvailable(), 'boolean');
-  assert.strictEqual(typeof mem2.vecAvailable(), 'boolean');
+  // Below the cap: vector_scan_capped is false.
+  assert.strictEqual(tmem.stats().vector_scan_capped, false);
 
-  // stats() reads the SAME per-instance flag, not a shared module var.
-  assert.strictEqual(mem1.stats().vec_available, mem1.vecAvailable());
-  assert.strictEqual(mem2.stats().vec_available, mem2.vecAvailable());
+  // >5000 embedded rows flips vector_scan_capped true. stats() counts rows
+  // with a non-NULL embedding, so insert real vectors (no provider needed).
+  tdb.transaction(function () {
+    var ins = tdb.prepare("INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text, embedding, embedding_model) VALUES (?, ?, 0, ?, ?, 'test')");
+    for (var i = 0; i < 5001; i++) ins.run('note', 'n' + i, 'x', '[0.1,0.2,0.3]');
+  })();
+  assert.strictEqual(tmem.stats().vector_scan_capped, true);
+  assert.strictEqual(tmem.stats().with_embeddings, 5001);
 
-  db1.close();
-  db2.close();
+  tdb.close();
 });
 
 // Fix (b): bulkIndex honors an explicit chunk_index of 0. Pre-fix,
