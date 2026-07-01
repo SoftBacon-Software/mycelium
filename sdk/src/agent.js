@@ -366,12 +366,23 @@ export class MyceliumAgent {
     if (this._running) return
     this._running = true
 
-    // Start heartbeat
-    this._heartbeatTimer = setInterval(() => {
-      this.heartbeat().catch(err => {
+    // Start heartbeat — self-rescheduling so a slow beat never overlaps the
+    // next one. setInterval fires on a fixed cadence regardless of whether the
+    // previous async beat has settled, which stampedes the server when latency
+    // exceeds the interval. The next beat is scheduled only after this one
+    // settles (resolve or reject); clearTimeout in stop() cancels any pending.
+    const heartbeatLoop = async () => {
+      try {
+        await this.heartbeat()
+      } catch (err) {
         console.error('[mycelium] heartbeat error:', err.message)
-      })
-    }, this.heartbeatInterval)
+      } finally {
+        if (this._running) {
+          this._heartbeatTimer = setTimeout(heartbeatLoop, this.heartbeatInterval)
+        }
+      }
+    }
+    this._heartbeatTimer = setTimeout(heartbeatLoop, this.heartbeatInterval)
 
     // Start work polling
     if (this._workHandler || this._idleHandler) {
@@ -385,7 +396,7 @@ export class MyceliumAgent {
 
   async stop() {
     this._running = false
-    if (this._heartbeatTimer) clearInterval(this._heartbeatTimer)
+    if (this._heartbeatTimer) clearTimeout(this._heartbeatTimer)
     if (this._pollTimer) clearTimeout(this._pollTimer)
     if (this._pollResolve) {
       this._pollResolve()
@@ -425,6 +436,23 @@ export class MyceliumAgent {
               }
             } catch (err) {
               console.error('[mycelium] work handler error:', err.message)
+              // Report the failure to the server so the task is not orphaned in
+              // in_progress. Only task-typed items have a server-side status to
+              // transition (messages/requests/directives are not tasks); 'failed'
+              // is not a valid status, so we use 'cancelled' with a note carrying
+              // the error — returning the task to a re-claimable state.
+              var itemType = item.type || item.msg_type
+              var isTask = item.id && itemType !== 'message' && itemType !== 'request' && itemType !== 'directive'
+              if (isTask) {
+                try {
+                  await this.updateTask(item.id, {
+                    status: 'cancelled',
+                    notes: 'Handler error: ' + err.message
+                  })
+                } catch (reportErr) {
+                  console.error('[mycelium] failed to report task error:', reportErr.message)
+                }
+              }
             }
             this.workingOn = ''
           } else if (this._idleHandler) {
