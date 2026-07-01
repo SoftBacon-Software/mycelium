@@ -171,14 +171,44 @@ export default function (core) {
     res.json(db.stats());
   });
 
-  // PUT /memory/embeddings/:sourceType/:sourceId — drone callback to store embedding
+  // A drone returning a vector for an embed job authenticates with the same
+  // agent key it claims work with (checkAgentOrAdmin falls through to that
+  // check). Scope a non-admin (drone) write to an embed job THAT drone claimed,
+  // so one agent can't poison another's embeddings. Returns true (allow) when
+  // no drone has claimed the source (linkage N/A — a direct embed) or when
+  // drone_jobs is absent (graceful: older installs / minimal fixtures).
+  function droneOwnsEmbedJob(platformDb, droneId, sourceType, sourceId, chunkIndex) {
+    try {
+      var row = platformDb.prepare(
+        "SELECT drone_id FROM drone_jobs WHERE job_type = 'embed' AND status = 'claimed' " +
+        "AND json_extract(input_data, '$.source_type') = ? " +
+        "AND json_extract(input_data, '$.source_id') = ? " +
+        "AND CAST(json_extract(input_data, '$.chunk_index') AS INTEGER) = ? LIMIT 1"
+      ).get(sourceType, String(sourceId), chunkIndex);
+      if (!row) return true;            // no claim for this source → linkage N/A → allow
+      return row.drone_id === droneId;  // scoped: only the owning drone
+    } catch (e) {
+      return true;                       // drone_jobs unavailable → graceful allow
+    }
+  }
+
+  // PUT /memory/embeddings/:sourceType/:sourceId — drone callback to store embedding.
+  // Auth is checkAgentOrAdmin (admin/agent direct, plus the drone key auth a
+  // drone reuses to claim work). Non-admin writes are scoped to the drone's own
+  // claimed embed job when the drone_jobs linkage is available.
   router.put('/embeddings/:sourceType/:sourceId', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    var sourceType = req.params.sourceType;
+    var sourceId = decodeURIComponent(req.params.sourceId);
     var { embedding, model, chunk_index } = req.body;
     if (!embedding || !Array.isArray(embedding)) return apiError(res, 400, 'embedding array is required');
-    db.updateEmbedding(req.params.sourceType, decodeURIComponent(req.params.sourceId), chunk_index || 0, embedding, model || 'unknown');
-    res.json({ ok: true, source_type: req.params.sourceType, source_id: decodeURIComponent(req.params.sourceId) });
+    var chunkIndex = chunk_index || 0;
+    if (!req._authIsAdmin && !droneOwnsEmbedJob(core.db, who, sourceType, sourceId, chunkIndex)) {
+      return apiError(res, 403, 'not authorized to write this embedding');
+    }
+    db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
+    res.json({ ok: true, source_type: sourceType, source_id: sourceId });
   });
 
   // GET /memory/config — current provider config (admin only, key stripped)
