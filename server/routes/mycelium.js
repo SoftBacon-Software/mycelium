@@ -681,6 +681,13 @@ function emitEvent(type, agentId, projectId, summary, data) {
     created_at: new Date().toISOString()
   };
   // Broadcast to connected SSE clients (with per-client filtering)
+  // NOTE (audit 2026-07, M2): the inner JSON.stringify(eventObj.data) is the
+  // INTENTIONAL wire format, not a double-encode bug. Replayed events (the
+  // on-connect backlog in the /events SSE route) read `data` straight from the
+  // DB, where createEvent stores it as a JSON string — so live broadcasts
+  // re-stringify to match: every SSE consumer receives `data` as a JSON
+  // *string* on both paths. "Fixing" this forks the live vs replay format
+  // and breaks existing clients. See docs/audit-2026-07-core-hardening.md.
   if (sseClients.size > 0) {
     var payload = 'data: ' + JSON.stringify({ ...eventObj, data: JSON.stringify(eventObj.data) }) + '\n\n';
     sseClients.forEach(function (client) {
