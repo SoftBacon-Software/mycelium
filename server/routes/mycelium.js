@@ -2000,6 +2000,7 @@ router.put('/context/:projectId', asyncHandler(function (req, res) {
 router.post('/spend', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'spend_logged', { agent: agentId, project_id: req.body.project_id, cost_usd: req.body.cost_usd })) return;
   var costUsd = parseFloat(req.body.cost_usd) || 0;
   if (costUsd < 0) return res.status(400).json({ error: 'cost_usd must be non-negative' });
   logAgentSpend(
@@ -2043,6 +2044,7 @@ router.get('/spend', asyncHandler(function (req, res) {
 router.post('/runs', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!checkGuardrails(req, res, 'run_started', { agent: who, project_id: req.body.project_id })) return;
   // Bind the run to the AUTHENTICATED agent — a non-admin can't attribute a run to
   // another agent. Admin (e.g. the bridge recording on behalf of an agent) may set it.
   var ownerAgent = req._authIsAdmin ? (req.body.agent_id || who) : (req._authAgentId || who);
@@ -2593,6 +2595,7 @@ router.get('/assets', asyncHandler(function (req, res) {
 router.post('/assets', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'asset_registered', { agent: agentId, project_id: req.body.project_id, name: req.body.name })) return;
   var name = escapeHtml(req.body.name);
   if (!name) return res.status(400).json({ error: 'name is required' });
   var type = req.body.type || 'sprite';
@@ -2734,6 +2737,7 @@ router.get('/events', asyncHandler(function (req, res) {
 router.post('/events', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'event_emitted', { agent: agentId, project_id: req.body.project_id, type: req.body.type, summary: req.body.summary })) return;
   var type = req.body.type || 'custom';
   var projectId = req.body.project_id || null;
   var summary = escapeHtml(req.body.summary || '');
@@ -2835,6 +2839,7 @@ router.get('/requests/pending', asyncHandler(function (req, res) {
 router.post('/requests', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'request_created', { agent: agentId, project_id: req.body.project_id, to_agent: req.body.to_agent, content: (req.body.content || '').substring(0, 200) })) return;
   var content = req.body.content;
   if (!content) return res.status(400).json({ error: 'content is required' });
   var toAgent = req.body.to_agent || null;
@@ -3101,6 +3106,7 @@ router.get('/plans', asyncHandler(function (req, res) {
 router.post('/plans', asyncHandler(function (req, res) {
   var agentId = checkAgentOrAdmin(req, res);
   if (!agentId) return;
+  if (!checkGuardrails(req, res, 'plan_created', { agent: agentId, project_id: req.body.project_id, title: req.body.title })) return;
   var gate = checkApprovalGate(req, agentId, 'plan_create');
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
@@ -4588,6 +4594,7 @@ router.get('/files', asyncHandler(function (req, res) {
 router.post('/bugs', agentWriteLimiter, asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!checkGuardrails(req, res, 'bug_created', { agent: who, project_id: req.body.project_id, title: req.body.title })) return;
   var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
   var projectId = project_id;
   if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
@@ -6049,6 +6056,7 @@ router.get('/feedback', asyncHandler(async function (req, res) {
 router.post('/feedback', asyncHandler(async function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  if (!checkGuardrails(req, res, 'feedback_submitted', { agent: who, entity_type: req.body.entity_type, agent_id: req.body.agent_id, rating: req.body.rating })) return;
   var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
   if (!rating || rating < 1 || rating > 5) {
     return apiError(res, 400, 'rating must be 1-5');
