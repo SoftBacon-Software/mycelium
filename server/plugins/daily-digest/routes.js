@@ -3,6 +3,7 @@
 
 import { Router } from 'express';
 import createDigestDB from './db.js';
+import { assertPublicHost } from '../../lib/ssrf-guard.js';
 
 function gatherDigestData(db, coreDb, periodStart, periodEnd) {
   // Query tasks for completed tasks in period
@@ -168,6 +169,7 @@ export default function (core) {
       var slackWebhook = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
       if (slackWebhook && slackWebhook.value) {
         try {
+          await assertPublicHost(slackWebhook.value);
           await fetch(slackWebhook.value, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -239,6 +241,7 @@ export default function (core) {
       var slackWebhook = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'daily-digest' AND key = 'slack_webhook'").get();
       if (slackWebhook && slackWebhook.value) {
         try {
+          await assertPublicHost(slackWebhook.value);
           await fetch(slackWebhook.value, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

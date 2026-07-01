@@ -2,6 +2,7 @@
 // Ported from Python worker scripts
 
 import { google } from 'googleapis';
+import { assertPublicHost, SSRFBlockedError } from '../../../../lib/ssrf-guard.js';
 
 var COUNTRY_TIMEZONE_MAP = {
   US: 'America/New_York', GB: 'Europe/London', AU: 'Australia/Sydney',
@@ -70,8 +71,21 @@ export async function researchPress(contact) {
   var domain = extractDomain(contact.notes || '');
   if (!domain) return {};
 
+  // SSRF guard: domain is parsed from contact.notes (DB-controlled). Resolve DNS
+  // and block private/link-local/metadata addresses before fetching.
+  var targetUrl = 'https://' + domain;
   try {
-    var resp = await fetch('https://' + domain, { signal: AbortSignal.timeout(10000) });
+    await assertPublicHost(targetUrl);
+  } catch (ssrfErr) {
+    if (ssrfErr instanceof SSRFBlockedError) {
+      console.warn('[outreach-researcher] SSRF blocked for domain:', domain, '—', ssrfErr.message);
+      return { last_content: '(research blocked)', error: 'SSRF blocked' };
+    }
+    throw ssrfErr;
+  }
+
+  try {
+    var resp = await fetch(targetUrl, { signal: AbortSignal.timeout(10000) });
     if (!resp.ok) return {};
     var html = await resp.text();
 
