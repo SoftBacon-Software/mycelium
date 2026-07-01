@@ -5112,6 +5112,13 @@ router.post('/drones/jobs', agentWriteLimiter, asyncHandler(function (req, res) 
   var title = escapeHtml(req.body.title);
   if (!title) return res.status(400).json({ error: 'title is required' });
   var command = req.body.command || '';
+  // A raw command runs verbatim on the drone box (shell exec). Only admins may
+  // submit one; non-admin agents must go through job_type/templates, whose
+  // command is server-rendered from an admin-defined template. Without this
+  // gate, any agent key = arbitrary code execution on every drone (C-1).
+  if (command && !req._authIsAdmin) {
+    return apiError(res, 403, 'Raw drone commands are admin-only. Submit a template job (job_type / from-template) instead.');
+  }
   var inputData = req.body.input_data || {};
   var requires = req.body.requires || ['cpu'];
   var priority = parseInt(req.body.priority) || 0;
@@ -5496,8 +5503,18 @@ router.post('/drones/profiles/:profileId/setup-complete', asyncHandler(function 
 // ======== DRONE ARTIFACTS (persistent files — models, LoRAs, etc.) ========
 // Must be before /drones/:id to prevent :id from catching "artifacts"
 
-// Upload a drone artifact (persistent, no TTL) — admin or drone agents
-router.post('/drones/artifacts', requireAuth, artifactUpload.single('file'), asyncHandler(function (req, res) {
+// Upload a drone artifact (persistent, no TTL) — ADMIN ONLY.
+// Artifacts (e.g. generate_flux.py, model weights) are trusted files that drones
+// download and EXECUTE. The store overwrites by filename, so a non-admin upload of
+// name=generate_flux.py would poison the trusted script → mesh-wide RCE (C-3).
+// The admin gate MUST run before multer writes the file to disk, so it sits ahead
+// of artifactUpload in the chain rather than inside the handler.
+router.post('/drones/artifacts', requireAuth, function (req, res, next) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return; // 401 already sent
+  if (!req._authIsAdmin) return apiError(res, 403, 'Artifact upload is admin-only — artifacts are trusted code executed on drones.');
+  next();
+}, artifactUpload.single('file'), asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded. Use multipart form with field name "file"' });

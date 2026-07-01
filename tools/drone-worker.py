@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import platform
+import shlex
 import shutil
 import signal
 import subprocess
@@ -617,9 +618,14 @@ def execute_job(api, job, system_info, work_dir=None):
     env["MYCELIUM_SERVER"] = api.base.replace("/api/mycelium", "")
 
     print(f"  Executing: {command[:150]}")
+    # Run the command as an argv list with shell=False so job data interpolated
+    # into the command string cannot be interpreted by a shell (C-2 defense in
+    # depth, complementing the server-side metachar reject). shlex.split honors
+    # quoting; posix=False keeps Windows backslash paths intact.
+    argv = shlex.split(command, posix=(os.name != "nt"))
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
+            argv, shell=False, capture_output=True, text=True,
             timeout=3600, cwd=exec_dir, env=env,
         )
         stdout = result.stdout[:MAX_OUTPUT_SIZE] if result.stdout else ""
