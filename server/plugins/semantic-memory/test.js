@@ -199,6 +199,36 @@ test('config: plugin_config fallback merges under sm_config', function () {
   assert.equal(mem.getConfig('embedding_model'), 'nomic-embed-text');
 });
 
+// Redaction guard: PUT /memory/config must not echo the embedding API key
+// back in its response body — mirrors the GET handler's redaction.
+test('routes: PUT /memory/config response does NOT leak embedding_api_key', async function () {
+  // Set a fake API key in config
+  mem.setConfig('embedding_api_key', 'sk-fake-test-key-12345');
+  assert.strictEqual(mem.getConfig('embedding_api_key'), 'sk-fake-test-key-12345', 'key is stored');
+
+  // PUT config — update another field. NOTE: we restore embedding_provider
+  // below; leaving it as 'openai' would re-route downstream embedding tests
+  // off the hermetic Ollama fetch-patch and break them (shared in-memory DB).
+  var prevProvider = mem.getConfig('embedding_provider');
+  var r = await call('PUT', '/memory/config', { embedding_provider: 'openai' });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.config, 'response contains config object');
+
+  // The critical assertion: API key must NOT be in the response
+  assert.strictEqual(r.body.config.embedding_api_key, undefined, 'embedding_api_key redacted from PUT response');
+
+  // Verify the key is still persisted (we only redact the response, not the stored value)
+  assert.strictEqual(mem.getConfig('embedding_api_key'), 'sk-fake-test-key-12345', 'key still persisted');
+
+  // Also verify GET still redacts (regression guard)
+  var g = await call('GET', '/memory/config');
+  assert.strictEqual(g.body.embedding_api_key, undefined, 'embedding_api_key redacted from GET response');
+
+  // Teardown: restore the provider so we don't pollute the shared DB for
+  // later embedding tests.
+  mem.setConfig('embedding_provider', prevProvider);
+});
+
 // #191: concept_created carries no data payload — the handler resolves the
 // concept from the summary + concepts table, indexes it, and embeds it.
 test('handler: concept_created indexes + embeds the concept', async function () {

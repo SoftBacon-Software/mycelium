@@ -200,7 +200,12 @@ export default function (core) {
         db.setConfig(key, String(req.body[key]));
       }
     }
-    res.json({ ok: true, config: db.getAllConfig() });
+    // Mirror GET /config: strip the API key from the response. getAllConfig()
+    // builds a fresh object each call (stored state lives in sm_config), so
+    // delete here never touches what's persisted.
+    var config = db.getAllConfig();
+    delete config.embedding_api_key;
+    res.json({ ok: true, config: config });
   });
 
   // Oversized NULL-embedding rows can never embed whole — the provider
