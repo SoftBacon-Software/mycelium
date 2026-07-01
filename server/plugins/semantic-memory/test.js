@@ -612,3 +612,82 @@ test('search: multi-chunk doc collapses to its best chunk', async function () {
     assert.equal(bigHits[0].embedding, undefined, mode + ': raw vectors stripped');
   }
 });
+
+// ---- 3 bounded correctness fixes: per-instance _vecAvailable, chunk_index:0,
+// and null-embedding stringification ----
+
+// Fix (a): _vecAvailable is per-instance, not a module-level singleton.
+// Each createMemoryDB() independently determines whether ITS db can load
+// sqlite-vec — the first instance no longer poisons every later one.
+test('db: vecAvailable is per-instance, not a module-level singleton', function () {
+  var db1 = new Database(':memory:');
+  db1.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  var mem1 = createMemoryDB(db1);
+
+  var db2 = new Database(':memory:');
+  db2.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  var mem2 = createMemoryDB(db2);
+
+  // Both instances independently settle to a boolean (ran their own check,
+  // not a cached module-level value left at null).
+  assert.strictEqual(typeof mem1.vecAvailable(), 'boolean');
+  assert.strictEqual(typeof mem2.vecAvailable(), 'boolean');
+
+  // stats() reads the SAME per-instance flag, not a shared module var.
+  assert.strictEqual(mem1.stats().vec_available, mem1.vecAvailable());
+  assert.strictEqual(mem2.stats().vec_available, mem2.vecAvailable());
+
+  db1.close();
+  db2.close();
+});
+
+// Fix (b): bulkIndex honors an explicit chunk_index of 0. Pre-fix,
+// `if (item.chunk_index)` treated 0 as falsy and fell through to indexDoc,
+// which re-chunked oversized content and discarded the caller's assignment.
+// NOTE: this only manifests with OVERSIZED content — small content produces
+// a single chunk either way, so the test must use oversized text to catch it.
+test('db: bulkIndex respects explicit chunk_index 0 — oversized content stays one row', function () {
+  mem.setConfig('chunk_size', '600');
+  var big = makeBigText('chunkzero', 8); // oversized — would auto-chunk without the fix
+  assert.ok(big.length > 600, 'content is oversized');
+
+  var rows = mem.bulkIndex([
+    { source_type: 'test', source_id: 'chunk-zero', content_text: big, chunk_index: 0 }
+  ]);
+  // Explicit chunk_index: 0 => stored as a SINGLE row, NOT auto-chunked.
+  assert.strictEqual(rows.length, 1, 'one row — caller chunk_index honored');
+  assert.strictEqual(rows[0].chunk_index, 0);
+  assert.strictEqual(rows[0].content_text, big, 'full content, not a fragment');
+
+  assert.strictEqual(getChunkRows('test', 'chunk-zero').length, 1, 'exactly one DB row');
+  var doc = mem.getDoc('test', 'chunk-zero', 0);
+  assert.ok(doc);
+  assert.strictEqual(doc.content_text, big);
+});
+
+// Fix (c): updateEmbedding(null) must keep the column as SQL NULL, not the
+// string "null". The string would escape `embedding IS NULL` and permanently
+// hide the row from backfill — silent data loss. Scoped to this one row so
+// it is immune to other tests' in-flight async embeds.
+test('db: updateEmbedding(null) keeps row as SQL NULL, not the string "null"', function () {
+  mem.index('test', 'null-embed-test', 'content for null embedding test', {});
+  var row0 = db.prepare(
+    'SELECT embedding FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
+  ).get('test', 'null-embed-test', 0);
+  assert.strictEqual(row0.embedding, null, 'freshly indexed row has NULL embedding');
+
+  mem.updateEmbedding('test', 'null-embed-test', 0, null, 'some-model');
+
+  // The null must NOT have been stringified to "null" — column stays SQL NULL.
+  var row = db.prepare(
+    'SELECT embedding FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
+  ).get('test', 'null-embed-test', 0);
+  assert.strictEqual(row.embedding, null, 'embedding column is SQL NULL');
+  assert.notStrictEqual(row.embedding, 'null', 'not the string "null"');
+
+  // Still matches `embedding IS NULL` => remains backfill-visible.
+  var unembedded = db.prepare(
+    'SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND embedding IS NULL'
+  ).get('test', 'null-embed-test').c;
+  assert.strictEqual(unembedded, 1, 'row still backfill-visible (embedding IS NULL)');
+});

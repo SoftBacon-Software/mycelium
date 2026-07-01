@@ -36,6 +36,7 @@ export class MyceliumAgent {
     this.bootData = null
     this._heartbeatTimer = null
     this._pollTimer = null
+    this._pollResolve = null
     this._running = false
     this._workHandler = null
     this._messageHandler = null
@@ -386,6 +387,10 @@ export class MyceliumAgent {
     this._running = false
     if (this._heartbeatTimer) clearInterval(this._heartbeatTimer)
     if (this._pollTimer) clearTimeout(this._pollTimer)
+    if (this._pollResolve) {
+      this._pollResolve()
+      this._pollResolve = null
+    }
 
     // Final heartbeat — go offline
     try {
@@ -436,8 +441,10 @@ export class MyceliumAgent {
 
       // Wait before next poll
       await new Promise(resolve => {
+        this._pollResolve = resolve
         this._pollTimer = setTimeout(resolve, this.pollInterval)
       })
+      this._pollResolve = null
     }
   }
 

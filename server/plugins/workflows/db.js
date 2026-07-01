@@ -9,7 +9,8 @@ export var TRUNCATION_MARKER = '\n...[truncated at ' + RESULT_CAP + ' chars]';
 var TRANSITIONS = {
   pending:    ['claimed', 'cancelled'],
   claimed:    ['running', 'failed', 'cancelled'],
-  running:    ['completed', 'failed', 'cancelling'],
+  running:    ['completed', 'failed', 'cancelling', 'awaiting_approval'],
+  awaiting_approval: ['running', 'failed', 'cancelled'],
   cancelling: ['cancelled', 'completed', 'failed'],
   completed:  [],
   failed:     [],
@@ -19,6 +20,7 @@ var TRANSITIONS = {
 export var EVENT_KINDS = [
   'created', 'claimed', 'risk_assessed', 'wave_started',
   'invocation_started', 'invocation_finished', 'invocation_failed',
+  'awaiting_approval', 'resumed', 'cancelling',
   'completed', 'failed', 'cancelled'
 ];
 
@@ -85,7 +87,24 @@ function parseInvocation(row) {
   return row;
 }
 
+// Events are stored JSON.stringify(payload) in addEvent; parse it back so the
+// app gets an object, not an escaped JSON string (mirrors parseInvocation).
+function parseEvent(row) {
+  if (!row) return null;
+  try { row.payload = JSON.parse(row.payload); } catch (e) { /* keep raw */ }
+  return row;
+}
+
 export default function createWorkflowsDB(db) {
+  // Migration: the approval-gate link — an awaiting_approval workflow references
+  // the approval it's paused on. Idempotent: check the column exists first so a
+  // real error (disk I/O, db-locked) is NOT swallowed by a blanket try/catch.
+  var hasApprovalId = db.prepare('PRAGMA table_info(workflows)').all()
+    .some(function (col) { return col.name === 'approval_id'; });
+  if (!hasApprovalId) {
+    db.exec('ALTER TABLE workflows ADD COLUMN approval_id INTEGER');
+  }
+
   function addEvent(workflowId, kind, payload) {
     return db.prepare(
       'INSERT INTO workflow_events (workflow_id, kind, payload) VALUES (?, ?, ?) RETURNING id'
@@ -127,7 +146,7 @@ export default function createWorkflowsDB(db) {
       ).all(id).map(parseInvocation);
       wf.events = db.prepare(
         'SELECT * FROM workflow_events WHERE workflow_id = ? ORDER BY id DESC LIMIT 50'
-      ).all(id).reverse();
+      ).all(id).map(parseEvent).reverse();
       return wf;
     },
 
@@ -165,6 +184,12 @@ export default function createWorkflowsDB(db) {
       fields = fields || {};
       var wf = api.getWorkflow(id);
       if (!wf) return { ok: false, error: 'not found' };
+      // Terminal states cannot be modified at all — not even field-only updates
+      // (a PUT {risk:'red'} with no status used to bypass the transition guard
+      // because newStatus was falsy). Block everything once it's finished.
+      if (['completed', 'failed', 'cancelled'].indexOf(wf.status) !== -1) {
+        return { ok: false, error: 'cannot modify terminal state: ' + wf.status };
+      }
       var allowed = TRANSITIONS[wf.status] || [];
       if (newStatus && newStatus !== wf.status && allowed.indexOf(newStatus) === -1) {
         return { ok: false, from: wf.status,
@@ -182,12 +207,19 @@ export default function createWorkflowsDB(db) {
       }
       if (fields.risk !== undefined) { sets.push('risk = ?'); values.push(fields.risk); }
       if (fields.error !== undefined) { sets.push('error = ?'); values.push(fields.error); }
+      // The approval-gate link: set when pausing on a gate, cleared (null) on resume.
+      if (fields.approval_id !== undefined) { sets.push('approval_id = ?'); values.push(fields.approval_id); }
       if (sets.length === 0) return { ok: true, workflow: wf };
       values.push(id);
       db.prepare('UPDATE workflows SET ' + sets.join(', ') + ' WHERE id = ?').run(...values);
-      if (newStatus && newStatus !== wf.status &&
-          ['completed', 'failed', 'cancelled'].indexOf(newStatus) !== -1) {
-        addEvent(id, newStatus, fields.error ? { error: fields.error } : {});
+      if (newStatus && newStatus !== wf.status) {
+        if (['completed', 'failed', 'cancelled'].indexOf(newStatus) !== -1) {
+          addEvent(id, newStatus, fields.error ? { error: fields.error } : {});
+        } else if (newStatus === 'awaiting_approval') {
+          addEvent(id, 'awaiting_approval', { approval_id: fields.approval_id });
+        } else if (newStatus === 'running' && wf.status === 'awaiting_approval') {
+          addEvent(id, 'resumed', {});
+        }
       }
       return { ok: true, workflow: api.getWorkflow(id) };
     },
@@ -205,6 +237,7 @@ export default function createWorkflowsDB(db) {
       }
       if (wf.status === 'running') {
         db.prepare("UPDATE workflows SET status = 'cancelling' WHERE id = ?").run(id);
+        addEvent(id, 'cancelling', { was: wf.status });
         return { ok: true, status: 'cancelling' };
       }
       if (wf.status === 'cancelling') return { ok: true, status: 'cancelling' };

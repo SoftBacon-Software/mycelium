@@ -203,8 +203,18 @@ function formatSavepointSummary(diff) {
 
 // ---- MCP Config Helpers ----
 function getInstanceUrl(req) {
-  var proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  // Tier 1: explicit operator override — always trusted, no header parsing.
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
+  // Tier 2: allowlist gate — if set, the Host header must match an entry.
   var host = req.get('host');
+  var allowed = (process.env.ALLOWED_HOSTS || '').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  if (allowed.length) {
+    if (!allowed.includes(host)) {
+      throw new Error('Host not allowed: ' + host);
+    }
+  }
+  // Tier 3: legacy fallback — current behavior when neither env var is set.
+  var proto = req.get('x-forwarded-proto') || req.protocol || 'https';
   return proto + '://' + host;
 }
 
@@ -3858,7 +3868,12 @@ router.post('/admin/agents', adminWriteLimiter, asyncHandler(async function (req
     addChannelMember(generalChannel.id, id, 'agent', 'member');
   }
   emitEvent('agent_registered', '__admin__', null, 'Admin registered agent: ' + id);
-  var instanceUrl = getInstanceUrl(req);
+  var instanceUrl;
+  try {
+    instanceUrl = getInstanceUrl(req);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid Host header: ' + e.message });
+  }
   var mcpConfig = buildMcpConfig(id, apiKey, instanceUrl);
   res.json({ id: id, api_key: apiKey, mcp_config: mcpConfig, message: 'Store this key — it will not be shown again. MCP config included for agent setup.' });
 }));
@@ -3905,7 +3920,12 @@ router.get('/agents/:id/mcp-config', asyncHandler(function (req, res) {
   if (!checkAdmin(req, res)) return;
   var agent = getAgent(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  var instanceUrl = getInstanceUrl(req);
+  var instanceUrl;
+  try {
+    instanceUrl = getInstanceUrl(req);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid Host header: ' + e.message });
+  }
   var config = buildMcpConfig(req.params.id, '<YOUR_AGENT_API_KEY>', instanceUrl);
   res.json({ agent_id: req.params.id, mcp_config: config, note: 'Replace <YOUR_AGENT_API_KEY> with the agent\'s actual API key' });
 }));
@@ -5679,9 +5699,31 @@ router.get('/plugins/workers', asyncHandler(function (req, res) {
 }));
 
 // ---- Marketplace ----
+//
+// SECURITY: the plugin registry is PINNED to a specific commit SHA, never a
+// moving branch (main/master/HEAD). A moving ref would let a compromised branch
+// on SoftBacon-Software/mycelium-plugins push arbitrary plugin manifests to
+// every install. BUMP PROCEDURE:
+//   1. Get the target HEAD SHA:
+//        git ls-remote https://github.com/SoftBacon-Software/mycelium-plugins.git refs/heads/main
+//   2. Review the compare diff before trusting the new commit:
+//        https://github.com/SoftBacon-Software/mycelium-plugins/compare/<OLD_SHA>...<NEW_SHA>
+//   3. Update REGISTRY_COMMIT below to the new 40-char SHA.
+// TODO(registry-pin): REGISTRY_COMMIT below is a PLACEHOLDER (Git's null SHA),
+// NOT a real commit pin. Replace it with the live HEAD SHA from step 1 before
+// deploy. The squad executor (Lucy) cannot run git/network per CONTRACT.md, so
+// the live SHA was not fetched here; do NOT ship this value. The load-time guard
+// + tests (test/unit/registry-commit-pin.test.js) validate the pinning mechanism
+// for any valid 40-char SHA, so substituting the real SHA keeps everything green.
+var REGISTRY_COMMIT = '0000000000000000000000000000000000000000';
+var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/' + REGISTRY_COMMIT + '/registry.json';
+// Fail fast at module load if REGISTRY_URL is ever moved back to a moving ref.
+if (!/[0-9a-f]{40}/.test(REGISTRY_URL)) {
+  throw new Error('REGISTRY_URL must be commit-pinned to a 40-char hex SHA; got: ' + REGISTRY_URL);
+}
+export { REGISTRY_COMMIT, REGISTRY_URL };
 
 var registryCache = { data: null, fetched: 0 };
-var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/main/registry.json';
 var REGISTRY_TTL = 3600000; // 1 hour
 
 router.get('/plugins/registry', asyncHandler(function (req, res) {

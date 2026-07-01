@@ -8,14 +8,15 @@ CREATE TABLE IF NOT EXISTS workflows (
   shape        TEXT NOT NULL DEFAULT 'custom',     -- display label only (fanout|pipeline|repair|custom)
   spec         TEXT NOT NULL,                      -- JSON {invocations:[{id,agent,model,brief,deps}], params?:{}}
   project_id   TEXT,
-  status       TEXT NOT NULL DEFAULT 'pending',    -- pending|claimed|running|cancelling|completed|failed|cancelled
+  status       TEXT NOT NULL DEFAULT 'pending',    -- pending|claimed|running|awaiting_approval|cancelling|completed|failed|cancelled
   risk         TEXT,                               -- green|yellow|red (runner-computed at claim)
   requested_by TEXT NOT NULL DEFAULT '',
   claimed_by   TEXT,
   error        TEXT,
   created_at   TEXT DEFAULT (datetime('now')),
   started_at   TEXT,
-  finished_at  TEXT
+  finished_at  TEXT,
+  approval_id  INTEGER                              -- the approval this workflow is paused on (awaiting_approval)
 );
 
 CREATE TABLE IF NOT EXISTS workflow_invocations (

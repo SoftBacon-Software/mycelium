@@ -90,12 +90,13 @@ export default function (core) {
     var wf = getWorkflowOr404(req, res);
     if (!wf) return;
     var r = db.updateWorkflowStatus(wf.id, req.body.status,
-      { risk: req.body.risk, error: req.body.error });
+      { risk: req.body.risk, error: req.body.error, approval_id: req.body.approval_id });
     if (!r.ok) return apiError(res, 400, r.error, { from: r.from });
-    if (req.body.status && ['completed', 'failed', 'cancelled'].indexOf(req.body.status) !== -1) {
+    if (req.body.status &&
+        ['completed', 'failed', 'cancelled', 'awaiting_approval'].indexOf(req.body.status) !== -1) {
       core.emitEvent('workflow_' + req.body.status, who, wf.project_id || '',
         'workflow #' + wf.id + ' (' + wf.name + ') ' + req.body.status,
-        { workflow_id: wf.id, error: req.body.error });
+        { workflow_id: wf.id, error: req.body.error, approval_id: req.body.approval_id });
     }
     res.json({ ok: true, workflow: r.workflow });
   });
@@ -113,6 +114,17 @@ export default function (core) {
       transcript_path: req.body.transcript_path
     });
     if (!r.ok) return apiError(res, r.error === 'invocation not found' ? 404 : 400, r.error);
+    // Emit a lifecycle event on terminal invocation status so the app/cockpit
+    // animates each invocation finishing live (mirrors the PUT /:id workflow-
+    // status emit + the POST /:id/events re-emit convention).
+    if (req.body.status &&
+        ['completed', 'failed', 'skipped'].indexOf(req.body.status) !== -1) {
+      var eventKind = 'invocation_finished';
+      if (req.body.status === 'failed') eventKind = 'invocation_failed';
+      core.emitEvent('workflow_' + eventKind, who, wf.project_id || '',
+        'invocation ' + req.params.invId + ' of workflow #' + wf.id + ': ' + req.body.status,
+        { workflow_id: wf.id, inv_id: req.params.invId, status: req.body.status });
+    }
     res.json({ ok: true, invocation: r.invocation });
   });
 
