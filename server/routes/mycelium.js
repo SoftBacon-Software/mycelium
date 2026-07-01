@@ -407,6 +407,27 @@ function normalizeProjectField(req, res, next) {
   next();
 }
 
+// ---- Liveness-write debounce (H2) ----
+// getStudioUser runs on (nearly) every authenticated request and would
+// otherwise fire a `last_seen` UPDATE per request (2-3/req under polling).
+// Debounce per userId: at most one write per ~30s. The cache is bounded
+// (pruned every 5 min); touchStudioUserSeen() stays available for callers
+// that want an immediate write.
+var _studioSeenCache = {}; // userId -> last touch timestamp (ms)
+function touchStudioUserSeenDebounce(userId) {
+  var now = Date.now();
+  if (_studioSeenCache[userId] && (now - _studioSeenCache[userId]) < 30000) return;
+  _studioSeenCache[userId] = now;
+  touchStudioUserSeen(userId);
+}
+// Prune stale cache entries every 5 minutes (bounded memory)
+setInterval(function () {
+  var now = Date.now();
+  for (var uid in _studioSeenCache) {
+    if (now - _studioSeenCache[uid] > 300000) delete _studioSeenCache[uid];
+  }
+}, 5 * 60 * 1000).unref();
+
 // ---- Auth middleware ----
 
 // Decode studio JWT from Authorization: Bearer <token>
@@ -416,7 +437,7 @@ function getStudioUser(req) {
   try {
     var decoded = jwt.verify(auth.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded && decoded.studioUser) {
-      if (decoded.userId) touchStudioUserSeen(decoded.userId);
+      if (decoded.userId) touchStudioUserSeenDebounce(decoded.userId);
       return decoded;
     }
     return null;
@@ -660,6 +681,13 @@ function emitEvent(type, agentId, projectId, summary, data) {
     created_at: new Date().toISOString()
   };
   // Broadcast to connected SSE clients (with per-client filtering)
+  // NOTE (audit 2026-07, M2): the inner JSON.stringify(eventObj.data) is the
+  // INTENTIONAL wire format, not a double-encode bug. Replayed events (the
+  // on-connect backlog in the /events SSE route) read `data` straight from the
+  // DB, where createEvent stores it as a JSON string — so live broadcasts
+  // re-stringify to match: every SSE consumer receives `data` as a JSON
+  // *string* on both paths. "Fixing" this forks the live vs replay format
+  // and breaks existing clients. See docs/audit-2026-07-core-hardening.md.
   if (sseClients.size > 0) {
     var payload = 'data: ' + JSON.stringify({ ...eventObj, data: JSON.stringify(eventObj.data) }) + '\n\n';
     sseClients.forEach(function (client) {
@@ -4519,7 +4547,7 @@ setInterval(function () {
       }
     }
   } catch (e) { /* cleanup is best-effort */ }
-}, 10 * 60 * 1000);
+}, 10 * 60 * 1000).unref();
 
 // Bug #137: Periodically auto-fail stale claimed drone jobs (every 15 minutes)
 // Bug #134/#132: Also flag drones offline if no heartbeat in 30 minutes
@@ -4542,7 +4570,7 @@ setInterval(function () {
       }
     }
   } catch (e) { /* cleanup is best-effort */ }
-}, 15 * 60 * 1000);
+}, 15 * 60 * 1000).unref();
 
 // POST /files — upload a temp file (multipart form, field name: "file")
 // curl -X POST -H "X-Agent-Key: <key>" -F "file=@myimage.png" https://mycelium.fyi/api/mycelium/files
@@ -5792,19 +5820,17 @@ router.get('/plugins/workers', asyncHandler(function (req, res) {
 //   2. Review the compare diff before trusting the new commit:
 //        https://github.com/SoftBacon-Software/mycelium-plugins/compare/<OLD_SHA>...<NEW_SHA>
 //   3. Update REGISTRY_COMMIT below to the new 40-char SHA.
-// TODO(registry-pin): REGISTRY_COMMIT below is a PLACEHOLDER (Git's null SHA),
-// NOT a real commit pin. Replace it with the live HEAD SHA from step 1 before
-// deploy. The squad executor (Lucy) cannot run git/network per CONTRACT.md, so
-// the live SHA was not fetched here; do NOT ship this value. The load-time guard
-// + tests (test/unit/registry-commit-pin.test.js) validate the pinning mechanism
-// for any valid 40-char SHA, so substituting the real SHA keeps everything green.
-var REGISTRY_COMMIT = '0000000000000000000000000000000000000000';
+// pinned: mycelium-plugins registry commit (SoftBacon-Software/mycelium-plugins).
+// To rotate, follow the steps above (git ls-remote + review the compare diff),
+// then update REGISTRY_COMMIT to the new 40-char SHA. The load-time guard + tests
+// (test/unit/registry-commit-pin.test.js) validate the pin for any valid SHA.
+var REGISTRY_COMMIT = '972a3b351c952d6b39a8e47f62a12cb8aa9c465b';
 var REGISTRY_URL = 'https://raw.githubusercontent.com/SoftBacon-Software/mycelium-plugins/' + REGISTRY_COMMIT + '/registry.json';
 // Fail fast at module load if REGISTRY_URL is ever moved back to a moving ref.
 if (!/[0-9a-f]{40}/.test(REGISTRY_URL)) {
   throw new Error('REGISTRY_URL must be commit-pinned to a 40-char hex SHA; got: ' + REGISTRY_URL);
 }
-export { REGISTRY_COMMIT, REGISTRY_URL };
+export { REGISTRY_COMMIT, REGISTRY_URL, _studioSeenCache, touchStudioUserSeenDebounce };
 
 var registryCache = { data: null, fetched: 0 };
 var REGISTRY_TTL = 3600000; // 1 hour
@@ -6614,21 +6640,21 @@ function runHealthPatrol() {
   var staleAgents = getStaleAgents(staleAgentMins);
   for (var a of staleAgents) {
     updateAgentHeartbeat(a.id, 'offline', '');
-    createEvent('health_patrol', '__system__', null, 'Agent ' + a.id + ' marked offline (no heartbeat in ' + staleAgentMins + ' min)', JSON.stringify({ agent_id: a.id, last_heartbeat: a.last_heartbeat }));
+    emitEvent('health_patrol', '__system__', null, 'Agent ' + a.id + ' marked offline (no heartbeat in ' + staleAgentMins + ' min)', { agent_id: a.id, last_heartbeat: a.last_heartbeat });
     results.actions.push({ type: 'agent_offline', agent_id: a.id });
   }
   results.stale_agents = staleAgents.length;
 
   var staleTasks = getStaleTasks(staleTaskMins);
   for (var t of staleTasks) {
-    createEvent('health_patrol', '__system__', null, 'Task #' + t.id + ' in_progress with no active assignee (>' + staleTaskMins + ' min)', JSON.stringify({ task_id: t.id, assignee: t.assignee }));
+    emitEvent('health_patrol', '__system__', null, 'Task #' + t.id + ' in_progress with no active assignee (>' + staleTaskMins + ' min)', { task_id: t.id, assignee: t.assignee });
     results.actions.push({ type: 'stale_task_warning', task_id: t.id, assignee: t.assignee });
   }
   results.stale_tasks = staleTasks.length;
 
   var staleReqs = getStaleRequests(staleRequestMins);
   for (var r of staleReqs) {
-    createEvent('health_patrol', '__system__', null, 'Request #' + r.id + ' pending for >' + staleRequestMins + ' min', JSON.stringify({ request_id: r.id, from: r.from_agent, to: r.to_agent }));
+    emitEvent('health_patrol', '__system__', null, 'Request #' + r.id + ' pending for >' + staleRequestMins + ' min', { request_id: r.id, from: r.from_agent, to: r.to_agent });
     results.actions.push({ type: 'stale_request', request_id: r.id });
   }
   results.stale_requests = staleReqs.length;
@@ -6637,14 +6663,14 @@ function runHealthPatrol() {
   for (var d of staleDrns) {
     updateAgentHeartbeat(d.id, 'offline', '');
     try { releaseStaleClaimedJobs(d.id); } catch (e) { /* non-critical */ }
-    createEvent('health_patrol', '__system__', null, 'Drone ' + d.id + ' marked offline + jobs released', JSON.stringify({ drone_id: d.id }));
+    emitEvent('health_patrol', '__system__', null, 'Drone ' + d.id + ' marked offline + jobs released', { drone_id: d.id });
     results.actions.push({ type: 'drone_offline', drone_id: d.id });
   }
   results.stale_drones = staleDrns.length;
 
   var staleSteps = getStalePlanSteps(stalePlanStepMins);
   for (var s of staleSteps) {
-    createEvent('health_patrol', '__system__', null, 'Plan step #' + s.id + ' in_progress for >' + stalePlanStepMins + ' min', JSON.stringify({ step_id: s.id, plan_id: s.plan_id, assignee: s.assignee }));
+    emitEvent('health_patrol', '__system__', null, 'Plan step #' + s.id + ' in_progress for >' + stalePlanStepMins + ' min', { step_id: s.id, plan_id: s.plan_id, assignee: s.assignee });
     results.actions.push({ type: 'stale_plan_step', step_id: s.id, plan_id: s.plan_id });
   }
   results.stale_plan_steps = staleSteps.length;
@@ -6660,7 +6686,7 @@ setInterval(function () {
     if (enabled === 'false') return; // defaults to enabled unless explicitly disabled
     runHealthPatrol();
   } catch (e) { console.error('[health_patrol] Error:', e.message); }
-}, PATROL_INTERVAL);
+}, PATROL_INTERVAL).unref();
 
 router.get('/admin/health', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
