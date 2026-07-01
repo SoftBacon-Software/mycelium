@@ -6,6 +6,11 @@ export function createClient(opts) {
   var apiKey = opts.apiKey
   var role = opts.role || 'agent'
   var agentId = opts.agentId || ''
+  // Configurable request timeout. Every Mycelium endpoint is an immediate REST
+  // call (GET /work/:agentId returns at once — it does NOT long-poll), so a
+  // uniform default is safe and catches hung/dropped connections instead of
+  // leaving the agent wedged on a fetch that never settles.
+  var defaultTimeout = opts.timeout || 30000
 
   function headers() {
     var h = {}
@@ -26,6 +31,10 @@ export function createClient(opts) {
       h['Content-Type'] = 'application/json'
       fetchOpts.body = JSON.stringify(body)
     }
+    // Abort a hung/dropped connection after the configured timeout instead of
+    // pending forever. AbortSignal.timeout is available on Node >= 17.3
+    // (this SDK requires >= 20).
+    fetchOpts.signal = AbortSignal.timeout(defaultTimeout)
     var res = await fetch(url, fetchOpts)
     var text = await res.text()
     var data
