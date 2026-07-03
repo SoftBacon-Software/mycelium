@@ -111,7 +111,7 @@ import {
   getContextHistory, rollbackContextKey,
   logAgentSpend, getAgentSpend, getSpendSummary,
   createRun, updateRun, getRun, listRuns, claimRun, releaseStaleClaimedRuns,
-  createWidget, updateWidget, listWidgets, deleteWidget,
+  createWidget, getWidget, updateWidget, listWidgets, deleteWidget,
   createSkill, getSkill, listSkills, updateSkill, installSkill, uninstallSkill, getAgentSkills,
   createAsset, getAsset, listAssets, updateAsset, deleteAsset,
   autoTaskFromAsset,
@@ -2194,6 +2194,9 @@ router.post('/widgets', asyncHandler(function (req, res) {
 router.put('/widgets/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  var widget = getWidget(req.params.id);
+  if (!widget) return res.status(404).json({ error: 'widget not found' });
+  if (!checkProjectScope(req, res, widget.project_id)) return;
   var updated = updateWidget(req.params.id, req.body);
   if (!updated) return res.status(404).json({ error: 'widget not found' });
   res.json(updated);
@@ -2202,6 +2205,9 @@ router.put('/widgets/:id', asyncHandler(function (req, res) {
 router.delete('/widgets/:id', asyncHandler(function (req, res) {
   var who = checkAgentOrAdmin(req, res);
   if (!who) return;
+  var widget = getWidget(req.params.id);
+  if (!widget) return res.status(404).json({ error: 'widget not found' });
+  if (!checkProjectScope(req, res, widget.project_id)) return;
   deleteWidget(req.params.id);
   res.json({ ok: true });
 }));

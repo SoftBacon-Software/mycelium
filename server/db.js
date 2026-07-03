@@ -1223,6 +1223,10 @@ export function getAgentSkills(agentId) {
 
 // -- Widgets --
 
+export function getWidget(id) {
+  return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
+}
+
 export function createWidget(agentId, projectId, title, widgetType, data) {
   var result = db.prepare(
     "INSERT INTO widgets (agent_id, project_id, title, widget_type, data) VALUES (?, ?, ?, ?, ?)"
