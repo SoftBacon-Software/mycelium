@@ -1755,7 +1755,11 @@ router.post('/tasks/:id/claim', asyncHandler(function (req, res) {
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  var agentId = req.body.agent_id || who;
+  if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;
+  // Assignee derives from AUTH, not the client body: a regular agent may only
+  // claim for itself (the `who` value); only admin may assign on behalf of
+  // another agent via req.body.agent_id. (Mirrors the /messages directive gate.)
+  var agentId = (req._authIsAdmin && req.body.agent_id) ? req.body.agent_id : who;
   updateTask(task.id, { assignee: agentId, status: 'in_progress' });
   emitEvent('task_claimed', who, task.project_id, who + ' claimed task #' + task.id, { task_id: task.id, agent: agentId });
   res.json({ ok: true, id: task.id, assignee: agentId, status: 'in_progress' });
@@ -4685,7 +4689,11 @@ router.post('/bugs/:id/claim', asyncHandler(function (req, res) {
   if (!who) return;
   var bug = getBug(parseIntParam(req.params.id));
   if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  var agentId = req.body.agent_id || who;
+  if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
+  // Assignee derives from AUTH, not the client body: a regular agent may only
+  // claim for itself (the `who` value); only admin may assign on behalf of
+  // another agent via req.body.agent_id. (Mirrors the /messages directive gate.)
+  var agentId = (req._authIsAdmin && req.body.agent_id) ? req.body.agent_id : who;
   updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
   emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
   res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });
