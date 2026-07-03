@@ -1802,7 +1802,7 @@ router.post('/tasks/:id/comments', asyncHandler(function (req, res) {
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  var author = escapeHtml(req.body.author || who);
+  var author = escapeHtml((req._authIsAdmin && req.body.author) ? req.body.author : who);
   var content = escapeHtml(req.body.content);
   if (!content) return res.status(400).json({ error: 'content is required' });
   var comment = addTaskComment(task.id, author, content);
@@ -1827,7 +1827,7 @@ router.post('/tasks/:id/deliverable', asyncHandler(function (req, res) {
   if (!who) return;
   var task = getTask(parseIntParam(req.params.id));
   if (!task) return res.status(404).json({ error: 'Task not found' });
-  var author = escapeHtml(req.body.author || who);
+  var author = escapeHtml((req._authIsAdmin && req.body.author) ? req.body.author : who);
   var kind = escapeHtml(req.body.kind || 'report');
   var format = escapeHtml(req.body.format || 'markdown');
   var flags = escapeHtml(req.body.flags || '');
@@ -3354,7 +3354,7 @@ router.post('/plans/:id/steps/:stepId/comments', asyncHandler(function (req, res
   if (!step) return res.status(404).json({ error: 'Step not found' });
   var content = escapeHtml(req.body.content);
   if (!content) return res.status(400).json({ error: 'content is required' });
-  var author = escapeHtml(req.body.author || who);
+  var author = escapeHtml((req._authIsAdmin && req.body.author) ? req.body.author : who);
   var comment = addPlanStepComment(stepId, plan.id, author, content);
   emitEvent('plan_step_comment', who, plan.project_id, who + ' commented on step #' + stepId + ' of plan #' + plan.id, { plan_id: plan.id, step_id: stepId, comment_id: comment.id });
   res.json(comment);
