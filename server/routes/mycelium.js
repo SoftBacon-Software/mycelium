@@ -2631,6 +2631,9 @@ router.post('/assets', asyncHandler(function (req, res) {
   var status = req.body.status || 'requested';
   if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var assetPath = req.body.path || '';
+  if (assetPath && (assetPath.indexOf('..') !== -1 || nodePath.isAbsolute(assetPath))) {
+    return res.status(400).json({ error: 'invalid asset path' });
+  }
   var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
   var id = createAsset(name, type, projectId, status, assetPath, metadata, agentId);
   emitEvent('asset_registered', agentId, projectId, agentId + ' registered asset: ' + name, { asset_id: id });
@@ -2666,7 +2669,12 @@ router.put('/assets/:id', asyncHandler(function (req, res) {
   if (!validateEnum(res, req.body.status, ASSET_STATUSES, 'status')) return;
   var fields = {};
   if (req.body.status !== undefined) fields.status = req.body.status;
-  if (req.body.path !== undefined) fields.path = req.body.path;
+  if (req.body.path !== undefined) {
+    if (typeof req.body.path === 'string' && (req.body.path.indexOf('..') !== -1 || nodePath.isAbsolute(req.body.path))) {
+      return res.status(400).json({ error: 'invalid asset path' });
+    }
+    fields.path = req.body.path;
+  }
   if (req.body.metadata !== undefined) fields.metadata = JSON.stringify(req.body.metadata);
   if (req.body.drone_job_id !== undefined) fields.drone_job_id = req.body.drone_job_id;
   if (req.body.assigned_to !== undefined) fields.assigned_to = req.body.assigned_to;
@@ -2703,7 +2711,11 @@ router.get('/assets/:id/download', asyncHandler(function (req, res) {
 
   var filePath = asset.file_path || nodePath.join(FILES_DIR, asset.path);
   var resolved = nodePath.resolve(filePath);
-  if (!resolved.startsWith(nodePath.resolve(FILES_DIR)) && !resolved.startsWith(nodePath.resolve(ARTIFACTS_DIR)) && !resolved.startsWith(nodePath.resolve(DATA_DIR))) {
+  // Allow ONLY the two upload/artifact dirs — NOT their parent DATA_DIR, which
+  // holds mycelium.db (Stripe/webhook secrets, bcrypt password + agent-key
+  // hashes). A stored '../mycelium.db' path resolves into DATA_DIR and, with
+  // DATA_DIR allowlisted, streamed the whole DB to any agent key (audit 2026-07-02).
+  if (!resolved.startsWith(nodePath.resolve(FILES_DIR)) && !resolved.startsWith(nodePath.resolve(ARTIFACTS_DIR))) {
     return res.status(403).json({ error: 'File path outside allowed directory' });
   }
   if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found on disk' });
