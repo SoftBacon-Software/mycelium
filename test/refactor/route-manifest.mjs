@@ -25,10 +25,13 @@ function collect(router) {
           .filter((m) => layer.route.methods[m])
           .map((m) => m.toUpperCase())
           .sort();
-        const mw = (layer.route.stack || [])
-          .map((s) => s.name || 'anon')
-          .filter((n) => n && n !== '<anonymous>');
-        for (const m of methods) lines.push(`${m} ${path}  [${mw.join(',')}]`);
+        // Capture the middleware COUNT (not just names) — rate limiters / guards are
+        // often anonymous closures, so a dropped `agentWriteLimiter` is invisible by
+        // name but changes the count. The count is part of the route contract.
+        const stack = layer.route.stack || [];
+        const names = stack.map((s) => s.name).filter((n) => n && n !== '<anonymous>' && n !== 'anon');
+        const sig = `mw:${stack.length}${names.length ? ' ' + names.join(',') : ''}`;
+        for (const m of methods) lines.push(`${m} ${path}  [${sig}]`);
       } else if (layer.name === 'router' && layer.handle?.stack) {
         // nested sub-router (post-extraction shape) — recurse so the manifest is
         // identical whether a route lives in the god file or a domain module.
