@@ -50,9 +50,13 @@ async function callOpenAI(baseUrl, model, apiKey, prompt) {
       model: model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
-      max_tokens: 2000
+      max_tokens: 2000,
+      // Constrained decoding: force valid JSON so small local models (nemotron-mini on
+      // the jetson) can't return markdown/prose the fact-parser then silently drops.
+      // Both auto-memory prompts (extraction + consolidation) request JSON. (2026-07-06)
+      response_format: { type: 'json_object' }
     }),
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(60000)  // jetson small model ~22s/call; 30s was too tight
   });
   if (!response.ok) throw new Error('OpenAI error: HTTP ' + response.status);
   var data = await response.json();
