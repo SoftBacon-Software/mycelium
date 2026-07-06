@@ -120,6 +120,23 @@ export default function (core) {
         facts_decay_pruned: decayPruned
       };
     } catch (e) { /* non-critical */ }
+    // Surface extraction/consolidation LLM health so a SILENT failure — a configured
+    // LLM that went unreachable — becomes VISIBLE. This is exactly how the memory
+    // quietly broke 2026-07-06: errors were logged to am_extraction_errors the whole
+    // time, but nothing surfaced them. (mycelium house rule: no silent failures.)
+    try {
+      var es = db.getErrorStats();
+      var recent = db.getExtractionErrors(1);
+      stats.extraction_errors = {
+        total: es.total,
+        last_24h: es.last24h,
+        last_error: recent.length ? {
+          at: recent[0].created_at,
+          source: recent[0].source_event,
+          message: (recent[0].error_message || '').slice(0, 200)
+        } : null
+      };
+    } catch (e) { /* non-critical */ }
     res.json(stats);
   });
 
