@@ -184,6 +184,7 @@ import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, regis
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
 import { registerChannelRoutes } from './channels.js';
+import { registerFeedbackRoutes } from './feedback.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 function isAdminKey(key) {
@@ -5909,57 +5910,10 @@ router.get('/docs', asyncHandler(function (req, res) {
   res.json({ routes: routes, count: routes.length });
 }));
 
-// ======== FEEDBACK ========
-
-// GET /feedback/summary — aggregate stats
-router.get('/feedback/summary', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var summary = getFeedbackSummary();
-  res.json(summary);
-}));
-
-// GET /feedback — list with optional filters
-router.get('/feedback', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var filters = {
-    entity_type: req.query.entity_type || '',
-    agent_id: req.query.agent_id || '',
-    submitted_by: req.query.submitted_by || '',
-    rating: req.query.rating || '',
-    min_rating: req.query.min_rating || '',
-    limit: parseIntParam(req.query.limit) || 50,
-    offset: parseIntParam(req.query.offset) || 0,
-  };
-  // Clear empty strings so listFeedback ignores them
-  Object.keys(filters).forEach(function (k) { if (filters[k] === '') delete filters[k]; });
-  res.json(listFeedback(filters));
-}));
-
-// POST /feedback — submit feedback
-router.post('/feedback', asyncHandler(async function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  if (!checkGuardrails(req, res, 'feedback_submitted', { agent: who, entity_type: req.body.entity_type, agent_id: req.body.agent_id, rating: req.body.rating })) return;
-  var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
-  if (!rating || rating < 1 || rating > 5) {
-    return apiError(res, 400, 'rating must be 1-5');
-  }
-  var id = createFeedback(entity_type, entity_id, subject, rating, comment, who, agent_id || '');
-  var record = getFeedback(id);
-  emitEvent('feedback_submitted', who, '', JSON.stringify({ id, rating, entity_type, agent_id }));
-  res.status(201).json(record);
-}));
-
-// DELETE /feedback/:id
-router.delete('/feedback/:id', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var id = parseIntParam(req.params.id);
-  if (!id) return apiError(res, 400, 'Invalid feedback id');
-  var record = getFeedback(id);
-  if (!record) return apiError(res, 404, 'Feedback not found');
-  deleteFeedback(id);
-  res.json({ ok: true });
-}));
+registerFeedbackRoutes(router, {
+  asyncHandler, checkAdmin, checkAgentOrAdmin, checkGuardrails,
+  parseIntParam, apiError, emitEvent,
+});
 
 // ======== OPERATOR INBOX ========
 // Human-facing message layer — keeps operator traffic separate from agent chatter.
