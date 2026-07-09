@@ -1203,7 +1203,7 @@ router.get('/boot/:agentId', asyncHandler(async function (req, res) {
             var agent = getAgent(agentId);
             var workTexts = [];
             if (agent && agent.working_on) workTexts.push(agent.working_on);
-            var recentWork = db.prepare(
+            var recentWork = getDB().prepare(
               "SELECT title FROM tasks WHERE assignee = ? AND status IN ('open', 'in_progress') LIMIT 5"
             ).all(agentId);
             for (var rw of recentWork) { if (rw.title) workTexts.push(rw.title); }
