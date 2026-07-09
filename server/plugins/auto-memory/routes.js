@@ -120,6 +120,23 @@ export default function (core) {
         facts_decay_pruned: decayPruned
       };
     } catch (e) { /* non-critical */ }
+    // Surface extraction/consolidation LLM health so a SILENT failure — a configured
+    // LLM that went unreachable — becomes VISIBLE. This is exactly how the memory
+    // quietly broke 2026-07-06: errors were logged to am_extraction_errors the whole
+    // time, but nothing surfaced them. (mycelium house rule: no silent failures.)
+    try {
+      var es = db.getErrorStats();
+      var recent = db.getExtractionErrors(1);
+      stats.extraction_errors = {
+        total: es.total,
+        last_24h: es.last24h,
+        last_error: recent.length ? {
+          at: recent[0].created_at,
+          source: recent[0].source_event,
+          message: (recent[0].error_message || '').slice(0, 200)
+        } : null
+      };
+    } catch (e) { /* non-critical */ }
     res.json(stats);
   });
 
@@ -127,6 +144,25 @@ export default function (core) {
 }
 
 // ---- Extraction ----
+
+// Robustly pull a facts array from an LLM response (2026-07-06 parse-robustness).
+// Handles response_format=json_object -> {"facts":[...]}, a bare JSON array, and
+// JSON embedded in prose/code fences — so a small local model (nemotron-mini on the
+// jetson) that wraps or wobbles its output no longer yields silent 0-fact extractions.
+function parseFactArray(response) {
+  if (!response) return [];
+  var text = String(response);
+  try {
+    var whole = JSON.parse(text.trim());
+    if (Array.isArray(whole)) return whole;
+    if (whole && Array.isArray(whole.facts)) return whole.facts;
+  } catch (_) { /* fall through */ }
+  var objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) { try { var obj = JSON.parse(objMatch[0]); if (obj && Array.isArray(obj.facts)) return obj.facts; } catch (_) {} }
+  var arrMatch = text.match(/\[[\s\S]*\]/);
+  if (arrMatch) { try { var arr = JSON.parse(arrMatch[0]); if (Array.isArray(arr)) return arr; } catch (_) {} }
+  return [];
+}
 
 var EXTRACTION_PROMPT = `Given this agent activity, extract durable knowledge facts.
 Only extract facts useful across sessions — preferences, decisions, patterns, architecture choices, conventions.
@@ -137,7 +173,7 @@ Each fact's "category" MUST be exactly ONE word from this set: preference, decis
 Activity:
 {content}
 
-Return ONLY a JSON array (no markdown, no prose). Each item: {"category":"<one word>","fact_text":"...","confidence":0.0-1.0}`;
+Return a JSON object of the form {"facts":[{"category":"<one word>","fact_text":"...","confidence":0.5}]} (no markdown, no prose).`;
 
 export async function extractFacts(db, config, text, agentId, projectId) {
   if (!text || text.length < 20) return [];
@@ -148,12 +184,10 @@ export async function extractFacts(db, config, text, agentId, projectId) {
     var response = await callLLM(config, prompt);
     if (!response) return [];
 
-    // Parse JSON from response
-    var jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-    var facts = JSON.parse(jsonMatch[0]);
-
-    if (!Array.isArray(facts)) return [];
+    // Parse facts robustly (2026-07-06): response_format=json_object yields
+    // {"facts":[...]}; parseFactArray also handles bare arrays + prose-wrapped JSON.
+    var facts = parseFactArray(response);
+    if (!facts.length) return [];
 
     var created = [];
     for (var fact of facts) {
