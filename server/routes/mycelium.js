@@ -183,6 +183,10 @@ import { loadPlugins, getLoadedPlugins, getPluginMcpTools, callEventHooks, regis
 
 import { broadcast, addClient, clientCount } from '../eventBus.js';
 
+import { registerChannelRoutes } from './channels.js';
+import { registerFeedbackRoutes } from './feedback.js';
+import { registerBugRoutes } from './bugs.js';
+
 var ADMIN_KEY = process.env.ADMIN_KEY;
 function isAdminKey(key) {
   if (!ADMIN_KEY || !key) return false;
@@ -4638,113 +4642,13 @@ router.get('/files', asyncHandler(function (req, res) {
   res.json(files);
 }));
 
-// =============== BUGS ===============
-
-// POST /bugs — create a bug report (agent or admin)
-router.post('/bugs', agentWriteLimiter, asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  if (!checkGuardrails(req, res, 'bug_created', { agent: who, project_id: req.body.project_id, title: req.body.title })) return;
-  var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
-  var projectId = project_id;
-  if (!title || !description) return res.status(400).json({ error: 'title and description are required' });
-  if (!validateStringLength(res, title, MAX_TITLE, 'title')) return;
-  if (!validateStringLength(res, description, MAX_DESCRIPTION, 'description')) return;
-  if (!validateEnum(res, category, getBugCategories(projectId), 'category')) return;
-  if (!validateEnum(res, severity, BUG_SEVERITIES, 'severity')) return;
-  var diagStr = null;
-  if (diagnostic_data) {
-    diagStr = typeof diagnostic_data === 'string' ? diagnostic_data : JSON.stringify(diagnostic_data);
-  }
-  var id = createBug(projectId, title, description, category, severity, who, assignee, diagStr);
-  emitEvent('bug_created', who, projectId || '', who + ' filed bug #' + id + ': ' + title, { bug_id: id });
-  dispatchWebhook('bug_created', who, { bug_id: id, title: title, project_id: projectId, severity: severity, reporter: who, assignee: assignee });
-  res.json({ ok: true, id: id });
-}));
-
-// GET /bugs — list bugs (agent or admin, optional filters: project_id, status, assignee)
-router.get('/bugs', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var filters = {};
-  if (req.query.project_id) filters.project_id = req.query.project_id;
-  if (req.query.status) filters.status = req.query.status;
-  if (req.query.assignee) filters.assignee = req.query.assignee;
-  if (req.query.reporter) filters.reporter = req.query.reporter;
-  if (req.query.severity) filters.severity = req.query.severity;
-  if (req.query.category) filters.category = req.query.category;
-  filters.limit = parseLimit(req.query.limit, 50);
-  filters.offset = parseInt(req.query.offset) || 0;
-  var bugs = listBugs(filters);
-  var counts = countBugs();
-  res.json({ bugs: bugs, counts: counts });
-}));
-
-// GET /bugs/:id — get bug detail
-router.get('/bugs/:id', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var bug = getBug(parseIntParam(req.params.id));
-  if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  res.json(bug);
-}));
-
-// POST /bugs/:id/claim — claim a bug (convenience route)
-router.post('/bugs/:id/claim', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var bug = getBug(parseIntParam(req.params.id));
-  if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
-  // Assignee derives from AUTH, not the client body: a regular agent may only
-  // claim for itself (the `who` value); only admin may assign on behalf of
-  // another agent via req.body.agent_id. (Mirrors the /messages directive gate.)
-  var agentId = (req._authIsAdmin && req.body.agent_id) ? req.body.agent_id : who;
-  updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
-  emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
-  res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });
-}));
-
-// PUT /bugs/:id — update bug (status, assignee, admin_notes, severity)
-router.put('/bugs/:id', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var bug = getBug(parseIntParam(req.params.id));
-  if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
-  if (!validateEnum(res, req.body.status, BUG_STATUSES, 'status')) return;
-  if (!validateEnum(res, req.body.severity, BUG_SEVERITIES, 'severity')) return;
-  warnSuspectTransition('bug', bug.status, req.body.status);
-  var updates = {};
-  if (req.body.status !== undefined) updates.status = req.body.status;
-  if (req.body.assignee !== undefined) updates.assignee = req.body.assignee;
-  if (req.body.admin_notes !== undefined) updates.admin_notes = req.body.admin_notes;
-  if (req.body.severity !== undefined) updates.severity = req.body.severity;
-  updateBug(bug.id, updates);
-  if (updates.status) {
-    emitEvent('bug_updated', who, bug.project_id, who + ' set bug #' + bug.id + ' to ' + updates.status, { bug_id: bug.id });
-    if (updates.status === 'fixed' || updates.status === 'closed') {
-      try { incrementProfileCounter(bug.assignee || who, 'total_bugs_fixed'); } catch (e) { /* non-critical */ }
-    }
-  }
-  dispatchWebhook('bug_updated', who, { bug_id: bug.id, title: bug.title, updates: updates });
-  // Webhook: notify assignee when bug is assigned
-  var bugTarget = updates.assignee || bug.assignee;
-  if (bugTarget && (updates.assignee || updates.status)) {
-    dispatchWebhook('bug_assigned', bugTarget, { bug_id: bug.id, title: bug.title, status: updates.status || bug.status });
-  }
-  res.json({ ok: true, id: bug.id });
-}));
-
-// Delete bug (admin only)
-router.delete('/bugs/:id', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var bug = getBug(parseIntParam(req.params.id));
-  if (!bug) return res.status(404).json({ error: 'Bug not found' });
-  deleteBug(bug.id);
-  emitEvent('bug_deleted', getAdminDisplayName(req), bug.project_id, 'Deleted bug #' + bug.id + ': ' + bug.title, { bug_id: bug.id });
-  res.json({ ok: true, id: bug.id });
-}));
+// =============== BUGS (extracted to bugs.js) ===============
+registerBugRoutes(router, {
+  asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
+  checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
+  parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
+  MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES,
+});
 
 // ======== RECONCILIATION (A7 — state-desync visibility) ========
 // Read-only. Surfaces records (bugs, tasks, plan_steps) sitting in_progress
@@ -4791,195 +4695,7 @@ router.post('/team-chat', asyncHandler(function (req, res) {
   res.json({ ok: true, id: id });
 }));
 
-// ======== CHANNELS ========
-
-// GET /channels/unread — unread counts (MUST be before :id routes)
-router.get('/channels/unread', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var counts = getUnreadCounts(who);
-  var result = {};
-  for (var c of counts) {
-    result[c.channel_id] = { name: c.name, slug: c.slug, unread: c.unread };
-  }
-  res.json(result);
-}));
-
-// GET /channels — list channels
-router.get('/channels', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var filters = {
-    type: req.query.type,
-    status: req.query.status,
-    member: req.query.member,
-    limit: parseLimit(req.query.limit, 50),
-    offset: parseInt(req.query.offset) || 0
-  };
-  var channels = listChannels(filters);
-  // DM channels are private — filter to only include those where the authenticated user is a member.
-  // Skip filtering if an explicit member filter is already set, or caller is __system__.
-  if (!filters.member && who !== '__system__') {
-    channels = channels.filter(function (c) {
-      if (c.type !== 'dm') return true;
-      return isChannelMember(c.id, who);
-    });
-  }
-  res.json(channels);
-}));
-
-// POST /channels — create channel
-router.post('/channels', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var name = escapeHtml(req.body.name);
-  var slug = escapeHtml(req.body.slug);
-  if (!name || !slug) return res.status(400).json({ error: 'name and slug are required' });
-  var existing = getChannelBySlug(slug);
-  if (existing) return res.status(409).json({ error: 'Channel slug already exists', channel_id: existing.id });
-  var type = req.body.type || 'general';
-  var description = escapeHtml(req.body.description || '');
-  var createdBy = who;
-  var id = createChannel(name, slug, type, req.body.linked_type || null, req.body.linked_id || null, description, createdBy);
-  if (req.body.members && Array.isArray(req.body.members)) {
-    for (var m of req.body.members) {
-      addChannelMember(id, m.user_id, m.user_type || 'agent', m.role || 'member');
-    }
-  }
-  emitEvent('channel_created', createdBy, null, createdBy + ' created channel ' + name, { channel_id: id });
-  res.json({ ok: true, id: id, name: name, slug: slug });
-}));
-
-// POST /channels/dm — start or get a DM channel with another user
-router.post('/channels/dm', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var targetId = req.body.user_id || req.body.target;
-  if (!targetId) return res.status(400).json({ error: 'user_id is required' });
-  var myType = req._authAgentId ? 'agent' : 'operator';
-  var targetType = req.body.user_type || 'operator';
-  var channelId = getOrCreateDmChannel(who, targetId, myType, targetType);
-  var channel = getChannel(channelId);
-  res.json({ ok: true, channel_id: channelId, channel: channel });
-}));
-
-// GET /channels/:id — channel detail + member count
-router.get('/channels/:id', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  var members = listChannelMembers(channel.id);
-  channel.members = members;
-  channel.member_count = members.length;
-  res.json(channel);
-}));
-
-// PUT /channels/:id — update channel
-router.put('/channels/:id', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  if (!validateEnum(res, req.body.status, CHANNEL_STATUSES, 'status')) return;
-  var fields = {};
-  if (req.body.name !== undefined) fields.name = escapeHtml(req.body.name);
-  if (req.body.description !== undefined) fields.description = escapeHtml(req.body.description);
-  if (req.body.status !== undefined) fields.status = req.body.status;
-  updateChannel(channel.id, fields);
-  res.json({ ok: true, id: channel.id });
-}));
-
-// DELETE /channels/:id — delete channel (admin only, protected slugs cannot be deleted)
-var PROTECTED_CHANNEL_SLUGS = ['general', 'admin'];
-router.delete('/channels/:id', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  if (PROTECTED_CHANNEL_SLUGS.includes(channel.slug)) return res.status(403).json({ error: 'Cannot delete protected channel' });
-  deleteChannel(channel.id);
-  emitEvent('channel_deleted', getAdminDisplayName(req), null, 'Deleted channel ' + channel.name, { channel_id: channel.id });
-  res.json({ ok: true, deleted: channel.id });
-}));
-
-// -- Channel Members --
-
-router.get('/channels/:id/members', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  res.json(listChannelMembers(channel.id));
-}));
-
-router.post('/channels/:id/members', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  var userId = req.body.user_id;
-  if (!userId) return res.status(400).json({ error: 'user_id is required' });
-  var added = addChannelMember(channel.id, userId, req.body.user_type || 'agent', req.body.role || 'member');
-  res.json({ ok: true, added: added, channel_id: channel.id, user_id: userId });
-}));
-
-router.delete('/channels/:id/members/:userId', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  var removed = removeChannelMember(channel.id, req.params.userId);
-  res.json({ ok: true, removed: removed });
-}));
-
-// -- Channel Messages --
-
-router.get('/channels/:id/messages', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  // DM channels are private — only members can read messages
-  if (channel.type === 'dm' && who !== '__system__' && !isChannelMember(channel.id, who)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-  var filters = {
-    before: req.query.before ? parseIntParam(req.query.before) : undefined,
-    after: req.query.after ? parseIntParam(req.query.after) : undefined,
-    limit: parseLimit(req.query.limit, 50)
-  };
-  var messages = listChannelMessages(channel.id, filters);
-  res.json(messages);
-}));
-
-router.post('/channels/:id/messages', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  // DM channels are private — only members can post
-  if (channel.type === 'dm' && who !== '__system__' && !isChannelMember(channel.id, who)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-  var content = req.body.content;
-  if (!content) return res.status(400).json({ error: 'content is required' });
-  var metadata = req.body.metadata ? JSON.stringify(req.body.metadata) : '{}';
-  var id = createChannelMessage(channel.id, who, content, metadata);
-  emitEvent('channel_message', who, null, who + ' posted in ' + channel.name, { channel_id: channel.id, message_id: id });
-  res.json({ ok: true, id: id, channel_id: channel.id });
-}));
-
-// -- Channel Read Tracking --
-
-router.put('/channels/:id/read', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var channel = getChannel(parseIntParam(req.params.id));
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
-  var messageId = req.body.message_id || getLatestChannelMessageId(channel.id);
-  markChannelRead(channel.id, who, messageId);
-  res.json({ ok: true, channel_id: channel.id, last_read_message_id: messageId });
-}));
+registerChannelRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, escapeHtml, parseIntParam, parseLimit, validateEnum, emitEvent, getAdminDisplayName, CHANNEL_STATUSES });
 
 // ======== WEBHOOKS ========
 
@@ -6095,57 +5811,10 @@ router.get('/docs', asyncHandler(function (req, res) {
   res.json({ routes: routes, count: routes.length });
 }));
 
-// ======== FEEDBACK ========
-
-// GET /feedback/summary — aggregate stats
-router.get('/feedback/summary', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var summary = getFeedbackSummary();
-  res.json(summary);
-}));
-
-// GET /feedback — list with optional filters
-router.get('/feedback', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var filters = {
-    entity_type: req.query.entity_type || '',
-    agent_id: req.query.agent_id || '',
-    submitted_by: req.query.submitted_by || '',
-    rating: req.query.rating || '',
-    min_rating: req.query.min_rating || '',
-    limit: parseIntParam(req.query.limit) || 50,
-    offset: parseIntParam(req.query.offset) || 0,
-  };
-  // Clear empty strings so listFeedback ignores them
-  Object.keys(filters).forEach(function (k) { if (filters[k] === '') delete filters[k]; });
-  res.json(listFeedback(filters));
-}));
-
-// POST /feedback — submit feedback
-router.post('/feedback', asyncHandler(async function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  if (!checkGuardrails(req, res, 'feedback_submitted', { agent: who, entity_type: req.body.entity_type, agent_id: req.body.agent_id, rating: req.body.rating })) return;
-  var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
-  if (!rating || rating < 1 || rating > 5) {
-    return apiError(res, 400, 'rating must be 1-5');
-  }
-  var id = createFeedback(entity_type, entity_id, subject, rating, comment, who, agent_id || '');
-  var record = getFeedback(id);
-  emitEvent('feedback_submitted', who, '', JSON.stringify({ id, rating, entity_type, agent_id }));
-  res.status(201).json(record);
-}));
-
-// DELETE /feedback/:id
-router.delete('/feedback/:id', asyncHandler(async function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var id = parseIntParam(req.params.id);
-  if (!id) return apiError(res, 400, 'Invalid feedback id');
-  var record = getFeedback(id);
-  if (!record) return apiError(res, 404, 'Feedback not found');
-  deleteFeedback(id);
-  res.json({ ok: true });
-}));
+registerFeedbackRoutes(router, {
+  asyncHandler, checkAdmin, checkAgentOrAdmin, checkGuardrails,
+  parseIntParam, apiError, emitEvent,
+});
 
 // ======== OPERATOR INBOX ========
 // Human-facing message layer — keeps operator traffic separate from agent chatter.
