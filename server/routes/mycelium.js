@@ -196,6 +196,7 @@ import { registerAssetRoutes } from './assets.js';
 import { registerRunRoutes } from './runs.js';
 import { registerProjectRoutes } from './projects.js';
 import { registerOperatorRoutes } from './operators.js';
+import { registerOrgRoutes } from './orgs.js';
 import { registerConceptRoutes } from './concepts.js';
 import { registerSkillRoutes } from './skills.js';
 import { registerMessageRoutes } from './messages.js';
@@ -3102,47 +3103,9 @@ router.get('/admin/api-usage', asyncHandler(async function (req, res) {
 }));
 
 // =============== ORGANIZATIONS ===============
-
-router.get('/orgs', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  res.json(listOrgs());
-}));
-
-router.post('/orgs', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var { id, name, description } = req.body;
-  if (!id || !name) return res.status(400).json({ error: 'id and name required' });
-  createOrg(id, name, description || '', getAdminDisplayName(req));
-  var org = getOrg(id);
-  emitEvent('org_created', getAdminDisplayName(req), '', 'Organization created: ' + name);
-  res.json(org);
-}));
-
-router.get('/orgs/:id', asyncHandler(function (req, res) {
-  var who = checkAgentOrAdmin(req, res);
-  if (!who) return;
-  var org = getOrg(req.params.id);
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
-  org.projects = listProjects(req.params.id);
-  res.json(org);
-}));
-
-router.put('/orgs/:id', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var org = getOrg(req.params.id);
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
-  updateOrg(req.params.id, req.body);
-  res.json(getOrg(req.params.id));
-}));
-
-router.delete('/orgs/:id', asyncHandler(function (req, res) {
-  if (!checkAdmin(req, res)) return;
-  var org = getOrg(req.params.id);
-  if (!org) return res.status(404).json({ error: 'Organization not found' });
-  deleteOrg(req.params.id);
-  res.json({ ok: true });
-}));
+registerOrgRoutes(router, {
+  asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent, getAdminDisplayName,
+});
 
 // =============== PROJECTS ===============
 registerProjectRoutes(router, {
