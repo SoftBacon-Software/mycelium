@@ -113,3 +113,72 @@ export async function assertPublicHost(url, { allowLoopback = false } = {}) {
   for (const r of records) check(r.address);
   return { hostname: host, ip: records[0].address };
 }
+
+// HTTP statuses that constitute a redirect the guard must follow manually so it
+// can re-validate the target. Matches fetch's own redirect set.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+// Upper bound on manual redirect following. Tighter than fetch's built-in 20 —
+// these are server-to-server webhook/discover calls, not a browser.
+const DEFAULT_MAX_REDIRECTS = 5;
+
+/**
+ * fetch() that re-runs `assertPublicHost` on the initial URL **and on the
+ * resolved target of every redirect hop**, then bounds the hop count.
+ *
+ * `assertPublicHost` alone only vetoes the *first* hop. With Node's default
+ * `redirect: 'follow'`, a public host can answer `302 → http://127.0.0.1/…`
+ * (or any internal/metadata address) and `fetch` will silently follow it — an
+ * SSRF bypass. By forcing `redirect: 'manual'` and re-validating each
+ * `Location` before following, every hop is gated. Re-resolving DNS at each hop
+ * also narrows (does not eliminate) the DNS-rebinding TOCTOU window between
+ * validation and connect.
+ *
+ * Note: Node's global `fetch` (undici), unlike the browser WHATWG fetch, exposes
+ * the real 3xx status and a readable `Location` header under `redirect:
+ * 'manual'` — so no extra dependency is needed to follow hops manually.
+ *
+ * @param {string} url
+ * @param {object} [options] - standard fetch options; `redirect` is forced to 'manual'
+ * @param {{ allowLoopback?: boolean, maxRedirects?: number }} [guardOptions]
+ * @returns {Promise<Response>} the final (non-redirect) response
+ * @throws {SSRFBlockedError} if any hop targets a private/internal host, on a
+ *   malformed `Location`, or when the hop count is exceeded
+ */
+export async function guardedFetch(url, options = {}, { allowLoopback = false, maxRedirects = DEFAULT_MAX_REDIRECTS } = {}) {
+  let fetchOpts = { ...options, redirect: 'manual' };
+  let currentUrl = url;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    // Re-validate the host on EVERY hop — first hop and each redirect target.
+    await assertPublicHost(currentUrl, { allowLoopback });
+
+    const response = await fetch(currentUrl, fetchOpts);
+    const status = response.status;
+    const location = response.headers.get('location');
+    if (!REDIRECT_STATUSES.has(status) || !location) {
+      return response;
+    }
+    if (hop === maxRedirects) {
+      throw new SSRFBlockedError(`Too many redirects (>${maxRedirects}) following ${url}`);
+    }
+    let nextUrl;
+    try {
+      nextUrl = new URL(location, currentUrl).href;
+    } catch (e) {
+      throw new SSRFBlockedError(`Malformed redirect Location: ${location}`);
+    }
+    currentUrl = nextUrl;
+    // Match fetch redirect semantics: 301/302/303 downgrade the method to GET
+    // and drop the body; 307/308 preserve method and body. (A body on a GET
+    // would make undici throw, so it must be cleared.)
+    if (status === 301 || status === 302 || status === 303) {
+      const method = (fetchOpts.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        fetchOpts = { ...fetchOpts, method: 'GET', body: undefined };
+      }
+    }
+  }
+  // Unreachable when maxRedirects >= 0, but fail CLOSED rather than returning
+  // undefined if the loop ever exits without resolving.
+  throw new SSRFBlockedError(`Too many redirects following ${url}`);
+}

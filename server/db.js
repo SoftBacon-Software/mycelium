@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import migrateTableNames from './migrate-table-names.js';
-import { assertPublicHost, SSRFBlockedError } from './lib/ssrf-guard.js';
+import { assertPublicHost, guardedFetch, SSRFBlockedError } from './lib/ssrf-guard.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -2292,9 +2292,11 @@ export async function dispatchWebhook(event, agentId, data) {
     var whId = wh.id;
     var startTime = Date.now();
 
-    // Non-blocking fetch with 5s timeout and retry (up to 3 attempts)
+    // Non-blocking fetch with 5s timeout and retry (up to 3 attempts).
+    // guardedFetch re-runs the SSRF guard on every redirect hop so a public
+    // first-hop can't 302 into an internal address.
     (function deliverWithRetry(url, opts, attempt) {
-      fetch(url, Object.assign({}, opts, { signal: AbortSignal.timeout(5000) }))
+      guardedFetch(url, Object.assign({}, opts, { signal: AbortSignal.timeout(5000) }), { allowLoopback })
         .then(function (resp) {
           var duration = Date.now() - startTime;
           return resp.text().then(function (body) {
@@ -2302,6 +2304,12 @@ export async function dispatchWebhook(event, agentId, data) {
           });
         }).catch(function (err) {
           var duration = Date.now() - startTime;
+          // SSRF blocks (incl. a redirect to a private host) must NOT be retried.
+          if (err instanceof SSRFBlockedError) {
+            logWebhookDelivery(whId, event, agentId, payload, null, null, 'SSRF blocked: ' + err.message, duration);
+            console.warn('[webhook] SSRF blocked for webhook ' + whId + ':', err.message);
+            return;
+          }
           if (attempt < 3) {
             var delay = Math.pow(2, attempt) * 1000; // 2s, 4s backoff
             setTimeout(function () { deliverWithRetry(url, opts, attempt + 1); }, delay);
