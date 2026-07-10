@@ -1,4 +1,4 @@
-:HL["/_next/static/chunks/1r1i_ajzpss9y.css","style"]
+:HL["/_next/static/chunks/2pai-s0j-idtz.css","style"]
 :HL["/badges/nvidia-inception-program-badge.svg","image"]
 :HL["/squad/lucy/lucy-hero.png","image",{"imageSizes":"(min-width: 1280px) 360px, (min-width: 1024px) 320px, 340px"}]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"lucy","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}}}},"staleTime":300,"buildId":"bsnrxFhkcgQ1CvNjOu-MS"}
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"lucy","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}}}},"staleTime":300,"buildId":"bGOpjI2B2d7sRGd36Ocfb"}

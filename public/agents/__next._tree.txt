@@ -1,8 +1,10 @@
-:HL["/_next/static/chunks/1r1i_ajzpss9y.css","style"]
+:HL["/_next/static/chunks/2pai-s0j-idtz.css","style"]
 :HL["/badges/nvidia-inception-program-badge.svg","image"]
 :HL["/squad/kira/kira-hero.png","image"]
 :HL["/squad/ada/ada-hero.jpg","image"]
 :HL["/squad/lucy/lucy-hero.png","image"]
 :HL["/squad/echo/echo-hero.png","image"]
 :HL["/squad/scout/scout-hero.png","image"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"bsnrxFhkcgQ1CvNjOu-MS"}
+:HL["/squad/merlin/merlin-hero.png","image"]
+:HL["/squad/piper/piper-hero.png","image"]
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"bGOpjI2B2d7sRGd36Ocfb"}
