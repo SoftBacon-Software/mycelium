@@ -3,7 +3,7 @@
 
 import { Router } from 'express';
 import createDigestDB from './db.js';
-import { assertPublicHost } from '../../lib/ssrf-guard.js';
+import { assertPublicHost, guardedFetch } from '../../lib/ssrf-guard.js';
 
 function gatherDigestData(db, coreDb, periodStart, periodEnd) {
   // Query tasks for completed tasks in period
@@ -170,7 +170,7 @@ export default function (core) {
       if (slackWebhook && slackWebhook.value) {
         try {
           await assertPublicHost(slackWebhook.value);
-          await fetch(slackWebhook.value, {
+          await guardedFetch(slackWebhook.value, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: '*' + digestType + ' Digest*\n' + summary })
@@ -242,7 +242,7 @@ export default function (core) {
       if (slackWebhook && slackWebhook.value) {
         try {
           await assertPublicHost(slackWebhook.value);
-          await fetch(slackWebhook.value, {
+          await guardedFetch(slackWebhook.value, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: '*' + report.digest_type + ' Digest (re-sent)*\n' + report.summary })

@@ -2,7 +2,7 @@
 // Ported from Python worker scripts
 
 import { google } from 'googleapis';
-import { assertPublicHost, SSRFBlockedError } from '../../../../lib/ssrf-guard.js';
+import { assertPublicHost, guardedFetch, SSRFBlockedError } from '../../../../lib/ssrf-guard.js';
 
 var COUNTRY_TIMEZONE_MAP = {
   US: 'America/New_York', GB: 'Europe/London', AU: 'Australia/Sydney',
@@ -85,7 +85,7 @@ export async function researchPress(contact) {
   }
 
   try {
-    var resp = await fetch(targetUrl, { signal: AbortSignal.timeout(10000) });
+    var resp = await guardedFetch(targetUrl, { signal: AbortSignal.timeout(10000) });
     if (!resp.ok) return {};
     var html = await resp.text();
 
