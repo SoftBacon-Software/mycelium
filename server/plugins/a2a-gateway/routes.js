@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import createA2ADB from './db.js';
-import { assertPublicHost, SSRFBlockedError } from '../../lib/ssrf-guard.js';
+import { assertPublicHost, guardedFetch, SSRFBlockedError } from '../../lib/ssrf-guard.js';
 
 // A2A status mapping
 var A2A_TO_MYCELIUM = {
@@ -207,7 +207,7 @@ export default function (core) {
     var agentCardUrl = url.replace(/\/$/, '') + '/.well-known/agent.json';
 
     try {
-      var response = await fetch(agentCardUrl, {
+      var response = await guardedFetch(agentCardUrl, {
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(10000)
       });
@@ -219,6 +219,9 @@ export default function (core) {
       core.emitEvent('a2a_agent_discovered', who, null, who + ' discovered A2A agent: ' + (card.name || url), { agent_url: url, agent_id: id });
       res.json({ ok: true, id: id, agent: db.getExternalAgent(id) });
     } catch (e) {
+      if (e instanceof SSRFBlockedError) {
+        return apiError(res, 400, 'Invalid or blocked URL — must be public http(s)');
+      }
       return apiError(res, 502, 'Failed to discover agent: ' + e.message);
     }
   });
@@ -269,7 +272,7 @@ export default function (core) {
         }
       };
 
-      var response = await fetch(a2aUrl, {
+      var response = await guardedFetch(a2aUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rpcBody),
@@ -292,6 +295,9 @@ export default function (core) {
       res.json({ ok: true, task_id: taskId, result: a2aResult });
     } catch (e) {
       db.updateOutboundTask(taskId, { status: 'failed', result: { error: e.message } });
+      if (e instanceof SSRFBlockedError) {
+        return apiError(res, 400, 'Agent URL is blocked — private/internal addresses not allowed');
+      }
       return apiError(res, 502, 'Failed to send A2A task: ' + e.message);
     }
   });
