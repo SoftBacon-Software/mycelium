@@ -4,7 +4,7 @@
   "displayName": "Guardrails",
   "description": "Automated quality checks and rule enforcement. Configurable rules that validate agent actions before they land — block or warn on violations.",
   "author": "SoftBacon Software",
-  "enabled": false,
+  "enabled": true,
   "routePrefix": "/guardrails",
   "schema": "schema.sql",
   "gatedActions": ["guardrails_override"],
