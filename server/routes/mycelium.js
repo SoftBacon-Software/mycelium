@@ -532,11 +532,16 @@ function invalidateAgentKeyCache(agentId) {
 // Check if the authenticated caller has access to a resource's project.
 // Admins and studio users bypass. Agents can READ any project but can only
 // WRITE to their own project (or resources assigned to them).
-function checkProjectScope(req, res, resourceProjectId, assignee) {
+//
+// opts.strictRead (F1): context keys can hold secrets, so unlike tasks/plans
+// their READS are also project-scoped — strictRead defeats the GET bypass below
+// so a cross-project agent read is denied. Writes are always scoped regardless.
+function agentCanAccessProject(req, resourceProjectId, assignee, opts) {
   if (req._authIsAdmin) return true;
   if (!req._authAgentId) return true; // studio user or admin — no scope restriction
-  if (!resourceProjectId) return true; // resource has no project — allow
-  if (req.method === 'GET') return true; // agents can read across projects (shared swarm context)
+  if (!resourceProjectId) return true; // resource has no project — allow (shared/global)
+  var strictRead = opts && opts.strictRead;
+  if (req.method === 'GET' && !strictRead) return true; // agents can read across projects (shared swarm context)
   if (req._authProjectId === resourceProjectId) return true;
   if (assignee && assignee === req._authAgentId) return true; // assigned agent can update their own work across projects
   // Team-scope (durable): an agent may write to any project owned by a team it
@@ -546,7 +551,12 @@ function checkProjectScope(req, res, resourceProjectId, assignee) {
   // result or creating a plan there.
   try {
     if (getTeamProjectIdsForAgent(req._authAgentId).indexOf(resourceProjectId) !== -1) return true;
-  } catch (e) { /* fall through to 403 */ }
+  } catch (e) { /* fall through to deny */ }
+  return false;
+}
+
+function checkProjectScope(req, res, resourceProjectId, assignee, opts) {
+  if (agentCanAccessProject(req, resourceProjectId, assignee, opts)) return true;
   res.status(403).json({ error: 'Agent ' + req._authAgentId + ' cannot access resources in project ' + resourceProjectId });
   return false;
 }
@@ -1375,7 +1385,7 @@ registerAgentRoutes(router, {
 
 // ======== CONTEXT ========
 
-registerContextRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent });
+registerContextRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent, checkProjectScope, agentCanAccessProject });
 
 // ======== SPEND TRACKING (extracted to spend.js) ========
 

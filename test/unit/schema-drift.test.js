@@ -71,6 +71,9 @@ function extractMigrations() {
     // Smart Memory — access tracking for context keys
     ["context_keys", "access_count", "INTEGER NOT NULL DEFAULT 0"],
     ["context_keys", "last_accessed_at", "TEXT"],
+    // F1 (red-team) — project-scope context keys (NULL = shared/global)
+    ["context_keys", "project_id", "TEXT"],
+    ["context_history", "project_id", "TEXT"],
   ];
 
   // Lines 109-129 in db.js
