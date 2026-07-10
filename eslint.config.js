@@ -19,7 +19,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ['server/**/*.js', 'sdk/**/*.js', 'test/**/*.js'],
+    files: ['server/**/*.{js,mjs}', 'sdk/**/*.{js,mjs}', 'test/**/*.{js,mjs}'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
