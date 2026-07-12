@@ -247,13 +247,13 @@ describe('teams — CRUD + auth', () => {
     expect(res.body.error).toBe('id, org_id, and name required')
   })
 
-  // LATENT BUG: duplicate team creation surfaces the RAW SQLite error message
-  // to the client (err.message pass-through) instead of a clean conflict error.
-  test('POST /teams duplicate id → 400 leaking the raw SQLite UNIQUE-constraint message', async () => {
+  // FIXED (findings §3): duplicate team creation now maps UNIQUE → 409 with a
+  // clean conflict message (was a raw SQLite UNIQUE-error pass-through at 400).
+  test('POST /teams duplicate id → 409 Team already exists', async () => {
     const res = await asAdmin(request(app).post('/api/mycelium/teams'))
       .send({ id: 'alpha', org_id: 'org-a', name: 'Alpha Again' })
-    expect(res.status).toBe(400)
-    expect(res.body.error).toMatch(/UNIQUE constraint failed: teams\.id/)
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Team already exists')
   })
 
   // LATENT BUG: org existence is never validated on team create (and teams.org_id
@@ -448,21 +448,22 @@ describe('team members — roles, primary flag, auth', () => {
     await asAdmin(request(app).delete('/api/mycelium/teams/alpha/members/nobody-anywhere'))
   })
 
-  // LATENT BUG: raw SQLite UNIQUE-constraint message leaks on duplicate add.
-  test('adding the same member twice → 400 with raw UNIQUE-constraint message', async () => {
+  // FIXED (findings §3): duplicate member add now maps UNIQUE → 409 with a
+  // clean conflict message (was a raw SQLite UNIQUE error at 400).
+  test('adding the same member twice → 409 Member already exists', async () => {
     const res = await asAdmin(request(app).post('/api/mycelium/teams/alpha/members'))
       .send({ user_id: 'op-1' })
-    expect(res.status).toBe(400)
-    expect(res.body.error).toMatch(/UNIQUE constraint failed: team_members\.team_id, team_members\.user_id/)
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Member already exists')
   })
 
-  // LATENT BUG: raw FK error leaks when the team doesn't exist (foreign_keys=ON
-  // catches it, but the client sees SQLite internals instead of a 404).
-  test('adding a member to a NONEXISTENT team → 400 with raw FOREIGN KEY message', async () => {
+  // FIXED (findings §3): member add to a nonexistent team now maps the FK
+  // violation → 404 with a clean message (was a raw SQLite FK error at 400).
+  test('adding a member to a NONEXISTENT team → 404 Team not found', async () => {
     const res = await asAdmin(request(app).post('/api/mycelium/teams/no-such-team/members'))
       .send({ user_id: 'op-1' })
-    expect(res.status).toBe(400)
-    expect(res.body.error).toMatch(/FOREIGN KEY constraint failed/)
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('Team not found')
   })
 
   test('is_primary add sets the operator primary_team_id; re-primary elsewhere moves it (single-primary invariant)', async () => {

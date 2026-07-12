@@ -277,6 +277,21 @@ function apiError(res, status, message, extra) {
   return res.status(status).json(Object.assign({ error: message }, extra || {}));
 }
 
+// Map a better-sqlite3 constraint error to a clean HTTP response so raw SQLite
+// internals ("UNIQUE constraint failed: ...", "FOREIGN KEY constraint failed")
+// never reach the client. Mirrors POST /skills' UNIQUE→409 mapping
+// (err.message includes 'UNIQUE'); adds FK→404 for the missing-parent case.
+// `label` names the entity for the UNIQUE (duplicate) message; `fkLabel`
+// (defaults to `label`) names the referenced entity for the FK message.
+// Returns { status, error } for a constraint error, or null so the caller
+// falls back to its existing error handling / rethrow.
+function mapSqliteConstraintError(err, label, fkLabel) {
+  var msg = err && err.message ? String(err.message) : '';
+  if (msg.includes('UNIQUE')) return { status: 409, error: (label || 'Resource') + ' already exists' };
+  if (msg.includes('FOREIGN KEY')) return { status: 404, error: (fkLabel || label || 'Resource') + ' not found' };
+  return null;
+}
+
 // Validate an enum field. Returns true if valid, sends 400 via apiError and returns false if not.
 // Exposed via core.validateEnum so plugins share this implementation.
 //
@@ -1468,7 +1483,7 @@ registerAgentRoutes(router, {
 registerMiscRoutes(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   checkAdminOrOperator, checkProjectScope, emitEvent,
-  getAdminDisplayName, checkEnforcementRules,
+  getAdminDisplayName, checkEnforcementRules, mapSqliteConstraintError,
 });
 
 // ======== ADMIN (overview/config/kill-switch/health/reconciliation/stats) ======== (extracted -> ./admin.js)
@@ -1498,7 +1513,7 @@ registerAssetRoutes(router, {
 // ======== TEAMS + ORGS + OPERATORS + TEAM-SETTINGS ======== (extracted -> ./teams.js)
 registerTeamRoutes(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkAdminOrOperator,
-  emitEvent, getAdminDisplayName, apiError,
+  emitEvent, getAdminDisplayName, apiError, mapSqliteConstraintError,
 });
 
 // ======== PLANS + APPROVALS ======== (extracted -> ./plans.js)

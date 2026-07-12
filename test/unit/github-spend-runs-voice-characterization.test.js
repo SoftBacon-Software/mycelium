@@ -290,16 +290,17 @@ describe('runs CRUD + claim queue (route layer over the db-runs contract)', () =
     expect(res.body.started_at).toBeNull()     // pending ⇒ starts on claim, not at queue time
   })
 
-  test('client-supplied run id is honored; LATENT SMELL (locked): a DUPLICATE id → raw 500, not 409', async () => {
+  test('client-supplied run id is honored; FIXED (findings §3): a DUPLICATE id → 409, not raw 500', async () => {
     const first = await request(app).post(api('/runs')).set('X-Agent-Key', lucyKey)
       .send({ id: 'run-dup-1', brief: 'first' })
     expect(first.status).toBe(200)
     expect(first.body.id).toBe('run-dup-1')
-    // UNIQUE constraint escapes as an unhandled throw → Express default 500.
-    // (Compare POST /skills which maps UNIQUE → 409.) Locked as-is.
+    // UNIQUE constraint now maps → 409 (mirrors POST /skills); was an
+    // unhandled throw → Express default 500.
     const dup = await request(app).post(api('/runs')).set('X-Agent-Key', lucyKey)
       .send({ id: 'run-dup-1', brief: 'second' })
-    expect(dup.status).toBe(500)
+    expect(dup.status).toBe(409)
+    expect(dup.body.error).toBe('Run already exists')
   })
 
   test('PUT /runs/:id by the OWNER records telemetry; JSON arrays stored as strings; untouched fields persist', async () => {

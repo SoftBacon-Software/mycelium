@@ -30,7 +30,7 @@ import {
 } from '../db.js';
 
 export function registerTeamRoutes(router, deps) {
-  const { asyncHandler, checkAgentOrAdmin, checkAdmin, checkAdminOrOperator, emitEvent, getAdminDisplayName, apiError } = deps;
+  const { asyncHandler, checkAgentOrAdmin, checkAdmin, checkAdminOrOperator, emitEvent, getAdminDisplayName, apiError, mapSqliteConstraintError } = deps;
 
   // ======== OPERATORS (people) ========
 
@@ -204,6 +204,8 @@ export function registerTeamRoutes(router, deps) {
       } catch (chErr) { console.log('[teams] Auto-channel creation failed:', chErr.message); }
       res.json(team);
     } catch (err) {
+      var mapped = mapSqliteConstraintError(err, 'Team');
+      if (mapped) return apiError(res, mapped.status, mapped.error);
       return apiError(res, 400, err.message);
     }
   }));
@@ -241,6 +243,8 @@ export function registerTeamRoutes(router, deps) {
       } catch (_) {}
       res.json(member);
     } catch (err) {
+      var mapped = mapSqliteConstraintError(err, 'Member', 'Team');
+      if (mapped) return apiError(res, mapped.status, mapped.error);
       return apiError(res, 400, err.message);
     }
   }));

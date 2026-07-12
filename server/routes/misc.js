@@ -16,7 +16,7 @@ export function registerMiscRoutes(router, deps) {
   const {
     asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
     checkAdminOrOperator, checkProjectScope, emitEvent,
-    getAdminDisplayName, checkEnforcementRules,
+    getAdminDisplayName, checkEnforcementRules, mapSqliteConstraintError,
   } = deps;
 
   // ======== SPEND TRACKING ========
@@ -85,16 +85,22 @@ export function registerMiscRoutes(router, deps) {
     // Bind the run to the AUTHENTICATED agent — a non-admin can't attribute a run to
     // another agent. Admin (e.g. the bridge recording on behalf of an agent) may set it.
     var ownerAgent = req._authIsAdmin ? (req.body.agent_id || who) : (req._authAgentId || who);
-    var run = createRun({
-      id: req.body.id || crypto.randomUUID(),
-      agent_id: ownerAgent,
-      model: req.body.model,
-      project_id: req.body.project_id,
-      workflow_id: req.body.workflow_id || null,
-      brief: req.body.brief,
-      status: req.body.status || 'running'
-    });
-    res.json(run);
+    try {
+      var run = createRun({
+        id: req.body.id || crypto.randomUUID(),
+        agent_id: ownerAgent,
+        model: req.body.model,
+        project_id: req.body.project_id,
+        workflow_id: req.body.workflow_id || null,
+        brief: req.body.brief,
+        status: req.body.status || 'running'
+      });
+      res.json(run);
+    } catch (err) {
+      var mapped = mapSqliteConstraintError(err, 'Run');
+      if (mapped) return res.status(mapped.status).json({ error: mapped.error });
+      throw err;
+    }
   }));
 
   // Close/update a run with telemetry (turns/tokens/energy/artifacts/result/finished_at).
