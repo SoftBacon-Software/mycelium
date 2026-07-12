@@ -861,6 +861,42 @@ export function bulkDeleteMessages(filters) {
 //   'ephemeral' - session state, recovery instructions (auto-expire via TTL)
 var CONTEXT_MAX_KEYS_PER_NAMESPACE = 200;
 
+// Strip prototype-pollution keys (__proto__/constructor/prototype) from a parsed
+// object, in place. No-op for non-objects. (findings §8) This is the SAME
+// sanitizer that used to live inline on the merge path only — extracted so every
+// context write path can share it.
+function sanitizePrototypeKeys(obj) {
+  if (obj && typeof obj === 'object') {
+    delete obj.__proto__;
+    delete obj.constructor;
+    delete obj.prototype;
+  }
+  return obj;
+}
+
+// Coerce a context `data` value (string or object) to its sanitized
+// JSON-storage form: JSON-object inputs have __proto__/constructor/prototype
+// stripped before re-stringify; non-JSON strings round-trip verbatim (nothing
+// to sanitize). (findings §8) Applied to first-write, merge-fallback, and
+// rollback writes so the sanitizer can no longer be bypassed by writing to a
+// not-yet-existing key.
+function sanitizeContextData(data) {
+  if (typeof data === 'string') {
+    var parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch (e) {
+      return data; // non-JSON string → store verbatim
+    }
+    if (parsed && typeof parsed === 'object') {
+      return JSON.stringify(sanitizePrototypeKeys(parsed));
+    }
+    return data; // JSON scalar (number/true/false/null) → verbatim
+  }
+  sanitizePrototypeKeys(data);
+  return JSON.stringify(data);
+}
+
 export function upsertContextKey(namespace, key, data, agentId, opts) {
   var category = (opts && opts.category) || 'durable';
   var ttl = (opts && opts.ttl) || null; // seconds
@@ -883,18 +919,13 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     try {
       var existingData = JSON.parse(existing.data);
       var newData = typeof data === 'string' ? JSON.parse(data) : data;
-      // Sanitize against prototype pollution
-      if (newData && typeof newData === 'object') {
-        delete newData.__proto__;
-        delete newData.constructor;
-        delete newData.prototype;
-      }
+      sanitizePrototypeKeys(newData); // strip __proto__/constructor/prototype (findings §8)
       merged = JSON.stringify(Object.assign({}, existingData, newData));
     } catch (e) {
-      merged = typeof data === 'string' ? data : JSON.stringify(data);
+      merged = sanitizeContextData(data); // sanitize even when merge falls back to replace (findings §8)
     }
   } else {
-    merged = typeof data === 'string' ? data : JSON.stringify(data);
+    merged = sanitizeContextData(data); // first write — sanitize (findings §8: was stored verbatim)
   }
   db.prepare(
     "INSERT INTO context_keys (namespace, key, data, category, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
@@ -1023,10 +1054,12 @@ export function rollbackContextKey(historyId, agentId) {
   if (current) {
     db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(row.namespace, row.key, current.data, agentId || '');
   }
-  // Restore the historical value
+  // Restore the historical value — sanitized against prototype pollution in
+  // case the history row predates the write-path fix (findings §8).
+  var restored = sanitizeContextData(row.data);
   db.prepare(
     "UPDATE context_keys SET data = ?, updated_by = ?, updated_at = datetime('now') WHERE namespace = ? AND key = ?"
-  ).run(row.data, agentId || '', row.namespace, row.key);
+  ).run(restored, agentId || '', row.namespace, row.key);
   return row;
 }
 

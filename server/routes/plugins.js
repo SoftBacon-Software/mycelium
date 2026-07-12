@@ -39,6 +39,12 @@ export { REGISTRY_COMMIT, REGISTRY_URL };
 var registryCache = { data: null, fetched: 0 };
 var REGISTRY_TTL = 3600000; // 1 hour
 
+// Shared mask placeholder for secret values returned over the API. Reused by
+// the plugin-config routes (is_secret values) and GET /webhooks (signing
+// secrets). (findings §12) GET /webhooks previously returned signing secrets in
+// cleartext while plugin-config secrets were masked — both now use this mask.
+var SECRET_MASK = '••••••••';
+
 export function registerPluginRoutes(router, deps) {
   const { asyncHandler, checkAdmin, checkAgentOrAdmin, emitEvent, getAdminDisplayName, parseIntParam, parseLimit } = deps;
 
@@ -49,6 +55,14 @@ export function registerPluginRoutes(router, deps) {
     if (!checkAdmin(req, res)) return;
     var { agent_id, url, events, secret } = req.body;
     if (!agent_id || !url) return res.status(400).json({ error: 'agent_id and url are required' });
+    // events must be a proper array (findings §12). Anything else (string,
+    // object, number) used to be stored verbatim, creating a silently-dead
+    // subscription: dispatchWebhook JSON.parses events at delivery time and
+    // skips on parse failure. Reject up front. Omitted events is allowed and
+    // falls back to the default event set.
+    if (events !== undefined && !Array.isArray(events)) {
+      return res.status(400).json({ error: 'events must be an array' });
+    }
     var id = createWebhook(agent_id, url, events, secret);
     res.json({ ok: true, id: id });
   }));
@@ -57,7 +71,14 @@ export function registerPluginRoutes(router, deps) {
   router.get('/webhooks', asyncHandler(function (req, res) {
     if (!checkAdmin(req, res)) return;
     var agentId = req.query.agent_id || null;
-    res.json(listWebhooks(agentId));
+    var hooks = listWebhooks(agentId);
+    // Mask signing secrets (findings §12) — they are never returned in
+    // cleartext, exactly like plugin-config secret values. An empty secret
+    // (no signing configured) is left empty so the mask isn't misleading.
+    for (var i = 0; i < hooks.length; i++) {
+      if (hooks[i].secret) hooks[i].secret = SECRET_MASK;
+    }
+    res.json(hooks);
   }));
 
   // DELETE /webhooks/:id — remove a webhook
@@ -184,7 +205,7 @@ export function registerPluginRoutes(router, deps) {
     // Return config as key→value map; mask secrets
     var config = {};
     for (var row of rows) {
-      config[row.key] = row.is_secret ? '••••••••' : row.value;
+      config[row.key] = row.is_secret ? SECRET_MASK : row.value;
     }
     res.json(config);
   }));
@@ -199,7 +220,7 @@ export function registerPluginRoutes(router, deps) {
     var schema = loaded ? (loaded.configSchema || []) : [];
     for (var [key, value] of Object.entries(body)) {
       // Skip if the value is the masked placeholder (user didn't change a secret)
-      if (value === '••••••••') continue;
+      if (value === SECRET_MASK) continue;
       var schemaField = schema.find(function (f) { return f.key === key; });
       var isSecret = schemaField ? (schemaField.type === 'secret') : false;
       setPluginConfig(req.params.name, key, value, isSecret);

@@ -489,28 +489,33 @@ describe('POST /webhooks — create subscription', () => {
     expect(Object.keys(row).sort()).toEqual(['active', 'agent_id', 'created_at', 'events', 'id', 'secret', 'url'])
   })
 
-  test('events array is JSON-stringified; secret stored and RETURNED IN PLAINTEXT by the list', async () => {
+  test('events array is JSON-stringified; secret is MASKED in the list (findings §12 fix)', async () => {
     const res = await asAdmin(api().post('/api/mycelium/webhooks'))
       .send({ agent_id: 'plug-test-agent', url: 'http://example.com/hook2', events: ['task_done', '*'], secret: 'hook-secret-1' })
     expect(res.status).toBe(200)
     const list = await asAdmin(api().get('/api/mycelium/webhooks'))
     const row = list.body.find((w) => w.id === res.body.id)
     expect(row.events).toBe('["task_done","*"]')
-    // SMELL (locked): the signing secret round-trips in cleartext to any admin
-    // listing webhooks — it is never masked like plugin config secrets are.
-    expect(row.secret).toBe('hook-secret-1')
+    // Was (S12 locks-bug): the signing secret round-tripped in cleartext to any
+    // admin listing webhooks — never masked like plugin-config secrets. Now
+    // (S12 proves-fix): it is masked with the SAME placeholder plugin-config
+    // secrets use.
+    expect(row.secret).toBe(MASK)
   })
 
-  test('non-array events string is stored VERBATIM — even when it is not valid JSON', async () => {
-    // SMELL (locked): createWebhook only stringifies arrays; any other truthy
-    // value is stored as-is. dispatchWebhook JSON.parses events at delivery
-    // time and SKIPS the webhook on parse failure — so this subscription is
-    // silently dead from birth, with a 200 at creation.
+  test('FIXED (findings §12): non-array events is rejected with 400 — no silently-dead subscription', async () => {
+    // Was (S12 locks-bug): createWebhook only stringifies arrays; any other
+    // value was stored as-is, and dispatchWebhook JSON.parses events at
+    // delivery time then SKIPS on parse failure — a subscription silently dead
+    // from birth, acknowledged with a 200 at creation. Now (S12 proves-fix):
+    // the route validates events is a proper array up front and rejects.
     const res = await asAdmin(api().post('/api/mycelium/webhooks'))
       .send({ agent_id: 'plug-test-agent', url: 'http://example.com/hook3', events: 'totally not json' })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
+    expect(res.body).toEqual({ error: 'events must be an array' })
+    // The dead subscription was never created.
     const list = await asAdmin(api().get('/api/mycelium/webhooks'))
-    expect(list.body.find((w) => w.id === res.body.id).events).toBe('totally not json')
+    expect(list.body.find((w) => w.url === 'http://example.com/hook3')).toBeUndefined()
   })
 
   test('no validation of url or agent_id existence at creation time', async () => {
@@ -532,7 +537,9 @@ describe('GET /webhooks — list + filter', () => {
   test('?agent_id= filters to that agent; unfiltered list returns every active webhook', async () => {
     const all = await asAdmin(api().get('/api/mycelium/webhooks'))
     expect(all.status).toBe(200)
-    expect(all.body.length).toBeGreaterThanOrEqual(4) // fixtures created above
+    // hook3 (non-array events) is now rejected at creation (findings §12), so
+    // one fewer fixture survives here than before: hook1, hook2, and the ghost.
+    expect(all.body.length).toBeGreaterThanOrEqual(3)
     const ghosts = await asAdmin(api().get('/api/mycelium/webhooks').query({ agent_id: 'ghost-agent-never-registered' }))
     expect(ghosts.body).toHaveLength(1)
     expect(ghosts.body[0].agent_id).toBe('ghost-agent-never-registered')

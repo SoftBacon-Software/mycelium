@@ -258,11 +258,15 @@ describe('PUT merge semantics (CURRENT behavior: shallow JSON merge, NOT replace
     expect(res.body.data).toBe('{"safe":1,"b":2}')
   })
 
-  test('BUG SMELL (asymmetry): FIRST write stores __proto__ keys verbatim — sanitize only runs on the merge path', async () => {
+  test('FIXED (findings §8): FIRST write strips __proto__ keys — sanitize now runs on ALL write paths, not just merge', async () => {
     const raw = '{"__proto__":{"polluted":1},"a":1}'
     await putKey('mergens', 'praw', raw)
     const res = await getKey('mergens', 'praw')
-    expect(res.body.data).toBe(raw)
+    // Was (S8 locks-bug): `raw` stored verbatim, because the __proto__/
+    // constructor/prototype sanitizer ran ONLY on the merge path. Now
+    // (S8 proves-fix): the same sanitizer is applied to first writes too, so
+    // the prototype-pollution keys are stripped before the value is stored.
+    expect(res.body.data).toBe('{"a":1}')
   })
 })
 
