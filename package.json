@@ -23,7 +23,9 @@
     "start:printer:mock": "node printer-drone/index.js --mock",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check server test/unit",
+    "lint:fix": "biome check --write server test/unit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -41,6 +43,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
     "@vitest/coverage-v8": "^4.1.7",
     "supertest": "^7.2.2",
     "vitest": "^4.1.7"
