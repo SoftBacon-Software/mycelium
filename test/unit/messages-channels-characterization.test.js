@@ -336,12 +336,12 @@ describe('messages', () => {
     expect(res.status).toBe(200)
   })
 
-  // SMELL (locked): the @mention regex (@[a-z0-9_-]+) has no word-boundary or
-  // existence check: (a) inbox rows are written for operators that don't exist
-  // (operator_inbox.operator_id has NO foreign key, so the "operator may not
-  // exist" try/catch never actually fires), and (b) email addresses in the
-  // content false-positive — foo@example.com mints a mention for "example".
-  test('@mentions create inbox items — including for NON-EXISTENT operators and email-address false positives', async () => {
+  // FIX (findings §22): the @mention regex now requires the '@' to NOT be
+  // preceded by a word character, so an '@' inside an email address
+  // (foo@example.com) is no longer treated as a mention for "example". Real
+  // @mentions still work; the legacy no-existence-check smell (inbox rows for
+  // non-existent operators) is unchanged.
+  test('@mentions create inbox items; an @ inside an email address is NOT a mention', async () => {
     const res = await request(app).post('/api/mycelium/messages')
       .set('X-Agent-Key', lucyKey)
       .send({ to: 'echo', content: 'hey @hijack and @hijack again — mail foo@example.com' })
@@ -354,9 +354,10 @@ describe('messages', () => {
     expect(mentions.length).toBe(1)
     expect(mentions[0].title).toBe('lucy mentioned you')
 
-    // Email false positive: orphan inbox row for operator "example" (does not exist)
+    // No email false positive: foo@example.com no longer mints an orphan inbox
+    // row for the (non-existent) operator "example".
     const ghostInbox = await admin(request(app).get('/api/mycelium/inbox?operator_id=example&type=mention'))
-    expect(ghostInbox.body.some(i => i.data && i.data.message_id === msgId)).toBe(true)
+    expect(ghostInbox.body.some(i => i.data && i.data.message_id === msgId)).toBe(false)
   })
 
   // SMELL (locked): ack has no msg_type check (PUT /requests/:id validates

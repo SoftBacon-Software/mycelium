@@ -381,18 +381,19 @@ describe('assets — upload → download round trip + containment gate', () => {
     expect(readdirSync(FILES_DIR).length).toBe(before) // requireAuth precedes upload.single
   })
 
-  // BUG(locked) #4: for an AUTHENTICATED upload to a nonexistent asset, multer
-  // runs before the handler's 404 — the file lands in FILES_DIR and stays there
-  // (orphan; only the 24h TTL sweep will collect it).
-  test('BUG(locked): upload to nonexistent asset → 404, but the multer file is already on disk (orphan)', async () => {
+  // FIX (findings §21): for an AUTHENTICATED upload to a nonexistent asset,
+  // multer has already written the file by the time the handler returns 404.
+  // The handler now deletes that orphan before responding, so FILES_DIR is left
+  // unchanged instead of waiting for the 24h TTL sweep to collect it.
+  test('FIX (findings §21): upload to nonexistent asset → 404 and the orphaned multer file is cleaned up', async () => {
     const before = readdirSync(FILES_DIR)
     const res = await asAgent(api().post('/api/mycelium/assets/999999/upload'))
       .attach('file', Buffer.from('ORPHANED-BYTES'), 'orphan.txt')
     expect(res.status).toBe(404)
     expect(res.body.error).toBe('Asset not found')
     const after = readdirSync(FILES_DIR)
-    expect(after.length).toBe(before.length + 1)
-    expect(after.some((f) => /^orphan_\d+\.txt$/.test(f))).toBe(true)
+    expect(after.length).toBe(before.length)
+    expect(after.some((f) => /^orphan_\d+\.txt$/.test(f))).toBe(false)
   })
 
   test('download with no file attached (metadata-only asset) → 404 "No file attached to this asset"', async () => {

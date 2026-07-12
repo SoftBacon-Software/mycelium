@@ -151,7 +151,15 @@ export function registerAssetRoutes(router, deps) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var asset = getAsset(parseIntParam(req.params.id));
-    if (!asset) return res.status(404).json({ error: 'Asset not found' });
+    if (!asset) {
+      // multer has already written the upload to disk by the time we reach the
+      // handler; a 404 here used to orphan it in FILES_DIR (only the 24h TTL
+      // sweep collected it). Delete the just-written temp file first.
+      if (req.file && req.file.path) {
+        try { fs.unlinkSync(req.file.path); } catch (e) { /* already gone */ }
+      }
+      return res.status(404).json({ error: 'Asset not found' });
+    }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     var filePath = req.file.path;

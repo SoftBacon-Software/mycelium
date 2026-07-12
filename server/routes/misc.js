@@ -25,7 +25,20 @@ export function registerMiscRoutes(router, deps) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
     if (!checkGuardrails(req, res, 'spend_logged', { agent: agentId, project_id: req.body.project_id, cost_usd: req.body.cost_usd })) return;
-    var costUsd = parseFloat(req.body.cost_usd) || 0;
+    // Validate cost_usd is a finite number. parseFloat(garbage) used to yield
+    // NaN → `NaN || 0` → 0, silently booking a $0 spend row and under-reporting
+    // the meter. Reject non-numeric input with 400; a valid number (incl. an
+    // explicit 0) and a numeric string still parse and work.
+    var rawCost = req.body.cost_usd;
+    var costUsd;
+    if (typeof rawCost === 'number') {
+      costUsd = rawCost;
+    } else if (typeof rawCost === 'string' && rawCost.trim() !== '') {
+      costUsd = Number(rawCost);
+    }
+    if (!Number.isFinite(costUsd)) {
+      return res.status(400).json({ error: 'cost_usd must be a finite number' });
+    }
     if (costUsd < 0) return res.status(400).json({ error: 'cost_usd must be non-negative' });
     logAgentSpend(
       agentId,

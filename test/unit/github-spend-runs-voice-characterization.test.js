@@ -190,17 +190,18 @@ describe('spend tracking', () => {
     expect(res.body.breakdown[0].total_cost).toBeCloseTo(0.3, 10) // raw sum, not rounded
   })
 
-  test('LATENT SMELL (locked): non-numeric cost_usd is silently coerced to $0 and logged as ok', async () => {
-    // parseFloat('not-a-number') → NaN → `NaN || 0` → 0. Garbage input does NOT
-    // 400 — it books a zero-cost row. A spend meter that silently drops cost on
-    // malformed input under-reports; still: current behavior is 200 {ok:true}.
+  test('FIX (findings §18): non-numeric cost_usd is rejected with 400 (no silent $0 row)', async () => {
+    // parseFloat('not-a-number') used to yield NaN → `NaN || 0` → 0, booking a
+    // zero-cost spend row and returning ok:true — the meter silently dropped the
+    // cost. Now malformed cost is validated up front and rejected; a valid number
+    // (incl. an explicit 0) and a numeric string still parse and work.
     const res = await request(app).post(api('/spend')).set('X-Agent-Key', lucyKey)
       .send({ cost_usd: 'not-a-number', project_id: 'garbage-proj' })
-    expect(res.status).toBe(200)
-    expect(res.body).toEqual({ ok: true })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('cost_usd must be a finite number')
+    // No spend row is booked for the garbage input
     const entries = await asAdmin(request(app).get(api('/spend/lucy?project_id=garbage-proj')))
-    expect(entries.body).toHaveLength(1)
-    expect(entries.body[0].cost_usd).toBe(0)
+    expect(entries.body).toEqual([])
   })
 
   test('negative cost_usd → 400 (the one validation the route does perform)', async () => {

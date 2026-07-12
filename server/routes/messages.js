@@ -237,8 +237,11 @@ export function registerMessageRoutes(router, deps) {
         var dirTitle = content.substring(0, 80) + (content.length > 80 ? '...' : '');
         createInboxItemForAllOperators('message', 'message', String(id), 'Directive from ' + displayName(agentId), dirTitle, { message_id: id, from: agentId, msg_type: 'directive' }, 'urgent');
       }
-      // @mention detection — @operatorId patterns (e.g. @hijack, @greatness)
-      var mentionRe = /@([a-z0-9_-]+)/gi;
+      // @mention detection — @operatorId patterns (e.g. @hijack, @greatness).
+      // The negative lookbehind excludes an '@' preceded by a word character,
+      // so an '@' inside an email address (foo@example.com) is NOT treated as a
+      // mention for "example".
+      var mentionRe = /(?<!\w)@([a-z0-9_-]+)/gi;
       var mentionMatch;
       var notifiedOps = new Set();
       while ((mentionMatch = mentionRe.exec(content)) !== null) {
