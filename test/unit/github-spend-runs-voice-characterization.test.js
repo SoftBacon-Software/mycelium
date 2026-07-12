@@ -465,12 +465,13 @@ describe('voice command routing', () => {
     expect(res.body.response).toBe('0 drones registered. ') // trailing space: empty join
   })
 
-  test('LATENT SMELL (locked): "drone status" is captured by the STATUS branch, never reaching drone_status', async () => {
-    // Intent branches are checked in order and the status regex matches the
-    // literal word "status" anywhere — so any drone/agent phrase containing
-    // "status" is swallowed by the generic status intent.
+  test('FIX: "drone status" reaches drone_status (specific intents now precede the generic status catch-all)', async () => {
+    // Intent branches were reordered so the drone/agent-specific branches fire
+    // before the generic status catch-all. "drone status" now routes to
+    // drone_status instead of being swallowed by the status regex.
     const res = await voice('drone status')
-    expect(res.body.action).toBe('status')
+    expect(res.body.action).toBe('drone_status')
+    expect(res.body.response).toBe('0 drones registered. ') // no drones in this fixture
   })
 
   test('LATENT SMELL (locked): "assign task X to Y" hits the TASKS branch (contains "task"), not assign', async () => {

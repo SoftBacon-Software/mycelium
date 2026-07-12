@@ -257,16 +257,22 @@ describe('assets — metadata CRUD', () => {
     expect(dl.text || '').not.toContain('TOP-SECRET')
   })
 
-  // BUG(locked) #1: PUT /assets/link-job is registered AFTER PUT /assets/:id,
-  // so Express matches ':id' = 'link-job' first → parseIntParam → null →
-  // getAsset(null) → 404. The bulk link-job endpoint is unreachable — every
-  // call, however valid, returns 404 'Asset not found'.
-  test('BUG(locked): PUT /assets/link-job is shadowed by PUT /assets/:id → always 404 "Asset not found"', async () => {
-    const created = await asAgent(api().post('/api/mycelium/assets')).send({ name: 'linkable', project_id: PROJECT })
+  // FIX (BUG(locked) #1 resolved): PUT /assets/link-job is now registered BEFORE
+  // PUT /assets/:id, so the literal 'link-job' path resolves to the bulk-link
+  // handler instead of being swallowed by ':id' → parseIntParam → null → 404.
+  test('FIX: PUT /assets/link-job is reachable — bulk-links assets to a drone job', async () => {
+    const a1 = await asAgent(api().post('/api/mycelium/assets')).send({ name: 'link-1', project_id: PROJECT })
+    const a2 = await asAgent(api().post('/api/mycelium/assets')).send({ name: 'link-2', project_id: PROJECT })
+    const jobId = db.createDroneJob('bulk link target', 'echo hi', '{}', ['cpu'], AGENT_ID, 0, null, 'main', null)
     const res = await asAgent(api().put('/api/mycelium/assets/link-job'))
-      .send({ asset_ids: [created.body.id], drone_job_id: 1, status: 'ready' })
-    expect(res.status).toBe(404)
-    expect(res.body.error).toBe('Asset not found')
+      .send({ asset_ids: [a1.body.id, a2.body.id], drone_job_id: jobId, status: 'ready' })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ ok: true, updated: 2 })
+    const row1 = (await asAgent(api().get('/api/mycelium/assets/' + a1.body.id))).body
+    const row2 = (await asAgent(api().get('/api/mycelium/assets/' + a2.body.id))).body
+    expect(row1.drone_job_id).toBe(jobId)
+    expect(row1.status).toBe('ready')
+    expect(row2.drone_job_id).toBe(jobId)
   })
 
   test('DELETE /assets/:id is admin-only; agent key gets 403 "Admin role required" (findings-§1 fix: authenticated, not authorized)', async () => {

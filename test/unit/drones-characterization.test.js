@@ -1013,15 +1013,23 @@ describe('asset ↔ drone-job linkage', () => {
     expect(after.body.drone_job_id).toBe(jobId)
   })
 
-  test('LATENT L6: PUT /assets/link-job is SHADOWED by PUT /assets/:id — always 404 Asset not found', async () => {
-    // /assets/:id is registered before /assets/link-job, so Express routes
-    // 'link-job' into :id; parseIntParam('link-job') → null → getAsset(null)
-    // → 404. The documented bulk-link endpoint is unreachable dead code.
+  test('FIX (L6 resolved): PUT /assets/link-job is REACHABLE — bulk-links assets to a drone job', async () => {
+    // /assets/link-job is now registered BEFORE /assets/:id, so the literal
+    // path resolves to the bulk-link handler instead of ':id'='link-job' →
+    // parseIntParam → null → getAsset(null) → 404.
+    const asset = await api().post('/api/mycelium/assets')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ name: 'bulk-linkable', type: 'image', status: 'in_progress', project_id: 'proj-x' })
+    expect(asset.status).toBe(200)
+    const jobId = db.createDroneJob('bulk link target', 'echo x', '{}', ['cpu'], 'lucy-test', 0, null, 'main', null)
     const res = await api().put('/api/mycelium/assets/link-job')
       .set('X-Agent-Key', AGENT_KEY)
-      .send({ asset_ids: [1], drone_job_id: 1 })
-    expect(res.status).toBe(404)
-    expect(res.body.error).toBe('Asset not found')
+      .send({ asset_ids: [asset.body.id], drone_job_id: jobId, status: 'ready' })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ ok: true, updated: 1 })
+    const after = await api().get('/api/mycelium/assets/' + asset.body.id).set('X-Agent-Key', AGENT_KEY)
+    expect(after.body.drone_job_id).toBe(jobId)
+    expect(after.body.status).toBe('ready')
   })
 })
 

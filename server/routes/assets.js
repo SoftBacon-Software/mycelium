@@ -7,10 +7,11 @@
 // to before extraction — enforced by test/refactor/route-manifest.mjs and pinned
 // by test/unit/assets-files-widgets-characterization.test.js.
 //
-// NOTE: route registration ORDER within this module is load-bearing. In
-// particular PUT /assets/:id is registered BEFORE PUT /assets/link-job, so the
-// ':id' param shadows the literal 'link-job' — the bulk link-job endpoint is
-// unreachable (BUG(locked) #1 in the characterization net). Do not reorder.
+// NOTE: route registration ORDER within this module is load-bearing.
+// PUT /assets/link-job is registered BEFORE PUT /assets/:id so the literal
+// 'link-job' path wins. Registering it after /:id lets ':id'='link-job' shadow
+// it (parseIntParam → null → 404), making the bulk link endpoint unreachable
+// dead code. Keep link-job ahead of the /assets/:id family.
 import fs from 'fs';
 import nodePath from 'path';
 import {
@@ -120,6 +121,32 @@ export function registerAssetRoutes(router, deps) {
     res.json(asset);
   }));
 
+  // Link assets to a drone job (bulk update status + drone_job_id).
+  // Registered BEFORE PUT /assets/:id — see the ORDER note atop this file.
+  router.put('/assets/link-job', asyncHandler(function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var { asset_ids, drone_job_id, status } = req.body;
+    if (!asset_ids || !Array.isArray(asset_ids)) return res.status(400).json({ error: 'asset_ids array required' });
+    if (!drone_job_id) return res.status(400).json({ error: 'drone_job_id required' });
+    // Validate drone job exists
+    var job = getDroneJob(parseIntParam(drone_job_id));
+    if (!job) return res.status(404).json({ error: 'Drone job #' + drone_job_id + ' not found' });
+    // Validate all asset IDs exist before making any changes
+    var missing = asset_ids.filter(function (id) { return !getAsset(parseIntParam(id)); });
+    if (missing.length > 0) return res.status(404).json({ error: 'Assets not found: ' + missing.join(', ') });
+    if (!validateEnum(res, status, ASSET_STATUSES, 'status')) return;
+    var updated = 0;
+    for (var id of asset_ids) {
+      var fields = { drone_job_id: drone_job_id };
+      if (status) fields.status = status;
+      var result = updateAsset(parseInt(id), fields);
+      if (result.changes) updated++;
+    }
+    emitEvent('assets_linked_to_job', who, null, updated + ' assets linked to drone job #' + drone_job_id, { asset_ids: asset_ids, drone_job_id: drone_job_id });
+    res.json({ ok: true, updated: updated });
+  }));
+
   router.put('/assets/:id', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
@@ -187,31 +214,6 @@ export function registerAssetRoutes(router, deps) {
     }
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found on disk' });
     res.download(resolved);
-  }));
-
-  // Link assets to a drone job (bulk update status + drone_job_id)
-  router.put('/assets/link-job', asyncHandler(function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
-    if (!who) return;
-    var { asset_ids, drone_job_id, status } = req.body;
-    if (!asset_ids || !Array.isArray(asset_ids)) return res.status(400).json({ error: 'asset_ids array required' });
-    if (!drone_job_id) return res.status(400).json({ error: 'drone_job_id required' });
-    // Validate drone job exists
-    var job = getDroneJob(parseIntParam(drone_job_id));
-    if (!job) return res.status(404).json({ error: 'Drone job #' + drone_job_id + ' not found' });
-    // Validate all asset IDs exist before making any changes
-    var missing = asset_ids.filter(function (id) { return !getAsset(parseIntParam(id)); });
-    if (missing.length > 0) return res.status(404).json({ error: 'Assets not found: ' + missing.join(', ') });
-    if (!validateEnum(res, status, ASSET_STATUSES, 'status')) return;
-    var updated = 0;
-    for (var id of asset_ids) {
-      var fields = { drone_job_id: drone_job_id };
-      if (status) fields.status = status;
-      var result = updateAsset(parseInt(id), fields);
-      if (result.changes) updated++;
-    }
-    emitEvent('assets_linked_to_job', who, null, updated + ' assets linked to drone job #' + drone_job_id, { asset_ids: asset_ids, drone_job_id: drone_job_id });
-    res.json({ ok: true, updated: updated });
   }));
 
   // Delete asset (admin only)

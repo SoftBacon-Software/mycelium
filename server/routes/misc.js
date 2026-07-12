@@ -199,17 +199,11 @@ export function registerMiscRoutes(router, deps) {
   function parseVoiceCommand(text, who) {
     var lower = text.toLowerCase();
 
-    // Status queries
-    if (lower.match(/status|how.*(things|going|look)|what.*(happening|going on)/)) {
-      var agents = listAgents ? listAgents() : [];
-      var online = agents.filter(function(a) { return a.status === 'online'; });
-      var working = online.filter(function(a) { return a.working_on; });
-      return {
-        action: 'status',
-        response: online.length + ' agents online, ' + working.length + ' working. ' +
-          (working.length > 0 ? working.map(function(a) { return a.id + ' is on ' + a.working_on; }).join('. ') : 'Everyone is idle.')
-      };
-    }
+    // Intent branches are checked in order — SPECIFIC intents must precede the
+    // generic status catch-all below. The catch-all's regex matches the literal
+    // word "status" anywhere, so a more-specific phrase that also contains
+    // "status" (e.g. "drone status", "status <agent>") must get its own branch
+    // FIRST, or it is swallowed by the catch-all and never routes correctly.
 
     // Agent-specific status
     var agentMatch = lower.match(/(?:status|what.* doing|where.*is|check on)\s+(\S+)/);
@@ -233,6 +227,19 @@ export function registerMiscRoutes(router, deps) {
         response: drones.length + ' drones registered. ' + drones.map(function(d) {
           return d.id + ': ' + d.status + (d.working_on ? ' (' + d.working_on + ')' : '');
         }).join('. ')
+      };
+    }
+
+    // Generic status (catch-all) — checked AFTER the specific drone/agent
+    // branches so "drone status" / "status <agent>" route to those, not here.
+    if (lower.match(/status|how.*(things|going|look)|what.*(happening|going on)/)) {
+      var agents = listAgents ? listAgents() : [];
+      var online = agents.filter(function(a) { return a.status === 'online'; });
+      var working = online.filter(function(a) { return a.working_on; });
+      return {
+        action: 'status',
+        response: online.length + ' agents online, ' + working.length + ' working. ' +
+          (working.length > 0 ? working.map(function(a) { return a.id + ' is on ' + a.working_on; }).join('. ') : 'Everyone is idle.')
       };
     }
 
