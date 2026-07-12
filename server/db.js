@@ -21,13 +21,21 @@ import { listBugs, countBugs } from './db/bugs.js';
 // listEvents is called by the boot payload + overview composites still living in
 // this barrel; same named-import contract as config/bugs above.
 import { listEvents } from './db/events.js';
+// listConcepts / getProjectConcepts / getConceptProjects are called by the boot
+// payload + overview composites still living in this barrel; same named-import
+// contract as config/bugs/events above. concepts.js imports only ./core.js.
+import { listConcepts, getProjectConcepts, getConceptProjects } from './db/concepts.js';
+// getProject / listProjects / listOrgs are called by the boot payload + overview
+// composites still living in this barrel; same named-import contract as above.
+// projects.js imports only ./core.js.
+import { getProject, listProjects, listOrgs } from './db/projects.js';
 
 export { getDB };
 
 // Entity modules migrate here one per PR (see docs/DB-DECOMPOSITION-PLAN.md).
 // Wave 2 pilot: spend (3 functions, zero coupling). Wave 3: config, bugs,
-// feedback, events, widgets, skills. Each is re-exported so the barrel's
-// public surface stays exactly 306.
+// feedback, events, widgets, skills, concepts, projects, runs, plugins, health,
+// webhooks. Each is re-exported so the barrel's public surface stays exactly 306.
 export * from './db/spend.js';
 export * from './db/config.js';
 export * from './db/bugs.js';
@@ -35,6 +43,9 @@ export * from './db/feedback.js';
 export * from './db/events.js';
 export * from './db/widgets.js';
 export * from './db/skills.js';
+export * from './db/concepts.js';
+export * from './db/projects.js';
+export * from './db/runs.js';
 
 // Composed initDB — the ONE non-verbatim edit in the campaign (mechanics §3):
 // core owns connection+migrations+schema+instance_config seeding (initDBConnection);
@@ -162,57 +173,7 @@ export function deleteOperator(id) {
   stmt('dvDeleteOperator', 'DELETE FROM operators WHERE id = ?').run(id);
 }
 
-// -- Projects --
-
-// -- Organizations --
-
-export function createOrg(id, name, description, ownerId) {
-  stmt('dvCreateOrg', `INSERT OR IGNORE INTO organizations (id, name, description, owner_id)
-    VALUES (?, ?, ?, ?)`).run(id, name, description || '', ownerId || '');
-}
-
-export function listOrgs() {
-  return stmt('dvListOrgs', 'SELECT * FROM organizations ORDER BY created_at').all();
-}
-
-export function getOrg(id) {
-  return stmt('dvGetOrg', 'SELECT * FROM organizations WHERE id = ?').get(id);
-}
-
-export function updateOrg(id, fields) {
-  buildUpdate('organizations', id, fields, ['name', 'description', 'plan', 'status']);
-}
-
-export function deleteOrg(id) {
-  db.prepare('DELETE FROM organizations WHERE id = ?').run(id);
-}
-
-// -- Projects --
-
-export function createProject(id, name, description, repoUrl, orgId, type) {
-  stmt('dvCreateProject', `INSERT OR IGNORE INTO projects (id, name, description, repo_url, org_id, type)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '', orgId || '', type || 'software');
-}
-
-export function listProjects(orgId) {
-  if (orgId) return db.prepare('SELECT * FROM projects WHERE org_id = ? ORDER BY created_at').all(orgId);
-  return stmt('dvListProjects', 'SELECT * FROM projects ORDER BY created_at').all();
-}
-
-export function getProject(id) {
-  return stmt('dvGetProject', 'SELECT * FROM projects WHERE id = ?').get(id);
-}
-
-export function updateProject(id, fields) {
-  if (fields.bug_categories !== undefined && typeof fields.bug_categories !== 'string') {
-    fields = Object.assign({}, fields, { bug_categories: JSON.stringify(fields.bug_categories) });
-  }
-  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'repo_path', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
-}
-
-export function deleteProject(id) {
-  getDB().prepare('DELETE FROM projects WHERE id = ?').run(id);
-}
+// -- Projects / Organizations --  → moved to ./db/projects.js (Wave 3)
 
 // -- Tasks --
 
@@ -2661,57 +2622,7 @@ export function checkDroneCompatibility(droneId) {
   return { drone_id: droneId, compatible: compatible, incompatible: incompatible };
 }
 
-// -- Shared Concepts --
-
-export function createConcept(name, type, description, data, createdBy) {
-  var r = stmt('dvCreateConcept', `INSERT INTO concepts (name, type, description, data, created_by)
-    VALUES (?, ?, ?, ?, ?)`).run(name, type || 'custom', description || '', JSON.stringify(data || {}), createdBy || '');
-  return r.lastInsertRowid;
-}
-
-export function getConcept(id) {
-  return stmt('dvGetConcept', 'SELECT * FROM concepts WHERE id = ?').get(id);
-}
-
-export function listConcepts(filters) {
-  var where = []; var params = [];
-  if (filters && filters.type) { where.push('type = ?'); params.push(filters.type); }
-  var sql = 'SELECT * FROM concepts' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY updated_at DESC';
-  if (filters && filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit); }
-  return stmt('dvListConcepts_' + where.join('_') + (filters && filters.limit || ''), sql).all(...params);
-}
-
-export function updateConcept(id, fields) {
-  var f = Object.assign({}, fields);
-  if (f.data !== undefined && typeof f.data !== 'string') f.data = JSON.stringify(f.data);
-  buildUpdate('concepts', id, f, ['name', 'type', 'description', 'data'], { updatedAt: true, extraSets: ['version = version + 1'] });
-}
-
-export function deleteConcept(id) {
-  db.prepare('DELETE FROM concepts WHERE id = ?').run(id);
-}
-
-export function linkConceptToProject(projectId, conceptId, linkedBy) {
-  stmt('dvLinkConcept', `INSERT OR IGNORE INTO project_concepts (project_id, concept_id, linked_by)
-    VALUES (?, ?, ?)`).run(projectId, conceptId, linkedBy || '');
-}
-
-export function unlinkConceptFromProject(projectId, conceptId) {
-  stmt('dvUnlinkConcept', 'DELETE FROM project_concepts WHERE project_id = ? AND concept_id = ?').run(projectId, conceptId);
-}
-
-export function getProjectConcepts(projectId) {
-  return stmt('dvGetProjectConcepts', `SELECT c.*, pc.linked_at, pc.linked_by
-    FROM concepts c JOIN project_concepts pc ON c.id = pc.concept_id
-    WHERE pc.project_id = ? ORDER BY c.name`).all(projectId);
-}
-
-export function getConceptProjects(conceptId) {
-  return stmt('dvGetConceptProjects', `SELECT p.*, pc.linked_at, pc.linked_by
-    FROM projects p JOIN project_concepts pc ON p.id = pc.project_id
-    WHERE pc.concept_id = ? ORDER BY p.name`).all(conceptId);
-}
-
+// -- Shared Concepts --  → moved to ./db/concepts.js (Wave 3)
 // -- Init (no default seed data — new instances start blank) --
 
 // =============== APPROVALS ===============
