@@ -487,7 +487,10 @@ export function updateTask(id, fields) {
   if (f.needs_approval !== undefined) f.needs_approval = f.needs_approval ? 1 : 0;
   if (f.blocked_by !== undefined) f.blocked_by = JSON.stringify(f.blocked_by);
   if (f.blocks !== undefined) f.blocks = JSON.stringify(f.blocks);
-  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo', 'review_metadata'], { updatedAt: true });
+  // 'request_id' is in the allowlist so POST /requests?auto_task can link the
+  // spawned task to its request — without it the done-cascade's "auto-resolve
+  // linked request" branch is unreachable through the routes (findings §15).
+  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo', 'review_metadata', 'request_id'], { updatedAt: true });
 }
 
 // -- Task dependencies --
@@ -2208,8 +2211,12 @@ export function completeLinkedPlanSteps(taskId) {
   for (var planId of affectedPlanIds) {
     var remaining = db.prepare("SELECT COUNT(*) as c FROM plan_steps WHERE plan_id = ? AND status NOT IN ('completed', 'skipped')").get(planId);
     if (remaining.c === 0) {
-      db.prepare("UPDATE plans SET status = 'completed', updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(planId);
-      completedPlans.push(planId);
+      // The status flip is gated on status='active'; gate the plans_completed
+      // push on the SAME condition — only report a plan completed when its
+      // status actually flipped (findings §20). Otherwise a 'draft' plan is
+      // announced completed while staying 'draft'.
+      var flipped = db.prepare("UPDATE plans SET status = 'completed', updated_at = datetime('now') WHERE id = ? AND status = 'active'").run(planId);
+      if (flipped.changes > 0) completedPlans.push(planId);
     } else {
       db.prepare("UPDATE plans SET updated_at = datetime('now') WHERE id = ?").run(planId);
     }

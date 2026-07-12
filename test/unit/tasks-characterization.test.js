@@ -24,10 +24,10 @@ import request from 'supertest'
 //   PUT    /messages/:id/resolve
 //
 // Latent-bug smells locked below (search "BUG(locked)"):
-//   1. POST /requests auto_task: updateTask()'s field allowlist has no
-//      'request_id', so the task→request link is silently DROPPED — the done-
-//      cascade's "auto-resolve linked request" branch is unreachable through the
-//      routes (proven both ways: route-created link is null; db-seeded link works).
+//   1. FIXED (findings §15): POST /requests auto_task — 'request_id' is now in
+//      updateTask()'s field allowlist, so the task→request link PERSISTS and the
+//      done-cascade's "auto-resolve linked request" branch fires for route-created
+//      tasks (was silently DROPPED — link stayed null, request stayed pending).
 //   2. POST /tasks does NOT validate priority (PUT does) — any string is stored.
 //   3. FIXED (findings §1): DELETE /tasks/:id with a valid AGENT key → 403
 //      "Admin role required" — checkAdmin now classifies a valid agent key as
@@ -36,10 +36,12 @@ import request from 'supertest'
 //      → 401 "Authentication required" (was a misleading 403 "Invalid admin key").
 //   5. GET /tasks?status=<garbage> is not enum-checked — silently returns [].
 //   6. PUT /tasks/:id can blank a title ('' passes; POST requires non-empty).
-//   7. done-cascade re-runs in full when an already-done task is set done again.
-//   8. plans_completed reports a plan whose status was NOT flipped (only 'active'
-//      plans get UPDATEd, but the id is pushed regardless — a 'draft' plan is
-//      reported completed while staying draft).
+//   7. FIXED (findings §19): done-cascade no longer re-runs when an already-done
+//      task is set done again — guarded on a genuine transition INTO 'done', so
+//      total_tasks_completed no longer double-counts.
+//   8. FIXED (findings §20): plans_completed is gated on the same status='active'
+//      condition as the status flip — a 'draft' plan is no longer reported
+//      completed while staying 'draft'.
 //   9. Auto-dispatch assigns a task to an idle agent but leaves status 'open'
 //      (the assignment IS the dispatch — documented behavior, pinned here).
 //  10. Requests: content is stored RAW (tasks escape HTML; requests don't),
@@ -453,19 +455,34 @@ describe('done-cascade (PUT /tasks/:id status=done)', () => {
     expect(JSON.parse((await getTask(blocked)).blocked_by)).toEqual([])
   })
 
-  // BUG(locked) #7: no already-done guard — setting done again re-runs the whole
-  // cascade (incl. incrementProfileCounter, so total_tasks_completed double-counts).
-  // The response is just { ok, id } (nothing left to unblock).
-  test('re-completing an already-done task returns 200 and re-runs the cascade', async () => {
-    const t = await mkTask({ title: 'double done', project_id: 'char-cascade-proj' })
-    const first = await request(app).put('/api/mycelium/tasks/' + t).set(admin()).send({ status: 'done' })
+  // FIXED (findings §19): the done-cascade is now guarded on a genuine
+  // transition INTO 'done' — re-completing an already-done task is a no-op. The
+  // cascade does not re-run, so incrementProfileCounter is not called again and
+  // total_tasks_completed does NOT double-count. (The old lock only asserted the
+  // response shape { ok, id }, which is identical either way — this version
+  // observes the counter delta to actually prove the no-op.)
+  test('re-completing an already-done task is a no-op: cascade does not re-run, counter not re-incremented', async () => {
+    // ensureAgentProfile creates the counter row (incrementProfileCounter only
+    // UPDATEs an existing row — it does not auto-create one). char-agent is a
+    // registered agent, so the agent_profiles FK is satisfied; the task lives in
+    // char-agent's own project so it may write it.
+    db.ensureAgentProfile('char-agent')
+    const t = await mkTask({ title: 'double done', project_id: 'char-proj' }, agent(agentKey))
+
+    const beforeFirst = db.getAgentProfile('char-agent').total_tasks_completed
+    const first = await request(app).put('/api/mycelium/tasks/' + t).set(agent(agentKey)).send({ status: 'done' })
     expect(first.status).toBe(200)
-    const again = await request(app).put('/api/mycelium/tasks/' + t).set(admin()).send({ status: 'done' })
+    const afterFirst = db.getAgentProfile('char-agent').total_tasks_completed
+    expect(afterFirst).toBe(beforeFirst + 1) // first completion DID count — counter is live
+
+    const again = await request(app).put('/api/mycelium/tasks/' + t).set(agent(agentKey)).send({ status: 'done' })
     expect(again.status).toBe(200)
     expect(again.body).toEqual({ ok: true, id: t })
+    // the already-done guard skipped the cascade — counter unchanged (was +1 before the fix)
+    expect(db.getAgentProfile('char-agent').total_tasks_completed).toBe(afterFirst)
   })
 
-  test('linked plan steps auto-complete; a DRAFT plan is reported in plans_completed but stays draft', async () => {
+  test('linked plan steps auto-complete; a DRAFT plan is NOT reported completed (stays draft)', async () => {
     const t = await mkTask({ title: 'plan-linked task', project_id: 'char-plan-proj' })
     const plan = await request(app)
       .post('/api/mycelium/plans')
@@ -482,21 +499,21 @@ describe('done-cascade (PUT /tasks/:id status=done)', () => {
     const res = await request(app).put('/api/mycelium/tasks/' + t).set(admin()).send({ status: 'done' })
     expect(res.status).toBe(200)
     expect(res.body.plan_steps_completed).toBe(1)
-    // BUG(locked) #8: plans_completed includes the plan even though the
-    // status-flip UPDATE is guarded by status='active' — a default 'draft' plan
-    // is announced as completed while remaining 'draft'.
-    expect(res.body.plans_completed).toEqual([planId])
+    // FIXED (findings §20): plans_completed is now gated on the same status='active'
+    // condition as the status flip — a default 'draft' plan is NOT announced as
+    // completed. The step still auto-completes; the plan stays 'draft'.
+    expect(res.body.plans_completed).toBeUndefined()
     const planAfter = await request(app).get('/api/mycelium/plans/' + planId).set(admin())
     expect(planAfter.body.status).toBe('draft')
     expect(planAfter.body.steps[0].status).toBe('completed')
   })
 
-  // BUG(locked) #1 — THE big one. POST /requests?auto_task calls
-  // updateTask(taskId, { assignee, request_id }) but updateTask's buildUpdate
-  // allowlist has no 'request_id', so the link is silently dropped. The done-
-  // cascade's "auto-resolve linked request" branch can therefore NEVER fire for
-  // route-created tasks: completing the auto-task leaves the request pending.
-  test('auto_task drops request_id → completing the task does NOT resolve the request', async () => {
+  // FIXED (findings §15): POST /requests?auto_task calls
+  // updateTask(taskId, { assignee, request_id }) and 'request_id' is now in
+  // updateTask's buildUpdate allowlist, so the link PERSISTS. The done-cascade's
+  // "auto-resolve linked request" branch now fires for route-created tasks:
+  // completing the auto-task resolves the linked request.
+  test('auto_task links request_id → completing the task RESOLVES the request', async () => {
     const reqRes = await request(app)
       .post('/api/mycelium/requests')
       .set(agent(peerKey))
@@ -507,8 +524,8 @@ describe('done-cascade (PUT /tasks/:id status=done)', () => {
     const taskId = reqRes.body.task_id
 
     const task = await getTask(taskId)
-    expect(task.assignee).toBe('char-agent') // assignee half of the update DID land
-    expect(task.request_id).toBeNull()       // request_id half was dropped by the allowlist
+    expect(task.assignee).toBe('char-agent') // assignee half of the update landed
+    expect(task.request_id).toBe(requestId)  // request_id half now persists too (was dropped)
 
     const done = await request(app)
       .put('/api/mycelium/tasks/' + taskId)
@@ -516,10 +533,11 @@ describe('done-cascade (PUT /tasks/:id status=done)', () => {
       .send({ status: 'done' })
     expect(done.status).toBe(200)
 
-    // The request is STILL pending — the cascade branch never saw a request_id.
+    // The cascade branch saw the request_id and auto-resolved it.
     const pending = await request(app).get('/api/mycelium/requests/pending').set(agent(agentKey))
-    expect(pending.body.map(r => r.id)).toContain(requestId)
-    expect(db.getMessage(requestId).status).toBe('pending')
+    expect(pending.body.map(r => r.id)).not.toContain(requestId)
+    expect(db.getMessage(requestId).status).toBe('resolved')
+    expect(db.getMessage(requestId).resolved_by).toBe('char-agent') // resolver = the agent that completed the task
   })
 
   test('cascade request-branch DOES work when request_id is present (db-seeded control)', async () => {

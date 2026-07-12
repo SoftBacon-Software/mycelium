@@ -130,8 +130,11 @@ router.put('/tasks/:id', asyncHandler(function (req, res) {
     if (addedDeps.length > 0) result.blocked_by = addedDeps;
   }
 
-  // When task completes: resolve dependencies and update linked asset
-  if (fields.status === 'done') {
+  // When task completes: resolve dependencies and update linked asset.
+  // Guard on a genuine transition INTO 'done' (findings §19): re-completing an
+  // already-done task is a no-op — the cascade must not re-run, and the profile
+  // counter must not be re-incremented (was double-counting total_tasks_completed).
+  if (fields.status === 'done' && task.status !== 'done') {
     if (getSleepMode().active) appendSleepLog('tasks_completed', { id: task.id, title: task.title, agent: agentId, time: new Date().toISOString() });
     try { incrementProfileCounter(agentId, 'total_tasks_completed'); } catch (e) { /* non-critical */ }
 
