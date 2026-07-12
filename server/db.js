@@ -12,6 +12,11 @@ import { db, stmt, buildUpdate, getDB, initDBConnection, DB_PATH } from './db/co
 
 export { getDB };
 
+// Wave 2 — entity modules migrate here one per PR (see docs/DB-DECOMPOSITION-PLAN.md).
+// spend is the pilot: 3 functions, zero coupling, re-exported so the barrel's
+// public surface stays exactly 306.
+export * from './db/spend.js';
+
 // Composed initDB — the ONE non-verbatim edit in the campaign (mechanics §3):
 // core owns connection+migrations+schema+instance_config seeding (initDBConnection);
 // the barrel composes the three entity seeds (still local until their modules
@@ -844,45 +849,6 @@ export function rollbackContextKey(historyId, agentId) {
 }
 
 // Purge all expired context keys (called on server boot and periodically)
-// ---- Agent Spend Tracking ----
-
-export function logAgentSpend(agentId, projectId, costUsd, source, description, model, tokensIn, tokensOut) {
-  db.prepare(
-    "INSERT INTO agent_spend (agent_id, project_id, cost_usd, source, description, model, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(agentId, projectId || '', costUsd || 0, source || '', description || '', model || '', tokensIn || 0, tokensOut || 0);
-}
-
-export function getAgentSpend(agentId, opts) {
-  var since = (opts && opts.since) || null;
-  var projectId = (opts && opts.project_id) || null;
-  var limit = (opts && opts.limit) || 50;
-
-  var where = ['agent_id = ?'];
-  var params = [agentId];
-  if (since) { where.push('created_at >= ?'); params.push(since); }
-  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
-  params.push(limit);
-
-  return db.prepare(
-    'SELECT * FROM agent_spend WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
-  ).all(...params);
-}
-
-export function getSpendSummary(opts) {
-  var since = (opts && opts.since) || null;
-  var projectId = (opts && opts.project_id) || null;
-
-  var where = ['1=1'];
-  var params = [];
-  if (since) { where.push('created_at >= ?'); params.push(since); }
-  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
-
-  var rows = db.prepare(
-    'SELECT agent_id, project_id, SUM(cost_usd) as total_cost, COUNT(*) as entry_count, SUM(tokens_in) as total_tokens_in, SUM(tokens_out) as total_tokens_out FROM agent_spend WHERE ' + where.join(' AND ') + ' GROUP BY agent_id, project_id ORDER BY total_cost DESC'
-  ).all(...params);
-  return rows;
-}
-
 // ---- Runs (the run-log) ----
 
 export function createRun(run) {
