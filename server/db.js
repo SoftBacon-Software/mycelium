@@ -815,8 +815,11 @@ export function listThreads(limit) {
     GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(Math.min(limit || 20, 500));
 }
 
-// Archive resolved messages older than N days (default 90)
-// Deletes from messages, returns count of rows removed
+// "Archive" resolved messages older than N days (default 90).
+// NOTE: this DELETEs rows (no archive table) — the name predates the behavior.
+// Called ONLY from POST /admin/cleanup (manual); it is NOT on the daily
+// maintenance timer in index.js, so messages grow unbounded between manual
+// cleanups. See docs/HANDOFF-2026-07-legacy-pass.md before putting it on a timer.
 export function archiveOldMessages(daysOld) {
   daysOld = parseInt(daysOld) || 90;
   var result = db.prepare(
@@ -826,7 +829,12 @@ export function archiveOldMessages(daysOld) {
   return result.changes;
 }
 
-// Archive old events older than N days (default 60)
+// "Archive" events older than N days (default 60).
+// NOTE: this DELETEs rows (no archive table) — the name predates the behavior.
+// Called ONLY from POST /admin/cleanup (manual), NOT the daily timer. The
+// events table has flooded before (18M rows / 3GB from persisted heartbeats —
+// since fixed by never persisting heartbeat events), so unbounded growth here
+// is a known 2am failure mode. See docs/HANDOFF-2026-07-legacy-pass.md.
 export function archiveOldEvents(daysOld) {
   daysOld = parseInt(daysOld) || 60;
   var result = db.prepare(

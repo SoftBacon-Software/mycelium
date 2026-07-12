@@ -187,6 +187,61 @@ export function getWorkerStatus() {
 
 var workerPortIndex = 0;
 
+// ---- Async-rejection guard for plugin routes ----
+// Express 4 does NOT forward rejected promises from async handlers to the
+// error middleware — an unguarded `async` route that throws becomes an
+// unhandledRejection, and index.js (deliberately) exits the process on those
+// for crash diagnostics. That means ONE missing try/catch in ONE plugin route
+// could kill the whole daemon; this has actually happened (semantic-memory
+// /reindex + /backfill, fixed per-instance in 92b6873). Core routes go through
+// routes/mycelium.js asyncHandler at every site; plugins are an open surface
+// (third parties write them), so we close the class HERE at the mount seam
+// instead of trusting each plugin author to remember.
+//
+// wrapAsyncErrors: forward both sync throws and rejected promises to next(err)
+// so they reach the app-level error handler (500) instead of crashing the
+// process. Handlers with arity >= 4 are Express error middleware — left
+// untouched so their (err, req, res, next) signature keeps being detected.
+function wrapAsyncErrors(fn) {
+  if (typeof fn !== 'function' || fn.length >= 4) return fn;
+  return function (req, res, next) {
+    try {
+      var out = fn(req, res, next);
+      if (out && typeof out.catch === 'function') out.catch(next);
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
+// Walk an Express 4 router's layer stack and wrap every handler.
+// Uses stable Express 4 internals (router.stack -> Layer; route layers carry
+// layer.route.stack; nested routers carry a handle with its own .stack).
+// If the shape ever looks unfamiliar, the router is left untouched (fail-open
+// to pre-guard behavior) rather than risk breaking plugin routing.
+export function guardPluginRouter(pluginRouter, pluginName) {
+  try {
+    if (!pluginRouter || !Array.isArray(pluginRouter.stack)) return pluginRouter;
+    for (var layer of pluginRouter.stack) {
+      if (layer.route && Array.isArray(layer.route.stack)) {
+        // Route layer: wrap each verb handler on the route
+        for (var routeLayer of layer.route.stack) {
+          routeLayer.handle = wrapAsyncErrors(routeLayer.handle);
+        }
+      } else if (layer.handle && Array.isArray(layer.handle.stack)) {
+        // Nested router: recurse
+        guardPluginRouter(layer.handle, pluginName);
+      } else if (typeof layer.handle === 'function') {
+        // Plain middleware (incl. error middleware, which wrapAsyncErrors skips)
+        layer.handle = wrapAsyncErrors(layer.handle);
+      }
+    }
+  } catch (e) {
+    console.warn('[plugins] ' + (pluginName || 'unknown') + ': could not guard router async errors:', e.message);
+  }
+  return pluginRouter;
+}
+
 export async function loadPlugins(core, router) {
   if (!fs.existsSync(PLUGINS_DIR)) {
     console.log('[plugins] No plugins directory found');
@@ -274,7 +329,8 @@ export async function loadPlugins(core, router) {
           var prefix = manifest.routePrefix || ('/' + manifest.name);
           for (var tool of mcpTools) {
             var toolRoute = prefix + '/tools/' + tool.name;
-            router.post(toolRoute, createWorkerToolProxy(manifest.name, workerPort, tool.name));
+            // wrapAsyncErrors: proxy handler is async — same rejection-crash class
+            router.post(toolRoute, wrapAsyncErrors(createWorkerToolProxy(manifest.name, workerPort, tool.name)));
           }
 
           // Proxy catch-all for any other worker routes
@@ -309,7 +365,7 @@ export async function loadPlugins(core, router) {
         var routeModule = await import(pathToFileURL(routesPath).href);
         var pluginRouter = routeModule.default(core);
         var prefix = manifest.routePrefix || ('/' + manifest.name);
-        router.use(prefix, pluginRouter);
+        router.use(prefix, guardPluginRouter(pluginRouter, manifest.name));
       }
 
       // Collect MCP tools with plugin metadata

@@ -39,8 +39,13 @@ export default function (core) {
     });
   }
 
-  // POST /memory/search — hybrid search
-  router.post('/search', async function (req, res) {
+  // POST /memory/search — hybrid search.
+  // asyncHandler is NOT optional: a throw from db.searchKeyword/searchHybrid in
+  // a naked async handler becomes an unhandledRejection → daemon exit (the same
+  // class 92b6873 fixed on /reindex + /backfill, but missed here). The loader's
+  // guardPluginRouter (plugins.js) also covers this seam; wrapping here keeps
+  // the file self-protective and consistent with its own convention.
+  router.post('/search', asyncHandler(async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var { query, source_types, namespace, project_id, limit, mode } = req.body;
@@ -87,7 +92,7 @@ export default function (core) {
     });
 
     res.json({ results: results, mode: mode, query: query, count: results.length });
-  });
+  }));
 
   // POST /memory/index — index content
   router.post('/index', function (req, res) {

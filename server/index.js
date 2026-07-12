@@ -112,7 +112,23 @@ var app = express();
 
 // Railway runs behind a reverse proxy — trust X-Forwarded-For for real client IPs.
 // Required for rate limiting to work correctly (otherwise req.ip = proxy IP).
-app.set('trust proxy', true);
+//
+// CAVEAT (operators of DIRECT-exposed instances, i.e. no proxy in front —
+// LAN box, Jetson, bare VPS): 'trust proxy' = true believes ANY client's
+// X-Forwarded-For header, so callers can spoof req.ip and dodge or poison the
+// per-IP rate limits (login brute-force, agent-key guessing). Set
+// TRUST_PROXY=false on direct deployments; a hop count ("1") or subnet list
+// ("loopback, 10.0.0.0/8") also works — see
+// https://expressjs.com/en/guide/behind-proxies.html
+// Default remains true so existing proxied deployments keep working unchanged.
+var TRUST_PROXY = process.env.TRUST_PROXY;
+if (TRUST_PROXY === undefined || TRUST_PROXY === '' || TRUST_PROXY === 'true') {
+  app.set('trust proxy', true);
+} else if (TRUST_PROXY === 'false') {
+  app.set('trust proxy', false);
+} else {
+  app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? parseInt(TRUST_PROXY, 10) : TRUST_PROXY);
+}
 
 app.use(compression());
 

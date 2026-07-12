@@ -207,7 +207,10 @@ export default function (core) {
   // ── Lightweight In-Process Operations ──
 
   // POST /sessions/:id/captions — Generate captions for clips (Claude API, runs in-process)
-  router.post('/sessions/:id/captions', async function (req, res) {
+  // NOT async: the body awaits nothing, and on Express 4 a gratuitous `async`
+  // turns a catchable sync throw into an unhandledRejection (daemon exit).
+  // If this ever needs await, wrap it like the loader does (guardPluginRouter).
+  router.post('/sessions/:id/captions', function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var session = db.getSession(parseIntParam(req.params.id));

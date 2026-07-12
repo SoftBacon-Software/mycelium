@@ -3387,13 +3387,23 @@ router.put('/plans/:id/reorder', asyncHandler(function (req, res) {
 
 // ======== STUDIO AUTH ========
 
+// Timing-equalization dummy: a bcrypt(10) hash of a discarded random secret.
+// Unknown-username logins compare against this so they cost the same ~bcrypt
+// work as a wrong-password attempt. Without it, a fast 401 is a username-
+// enumeration oracle (no bcrypt = user doesn't exist). The preimage was never
+// recorded, and even a (impossible) match still returns 401.
+var DUMMY_PASSWORD_HASH = '$2b$10$IdXAs1NYtjlSW9GPXwmXde8.C0VPUVZT8VZVs0dgdc/hSskze9Z8m';
+
 // Login — returns JWT
 router.post('/studio/login', loginLimiter, asyncHandler(async function (req, res) {
   var username = (req.body.username || '').trim().toLowerCase();
   var password = req.body.password || '';
   if (!username || !password) return res.status(400).json({ error: 'username and password are required' });
   var user = getStudioUserByUsername(username);
-  if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+  if (!user) {
+    await bcrypt.compare(password, DUMMY_PASSWORD_HASH); // equalize timing — see DUMMY_PASSWORD_HASH
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
   if (!(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
