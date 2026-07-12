@@ -321,12 +321,12 @@ describe('POST /admin/agents — drone registration', () => {
     expect(res.body.error).toBe('id, name, and project_id are required')
   })
 
-  test('agent key alone → 401 (checkAdmin sees no admin credentials at all)', async () => {
+  test('agent key alone → 403 "Admin role required" (findings-§1 fix: authenticated, not authorized)', async () => {
     const res = await api().post('/api/mycelium/admin/agents')
       .set('X-Agent-Key', AGENT_KEY)
       .send({ id: 'nope', name: 'Nope', project_id: 'drone' })
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('wrong admin key → 403 Invalid admin key', async () => {
@@ -411,10 +411,10 @@ describe('job templates — /drones/templates', () => {
     expect(res.body.error).toBe('Template not found')
   })
 
-  test('create is admin-only: agent key → 401, wrong admin key → 403', async () => {
+  test('create is admin-only: agent key → 403, wrong admin key → 403', async () => {
     const asAgent = await api().post('/api/mycelium/drones/templates')
       .set('X-Agent-Key', AGENT_KEY).send({ id: 'sneaky' })
-    expect(asAgent.status).toBe(401) // checkAdmin: no admin credential present at all
+    expect(asAgent.status).toBe(403) // findings-§1 fix: authenticated agent, not authorized
     const badKey = await api().post('/api/mycelium/drones/templates')
       .set('X-Admin-Key', 'wrong').send({ id: 'sneaky' })
     expect(badKey.status).toBe(403)
@@ -869,9 +869,9 @@ describe('DELETE /drones/jobs/:id — cancel (admin only)', () => {
     expect(job.body.completed_at).toBeTruthy()
   })
 
-  test('agent key → 401; wrong admin key → 403; unknown job → 404', async () => {
+  test('agent key → 403 (findings-§1 fix); wrong admin key → 403; unknown job → 404', async () => {
     const asAgent = await api().delete('/api/mycelium/drones/jobs/1').set('X-Agent-Key', AGENT_KEY)
-    expect(asAgent.status).toBe(401)
+    expect(asAgent.status).toBe(403)
     const badKey = await api().delete('/api/mycelium/drones/jobs/1').set('X-Admin-Key', 'wrong')
     expect(badKey.status).toBe(403)
     const missing = await adminHeaders(api().delete('/api/mycelium/drones/jobs/999999'))
@@ -895,9 +895,9 @@ describe('DELETE /drones/jobs — bulk cleanup (admin only)', () => {
     expect(res.body.error).toBe('status must be failed, done, or both')
   })
 
-  test('agent key → 401', async () => {
+  test('agent key → 403 (findings-§1 fix)', async () => {
     const res = await api().delete('/api/mycelium/drones/jobs').set('X-Agent-Key', AGENT_KEY)
-    expect(res.status).toBe(401)
+    expect(res.status).toBe(403)
   })
 
   test('sweeps failed jobs to cancelled; reports { ok, cancelled, jobs:[{id,title}] }', async () => {
@@ -975,9 +975,9 @@ describe('drone artifacts — /drones/artifacts', () => {
     expect(res.body.error).toBe('Artifact not found')
   })
 
-  test('delete is admin-only: agent → 401; unknown → 404; success → { ok, deleted }', async () => {
+  test('delete is admin-only: agent → 403 (findings-§1 fix); unknown → 404; success → { ok, deleted }', async () => {
     const asAgent = await api().delete('/api/mycelium/drones/artifacts/my_file_.py').set('X-Agent-Key', AGENT_KEY)
-    expect(asAgent.status).toBe(401)
+    expect(asAgent.status).toBe(403)
     const missing = await adminHeaders(api().delete('/api/mycelium/drones/artifacts/ghost.bin'))
     expect(missing.status).toBe(404)
     const res = await adminHeaders(api().delete('/api/mycelium/drones/artifacts/my_file_.py'))

@@ -85,14 +85,15 @@ describe('github proxy without GITHUB_TOKEN (graceful degradation, zero network)
     expect(res.body.error).toBe('GITHUB_TOKEN not configured on server')
   })
 
-  test('POST create PR is ADMIN-ONLY: agent key → 401 (checkAdmin never looks at X-Agent-Key)', async () => {
-    // checkAdmin sees neither X-Admin-Key nor Authorization → generic 401,
-    // NOT "invalid key" — an agent key is invisible to the admin gate.
+  test('POST create PR is ADMIN-ONLY: agent key → 403 "Admin role required" (findings-§1 fix)', async () => {
+    // checkAdmin now recognizes a valid X-Agent-Key as authentication
+    // (classification only, grants nothing): authenticated-but-not-admin is an
+    // honest 403, no longer the as-if-anonymous 401.
     const res = await request(app).post(api('/github/prs/acme/widgets'))
       .set('X-Agent-Key', lucyKey)
       .send({ title: 't', head: 'h', base: 'b' })
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('POST create PR with a WRONG admin key → 403 Invalid admin key', async () => {
@@ -118,12 +119,12 @@ describe('github proxy without GITHUB_TOKEN (graceful degradation, zero network)
     expect(res.body.error).toBe('GITHUB_TOKEN not configured on server')
   })
 
-  test('POST merge PR with only an agent key → 401 (merge is operator-track, not squad-track)', async () => {
+  test('POST merge PR with only an agent key → 403 (merge is operator-track, not squad-track; findings-§1 fix)', async () => {
     const res = await request(app).post(api('/github/prs/acme/widgets/42/merge'))
       .set('X-Agent-Key', echoKey)
       .send({})
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 })
 

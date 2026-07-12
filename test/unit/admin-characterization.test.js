@@ -29,8 +29,9 @@ import jwt from 'jsonwebtoken'
 //                        - no credentials at all        → 401 'Authentication required'
 //                        - JWT with any non-admin role  → 403 'Admin role required'
 //                        - wrong admin key              → 403 'Invalid admin key'
-//                        - a valid AGENT key            → 401 (agent keys are invisible
-//                          to checkAdmin — it never reads X-Agent-Key)
+//                        - a valid AGENT key            → 403 'Admin role required'
+//                          (FIXED 2026-07, findings §1: authenticated-but-not-admin
+//                          is an authorization failure, not an authentication one)
 //   checkAgentOrAdmin:   JWT (any role) OR admin key OR agent key.
 //                        - nothing                      → 401 'Missing X-Agent-Key header'
 //                        - bad agent key                → 403 'Invalid agent key'
@@ -145,12 +146,13 @@ describe('admin auth gate — checkAdmin endpoints', () => {
     }
   })
 
-  test('valid AGENT key → 401 (checkAdmin never reads X-Agent-Key)', async () => {
-    // Agents cannot reach admin-only endpoints — but note the status is 401
-    // "Authentication required" (credentials ignored), not 403 (rejected).
+  test('valid AGENT key → 403 "Admin role required" (proves the findings-§1 fix)', async () => {
+    // Agents cannot reach admin-only endpoints — and since the 2026-07 fix the
+    // status is an honest 403 (authenticated but not authorized), not the old
+    // 401 that pretended the credential was never seen.
     const res = await request(app).get(api('/admin/overview')).set('X-Agent-Key', agentKey)
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 })
 

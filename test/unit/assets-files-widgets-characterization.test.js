@@ -269,11 +269,11 @@ describe('assets — metadata CRUD', () => {
     expect(res.body.error).toBe('Asset not found')
   })
 
-  test('DELETE /assets/:id is admin-only; agent key gets 401 (quirk: not 403 — checkAdmin sees no admin creds at all)', async () => {
+  test('DELETE /assets/:id is admin-only; agent key gets 403 "Admin role required" (findings-§1 fix: authenticated, not authorized)', async () => {
     const created = await asAgent(api().post('/api/mycelium/assets')).send({ name: 'undeletable', project_id: PROJECT })
     const res = await asAgent(api().delete('/api/mycelium/assets/' + created.body.id))
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
     // still there
     expect((await asAgent(api().get('/api/mycelium/assets/' + created.body.id))).status).toBe(200)
   })

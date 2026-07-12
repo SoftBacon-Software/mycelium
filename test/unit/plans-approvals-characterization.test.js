@@ -150,13 +150,13 @@ describe('auth pins', () => {
     expect((await request(app).post(base + '/approvals').send({ action_type: 'deploy', title: 'x', payload: {} })).status).toBe(401)
   })
 
-  test('PUT /approvals/:id/vote is ADMIN-ONLY: agent key → 401, wrong admin key → 403', async () => {
+  test('PUT /approvals/:id/vote is ADMIN-ONLY: agent key → 403, wrong admin key → 403', async () => {
     const { id } = await mkApproval()
-    // checkAdmin never inspects X-Agent-Key: with neither X-Admin-Key nor
-    // Authorization present it 401s "Authentication required" — agents cannot vote.
+    // findings-§1 fix: checkAdmin recognizes the valid agent key as
+    // authentication → honest 403 "Admin role required" — agents still cannot vote.
     const asAgent = await vote(id, { vote: 'approve' }, agent())
-    expect(asAgent.status).toBe(401)
-    expect(asAgent.body.error).toBe('Authentication required')
+    expect(asAgent.status).toBe(403)
+    expect(asAgent.body.error).toBe('Admin role required')
 
     const badKey = await vote(id, { vote: 'approve' }, { 'X-Admin-Key': 'wrong-key-wrong-key-wrong-key-wrong' })
     expect(badKey.status).toBe(403)

@@ -151,7 +151,7 @@ describe('POST /admin/agents (register)', () => {
     expect(res.body.error).toBe('Template no-such-template not found')
   })
 
-  test('auth matrix: no creds 401 / bad key 403 / non-admin JWT 403 / agent key 401', async () => {
+  test('auth matrix: no creds 401 / bad key 403 / non-admin JWT 403 / agent key 403', async () => {
     const body = { id: 'authz', name: 'A', project_id: 'p' }
     const none = await request(app).post('/api/mycelium/admin/agents').send(body)
     expect(none.status).toBe(401)
@@ -167,12 +167,13 @@ describe('POST /admin/agents (register)', () => {
     expect(member.status).toBe(403)
     expect(member.body.error).toBe('Admin role required')
 
-    // checkAdmin never accepts agent keys: no X-Admin-Key and no Authorization
-    // header → 401 (the agent key header is simply ignored)
+    // FIXED (findings §1): checkAdmin still never GRANTS via agent keys, but a
+    // valid X-Agent-Key now counts as authentication → 403 (not authorized),
+    // no longer the misleading 401 (as-if-anonymous).
     const agentKey = await request(app).post('/api/mycelium/admin/agents')
       .set('X-Agent-Key', agents['worker1']).send(body)
-    expect(agentKey.status).toBe(401)
-    expect(agentKey.body.error).toBe('Authentication required')
+    expect(agentKey.status).toBe(403)
+    expect(agentKey.body.error).toBe('Admin role required')
   })
 })
 
@@ -539,12 +540,12 @@ describe('agent templates', () => {
     expect(res.body).toEqual([])
   })
 
-  test('POST requires admin: agent key → 401; missing name → 400', async () => {
+  test('POST requires admin: agent key → 403 (findings-§1 fix); missing name → 400', async () => {
     const noAdmin = await request(app).post('/api/mycelium/agent-templates')
       .set('X-Agent-Key', agents['worker1'])
       .send({ id: 't1', name: 'T1' })
-    expect(noAdmin.status).toBe(401)
-    expect(noAdmin.body.error).toBe('Authentication required')
+    expect(noAdmin.status).toBe(403)
+    expect(noAdmin.body.error).toBe('Admin role required')
 
     const missing = await admin(request(app).post('/api/mycelium/agent-templates'))
       .send({ id: 'no-name' })

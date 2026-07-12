@@ -113,20 +113,19 @@ describe('auth matrix — checkAdmin on GET /plugins', () => {
     expect(res.body).toEqual({ error: 'Admin role required' })
   })
 
-  test('valid AGENT key is invisible to checkAdmin → 401 (agents cannot even list plugins)', async () => {
+  test('valid AGENT key → 403 "Admin role required" (findings-§1 fix; agents still cannot list plugins)', async () => {
     const res = await api().get('/api/mycelium/plugins').set('X-Agent-Key', agentKey)
-    expect(res.status).toBe(401)
-    expect(res.body).toEqual({ error: 'Authentication required' })
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'Admin role required' })
   })
 
-  test('garbage Bearer token → 403 with the MISLEADING message "Invalid admin key"', async () => {
-    // QUIRK (locked): an Authorization header that fails JWT verification falls
-    // through to the x-admin-key check; no admin key was sent, so the client is
-    // told their (nonexistent) admin key is invalid. Arguably should be a 401
-    // about the token — characterizing as-is.
+  test('garbage Bearer token → 401 "Authentication required" (fixed: no more misleading "Invalid admin key")', async () => {
+    // FIXED (findings §1 sibling): an Authorization header that fails JWT
+    // verification is a failed AUTHENTICATION — 401 about the caller's
+    // credentials, no longer a 403 blaming an admin key that was never sent.
     const res = await api().get('/api/mycelium/plugins').set('Authorization', 'Bearer not-a-jwt')
-    expect(res.status).toBe(403)
-    expect(res.body).toEqual({ error: 'Invalid admin key' })
+    expect(res.status).toBe(401)
+    expect(res.body).toEqual({ error: 'Authentication required' })
   })
 
   test('valid admin key in X-Admin-Key → 200', async () => {
@@ -446,16 +445,16 @@ describe('aggregate plugin views (nothing loaded)', () => {
 // ======================== WEBHOOKS ========================
 
 describe('POST /webhooks — create subscription', () => {
-  test('admin only: 401 with no credentials, 401 with a valid AGENT key', async () => {
+  test('admin only: 401 with no credentials, 403 with a valid AGENT key (findings-§1 fix)', async () => {
     expect((await api().post('/api/mycelium/webhooks').send({ agent_id: 'a', url: 'http://x' })).status).toBe(401)
-    // DESIGN SMELL (locked): an agent cannot register a webhook even for
-    // ITSELF — webhook management is admin-key/admin-JWT only, and agent keys
-    // are invisible to checkAdmin (→ 401 'Authentication required').
+    // DESIGN SMELL (still locked): an agent cannot register a webhook even for
+    // ITSELF — webhook management is admin-key/admin-JWT only. The agent's key
+    // now at least reads as authentication (→ 403 'Admin role required').
     const res = await api().post('/api/mycelium/webhooks')
       .set('X-Agent-Key', agentKey)
       .send({ agent_id: 'plug-test-agent', url: 'http://example.com/hook' })
-    expect(res.status).toBe(401)
-    expect(res.body).toEqual({ error: 'Authentication required' })
+    expect(res.status).toBe(403)
+    expect(res.body).toEqual({ error: 'Admin role required' })
   })
 
   test('missing agent_id or url → 400 with a single shared message', async () => {

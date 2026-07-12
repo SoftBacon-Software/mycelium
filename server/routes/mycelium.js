@@ -521,6 +521,23 @@ function checkProjectScope(req, res, resourceProjectId, assignee) {
   return false;
 }
 
+// Resolve an agent-key SHA-256 hash to its agent record ({ id, project_id }) or null.
+// CHEAP path only: in-memory cache + O(1) direct DB lookup. Deliberately excludes the
+// legacy-bcrypt sweep and all rate-limit bookkeeping so it is safe to call from auth
+// middlewares that merely need to CLASSIFY a caller (authenticated-agent vs anonymous)
+// without opening a new compute surface. Writes no response and mutates no request state.
+function resolveAgentKeyRecord(keyHash) {
+  var cached = getFromAgentKeyCache(keyHash);
+  if (cached) return { id: cached.id, project_id: cached.project_id };
+  var directMatch = getDB().prepare("SELECT id, project_id FROM agents WHERE api_key_hash = ?").get(keyHash);
+  if (directMatch) {
+    var record = { id: directMatch.id, project_id: directMatch.project_id || null };
+    setInAgentKeyCache(keyHash, record);
+    return record;
+  }
+  return null;
+}
+
 // Agent auth: validates X-Agent-Key header, sets req._authAgentId and req._authProjectId
 // Agent keys are high-entropy machine-generated secrets (192-bit) — stored as SHA-256.
 // bcrypt adds no security over SHA-256 for keys of this entropy; SHA-256 is instant and
@@ -542,20 +559,11 @@ function checkAgent(req, res) {
     return null;
   }
   var keyHash = crypto.createHash('sha256').update(key).digest('hex');
-  // In-memory cache: avoids DB lookup on every request
-  var cached = getFromAgentKeyCache(keyHash);
-  if (cached) {
-    req._authAgentId = cached.id;
-    req._authProjectId = cached.project_id;
-    return cached.id;
-  }
-  // DB lookup: O(1) SHA-256 direct lookup first, then bcrypt fallback for legacy hashes
-  var directMatch = getDB().prepare("SELECT id, project_id FROM agents WHERE api_key_hash = ?").get(keyHash);
-  if (directMatch) {
-    setInAgentKeyCache(keyHash, { id: directMatch.id, project_id: directMatch.project_id || null });
-    req._authAgentId = directMatch.id;
-    req._authProjectId = directMatch.project_id || null;
-    return directMatch.id;
+  var resolved = resolveAgentKeyRecord(keyHash);
+  if (resolved) {
+    req._authAgentId = resolved.id;
+    req._authProjectId = resolved.project_id;
+    return resolved.id;
   }
   // Fallback: scan for legacy bcrypt hashes and auto-migrate.
   // Guarded: skip the O(N) bcrypt sweep entirely when no legacy hashes exist, so
@@ -585,7 +593,11 @@ function checkAgent(req, res) {
   return null;
 }
 
-// Admin auth: validates X-Admin-Key, studio JWT, or legacy admin key
+// Admin auth: validates X-Admin-Key, studio JWT, or legacy admin key.
+// Reject-path semantics (fixed 2026-07, findings §1): 401 = not authenticated
+// (no credential, or a credential that failed verification); 403 = authenticated
+// but not authorized. A VALID agent key is real authentication — it earns a 403
+// "Admin role required", never a 401 — but grants NO admin access whatsoever.
 function checkAdmin(req, res) {
   // Try studio JWT first — must have admin role
   var user = getStudioUser(req);
@@ -593,16 +605,35 @@ function checkAdmin(req, res) {
   if (user) { res.status(403).json({ error: 'Admin role required' }); return false; }
   // Try admin key
   var key = req.headers['x-admin-key'];
-  if (!key && !req.headers['authorization']) {
-    res.status(401).json({ error: 'Authentication required' });
+  if (isAdminKey(key)) { req._authIsAdmin = true; return true; }
+  if (key) {
+    // An admin key was presented but is wrong — name the actual problem.
+    res.status(403).json({ error: 'Invalid admin key' });
     return false;
   }
-  if (isAdminKey(key)) { req._authIsAdmin = true; return true; }
-  res.status(403).json({ error: 'Invalid admin key' });
+  // No admin credential. If the caller authenticates with a valid AGENT key,
+  // they are a real (non-admin) caller on an admin-only route: 403, not 401.
+  // Cheap classification only — an invalid agent key falls through to the same
+  // 401 as before, and resolution never grants any access or request state.
+  var agentKey = req.headers['x-agent-key'];
+  if (agentKey) {
+    var keyHash = crypto.createHash('sha256').update(agentKey).digest('hex');
+    if (resolveAgentKeyRecord(keyHash)) {
+      res.status(403).json({ error: 'Admin role required' });
+      return false;
+    }
+  }
+  // Anonymous, a garbage Bearer token, or an unrecognized agent key: the caller
+  // never authenticated → 401 (a garbage Bearer previously drew a misleading
+  // 403 "Invalid admin key" despite no admin key being sent).
+  res.status(401).json({ error: 'Authentication required' });
   return false;
 }
 
-// Any studio JWT user (operator or admin) OR admin key — NOT agent keys
+// Any studio JWT user (operator or admin) OR admin key — NOT agent keys.
+// Reject-path semantics (aligned 2026-07 with checkAdmin, findings §1):
+// a fully anonymous caller gets 401; a caller who presented a credential
+// (agent key, admin key, Bearer) keeps the pre-fix 403.
 function checkAdminOrOperator(req, res) {
   var user = getStudioUser(req);
   if (user) { req._authIsAdmin = user.role === 'admin'; return user.displayName || user.username; }
@@ -610,6 +641,10 @@ function checkAdminOrOperator(req, res) {
   if (isAdminKey(key)) {
     req._authIsAdmin = true;
     return req.headers['x-acting-as'] || '__system__';
+  }
+  if (!key && !req.headers['authorization'] && !req.headers['x-agent-key']) {
+    res.status(401).json({ error: 'Authentication required' });
+    return false;
   }
   res.status(403).json({ error: 'Operator or admin access required' });
   return false;

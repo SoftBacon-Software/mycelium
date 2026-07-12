@@ -353,16 +353,27 @@ describe('teams — CRUD + auth', () => {
     expect(res.body.error).toBe('Admin role required')
   })
 
-  // NOTE (auth asymmetry, locked): checkAdmin never inspects X-Agent-Key, so an
-  // agent presenting a perfectly valid agent key gets 401 "Authentication
-  // required" (as if anonymous) on admin-only routes — not a 403.
-  test('POST /teams with only an agent key → 401 (agent keys invisible to checkAdmin)', async () => {
-    const res = await request(app)
+  // FIXED (findings §1): checkAdmin now classifies a VALID agent key as
+  // authenticated-but-not-authorized → 403 "Admin role required" (it grants
+  // nothing). An UNRECOGNIZED agent key is not authentication → still 401.
+  test('POST /teams with an agent key: valid → 403, unrecognized → 401', async () => {
+    const reg = await asAdmin(request(app).post('/api/mycelium/admin/agents'))
+      .send({ id: 'teams-auth-probe', name: 'Teams Auth Probe', project_id: 'teams-auth-probe-proj' })
+    expect(reg.status).toBe(200)
+
+    const valid = await request(app)
+      .post('/api/mycelium/teams')
+      .set('X-Agent-Key', reg.body.api_key)
+      .send({ id: 'agent-team', org_id: 'org-a', name: 'Nope' })
+    expect(valid.status).toBe(403)
+    expect(valid.body.error).toBe('Admin role required')
+
+    const unrecognized = await request(app)
       .post('/api/mycelium/teams')
       .set('X-Agent-Key', 'dvk_' + 'a'.repeat(48))
       .send({ id: 'agent-team', org_id: 'org-a', name: 'Nope' })
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(unrecognized.status).toBe(401)
+    expect(unrecognized.body.error).toBe('Authentication required')
   })
 
   // NOTE (locked): unauthenticated reads on checkAgentOrAdmin routes fall all
@@ -543,14 +554,15 @@ describe('team members — roles, primary flag, auth', () => {
     expect(res.body.error).toBe('Operator or admin access required')
   })
 
-  // NOTE (locked): checkAdminOrOperator has no 401 branch — a fully anonymous
-  // request gets the same 403 as a wrong-credential one.
-  test('unauthenticated member add → 403 (not 401)', async () => {
+  // FIXED (findings §1 sibling): checkAdminOrOperator now distinguishes a fully
+  // anonymous request (401 — never authenticated) from a caller that presented
+  // a credential but isn't operator/admin (403, as pinned above).
+  test('unauthenticated member add → 401 "Authentication required"', async () => {
     const res = await request(app)
       .post('/api/mycelium/teams/alpha/members')
       .send({ user_id: 'op-1' })
-    expect(res.status).toBe(403)
-    expect(res.body.error).toBe('Operator or admin access required')
+    expect(res.status).toBe(401)
+    expect(res.body.error).toBe('Authentication required')
   })
 })
 
@@ -670,14 +682,16 @@ describe('team-settings — sectioned KV, upsert/read-back, sync', () => {
     expect(res.body).toEqual({ ok: true, message: 'Profile sync complete' })
   })
 
-  test('team-settings are admin-only: operator JWT → 403, agent key → 401, anonymous → 401', async () => {
+  test('team-settings are admin-only: operator JWT → 403, unrecognized agent key → 401, anonymous → 401', async () => {
     const asOperator = await request(app)
       .get('/api/mycelium/team-settings')
       .set('Authorization', 'Bearer ' + jwtFor('member', 'Hijack'))
     expect(asOperator.status).toBe(403)
     expect(asOperator.body.error).toBe('Admin role required')
 
-    // Agent keys are invisible to checkAdmin → treated as anonymous (401).
+    // An UNRECOGNIZED agent key never authenticates → 401. (A VALID agent key
+    // now draws 403 "Admin role required" — findings-§1 fix, proven in the
+    // POST /teams auth test above.)
     const asAgent = await request(app)
       .get('/api/mycelium/team-settings')
       .set('X-Agent-Key', 'dvk_' + 'c'.repeat(48))
@@ -763,7 +777,7 @@ describe('operators — CRUD + admin-only mutations', () => {
     expect(res.body.error).toBe('Operator not found')
   })
 
-  test('operator mutations are admin-only: operator JWT 403, agent key 401', async () => {
+  test('operator mutations are admin-only: operator JWT 403, unrecognized agent key 401', async () => {
     const asOperator = await request(app)
       .post('/api/mycelium/operators')
       .set('Authorization', 'Bearer ' + jwtFor('member', 'Hijack'))
@@ -771,6 +785,8 @@ describe('operators — CRUD + admin-only mutations', () => {
     expect(asOperator.status).toBe(403)
     expect(asOperator.body.error).toBe('Admin role required')
 
+    // Unrecognized key = no authentication → 401 (a VALID agent key would 403
+    // per the findings-§1 fix).
     const asAgent = await request(app)
       .put('/api/mycelium/operators/op-1')
       .set('X-Agent-Key', 'dvk_' + 'd'.repeat(48))

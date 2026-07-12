@@ -144,11 +144,11 @@ describe('auth boundaries', () => {
     expect(res.body.error).toBe('Studio login required')
   })
 
-  test('DELETE /messages/bulk is admin-only: an agent key gets 401 (checkAdmin never looks at X-Agent-Key)', async () => {
+  test('DELETE /messages/bulk is admin-only: an agent key gets 403 "Admin role required" (findings-§1 fix)', async () => {
     const res = await request(app).delete('/api/mycelium/messages/bulk?from=lucy')
       .set('X-Agent-Key', lucyKey)
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('GET /events/stream with no credentials → 401 JSON (auth rejects before SSE headers)', async () => {
@@ -654,14 +654,14 @@ describe('channels', () => {
     expect(all.body.some(c => c.slug === 'archy')).toBe(true)
   })
 
-  test('DELETE /channels/:id: protected slugs 403; agents 401; admin deletes normal channels', async () => {
+  test('DELETE /channels/:id: protected slugs 403; agents 403; admin deletes normal channels', async () => {
     const protectedRes = await admin(request(app).delete(`/api/mycelium/channels/${generalChannelId}`))
     expect(protectedRes.status).toBe(403)
     expect(protectedRes.body.error).toBe('Cannot delete protected channel')
 
     const asAgent = await request(app).delete(`/api/mycelium/channels/${opsChannelId}`)
       .set('X-Agent-Key', lucyKey)
-    expect(asAgent.status).toBe(401) // checkAdmin ignores agent keys entirely
+    expect(asAgent.status).toBe(403) // findings-§1 fix: authenticated agent, not authorized
 
     const ok = await admin(request(app).delete(`/api/mycelium/channels/${opsChannelId}`))
     expect(ok.status).toBe(200)

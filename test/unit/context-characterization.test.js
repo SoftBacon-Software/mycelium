@@ -37,7 +37,8 @@ import request from 'supertest'
 //  4. History ?limit: default 20; >100 clamped to 100 (unobservable past the
 //     50-version retention cap); non-numeric → 20; NEGATIVE → no limit.
 //  5. category and ttl/expires_at are RESET by any later write that omits them.
-//  6. DELETE and /stats are admin-only; a valid AGENT key gets 401 (not 403).
+//  6. DELETE and /stats are admin-only; a valid AGENT key gets 403 "Admin
+//     role required" (FIXED 2026-07, findings §1 — was an as-if-anonymous 401).
 //     Agents have NO namespace ACL — any agent can write any namespace.
 //
 // Same harness as studio-login.test.js / auth-roles.test.js: real router,
@@ -438,16 +439,16 @@ describe('DELETE /context/keys/:namespace/:key', () => {
     expect(res.body).toEqual({ ok: true, deleted: 'delns:never-existed' })
   })
 
-  test('BUG SMELL: a valid AGENT gets 401 (not 403) on delete — checkAdmin never inspects X-Agent-Key', async () => {
-    // The agent IS authenticated infrastructure-wise, but checkAdmin only
-    // looks at JWT/X-Admin-Key; with neither present it answers 401
-    // "Authentication required" — misleading for a credentialed caller.
+  test('FIXED (findings §1): a valid AGENT gets 403 "Admin role required" on delete — authenticated, not authorized', async () => {
+    // The agent IS authenticated; checkAdmin now recognizes the valid
+    // X-Agent-Key (classification only, grants nothing) and answers an honest
+    // role-based 403 instead of the old as-if-anonymous 401.
     await putKey('delns', 'agent-target', 'x')
     const res = await request(app)
       .delete('/api/mycelium/context/keys/delns/agent-target')
       .set('X-Agent-Key', AGENT_KEY)
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
     expect((await getKey('delns', 'agent-target')).status).toBe(200) // untouched
   })
 })
@@ -606,12 +607,12 @@ describe('GET /context/stats', () => {
     expect(ephemeral).toEqual({ namespace: 'statns', category: 'ephemeral', count: 1, total_bytes: 2 })
   })
 
-  test('BUG SMELL: a valid AGENT gets 401 (not 403) — same checkAdmin quirk as DELETE', async () => {
+  test('FIXED (findings §1): a valid AGENT gets 403 — same checkAdmin fix as DELETE', async () => {
     const res = await request(app)
       .get('/api/mycelium/context/stats')
       .set('X-Agent-Key', AGENT_KEY)
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('wrong admin key → 403 Invalid admin key', async () => {

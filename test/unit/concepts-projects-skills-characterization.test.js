@@ -38,11 +38,12 @@ import jwt from 'jsonwebtoken'
 //  B8. Reinstalling a skill double-increments install_count (INSERT OR
 //      REPLACE + unconditional increment); uninstall never decrements.
 //  B9. POST /skills/:id/uninstall never 404s (no skill/agent existence check).
-// B10. Admin-only routes (checkAdmin) never consult X-Agent-Key: a request
-//      authenticated ONLY by a valid agent key gets 401 "Authentication
-//      required" (not 403). Conversely on agent-or-admin routes an INVALID
-//      X-Admin-Key with no agent key falls through to 401 "Missing
-//      X-Agent-Key header" (not 403 "Invalid admin key").
+// B10. FIXED (findings §1, 2026-07): admin-only routes (checkAdmin) now
+//      consult X-Agent-Key for CLASSIFICATION only — a request authenticated
+//      by a valid agent key gets 403 "Admin role required" (authenticated but
+//      not authorized), no longer the as-if-anonymous 401. No access granted.
+//      Still current: on agent-or-admin routes an INVALID X-Admin-Key with no
+//      agent key falls through to 401 "Missing X-Agent-Key header".
 //
 // Harness: same as studio-login.test.js — real router, fresh temp DB,
 // env before dynamic import, supertest. Fixtures via the real routes where
@@ -138,12 +139,13 @@ describe('auth: checkAdmin routes (POST /skills as probe)', () => {
     expect(res.body.error).toBe('Authentication required')
   })
 
-  test('LATENT BUG (locked) B10: valid AGENT key on admin route → 401 (agent keys never consulted)', async () => {
-    // checkAdmin only looks at studio JWT + X-Admin-Key. An authenticated
-    // agent gets the same 401 as an anonymous caller (not a role-based 403).
+  test('B10 FIXED: valid AGENT key on admin route → 403 "Admin role required"', async () => {
+    // Proves the findings-§1 fix: checkAdmin recognizes a valid agent key as
+    // authentication (grants nothing) and answers with a role-based 403
+    // instead of the old as-if-anonymous 401.
     const res = await request(app).post(api('/skills')).set(agentHeaders()).send({ id: 'x', name: 'X' })
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('wrong admin key → 403 "Invalid admin key"', async () => {
@@ -260,13 +262,13 @@ describe('projects: CRUD + listing', () => {
     expect(res.body.name).toBe('Crud One v2') // unchanged from previous test
   })
 
-  test('PUT /projects/:id unknown → 404; agent key → 401 (admin-only)', async () => {
+  test('PUT /projects/:id unknown → 404; agent key → 403 (admin-only)', async () => {
     const notFound = await request(app).put(api('/projects/nope')).set(adminHeaders()).send({ name: 'x' })
     expect(notFound.status).toBe(404)
     expect(notFound.body.error).toBe('Project not found')
 
     const asAgent = await request(app).put(api('/projects/proj-crud-1')).set(agentHeaders()).send({ name: 'x' })
-    expect(asAgent.status).toBe(401) // B10 again: agent key invisible to checkAdmin
+    expect(asAgent.status).toBe(403) // B10 fixed: agent is authenticated, just not admin
   })
 
   test('DELETE /projects/:id → { ok, deleted }; row gone; unknown → 404', async () => {

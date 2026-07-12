@@ -29,9 +29,11 @@ import request from 'supertest'
 //      cascade's "auto-resolve linked request" branch is unreachable through the
 //      routes (proven both ways: route-created link is null; db-seeded link works).
 //   2. POST /tasks does NOT validate priority (PUT does) — any string is stored.
-//   3. DELETE /tasks/:id with a valid AGENT key → 401 "Authentication required"
-//      (not 403): checkAdmin never looks at X-Agent-Key.
-//   4. A garbage Bearer token on an admin route reads as 403 "Invalid admin key".
+//   3. FIXED (findings §1): DELETE /tasks/:id with a valid AGENT key → 403
+//      "Admin role required" — checkAdmin now classifies a valid agent key as
+//      authenticated-but-not-authorized (grants nothing).
+//   4. FIXED (findings §1 sibling): a garbage Bearer token on an admin route
+//      → 401 "Authentication required" (was a misleading 403 "Invalid admin key").
 //   5. GET /tasks?status=<garbage> is not enum-checked — silently returns [].
 //   6. PUT /tasks/:id can blank a title ('' passes; POST requires non-empty).
 //   7. done-cascade re-runs in full when an already-done task is set done again.
@@ -155,14 +157,13 @@ describe('auth surface (tasks routes)', () => {
     expect(res.status).toBe(401)
   })
 
-  // BUG(locked) #3: a VALID agent key on the admin-only DELETE gets 401
-  // "Authentication required" — checkAdmin only inspects X-Admin-Key /
-  // Authorization, so an authenticated agent reads as "no credentials at all"
-  // (one would expect 403 for insufficient privilege).
-  test('DELETE /tasks/:id with a valid AGENT key → 401 (not 403)', async () => {
+  // BUG #3 FIXED (findings §1): a VALID agent key on the admin-only DELETE now
+  // gets 403 "Admin role required" — the agent is authenticated, just not
+  // authorized. No access granted; only the status code is honest now.
+  test('DELETE /tasks/:id with a valid AGENT key → 403 "Admin role required"', async () => {
     const res = await request(app).delete('/api/mycelium/tasks/1').set(agent(agentKey))
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Authentication required')
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
   })
 
   test('DELETE /tasks/:id with a wrong admin key → 403', async () => {
@@ -171,14 +172,15 @@ describe('auth surface (tasks routes)', () => {
     expect(res.body.error).toBe('Invalid admin key')
   })
 
-  // BUG(locked) #4: a garbage Bearer token fails JWT verification silently and
-  // falls through to the admin-key check — the error blames the admin key.
-  test('DELETE /tasks/:id with a garbage Bearer token → 403 "Invalid admin key"', async () => {
+  // BUG #4 FIXED (findings §1 sibling): a garbage Bearer token is a failed
+  // AUTHENTICATION — 401 about the caller's credentials, no longer a 403
+  // blaming an admin key that was never sent.
+  test('DELETE /tasks/:id with a garbage Bearer token → 401 "Authentication required"', async () => {
     const res = await request(app)
       .delete('/api/mycelium/tasks/1')
       .set({ Authorization: 'Bearer not.a.jwt' })
-    expect(res.status).toBe(403)
-    expect(res.body.error).toBe('Invalid admin key')
+    expect(res.status).toBe(401)
+    expect(res.body.error).toBe('Authentication required')
   })
 })
 
