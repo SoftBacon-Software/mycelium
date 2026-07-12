@@ -31,12 +31,15 @@ import request from 'supertest'
 //   S1. POST /plans ignores the approval-gate result except for its soft warning:
 //       an agent passing a bogus/denied approval_id still creates the plan, with
 //       NO warning. (DELETE /plans hard-fails the same condition — asymmetry.)
-//   S2. PUT /plans/:id/steps/:stepId with a nonexistent stepId returns 200 ok
-//       (no 404), and on an EMPTY plan a status:'completed' ghost update
-//       auto-completes the whole plan ([].every() === true).
-//   S3. The cascade evaluates the URL's plan, but updatePlanStep updates the
-//       step row by id alone — a step of plan B updated via plan A's URL
-//       mutates B's step yet B never cascades to completed.
+//   S2. FIXED (safety-first, 2026-07-12): PUT and DELETE /plans/:id/steps/:stepId
+//       now 404 on a nonexistent stepId (existence check BEFORE mutation/emit),
+//       closing both the ghost-200 PUT and the EMPTY-plan phantom
+//       auto-completion ([].every() === true on zero real steps). See the
+//       "FIXED (safety-first) S2a/S2b" tests below.
+//   S3. FIXED (safety-first, 2026-07-12): the same existence check is SCOPED to
+//       the URL's plan (plan.steps.find), so a step that belongs to a
+//       DIFFERENT plan now also 404s instead of being silently mutated via the
+//       wrong plan's URL. See "FIXED (safety-first) S3" below.
 //   S4. Cascade ignores plan lifecycle: a 'draft' plan jumps straight to
 //       'completed'; exhausted-retry sets plans to 'blocked', a status NOT in
 //       PLAN_STATUSES (clients can never set or restore it via the API).
@@ -381,13 +384,23 @@ describe('PUT /plans/:id/steps/:stepId — updates, links, assignee', () => {
     expect(after.steps[0].linked_pr_url).toBe('https://github.com/x/y/pull/1')
   })
 
-  test('BUG (locked) S2a: nonexistent stepId → 200 { ok:true } ghost update, no 404', async () => {
+  test('FIXED (safety-first) S2a: nonexistent stepId → 404, no ghost update', async () => {
     const created = await mkPlan({ title: 'Ghost step plan', steps: [{ title: 'real step' }] })
     const res = await putStep(created.id, 987654, { status: 'in_progress' })
-    expect(res.status).toBe(200)
-    expect(res.body).toEqual({ ok: true, step_id: 987654 }) // nothing was updated
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Plan step not found' })
     const after = await getPlan(created.id)
     expect(after.steps[0].status).toBe('pending') // real step untouched
+  })
+
+  test('FIXED (safety-first): DELETE of a nonexistent stepId → 404, no phantom delete', async () => {
+    const created = await mkPlan({ title: 'Ghost step delete plan', steps: [{ title: 'real step' }] })
+    const res = await request(app).delete(base + '/plans/' + created.id + '/steps/987654').set(admin())
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Plan step not found' })
+    const after = await getPlan(created.id)
+    expect(after.steps).toHaveLength(1) // real step untouched
+    expect(after.steps[0].status).toBe('pending')
   })
 })
 
@@ -410,29 +423,38 @@ describe('plan-step auto-completion cascade', () => {
     expect(after.progress).toEqual({ total: 2, completed: 2, percent: 100 })
   })
 
-  test('BUG (locked) S2b: ghost-completing a step on an EMPTY plan auto-completes the plan ([].every() === true)', async () => {
+  test('FIXED (safety-first) S2b: ghost-completing a step on an EMPTY plan → 404, plan stays draft (no phantom auto-complete)', async () => {
+    // Previously: the missing-step guard didn't exist, so updatePlanStep no-op'd,
+    // the cascade re-fetched the (still-empty) plan, and [].every() === true
+    // vacuously "completed" a plan with zero real steps. The 404 guard now
+    // short-circuits before the mutation OR the cascade ever run.
     const created = await mkPlan({ title: 'Empty plan' }) // zero steps
     const res = await putStep(created.id, 987655, { status: 'completed' })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Plan step not found' })
     const after = await getPlan(created.id)
-    expect(after.status).toBe('completed') // no step exists, yet the plan "completed"
+    expect(after.status).toBe('draft') // no phantom completion
   })
 
-  test('BUG (locked) S3: a foreign plan\'s step updated via the wrong plan URL — step mutates, cascade misses', async () => {
+  test('FIXED (safety-first) S3: a foreign plan\'s step via the wrong plan URL → 404, neither plan mutated', async () => {
+    // Previously: the handler resolved updatePlanStep by step id alone, so a
+    // step belonging to plan B could be silently mutated by hitting plan A's
+    // URL. The existence check is SCOPED to the URL's plan (plan.steps.find),
+    // so a step that is real but not a child of THIS plan now 404s too — the
+    // safety-first fix closes the cross-plan mutation path as a side effect.
     const planA = await mkPlan({ title: 'Plan A (URL)', steps: [{ title: 'a1' }] })
     const planB = await mkPlan({ title: 'Plan B (owner)', steps: [{ title: 'b1' }] })
     const stepB1 = (await getPlan(planB.id)).steps[0]
 
-    // updatePlanStep updates by step id alone; the :id in the URL is only used
-    // for existence/scope checks and for the cascade target.
     const res = await putStep(planA.id, stepB1.id, { status: 'completed' })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Plan step not found' })
 
     const afterB = await getPlan(planB.id)
-    expect(afterB.steps[0].status).toBe('completed') // B's step really changed...
-    expect(afterB.status).toBe('draft') // ...but B never cascades (cascade evaluated plan A)
+    expect(afterB.steps[0].status).toBe('pending') // B's step NOT touched via A's URL
+    expect(afterB.status).toBe('draft')
     const afterA = await getPlan(planA.id)
-    expect(afterA.steps[0].status).toBe('pending') // A untouched, A not cascaded either
+    expect(afterA.steps[0].status).toBe('pending') // A untouched
     expect(afterA.status).toBe('draft')
   })
 })

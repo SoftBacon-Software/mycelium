@@ -34,7 +34,7 @@ export function registerAdminRoutes(router, deps) {
     asyncHandler, checkAdmin, checkAgentOrAdmin, emitEvent, getAdminDisplayName,
     validateEnum, adminWriteLimiter, AGENT_STATUSES,
     getInstanceUrl, buildMcpConfig, displayName, getStudioUser,
-    clearAgentKeyCache, invalidateAgentKeyCache, runHealthPatrol,
+    clearAgentKeyCache, invalidateAgentKeyCache, runHealthPatrol, computeHealthReport,
   } = deps;
 
   // GET /stats/public — no auth, anonymized aggregate stats for landing page + investor demos
@@ -773,9 +773,21 @@ export function registerAdminRoutes(router, deps) {
     }
   }));
 
+  // GET is a safe, side-effect-free PREVIEW — no mutation, no event emission.
   router.get('/admin/health', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    try {
+      res.json(computeHealthReport());
+    } catch (e) {
+      return res.status(500).json({ error: 'Health patrol failed: ' + e.message });
+    }
+  }));
+
+  // POST actually RUNS the patrol (mutates: marks stale agents/drones offline,
+  // releases claimed jobs, emits health_patrol events) — privileged, admin-only.
+  router.post('/admin/health/run', asyncHandler(function (req, res) {
+    if (!checkAdmin(req, res)) return;
     try {
       res.json(runHealthPatrol());
     } catch (e) {

@@ -33,8 +33,9 @@ import express from 'express'
 // LATENT-BUG INVENTORY (all locked below, none fixed):
 //   L1  GET /drones/:id/status has no project_id==='drone' gate — serves any
 //       agent id — and queued_jobs is the GLOBAL pending count, not per-drone.
-//   L2  PUT /drones/:id/pause|resume never checks the drone exists — pausing a
-//       ghost id returns 200 { ok:true }.
+//   L2  FIXED (safety-first, 2026-07-12): PUT /drones/:id/pause|resume now
+//       mirror GET /drones/:id/status's existence check and 404 a ghost id
+//       BEFORE calling pauseDrone/resumeDrone — no more phantom 200 { ok:true }.
 //   L3  PUT /drones/jobs/:id ownership gate is `job.drone_id && ...` — while a
 //       job is PENDING (drone_id null) ANY agent may mutate it.
 //   L4  PUT /drones/jobs/:id with status:'claimed' and no drone_id body field
@@ -283,12 +284,20 @@ describe('PUT /drones/:id/pause + /resume', () => {
     expect(status.body.working_on).toBe('')
   })
 
-  test('LATENT L2: pausing a NONEXISTENT drone still returns 200 { ok:true }', async () => {
-    // pauseDrone() runs an UPDATE that matches zero rows and unconditionally
-    // returns { ok:true, status:'paused' } — no existence check anywhere.
+  test('FIXED (safety-first) L2: pausing a NONEXISTENT drone → 404, no phantom pause', async () => {
+    // Previously pauseDrone() ran an UPDATE that matched zero rows and
+    // unconditionally returned { ok:true, status:'paused' } — no existence
+    // check anywhere. The route now mirrors GET /drones/:id/status's
+    // getDroneStatus() existence check and 404s BEFORE calling pauseDrone.
     const res = await adminHeaders(api().put('/api/mycelium/drones/ghost-drone/pause'))
-    expect(res.status).toBe(200)
-    expect(res.body).toEqual({ ok: true, status: 'paused' })
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Drone not found' })
+  })
+
+  test('FIXED (safety-first) L2 (resume): resuming a NONEXISTENT drone → 404, no phantom resume', async () => {
+    const res = await adminHeaders(api().put('/api/mycelium/drones/ghost-drone/resume'))
+    expect(res.status).toBe(404)
+    expect(res.body).toEqual({ error: 'Drone not found' })
   })
 })
 

@@ -19,7 +19,8 @@ import jwt from 'jsonwebtoken'
 //   GET  /admin/config, GET /admin/config/:key, PUT /admin/config/:key
 //   PUT  /admin/override            (KILL SWITCH) + POST /work/request gating
 //   POST /admin/cleanup
-//   GET  /admin/health, GET /admin/health/history (stale patrol)
+//   GET  /admin/health (safe dry-run preview), POST /admin/health/run
+//        (admin-only, mutating), GET /admin/health/history (stale patrol)
 //   GET  /reconciliation
 //   GET  /stats/public
 //   POST /admin/churn-check, POST /admin/deploy/health-check-all (RETIRED → 404)
@@ -164,11 +165,14 @@ describe('admin auth gate — checkAgentOrAdmin endpoints (agent-READABLE admin 
     '/admin/health/history',
   ]
 
-  test('valid agent key → 200 on all four (SMELL: agents can read the whole admin config + trigger the patrol)', async () => {
+  test('valid agent key → 200 on all four (SMELL: agents can read the whole admin config; /admin/health is now a SAFE preview)', async () => {
     // SMELL (locked, not fixed): /admin/config exposes the FULL instance
     // config (risk_tiers, admin_agent_id, any operator-set key) to ANY agent
-    // key, and /admin/health lets any agent run a MUTATING patrol sweep
-    // (it marks stale agents offline — see health-patrol block below).
+    // key. /admin/health used to let any agent run a MUTATING patrol sweep via
+    // GET — RESOLVED (safety-first, 2026-07-12): GET now returns a read-only
+    // computeHealthReport() preview (dry_run:true, no mutation); the mutating
+    // run moved to POST /admin/health/run, which is checkAdmin-gated (see the
+    // admin-only describe block above and the health-patrol block below).
     for (const path of AGENT_OK) {
       const res = await request(app).get(api(path)).set('X-Agent-Key', agentKey)
       expect(res.status, 'GET ' + path).toBe(200)
@@ -458,11 +462,21 @@ describe('POST /admin/cleanup', () => {
 })
 
 // =====================================================================
-// 7. HEALTH PATROL — GET /admin/health (runs the sweep) + /admin/health/history
+// 7. HEALTH PATROL — GET /admin/health (SAFE preview, dry_run:true) +
+//    POST /admin/health/run (admin-only, actually MUTATES) + /admin/health/history
+//
+// FIXED (safety-first, 2026-07-12): GET /admin/health used to run the
+// mutating runHealthPatrol() sweep directly — a plain read marked stale
+// agents/drones offline and released their claimed jobs. It now calls the
+// pure computeHealthReport() preview (dry_run:true, same shape, actions
+// describe what a run WOULD do, no mutation/emit). The actual remediation
+// moved behind POST /admin/health/run, which requires checkAdmin (the old
+// smell — "any agent can run a MUTATING sweep via GET" — is resolved: an
+// agent key can still preview, but only an admin key can trigger).
 // =====================================================================
 
 describe('health patrol', () => {
-  test('quiet DB: all stale counts zero, no actions, run_at is ISO', async () => {
+  test('quiet DB: GET is a safe preview — all stale counts zero, no actions, dry_run:true, run_at is ISO', async () => {
     const res = await request(app).get(api('/admin/health')).set('X-Admin-Key', ADMIN_KEY)
     expect(res.status).toBe(200)
     expect(res.body).toEqual({
@@ -473,6 +487,7 @@ describe('health patrol', () => {
       stale_plan_steps: 0,
       actions: [],
       run_at: expect.any(String),
+      dry_run: true,
     })
     expect(Number.isNaN(Date.parse(res.body.run_at))).toBe(false)
   })
@@ -483,7 +498,7 @@ describe('health patrol', () => {
     expect(res.body).toEqual([])
   })
 
-  test('stale agent detection: online agent past threshold → counted, marked offline, action recorded', async () => {
+  test('stale agent detection: GET PREVIEWS it (dry_run, no mutation) — agent stays online, history stays empty', async () => {
     // Fixture via real routes: admin heartbeats ON BEHALF of the agent
     // (X-Admin-Key + agent_id body — the documented on-behalf path).
     const hb = await request(app)
@@ -499,10 +514,40 @@ describe('health patrol', () => {
       .prepare("UPDATE agents SET last_heartbeat = datetime('now', '-60 minutes') WHERE id = ?")
       .run('patrol-stale-1')
 
-    // Trigger the patrol WITH AN AGENT KEY — locking the smell that any agent
-    // can run this MUTATING sweep via a GET (it force-marks peers offline).
+    // GET now only PREVIEWS — safe to call with an agent key, no mutation.
     const res = await request(app).get(api('/admin/health')).set('X-Agent-Key', agentKey)
     expect(res.status).toBe(200)
+    expect(res.body.dry_run).toBe(true)
+    expect(res.body.stale_agents).toBe(1)
+    expect(res.body.stale_tasks).toBe(0)
+    expect(res.body.stale_requests).toBe(0)
+    expect(res.body.stale_drones).toBe(0)
+    expect(res.body.stale_plan_steps).toBe(0)
+    expect(res.body.actions).toEqual([{ type: 'agent_offline', agent_id: 'patrol-stale-1' }])
+
+    // The preview did NOT mutate — the agent is still online, no history yet.
+    const overview = await request(app).get(api('/admin/overview')).set('X-Admin-Key', ADMIN_KEY)
+    const stillOnline = overview.body.agents.find((a) => a.id === 'patrol-stale-1')
+    expect(stillOnline.status).toBe('online')
+    const historyBefore = await request(app).get(api('/admin/health/history')).set('X-Admin-Key', ADMIN_KEY)
+    expect(historyBefore.body).toEqual([])
+  })
+
+  test('an AGENT key cannot trigger the mutating run — POST /admin/health/run is admin-only (403)', async () => {
+    const res = await request(app).post(api('/admin/health/run')).set('X-Agent-Key', agentKey)
+    expect(res.status).toBe(403)
+    expect(res.body.error).toBe('Admin role required')
+    // Still not mutated — confirms the preview above and this rejected POST
+    // both left the agent alone.
+    const overview = await request(app).get(api('/admin/overview')).set('X-Admin-Key', ADMIN_KEY)
+    const stillOnline = overview.body.agents.find((a) => a.id === 'patrol-stale-1')
+    expect(stillOnline.status).toBe('online')
+  })
+
+  test('POST /admin/health/run (admin key) actually mutates: agent marked offline, action recorded, event emitted', async () => {
+    const res = await request(app).post(api('/admin/health/run')).set('X-Admin-Key', ADMIN_KEY)
+    expect(res.status).toBe(200)
+    expect(res.body.dry_run).toBeUndefined() // the real run — not the preview shape
     expect(res.body.stale_agents).toBe(1)
     expect(res.body.stale_tasks).toBe(0)
     expect(res.body.stale_requests).toBe(0)
@@ -517,8 +562,9 @@ describe('health patrol', () => {
     expect(agent.status).toBe('offline')
   })
 
-  test('patrol is self-limiting: a second run finds nothing (offline agents are skipped)', async () => {
-    const res = await request(app).get(api('/admin/health')).set('X-Admin-Key', ADMIN_KEY)
+  test('patrol is self-limiting: a second POST /admin/health/run finds nothing (offline agents are skipped)', async () => {
+    const res = await request(app).post(api('/admin/health/run')).set('X-Admin-Key', ADMIN_KEY)
+    expect(res.status).toBe(200)
     expect(res.body.stale_agents).toBe(0)
     expect(res.body.actions).toEqual([])
   })
