@@ -2,8 +2,24 @@
 import crypto from 'crypto';
 import { assertPublicHost, guardedFetch, SSRFBlockedError } from './lib/ssrf-guard.js';
 import { db, stmt, buildUpdate, initDBConnection, getDB, DB_PATH } from './db/core.js';
+// Resident db.js functions (getBootPayload, overview/health) still call these now-extracted
+// helpers by bare name. The `export *` barrel below re-exports them to consumers but does NOT
+// bind them in THIS module's lexical scope — so import them explicitly. db/*.js imports only
+// ./db/core.js, so this is acyclic (the barrel db/*.js → ../db.js is the forbidden direction).
+import { getSleepMode, listInstanceConfig } from './db/config.js';
+import { listEvents } from './db/events.js';
+import { listBugs, countBugs } from './db/bugs.js';
 
 export { getDB };
+
+// -- Decomposition barrel: db/* entity modules (Wave 1 leaves; each imports only ./db/core.js) --
+export * from './db/config.js';
+export * from './db/spend.js';
+export * from './db/bugs.js';
+export * from './db/feedback.js';
+export * from './db/events.js';
+export * from './db/widgets.js';
+export * from './db/skills.js';
 
 export function initDB() {
   initDBConnection();
@@ -124,47 +140,6 @@ export function isNetworkAutonomous() {
 
 export function deleteOperator(id) {
   stmt('dvDeleteOperator', 'DELETE FROM operators WHERE id = ?').run(id);
-}
-
-// -- Instance Config --
-
-export function getInstanceConfig(key) {
-  var row = stmt('dvGetConfig', 'SELECT value FROM instance_config WHERE key = ?').get(key);
-  return row ? row.value : null;
-}
-
-export function setInstanceConfig(key, value, updatedBy) {
-  stmt('dvSetConfig', `INSERT INTO instance_config (key, value, updated_by, updated_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
-  ).run(key, value, updatedBy || '');
-}
-
-export function listInstanceConfig() {
-  return stmt('dvListConfig', 'SELECT * FROM instance_config ORDER BY key').all();
-}
-
-export function deleteInstanceConfig(key) {
-  stmt('dvDeleteConfig', 'DELETE FROM instance_config WHERE key = ?').run(key);
-}
-
-// -- Sleep Mode --
-
-export function getSleepMode() {
-  var val = getInstanceConfig('sleep_mode');
-  if (!val) return { active: false };
-  try { return JSON.parse(val); } catch (e) { return { active: false }; }
-}
-
-export function appendSleepLog(field, item) {
-  var val = getInstanceConfig('sleep_mode_log');
-  var log;
-  try { log = val ? JSON.parse(val) : {}; } catch (e) { log = {}; }
-  if (!log[field]) log[field] = [];
-  if (Array.isArray(log[field])) {
-    log[field].push(item);
-  }
-  setInstanceConfig('sleep_mode_log', JSON.stringify(log), '__system__');
 }
 
 // -- Projects --
@@ -423,28 +398,6 @@ export function listAssetsByDroneJob(droneJobId) {
   return db.prepare('SELECT * FROM assets WHERE drone_job_id = ?').all(droneJobId);
 }
 
-// -- Events --
-
-export function createEvent(type, agent, projectId, summary, data) {
-  var result = stmt('dvCreateEvent', `INSERT INTO events (type, agent, project_id, summary, data)
-    VALUES (?, ?, ?, ?, ?) RETURNING id`).get(type, agent || '', projectId || null, summary || '', data || '{}');
-  return result.id;
-}
-
-export function listEvents(filters) {
-  var where = ['1=1'];
-  var params = [];
-  if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
-  if (filters.agent) { where.push('agent = ?'); params.push(filters.agent); }
-  if (filters.search) { where.push('(summary LIKE ? OR type LIKE ? OR agent LIKE ?)'); var s = '%' + filters.search + '%'; params.push(s, s, s); }
-  var limit = Math.min(filters.limit || 50, 500);
-  var offset = filters.offset || 0;
-  params.push(limit, offset);
-  return db.prepare('SELECT * FROM events WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
-}
-
 // -- Messages --
 
 var VALID_MSG_PRIORITIES = ['urgent', 'normal', 'fyi'];
@@ -587,15 +540,6 @@ export function archiveOldMessages(daysOld) {
   var result = db.prepare(
     "DELETE FROM messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
     " AND (status = 'resolved' OR msg_type = 'info')"
-  ).run(String(daysOld));
-  return result.changes;
-}
-
-// Archive old events older than N days (default 60)
-export function archiveOldEvents(daysOld) {
-  daysOld = parseInt(daysOld) || 60;
-  var result = db.prepare(
-    "DELETE FROM events WHERE created_at < datetime('now', '-' || ? || ' days')"
   ).run(String(daysOld));
   return result.changes;
 }
@@ -818,45 +762,6 @@ export function rollbackContextKey(historyId, agentId) {
 }
 
 // Purge all expired context keys (called on server boot and periodically)
-// ---- Agent Spend Tracking ----
-
-export function logAgentSpend(agentId, projectId, costUsd, source, description, model, tokensIn, tokensOut) {
-  db.prepare(
-    "INSERT INTO agent_spend (agent_id, project_id, cost_usd, source, description, model, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(agentId, projectId || '', costUsd || 0, source || '', description || '', model || '', tokensIn || 0, tokensOut || 0);
-}
-
-export function getAgentSpend(agentId, opts) {
-  var since = (opts && opts.since) || null;
-  var projectId = (opts && opts.project_id) || null;
-  var limit = (opts && opts.limit) || 50;
-
-  var where = ['agent_id = ?'];
-  var params = [agentId];
-  if (since) { where.push('created_at >= ?'); params.push(since); }
-  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
-  params.push(limit);
-
-  return db.prepare(
-    'SELECT * FROM agent_spend WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?'
-  ).all(...params);
-}
-
-export function getSpendSummary(opts) {
-  var since = (opts && opts.since) || null;
-  var projectId = (opts && opts.project_id) || null;
-
-  var where = ['1=1'];
-  var params = [];
-  if (since) { where.push('created_at >= ?'); params.push(since); }
-  if (projectId) { where.push('project_id = ?'); params.push(projectId); }
-
-  var rows = db.prepare(
-    'SELECT agent_id, project_id, SUM(cost_usd) as total_cost, COUNT(*) as entry_count, SUM(tokens_in) as total_tokens_in, SUM(tokens_out) as total_tokens_out FROM agent_spend WHERE ' + where.join(' AND ') + ' GROUP BY agent_id, project_id ORDER BY total_cost DESC'
-  ).all(...params);
-  return rows;
-}
-
 // ---- Runs (the run-log) ----
 
 export function createRun(run) {
@@ -965,128 +870,10 @@ export function contextKeyStats() {
   return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
-// -- Skills Registry --
-
-export function createSkill(id, name, description, category, version, author, installType, installData, requiredCapabilities, tags) {
-  db.prepare(
-    "INSERT INTO skills (id, name, description, category, version, author, install_type, install_data, required_capabilities, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(id, name, description || '', category || 'general', version || '1.0.0', author || '',
-    installType || 'concept', typeof installData === 'string' ? installData : JSON.stringify(installData || {}),
-    typeof requiredCapabilities === 'string' ? requiredCapabilities : JSON.stringify(requiredCapabilities || []),
-    typeof tags === 'string' ? tags : JSON.stringify(tags || []));
-  return { id: id };
-}
-
-export function getSkill(id) {
-  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
-}
-
-export function listSkills(filters) {
-  var where = ["status = 'published'"];
-  var params = [];
-  if (filters && filters.category) { where.push('category = ?'); params.push(filters.category); }
-  if (filters && filters.search) { where.push('(name LIKE ? OR description LIKE ? OR tags LIKE ?)'); var s = '%' + filters.search + '%'; params.push(s, s, s); }
-  return db.prepare('SELECT * FROM skills WHERE ' + where.join(' AND ') + ' ORDER BY install_count DESC, name ASC').all(...params);
-}
-
-export function updateSkill(id, updates) {
-  var f = Object.assign({}, updates);
-  if (f.install_data !== undefined && typeof f.install_data !== 'string') f.install_data = JSON.stringify(f.install_data);
-  if (f.required_capabilities !== undefined && typeof f.required_capabilities !== 'string') f.required_capabilities = JSON.stringify(f.required_capabilities);
-  if (f.tags !== undefined && typeof f.tags !== 'string') f.tags = JSON.stringify(f.tags);
-  var changed = buildUpdate('skills', id, f, ['name', 'description', 'category', 'version', 'install_data', 'required_capabilities', 'tags', 'status'], { updatedAt: true });
-  if (!changed) return null;
-  return db.prepare('SELECT * FROM skills WHERE id = ?').get(id);
-}
-
-export function installSkill(agentId, skillId, config) {
-  db.prepare(
-    "INSERT OR REPLACE INTO agent_skills (agent_id, skill_id, config) VALUES (?, ?, ?)"
-  ).run(agentId, skillId, typeof config === 'string' ? config : JSON.stringify(config || {}));
-  db.prepare('UPDATE skills SET install_count = install_count + 1 WHERE id = ?').run(skillId);
-}
-
-export function uninstallSkill(agentId, skillId) {
-  db.prepare('DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?').run(agentId, skillId);
-}
-
-export function getAgentSkills(agentId) {
-  return db.prepare(
-    'SELECT s.*, as2.installed_at, as2.config FROM skills s JOIN agent_skills as2 ON s.id = as2.skill_id WHERE as2.agent_id = ? ORDER BY s.name'
-  ).all(agentId);
-}
-
 // -- Widgets --
 
 export function getWidget(id) {
   return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
-}
-
-export function createWidget(agentId, projectId, title, widgetType, data) {
-  var result = db.prepare(
-    "INSERT INTO widgets (agent_id, project_id, title, widget_type, data) VALUES (?, ?, ?, ?, ?)"
-  ).run(agentId, projectId || '', title, widgetType || 'status', typeof data === 'string' ? data : JSON.stringify(data || {}));
-  return { id: result.lastInsertRowid };
-}
-
-export function updateWidget(id, updates) {
-  var f = Object.assign({}, updates);
-  if (f.data !== undefined && typeof f.data !== 'string') f.data = JSON.stringify(f.data);
-  var changed = buildUpdate('widgets', id, f, ['title', 'widget_type', 'data', 'position', 'status'], { updatedAt: true });
-  if (!changed) return null;
-  return db.prepare('SELECT * FROM widgets WHERE id = ?').get(id);
-}
-
-export function listWidgets(filters) {
-  var where = ["status = 'active'"];
-  var params = [];
-  if (filters && filters.agent_id) { where.push('agent_id = ?'); params.push(filters.agent_id); }
-  if (filters && filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  return db.prepare('SELECT * FROM widgets WHERE ' + where.join(' AND ') + ' ORDER BY position ASC, updated_at DESC').all(...params);
-}
-
-export function deleteWidget(id) {
-  db.prepare("UPDATE widgets SET status = 'archived' WHERE id = ?").run(id);
-}
-
-// -- Bugs --
-
-export function createBug(projectId, title, description, category, severity, reporter, assignee, diagnosticData) {
-  var result = db.prepare(
-    "INSERT INTO bugs (project_id, title, description, category, severity, reporter, assignee, diagnostic_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(projectId || '', title, description, category || 'other', severity || 'normal', reporter || 'admin', assignee || null, diagnosticData || null);
-  return result.id;
-}
-
-export function getBug(id) {
-  return db.prepare("SELECT * FROM bugs WHERE id = ?").get(id);
-}
-
-export function listBugs(filters) {
-  var where = ['1=1'];
-  var params = [];
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
-  if (filters.reporter) { where.push('reporter = ?'); params.push(filters.reporter); }
-  if (filters.severity) { where.push('severity = ?'); params.push(filters.severity); }
-  if (filters.category) { where.push('category = ?'); params.push(filters.category); }
-  var limit = Math.min(filters.limit || 50, 500);
-  var offset = filters.offset || 0;
-  params.push(limit, offset);
-  return db.prepare('SELECT * FROM bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
-}
-
-export function updateBug(id, updates) {
-  buildUpdate('bugs', id, updates, ['status', 'assignee', 'admin_notes', 'severity'], { updatedAt: true });
-}
-
-export function deleteBug(id) {
-  return db.prepare('DELETE FROM bugs WHERE id = ?').run(id);
-}
-
-export function countBugs() {
-  return db.prepare("SELECT SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open, SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress, SUM(CASE WHEN status = 'fixed' THEN 1 ELSE 0 END) as fixed, COUNT(*) as total FROM bugs").get();
 }
 
 // -- Boot payload --
@@ -3388,39 +3175,6 @@ export function pruneSavepoints(agentId, keepCount) {
   }
 }
 
-// -- Feedback --
-
-export function createFeedback(entityType, entityId, subject, rating, comment, submittedBy, agentId) {
-  var r = Math.max(1, Math.min(5, parseInt(rating) || 3));
-  var result = db.prepare(
-    'INSERT INTO feedback (entity_type, entity_id, subject, rating, comment, submitted_by, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
-  ).get(entityType || 'general', entityId || '', subject || '', r, comment || '', submittedBy || 'operator', agentId || '');
-  return result.id;
-}
-
-export function getFeedback(id) {
-  return db.prepare('SELECT * FROM feedback WHERE id = ?').get(id);
-}
-
-export function listFeedback(filters) {
-  var where = ['1=1'];
-  var params = [];
-  if (filters.entity_type) { where.push('entity_type = ?'); params.push(filters.entity_type); }
-  if (filters.agent_id) { where.push('agent_id = ?'); params.push(filters.agent_id); }
-  if (filters.submitted_by) { where.push('submitted_by = ?'); params.push(filters.submitted_by); }
-  if (filters.rating) { where.push('rating = ?'); params.push(parseInt(filters.rating)); }
-  if (filters.min_rating) { where.push('rating >= ?'); params.push(parseInt(filters.min_rating)); }
-  var limit = Math.min(filters.limit || 50, 500);
-  var offset = filters.offset || 0;
-  var sql = 'SELECT * FROM feedback WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-  params.push(limit, offset);
-  return db.prepare(sql).all(...params);
-}
-
-export function deleteFeedback(id) {
-  db.prepare('DELETE FROM feedback WHERE id = ?').run(id);
-}
-
 // -- Operator Inbox --
 
 export function createInboxItem(operatorId, type, entityType, entityId, title, summary, data, priority) {
@@ -3514,22 +3268,6 @@ export function claimRunnerSpawn(id, runnerId) {
 
 export function doneRunnerSpawn(id, result, status) {
   db.prepare("UPDATE runner_spawns SET status = ?, result = ?, done_at = datetime('now') WHERE id = ?").run(status || 'done', result || '', id);
-}
-
-export function getFeedbackSummary() {
-  var total = db.prepare('SELECT COUNT(*) as count FROM feedback').get().count;
-  var avgRating = db.prepare('SELECT ROUND(AVG(rating), 2) as avg FROM feedback').get().avg || 0;
-  var byAgent = db.prepare(
-    "SELECT agent_id, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM feedback WHERE agent_id != '' GROUP BY agent_id ORDER BY count DESC LIMIT 20"
-  ).all();
-  var byType = db.prepare(
-    'SELECT entity_type, COUNT(*) as count, ROUND(AVG(rating), 2) as avg_rating FROM feedback GROUP BY entity_type ORDER BY count DESC'
-  ).all();
-  var ratingDist = db.prepare(
-    'SELECT rating, COUNT(*) as count FROM feedback GROUP BY rating ORDER BY rating'
-  ).all();
-  var recent = db.prepare('SELECT * FROM feedback ORDER BY created_at DESC LIMIT 5').all();
-  return { total, avg_rating: avgRating, by_agent: byAgent, by_type: byType, rating_dist: ratingDist, recent };
 }
 
 // =============== NODE PROFILES — Stand Up Calibration ===============
