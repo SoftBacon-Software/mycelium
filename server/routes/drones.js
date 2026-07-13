@@ -155,6 +155,15 @@ export function registerDroneRoutes(router, deps) {
       return apiError(res, 403, 'Raw drone commands are admin-only. Submit a template job (job_type / from-template) instead.');
     }
     var inputData = req.body.input_data || {};
+    // input_data.setup is a free-form command the drone shell-executes at
+    // workspace setup (drone-worker.py). Like a raw `command`, only admins may
+    // supply one — the render-time metachar reject (C-2) blocks shell operators
+    // but not a bare command (`pip install evil`, `python -c "..."`), so an
+    // ungated setup = RCE on the drone from any agent key. Non-admin setup must
+    // come from an admin-defined template (setup_repo), not free-form input (C-4).
+    if (inputData && inputData.setup !== undefined && !req._authIsAdmin) {
+      return apiError(res, 403, 'input_data.setup is admin-only — it is shell-executed on the drone. Use a template setup_repo instead.');
+    }
     var requires = req.body.requires || ['cpu'];
     var priority = parseInt(req.body.priority) || 0;
     var workspaceRepo = req.body.workspace_repo || null;
@@ -187,6 +196,11 @@ export function registerDroneRoutes(router, deps) {
     var template = getJobTemplate(templateId);
     if (!template) return res.status(404).json({ error: 'Template not found: ' + templateId });
     var inputData = req.body.input_data || {};
+    // input_data.setup is admin-only — shell-executed on the drone (see the C-4
+    // gate on POST /drones/jobs). Block non-admin free-form setup here too.
+    if (inputData && inputData.setup !== undefined && !req._authIsAdmin) {
+      return apiError(res, 403, 'input_data.setup is admin-only — it is shell-executed on the drone. Use a template setup_repo instead.');
+    }
     var priority = parseInt(req.body.priority) || 0;
     var requires = [];
     try { requires = JSON.parse(template.requires || '["cpu"]'); } catch (e) { requires = ['cpu']; }
