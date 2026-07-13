@@ -55,6 +55,10 @@ export function registerDroneRoutes(router, deps) {
   router.put('/drones/:id/pause', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    // Mirror GET /drones/:id/status's existence check — a ghost id must 404,
+    // not silently UPDATE 0 rows and report { ok:true }.
+    var pauseStatus = getDroneStatus(req.params.id);
+    if (!pauseStatus) return res.status(404).json({ error: 'Drone not found' });
     var result = pauseDrone(req.params.id);
     try {
       createMessage(who, req.params.id, null, 'mycelium',
@@ -67,6 +71,10 @@ export function registerDroneRoutes(router, deps) {
   router.put('/drones/:id/resume', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    // Mirror GET /drones/:id/status's existence check — a ghost id must 404,
+    // not silently UPDATE 0 rows and report { ok:true }.
+    var resumeStatus = getDroneStatus(req.params.id);
+    if (!resumeStatus) return res.status(404).json({ error: 'Drone not found' });
     var result = resumeDrone(req.params.id);
     try {
       createMessage(who, req.params.id, null, 'mycelium',

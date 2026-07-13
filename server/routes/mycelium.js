@@ -1555,7 +1555,7 @@ registerOperatorRoutes(router, {
 // ======== INSTANCE CONFIG ========
 
 registerAdminRoutes(router, {
-  AGENT_STATUSES, adminWriteLimiter, asyncHandler, buildMcpConfig, checkAdmin, checkAgentOrAdmin, clearAgentKeyCache, displayName, emitEvent, getAdminDisplayName, getInstanceUrl, getStudioUser, invalidateAgentKeyCache, runHealthPatrol, validateEnum,
+  AGENT_STATUSES, adminWriteLimiter, asyncHandler, buildMcpConfig, checkAdmin, checkAgentOrAdmin, clearAgentKeyCache, computeHealthReport, displayName, emitEvent, getAdminDisplayName, getInstanceUrl, getStudioUser, invalidateAgentKeyCache, runHealthPatrol, validateEnum,
 });
 
 
@@ -1944,6 +1944,58 @@ function runHealthPatrol() {
     results.actions.push({ type: 'stale_plan_step', step_id: s.id, plan_id: s.plan_id });
   }
   results.stale_plan_steps = staleSteps.length;
+
+  return results;
+}
+
+// Pure read-only PREVIEW of what runHealthPatrol() would do — same stale-detection
+// queries, same config thresholds, same result shape, but NO mutation and NO event
+// emission. GET /admin/health uses this so a plain read stays safe/idempotent;
+// POST /admin/health/run is the one that actually calls runHealthPatrol() above.
+function computeHealthReport() {
+  var config = {};
+  try {
+    var rows = getDB().prepare("SELECT key, value FROM instance_config WHERE key LIKE 'patrol_%'").all();
+    for (var r of rows) config[r.key] = r.value;
+  } catch (e) { /* use defaults */ }
+
+  var staleAgentMins = parseInt(config.patrol_stale_agent_minutes) || 15;
+  var staleTaskMins = parseInt(config.patrol_stale_task_minutes) || 30;
+  var staleRequestMins = parseInt(config.patrol_stale_request_minutes) || 60;
+  var staleDroneMins = parseInt(config.patrol_stale_drone_minutes) || 30;
+  var stalePlanStepMins = parseInt(config.patrol_stale_plan_step_minutes) || 120;
+
+  var results = { stale_agents: 0, stale_tasks: 0, stale_requests: 0, stale_drones: 0, stale_plan_steps: 0, actions: [], run_at: new Date().toISOString(), dry_run: true };
+
+  var staleAgents = getStaleAgents(staleAgentMins);
+  for (var a of staleAgents) {
+    results.actions.push({ type: 'agent_offline', agent_id: a.id });
+  }
+  results.stale_agents = staleAgents.length;
+
+  var staleTasks = getStaleTasks(staleTaskMins);
+  for (var t of staleTasks) {
+    results.actions.push({ type: 'stale_task_warning', task_id: t.id, assignee: t.assignee });
+  }
+  results.stale_tasks = staleTasks.length;
+
+  var staleReqs = getStaleRequests(staleRequestMins);
+  for (var r2 of staleReqs) {
+    results.actions.push({ type: 'stale_request', request_id: r2.id });
+  }
+  results.stale_requests = staleReqs.length;
+
+  var staleDrns = getStaleDrones(staleDroneMins);
+  for (var d of staleDrns) {
+    results.actions.push({ type: 'drone_offline', drone_id: d.id });
+  }
+  results.stale_drones = staleDrns.length;
+
+  var staleSteps2 = getStalePlanSteps(stalePlanStepMins);
+  for (var s2 of staleSteps2) {
+    results.actions.push({ type: 'stale_plan_step', step_id: s2.id, plan_id: s2.plan_id });
+  }
+  results.stale_plan_steps = staleSteps2.length;
 
   return results;
 }

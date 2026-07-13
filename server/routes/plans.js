@@ -154,6 +154,7 @@ export function registerPlanRoutes(router, deps) {
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
     var stepId0 = parseIntParam(req.params.stepId);
     var planStep = plan.steps ? plan.steps.find(function (s) { return s.id === stepId0; }) : null;
+    if (!planStep) return res.status(404).json({ error: 'Plan step not found' });
     if (!checkProjectScope(req, res, plan.project_id, planStep ? planStep.assignee : null)) return;
     if (!validateEnum(res, req.body.status, PLAN_STEP_STATUSES, 'status')) return;
     var fields = {};
@@ -228,9 +229,12 @@ export function registerPlanRoutes(router, deps) {
     if (!agentId) return;
     var plan = getPlan(parseIntParam(req.params.id));
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
+    var delStepId = parseIntParam(req.params.stepId);
+    var delPlanStep = plan.steps ? plan.steps.find(function (s) { return s.id === delStepId; }) : null;
+    if (!delPlanStep) return res.status(404).json({ error: 'Plan step not found' });
     if (!checkProjectScope(req, res, plan.project_id)) return;
-    deletePlanStep(parseIntParam(req.params.stepId));
-    res.json({ ok: true, deleted: parseIntParam(req.params.stepId) });
+    deletePlanStep(delStepId);
+    res.json({ ok: true, deleted: delStepId });
   }));
 
   // -- Plan Step Comments --
