@@ -9,10 +9,16 @@ import { db, stmt, buildUpdate, initDBConnection, getDB, DB_PATH } from './db/co
 import { getSleepMode, listInstanceConfig } from './db/config.js';
 import { listEvents } from './db/events.js';
 import { listBugs, countBugs } from './db/bugs.js';
+import { isNetworkAutonomous, getAvailableOperators, listOperators, getActiveStudioUsers } from './db/operators.js';
+import { getProject, listProjects } from './db/projects.js';
+import { getProjectConcepts, listConcepts, getConceptProjects } from './db/concepts.js';
+import { listPendingApprovalsByAgent, listApprovals } from './db/approvals.js';
+import { listPendingRequests, getUnreadMessages, markMessagesRead, listMessages, listTeamChat } from './db/messages.js';
+import { getContext, getAllContext, listContextKeys, getContextKey, upsertContextKey } from './db/context.js';
 
 export { getDB };
 
-// -- Decomposition barrel: db/* entity modules (Wave 1 leaves; each imports only ./db/core.js) --
+// -- Decomposition barrel: db/* entity modules (each imports only ./db/core.js) --
 export * from './db/config.js';
 export * from './db/spend.js';
 export * from './db/bugs.js';
@@ -20,6 +26,13 @@ export * from './db/feedback.js';
 export * from './db/events.js';
 export * from './db/widgets.js';
 export * from './db/skills.js';
+export * from './db/operators.js';
+export * from './db/projects.js';
+export * from './db/concepts.js';
+export * from './db/approvals.js';
+export * from './db/runs.js';
+export * from './db/messages.js';
+export * from './db/context.js';
 
 export function initDB() {
   initDBConnection();
@@ -95,103 +108,6 @@ export function updateAgent(id, fields) {
     fields = Object.assign({}, fields, { system_diagnostics: JSON.stringify(fields.system_diagnostics) });
   }
   buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime']);
-}
-
-// -- Operators --
-
-export function createOperator(id, displayName, role, responsibilities, email, studioUserId) {
-  stmt('dvCreateOperator', `INSERT INTO operators (id, display_name, role, responsibilities, email, studio_user_id)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(id, displayName, role || 'member', responsibilities || '', email || '', studioUserId || null);
-}
-
-export function getOperator(id) {
-  return stmt('dvGetOperator', 'SELECT * FROM operators WHERE id = ?').get(id);
-}
-
-export function listOperators() {
-  return stmt('dvListOperators', 'SELECT * FROM operators ORDER BY created_at').all();
-}
-
-export function updateOperator(id, fields) {
-  buildUpdate('operators', id, fields, ['display_name', 'role', 'responsibilities', 'email', 'studio_user_id', 'status', 'availability', 'away_message'], { updatedAt: true });
-}
-
-export function setOperatorAvailability(id, availability, awayMessage) {
-  db.prepare(`UPDATE operators SET availability = ?, away_message = ?, last_seen_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
-    .run(availability, awayMessage || '', id);
-}
-
-export function getAvailableOperators() {
-  return db.prepare("SELECT * FROM operators WHERE status = 'active' AND availability = 'available'").all();
-}
-
-export function isNetworkAutonomous() {
-  // An operator counts as "present" only if they are available AND their linked
-  // dashboard user has been active recently. Agent heartbeats are automated and
-  // do NOT indicate human presence.
-  var count = db.prepare(
-    "SELECT COUNT(DISTINCT o.id) as c FROM operators o " +
-    "LEFT JOIN studio_users u ON u.id = o.studio_user_id " +
-    "WHERE o.status = 'active' AND o.availability = 'available' AND " +
-    "  u.last_seen > datetime('now', '-30 minutes')"
-  ).get();
-  return count.c === 0;
-}
-
-export function deleteOperator(id) {
-  stmt('dvDeleteOperator', 'DELETE FROM operators WHERE id = ?').run(id);
-}
-
-// -- Projects --
-
-// -- Organizations --
-
-export function createOrg(id, name, description, ownerId) {
-  stmt('dvCreateOrg', `INSERT OR IGNORE INTO organizations (id, name, description, owner_id)
-    VALUES (?, ?, ?, ?)`).run(id, name, description || '', ownerId || '');
-}
-
-export function listOrgs() {
-  return stmt('dvListOrgs', 'SELECT * FROM organizations ORDER BY created_at').all();
-}
-
-export function getOrg(id) {
-  return stmt('dvGetOrg', 'SELECT * FROM organizations WHERE id = ?').get(id);
-}
-
-export function updateOrg(id, fields) {
-  buildUpdate('organizations', id, fields, ['name', 'description', 'plan', 'status']);
-}
-
-export function deleteOrg(id) {
-  db.prepare('DELETE FROM organizations WHERE id = ?').run(id);
-}
-
-// -- Projects --
-
-export function createProject(id, name, description, repoUrl, orgId, type) {
-  stmt('dvCreateProject', `INSERT OR IGNORE INTO projects (id, name, description, repo_url, org_id, type)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(id, name, description || '', repoUrl || '', orgId || '', type || 'software');
-}
-
-export function listProjects(orgId) {
-  if (orgId) return db.prepare('SELECT * FROM projects WHERE org_id = ? ORDER BY created_at').all(orgId);
-  return stmt('dvListProjects', 'SELECT * FROM projects ORDER BY created_at').all();
-}
-
-export function getProject(id) {
-  return stmt('dvGetProject', 'SELECT * FROM projects WHERE id = ?').get(id);
-}
-
-export function updateProject(id, fields) {
-  if (fields.bug_categories !== undefined && typeof fields.bug_categories !== 'string') {
-    fields = Object.assign({}, fields, { bug_categories: JSON.stringify(fields.bug_categories) });
-  }
-  buildUpdate('projects', id, fields, ['name', 'description', 'repo_url', 'repo_path', 'org_id', 'type', 'status', 'bug_categories', 'team_id']);
-}
-
-export function deleteProject(id) {
-  getDB().prepare('DELETE FROM projects WHERE id = ?').run(id);
 }
 
 // -- Tasks --
@@ -344,22 +260,6 @@ export function getPlanStepComments(stepId) {
   ).all(stepId);
 }
 
-// -- Context --
-
-export function getContext(projectId) {
-  return stmt('dvGetContext', 'SELECT * FROM context WHERE project_id = ?').get(projectId);
-}
-
-export function getAllContext() {
-  return stmt('dvGetAllContext', 'SELECT * FROM context ORDER BY updated_at DESC').all();
-}
-
-export function upsertContext(projectId, data, agentId) {
-  stmt('dvUpsertContext', `INSERT INTO context (project_id, data, updated_by, updated_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(project_id) DO UPDATE SET data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at`).run(projectId, data, agentId);
-}
-
 // -- Assets --
 
 export function createAsset(name, type, projectId, status, assetPath, metadata, requester) {
@@ -398,242 +298,6 @@ export function listAssetsByDroneJob(droneJobId) {
   return db.prepare('SELECT * FROM assets WHERE drone_job_id = ?').all(droneJobId);
 }
 
-// -- Messages --
-
-var VALID_MSG_PRIORITIES = ['urgent', 'normal', 'fyi'];
-
-export function createMessage(fromAgent, toAgent, threadId, projectId, content, metadata, msgType, channelId, priority) {
-  var prio = VALID_MSG_PRIORITIES.includes(priority) ? priority : 'normal';
-  if (msgType && msgType !== 'message') {
-    var result = db.prepare(
-      "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-    ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', msgType, channelId || null, prio);
-    return result.id;
-  }
-  var result = db.prepare(
-    "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, channel_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}', channelId || null, prio);
-  return result.id;
-}
-
-export function createRequest(fromAgent, toAgent, threadId, projectId, content, metadata) {
-  var result = db.prepare(
-    "INSERT INTO messages (from_agent, to_agent, thread_id, project_id, content, metadata, msg_type, status, priority) VALUES (?, ?, ?, ?, ?, ?, 'request', 'pending', 'urgent') RETURNING id"
-  ).get(fromAgent, toAgent || null, threadId || null, projectId || null, content, metadata || '{}');
-  return result.id;
-}
-
-export function acknowledgeMessage(id) {
-  db.prepare("UPDATE messages SET status = 'acknowledged' WHERE id = ?").run(id);
-}
-
-export function resolveMessage(id, resolvedBy) {
-  db.prepare("UPDATE messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = ? WHERE id = ?").run(resolvedBy, id);
-}
-
-export function listPendingRequests(agentId) {
-  return db.prepare(
-    "SELECT * FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
-  ).all(agentId);
-}
-
-export function countPendingForAgent(agentId) {
-  var row = db.prepare(
-    "SELECT " +
-    "(SELECT COUNT(*) FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent')) as requests, " +
-    "(SELECT COUNT(*) FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent')) as directives, " +
-    "(SELECT COUNT(*) FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent') as unread"
-  ).get(agentId, agentId, agentId);
-  return row;
-}
-
-export function getAgentInbox(agentId, limit) {
-  limit = limit || 20;
-  // Directives (blocking, must handle first)
-  var directives = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
-  ).all(agentId);
-  // Requests (blocking, must respond)
-  var requests = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
-  ).all(agentId);
-  // Unread messages (directed to me or broadcast, status=sent)
-  var messages = db.prepare(
-    "SELECT id, from_agent, to_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE (to_agent = ? OR to_agent IS NULL) AND msg_type IN ('message', 'info') AND status = 'sent' ORDER BY created_at DESC LIMIT ?"
-  ).all(agentId, limit);
-  return { directives: directives, requests: requests, messages: messages };
-}
-
-export function getMessage(id) {
-  return db.prepare("SELECT * FROM messages WHERE id = ?").get(id);
-}
-
-// Mark messages as read by an agent (idempotent via UNIQUE constraint)
-export function markMessagesRead(agentId, messageIds) {
-  var stmt = db.prepare("INSERT OR IGNORE INTO message_reads (message_id, agent_id) VALUES (?, ?)");
-  var tx = db.transaction(function (ids) {
-    for (var id of ids) stmt.run(id, agentId);
-  });
-  tx(messageIds);
-}
-
-// Get unread messages for an agent (excludes messages they've already acked)
-export function getUnreadMessages(agentId, limit) {
-  limit = limit || 20;
-  // Directives + requests (blocking — always unread if status is pending/sent)
-  var directives = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'directive' AND status IN ('pending', 'sent') ORDER BY created_at ASC"
-  ).all(agentId);
-  var requests = db.prepare(
-    "SELECT id, from_agent, content, msg_type, priority, project_id, created_at FROM messages WHERE to_agent = ? AND msg_type = 'request' AND status IN ('pending', 'sent') ORDER BY created_at DESC"
-  ).all(agentId);
-  // Regular messages: directed to me OR broadcast, not yet read by me
-  var messages = db.prepare(
-    "SELECT m.id, m.from_agent, m.to_agent, m.content, m.msg_type, m.priority, m.project_id, m.created_at " +
-    "FROM messages m " +
-    "LEFT JOIN message_reads r ON r.message_id = m.id AND r.agent_id = ? " +
-    "WHERE (m.to_agent = ? OR m.to_agent IS NULL) AND m.msg_type IN ('message', 'info') AND m.status = 'sent' " +
-    "AND r.id IS NULL " +
-    "ORDER BY m.created_at DESC LIMIT ?"
-  ).all(agentId, agentId, limit);
-  return { directives, requests, messages };
-}
-
-export function listMessages(filters) {
-  var where = ["msg_type != 'chat'"];
-  var params = [];
-  // Exclude system-to-system telemetry (runner health, etc) unless explicitly requested
-  if (!filters.include_system) {
-    where.push("NOT (from_agent = '__system__' AND to_agent = '__system__')");
-  }
-  if (filters.from_agent) { where.push('from_agent = ?'); params.push(filters.from_agent); }
-  if (filters.to_agent) { where.push('(to_agent = ? OR to_agent IS NULL)'); params.push(filters.to_agent); }
-  if (filters.thread_id) { where.push('thread_id = ?'); params.push(filters.thread_id); }
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  if (filters.since) { where.push('created_at > ?'); params.push(filters.since); }
-  if (filters.channel_id) { where.push('channel_id = ?'); params.push(filters.channel_id); }
-  if (filters.msg_type) { where.push('msg_type = ?'); params.push(filters.msg_type); }
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
-  var limit = Math.min(filters.limit || 50, 500);
-  var offset = filters.offset || 0;
-  params.push(limit, offset);
-  // Sort: urgent messages first (within same time window), then by created_at DESC
-  var orderBy = filters.priority_sort
-    ? "CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, created_at DESC"
-    : 'created_at DESC';
-  return db.prepare('SELECT * FROM messages WHERE ' + where.join(' AND ') + ' ORDER BY ' + orderBy + ' LIMIT ? OFFSET ?').all(...params);
-}
-
-export function listThreads(limit) {
-  return db.prepare(`SELECT thread_id, COUNT(*) as message_count,
-    MAX(created_at) as last_message_at,
-    (SELECT from_agent FROM messages m2 WHERE m2.thread_id = messages.thread_id ORDER BY created_at DESC LIMIT 1) as last_sender
-    FROM messages WHERE thread_id IS NOT NULL
-    GROUP BY thread_id ORDER BY last_message_at DESC LIMIT ?`).all(Math.min(limit || 20, 500));
-}
-
-// Archive resolved messages older than N days (default 90)
-// Deletes from messages, returns count of rows removed
-export function archiveOldMessages(daysOld) {
-  daysOld = parseInt(daysOld) || 90;
-  var result = db.prepare(
-    "DELETE FROM messages WHERE created_at < datetime('now', '-' || ? || ' days')" +
-    " AND (status = 'resolved' OR msg_type = 'info')"
-  ).run(String(daysOld));
-  return result.changes;
-}
-
-export function bulkDeleteMessages(filters) {
-  var conditions = [];
-  var params = [];
-  if (filters.from) { conditions.push('from_agent = ?'); params.push(filters.from); }
-  if (filters.to) { conditions.push('to_agent = ?'); params.push(filters.to); }
-  if (filters.content_like) { conditions.push('content LIKE ?'); params.push('%' + filters.content_like + '%'); }
-  if (conditions.length === 0) return 0;
-  var sql = 'DELETE FROM messages WHERE ' + conditions.join(' AND ');
-  return db.prepare(sql).run(...params).changes;
-}
-
-// -- Namespaced context --
-
-// Context key categories:
-//   'durable'   - persistent config, guidelines, gen profiles (no auto-expiry)
-//   'ephemeral' - session state, recovery instructions (auto-expire via TTL)
-var CONTEXT_MAX_KEYS_PER_NAMESPACE = 200;
-
-export function upsertContextKey(namespace, key, data, agentId, opts) {
-  var category = (opts && opts.category) || 'durable';
-  // project_id scopes a key to its owning project (F1). NULL = shared/global.
-  // Only stamped on NEW rows; an existing key keeps its project (ON CONFLICT
-  // below deliberately omits project_id from the UPDATE) so a shared key stays
-  // shared and an owned key can't be re-homed by an overwrite.
-  var projectId = (opts && opts.projectId) || null;
-  var ttl = (opts && opts.ttl) || null; // seconds
-  var expiresAt = null;
-  if (ttl) {
-    expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
-  } else if (opts && opts.expires_at) {
-    expiresAt = opts.expires_at;
-  }
-
-  var existing = db.prepare("SELECT data, project_id FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
-  var merged = data;
-  if (existing) {
-    // Save previous value to history before overwriting. Stamp the history row
-    // with the key's CURRENT project (preserved for existing keys) so history
-    // reads + rollbacks can be project-scoped (F1).
-    try {
-      db.prepare("INSERT INTO context_history (namespace, key, data, changed_by, project_id) VALUES (?, ?, ?, ?, ?)").run(namespace, key, existing.data, agentId || '', existing.project_id || null);
-      // Keep only last 50 versions per key
-      db.prepare("DELETE FROM context_history WHERE namespace = ? AND key = ? AND id NOT IN (SELECT id FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 50)").run(namespace, key, namespace, key);
-    } catch (e) { /* non-critical — history table may not exist yet */ }
-    try {
-      var existingData = JSON.parse(existing.data);
-      var newData = typeof data === 'string' ? JSON.parse(data) : data;
-      // Sanitize against prototype pollution
-      if (newData && typeof newData === 'object') {
-        delete newData.__proto__;
-        delete newData.constructor;
-        delete newData.prototype;
-      }
-      merged = JSON.stringify(Object.assign({}, existingData, newData));
-    } catch (e) {
-      merged = typeof data === 'string' ? data : JSON.stringify(data);
-    }
-  } else {
-    merged = typeof data === 'string' ? data : JSON.stringify(data);
-  }
-  db.prepare(
-    "INSERT INTO context_keys (namespace, key, data, category, project_id, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
-  ).run(namespace, key, merged, category, projectId, expiresAt, agentId);
-
-  // Enforce size cap per namespace
-  enforceNamespaceCap(namespace);
-}
-
-function enforceNamespaceCap(namespace) {
-  var count = db.prepare("SELECT COUNT(*) as c FROM context_keys WHERE namespace = ?").get(namespace);
-  if (count.c > CONTEXT_MAX_KEYS_PER_NAMESPACE) {
-    // Delete oldest ephemeral keys first, then oldest durable
-    var excess = count.c - CONTEXT_MAX_KEYS_PER_NAMESPACE;
-    db.prepare(
-      "DELETE FROM context_keys WHERE id IN (SELECT id FROM context_keys WHERE namespace = ? ORDER BY CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)"
-    ).run(namespace, excess);
-  }
-}
-
-export function cleanupContextHistory(retentionDays) {
-  var days = retentionDays || 90;
-  var result = db.prepare(
-    "DELETE FROM context_history WHERE changed_at < datetime('now', '-' || ? || ' days')"
-  ).run(String(days));
-  if (result.changes > 0) {
-    console.log('[mycelium] Cleaned up %d old context history entries (retention: %d days)', result.changes, days);
-  }
-  return result.changes;
-}
-
 export function cleanupSavepoints(keepPerAgent) {
   var keep = keepPerAgent || 50;
   var agents = db.prepare("SELECT DISTINCT agent_id FROM agent_savepoints").all();
@@ -649,225 +313,6 @@ export function cleanupSavepoints(keepPerAgent) {
     console.log('[mycelium] Cleaned up %d old savepoints (keep: %d per agent)', totalCleaned, keep);
   }
   return totalCleaned;
-}
-
-export function getContextKey(namespace, key) {
-  var row = db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
-  if (row && row.expires_at && new Date(row.expires_at) < new Date()) {
-    db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
-    return null;
-  }
-  if (row) {
-    // Track access for smart boot scoring
-    try {
-      db.prepare("UPDATE context_keys SET access_count = access_count + 1, last_accessed_at = datetime('now') WHERE id = ?").run(row.id);
-    } catch (e) { /* non-critical */ }
-  }
-  return row;
-}
-
-export function listContextKeys(namespace, projectId) {
-  // Filter out expired keys on read
-  var now = new Date().toISOString();
-  var conditions = ["(expires_at IS NULL OR expires_at > ?)"];
-  var params = [now];
-  if (namespace) {
-    conditions.push("namespace = ?");
-    params.push(namespace);
-  }
-  // F1: scope listings to shared (NULL) + the caller's project. projectId is
-  // left undefined for admins/studio (no filter, see all) and set (possibly
-  // null → shared-only) for agents.
-  if (projectId !== undefined) {
-    conditions.push("(project_id IS NULL OR project_id = ?)");
-    params.push(projectId);
-  }
-  var order = namespace ? "key" : "namespace, key";
-  return db.prepare("SELECT * FROM context_keys WHERE " + conditions.join(" AND ") + " ORDER BY " + order).all(...params);
-}
-
-export function deleteContextKey(namespace, key) {
-  db.prepare("DELETE FROM context_keys WHERE namespace = ? AND key = ?").run(namespace, key);
-}
-
-// Bulk delete context keys by array of IDs (admin use)
-export function bulkDeleteContextKeys(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return 0;
-  var placeholders = ids.map(function () { return '?'; }).join(',');
-  var result = db.prepare("DELETE FROM context_keys WHERE id IN (" + placeholders + ")").run(...ids);
-  return result.changes;
-}
-
-// Search context keys with filters
-export function searchContextKeys(opts) {
-  var now = new Date().toISOString();
-  var conditions = ["(expires_at IS NULL OR expires_at > ?)"];
-  var params = [now];
-
-  if (opts.namespace) {
-    conditions.push("namespace = ?");
-    params.push(opts.namespace);
-  }
-  if (opts.category) {
-    conditions.push("category = ?");
-    params.push(opts.category);
-  }
-  if (opts.updated_by) {
-    conditions.push("updated_by = ?");
-    params.push(opts.updated_by);
-  }
-  if (opts.search) {
-    conditions.push("(key LIKE ? OR data LIKE ?)");
-    var pattern = "%" + opts.search + "%";
-    params.push(pattern, pattern);
-  }
-  // F1: scope search results to shared (NULL) + the caller's project.
-  if (opts.projectId !== undefined) {
-    conditions.push("(project_id IS NULL OR project_id = ?)");
-    params.push(opts.projectId);
-  }
-
-  var sql = "SELECT * FROM context_keys WHERE " + conditions.join(" AND ") + " ORDER BY namespace, key";
-  return db.prepare(sql).all(...params);
-}
-
-// Context history — view previous versions of a key
-export function getContextHistory(namespace, key, limit) {
-  return db.prepare(
-    "SELECT * FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT ?"
-  ).all(namespace, key, limit || 20);
-}
-
-// Single history entry by id — used by the rollback route to scope-check the
-// caller against the entry's project BEFORE restoring (F1). Returns the row
-// (now carrying project_id) without mutating anything.
-export function getContextHistoryEntry(historyId) {
-  return db.prepare("SELECT * FROM context_history WHERE id = ?").get(historyId);
-}
-
-// Rollback — restore a previous version by history ID
-export function rollbackContextKey(historyId, agentId) {
-  var row = db.prepare("SELECT * FROM context_history WHERE id = ?").get(historyId);
-  if (!row) return null;
-  // Save current value to history before rollback
-  var current = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(row.namespace, row.key);
-  if (current) {
-    db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(row.namespace, row.key, current.data, agentId || '');
-  }
-  // Restore the historical value
-  db.prepare(
-    "UPDATE context_keys SET data = ?, updated_by = ?, updated_at = datetime('now') WHERE namespace = ? AND key = ?"
-  ).run(row.data, agentId || '', row.namespace, row.key);
-  return row;
-}
-
-// Purge all expired context keys (called on server boot and periodically)
-// ---- Runs (the run-log) ----
-
-export function createRun(run) {
-  var status = run.status || 'running';
-  // started_at is the EXECUTION start: a run recorded as already-running starts now;
-  // a pending/queued run (a rerun) leaves it NULL until a worker claims it. created_at
-  // (the queue/record time) is always set by the column default.
-  db.prepare(
-    'INSERT INTO runs (id, agent_id, model, project_id, workflow_id, brief, status, rerun_of, started_at) ' +
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'running' THEN datetime('now') ELSE NULL END)"
-  ).run(
-    run.id, run.agent_id, run.model || '', run.project_id || '',
-    run.workflow_id || null, run.brief || '', status, run.rerun_of || null, status
-  );
-  return getRun(run.id);
-}
-
-var RUN_UPDATABLE = ['model', 'status', 'turns', 'tool_calls', 'tokens_in', 'tokens_out',
-                     'energy_joules', 'artifacts', 'result', 'error', 'finished_at', 'duration_ms'];
-
-export function updateRun(id, fields) {
-  var cols = [], params = [];
-  for (var k of RUN_UPDATABLE) {
-    if (fields[k] !== undefined) { cols.push(k + ' = ?'); params.push(fields[k]); }
-  }
-  if (!cols.length) return getRun(id);
-  params.push(id);
-  db.prepare('UPDATE runs SET ' + cols.join(', ') + ' WHERE id = ?').run(...params);
-  return getRun(id);
-}
-
-export function getRun(id) {
-  return db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
-}
-
-// The run-LOG list omits the heavy fields (result, tool_calls) so GET /runs stays
-// scannable even when a single result is 44K chars. The full body comes from
-// getRun(id) detail.
-var RUN_LIST_COLS = 'id, agent_id, model, project_id, workflow_id, brief, status, claimed_by, ' +
-                    'turns, tokens_in, tokens_out, energy_joules, artifacts, ' +
-                    'created_at, started_at, finished_at, duration_ms, rerun_of';
-
-export function listRuns(opts) {
-  var where = ['1=1'], params = [];
-  if (opts && opts.agent_id) { where.push('agent_id = ?'); params.push(opts.agent_id); }
-  if (opts && opts.project_id) { where.push('project_id = ?'); params.push(opts.project_id); }
-  if (opts && opts.status) { where.push('status = ?'); params.push(opts.status); }
-  if (opts && opts.since) { where.push('started_at >= ?'); params.push(opts.since); }
-  var limit = (opts && opts.limit) || 50;
-  params.push(limit);
-  return db.prepare(
-    // rowid DESC tiebreaks same-second runs so "newest-first" is deterministic.
-    'SELECT ' + RUN_LIST_COLS + ' FROM runs WHERE ' + where.join(' AND ') +
-    ' ORDER BY created_at DESC, rowid DESC LIMIT ?'
-  ).all(...params);
-}
-
-// Atomic claim of the oldest PENDING run (optionally for a specific agent), drone-job
-// style: the `WHERE status='pending'` guard means two workers can't grab the same run.
-// Sets claimed_by + the execution start (started_at). Returns the claimed run, or null
-// if nothing pending matched.
-export function claimRun(workerId, opts) {
-  var where = ["status = 'pending'"], params = [];
-  if (opts && opts.agent_id) { where.push('agent_id = ?'); params.push(opts.agent_id); }
-  // FIFO by queue time; loop a few candidates to skip rows another worker claimed mid-race.
-  var candidates = db.prepare(
-    'SELECT id FROM runs WHERE ' + where.join(' AND ') + ' ORDER BY created_at ASC, rowid ASC LIMIT 10'
-  ).all(...params);
-  for (var c of candidates) {
-    var r = db.prepare(
-      "UPDATE runs SET status='claimed', claimed_by=?, started_at=datetime('now') WHERE id=? AND status='pending'"
-    ).run(workerId, c.id);
-    if (r.changes === 1) return getRun(c.id);   // we won the claim
-  }
-  return null;
-}
-
-// Stale-claim recovery (drone_jobs.releaseStaleClaimedJobs analog): a run claimed/running
-// longer than staleMinutes with no completion is auto-failed, so a dead worker can't
-// strand a run forever. Returns the number of runs reaped.
-export function releaseStaleClaimedRuns(staleMinutes) {
-  var mins = parseInt(staleMinutes, 10) || 60;
-  var result = db.prepare(
-    "UPDATE runs SET status='failed', " +
-    "error='[stale_timeout] claimed/running too long with no completion; auto-failed', " +
-    "finished_at=datetime('now') " +
-    "WHERE status IN ('claimed','running') AND started_at IS NOT NULL " +
-    "AND started_at < datetime('now', '-' || ? || ' minutes')"
-  ).run(mins);
-  return result.changes;
-}
-
-export function purgeExpiredContextKeys() {
-  var result = db.prepare("DELETE FROM context_keys WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')").run();
-  return result.changes;
-}
-
-// Clean up stale session keys for an agent (called on agent boot)
-export function cleanupAgentSessionKeys(agentId) {
-  var result = db.prepare("DELETE FROM context_keys WHERE namespace = ? AND category = 'ephemeral' AND expires_at IS NOT NULL AND expires_at <= datetime('now')").run(agentId);
-  return result.changes;
-}
-
-// Get context stats per namespace
-export function contextKeyStats() {
-  return db.prepare("SELECT namespace, category, COUNT(*) as count, SUM(LENGTH(data)) as total_bytes FROM context_keys WHERE expires_at IS NULL OR expires_at > datetime('now') GROUP BY namespace, category ORDER BY namespace").all();
 }
 
 // -- Widgets --
@@ -1764,44 +1209,6 @@ export function completeLinkedPlanSteps(taskId) {
 
 // -- Studio Users --
 
-export function createStudioUser(username, displayName, passwordHash, role) {
-  var result = db.prepare(
-    "INSERT INTO studio_users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?) RETURNING id"
-  ).get(username, displayName, passwordHash, role || 'admin');
-  return result.id;
-}
-
-export function getStudioUserByUsername(username) {
-  return db.prepare("SELECT * FROM studio_users WHERE username = ?").get(username);
-}
-
-export function getStudioUserById(id) {
-  return db.prepare("SELECT id, username, display_name, role, created_at FROM studio_users WHERE id = ?").get(id);
-}
-
-export function listStudioUsers() {
-  return db.prepare("SELECT id, username, display_name, role, created_at, last_seen FROM studio_users ORDER BY created_at").all();
-}
-
-export function touchStudioUserSeen(id) {
-  db.prepare("UPDATE studio_users SET last_seen = datetime('now') WHERE id = ?").run(id);
-}
-
-export function getActiveStudioUsers(withinMinutes) {
-  var mins = withinMinutes || 5;
-  return db.prepare(
-    "SELECT id, username, display_name, role, last_seen FROM studio_users WHERE last_seen >= datetime('now', '-' || ? || ' minutes') ORDER BY last_seen DESC"
-  ).all(mins);
-}
-
-export function deleteStudioUser(id) {
-  db.prepare("DELETE FROM studio_users WHERE id = ?").run(id);
-}
-
-export function updateStudioUser(id, fields) {
-  buildUpdate('studio_users', id, fields, ['display_name', 'password_hash', 'role']);
-}
-
 // -- Webhooks --
 
 export function createWebhook(agentId, url, events, secret) {
@@ -1937,21 +1344,6 @@ export function pruneWebhookDeliveries(keepDays) {
   var days = keepDays || 7;
   var result = db.prepare("DELETE FROM webhook_deliveries WHERE created_at < datetime('now', '-' || ? || ' days')").run(days);
   return result.changes;
-}
-
-// -- Team Chat (human-only messages) --
-
-export function createTeamChat(fromUser, content) {
-  var result = db.prepare(
-    "INSERT INTO messages (from_agent, content, msg_type) VALUES (?, ?, 'chat') RETURNING id"
-  ).get(fromUser, content);
-  return result.id;
-}
-
-export function listTeamChat(limit) {
-  return db.prepare(
-    "SELECT * FROM messages WHERE msg_type = 'chat' ORDER BY created_at DESC LIMIT ?"
-  ).all(limit || 50);
 }
 
 // -- Channels --
@@ -2645,127 +2037,7 @@ export function checkDroneCompatibility(droneId) {
   return { drone_id: droneId, compatible: compatible, incompatible: incompatible };
 }
 
-// -- Shared Concepts --
-
-export function createConcept(name, type, description, data, createdBy) {
-  var r = stmt('dvCreateConcept', `INSERT INTO concepts (name, type, description, data, created_by)
-    VALUES (?, ?, ?, ?, ?)`).run(name, type || 'custom', description || '', JSON.stringify(data || {}), createdBy || '');
-  return r.lastInsertRowid;
-}
-
-export function getConcept(id) {
-  return stmt('dvGetConcept', 'SELECT * FROM concepts WHERE id = ?').get(id);
-}
-
-export function listConcepts(filters) {
-  var where = []; var params = [];
-  if (filters && filters.type) { where.push('type = ?'); params.push(filters.type); }
-  var sql = 'SELECT * FROM concepts' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY updated_at DESC';
-  if (filters && filters.limit) { sql += ' LIMIT ?'; params.push(filters.limit); }
-  return stmt('dvListConcepts_' + where.join('_') + (filters && filters.limit || ''), sql).all(...params);
-}
-
-export function updateConcept(id, fields) {
-  var f = Object.assign({}, fields);
-  if (f.data !== undefined && typeof f.data !== 'string') f.data = JSON.stringify(f.data);
-  buildUpdate('concepts', id, f, ['name', 'type', 'description', 'data'], { updatedAt: true, extraSets: ['version = version + 1'] });
-}
-
-export function deleteConcept(id) {
-  db.prepare('DELETE FROM concepts WHERE id = ?').run(id);
-}
-
-export function linkConceptToProject(projectId, conceptId, linkedBy) {
-  stmt('dvLinkConcept', `INSERT OR IGNORE INTO project_concepts (project_id, concept_id, linked_by)
-    VALUES (?, ?, ?)`).run(projectId, conceptId, linkedBy || '');
-}
-
-export function unlinkConceptFromProject(projectId, conceptId) {
-  stmt('dvUnlinkConcept', 'DELETE FROM project_concepts WHERE project_id = ? AND concept_id = ?').run(projectId, conceptId);
-}
-
-export function getProjectConcepts(projectId) {
-  return stmt('dvGetProjectConcepts', `SELECT c.*, pc.linked_at, pc.linked_by
-    FROM concepts c JOIN project_concepts pc ON c.id = pc.concept_id
-    WHERE pc.project_id = ? ORDER BY c.name`).all(projectId);
-}
-
-export function getConceptProjects(conceptId) {
-  return stmt('dvGetConceptProjects', `SELECT p.*, pc.linked_at, pc.linked_by
-    FROM projects p JOIN project_concepts pc ON p.id = pc.project_id
-    WHERE pc.concept_id = ? ORDER BY p.name`).all(conceptId);
-}
-
 // -- Init (no default seed data — new instances start blank) --
-
-// =============== APPROVALS ===============
-
-var GATED_ACTIONS = ['deploy', 'git_push', 'plan_create', 'money_action', 'delete', 'external_comm'];
-export { GATED_ACTIONS };
-
-export function createApproval(actionType, requestedBy, title, payload, projectId, riskTier, requiredApprovals) {
-  var result = stmt('dvCreateApproval2',
-    "INSERT INTO approvals (action_type, requested_by, title, payload, project_id, risk_tier, required_approvals) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-  ).get(actionType, requestedBy, title || '', typeof payload === 'string' ? payload : JSON.stringify(payload || {}), projectId || 'mycelium', riskTier || 'medium', requiredApprovals || 1);
-  return result.id;
-}
-
-export function getApproval(id) {
-  return stmt('dvGetApproval', "SELECT * FROM approvals WHERE id = ?").get(id);
-}
-
-export function listApprovals(filters) {
-  var where = ['1=1']; var params = [];
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  if (filters.action_type) { where.push('action_type = ?'); params.push(filters.action_type); }
-  if (filters.requested_by) { where.push('requested_by = ?'); params.push(filters.requested_by); }
-  if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
-  var limit = Math.min(filters.limit || 50, 500);
-  params.push(limit);
-  return db.prepare('SELECT * FROM approvals WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ?').all(...params);
-}
-
-export function decideApproval(id, status, decidedBy, reason) {
-  db.prepare(
-    "UPDATE approvals SET status = ?, decided_by = ?, decided_at = datetime('now'), reason = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(status, decidedBy, reason || '', id);
-  // Auto-action related inbox items so approve/reject buttons disappear
-  db.prepare(
-    "UPDATE operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE entity_type = 'approval' AND entity_id = ? AND status != 'dismissed'"
-  ).run(String(id));
-}
-
-export function markApprovalExecuted(id) {
-  db.prepare("UPDATE approvals SET status = 'executed', executed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
-}
-
-export function countPendingApprovals() {
-  return stmt('dvCountApprovals', "SELECT COUNT(*) as count FROM approvals WHERE status = 'pending'").get();
-}
-
-export function listPendingApprovalsByAgent(agentId) {
-  return db.prepare("SELECT * FROM approvals WHERE requested_by = ? AND status IN ('pending', 'approved') ORDER BY created_at DESC").all(agentId);
-}
-
-// -- Approval Votes --
-
-export function castApprovalVote(approvalId, voter, vote, notes) {
-  stmt('dvCastVote', `INSERT INTO approval_votes (approval_id, voter, vote, notes)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(approval_id, voter) DO UPDATE SET vote = excluded.vote, notes = excluded.notes, created_at = datetime('now')`
-  ).run(approvalId, voter, vote || 'approve', notes || '');
-}
-
-export function getApprovalVotes(approvalId) {
-  return stmt('dvGetVotes', 'SELECT * FROM approval_votes WHERE approval_id = ? ORDER BY created_at').all(approvalId);
-}
-
-export function countApprovalVotes(approvalId) {
-  var row = db.prepare(
-    "SELECT SUM(CASE WHEN vote = 'approve' THEN 1 ELSE 0 END) as approves, SUM(CASE WHEN vote = 'deny' THEN 1 ELSE 0 END) as denies FROM approval_votes WHERE approval_id = ?"
-  ).get(approvalId);
-  return { approves: row.approves || 0, denies: row.denies || 0 };
-}
 
 export function getAdminOps() {
   var pendingRequests = db.prepare(
@@ -2795,19 +2067,6 @@ export function getAdminOps() {
     stale_requests: staleRequests,
     open_prs: []
   };
-}
-
-export function resolveStaleRequests(hoursOld) {
-  var hours = hoursOld || 72;
-  var stale = db.prepare(
-    "SELECT id FROM messages WHERE msg_type = 'request' AND status IN ('pending', 'sent') AND created_at < datetime('now', '-' || ? || ' hours')"
-  ).all(hours);
-  for (var req of stale) {
-    db.prepare(
-      "UPDATE messages SET status = 'resolved', resolved_at = datetime('now'), resolved_by = 'system', content = content || '\n\n[Auto-resolved: request was pending for over ' || ? || ' hours]' WHERE id = ?"
-    ).run(hours, req.id);
-  }
-  return stale.length;
 }
 
 export function getOverview(userId) {
@@ -3173,101 +2432,6 @@ export function pruneSavepoints(agentId, keepCount) {
   if (cutoff) {
     db.prepare('DELETE FROM agent_savepoints WHERE agent_id = ? AND heartbeat_at < ?').run(agentId, cutoff.heartbeat_at);
   }
-}
-
-// -- Operator Inbox --
-
-export function createInboxItem(operatorId, type, entityType, entityId, title, summary, data, priority) {
-  var result = db.prepare(
-    'INSERT INTO operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
-  ).get(operatorId, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
-  return result.id;
-}
-
-export function createInboxItemForAllOperators(type, entityType, entityId, title, summary, data, priority) {
-  var ops = db.prepare("SELECT id FROM operators WHERE status = 'active'").all();
-  var ids = [];
-  var insertStmt = db.prepare(
-    'INSERT INTO operator_inbox (operator_id, type, entity_type, entity_id, title, summary, data, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
-  );
-  for (var op of ops) {
-    var row = insertStmt.get(op.id, type || 'message', entityType || '', entityId || '', title || '', summary || '', JSON.stringify(data || {}), priority || 'normal');
-    ids.push(row.id);
-  }
-  return ids;
-}
-
-export function getInboxItem(id) {
-  return db.prepare('SELECT * FROM operator_inbox WHERE id = ?').get(id);
-}
-
-export function listInboxItems(filters) {
-  var where = ['1=1'];
-  var params = [];
-  if (filters.operator_id) { where.push('operator_id = ?'); params.push(filters.operator_id); }
-  if (filters.status) { where.push('status = ?'); params.push(filters.status); }
-  else { where.push("status != 'dismissed'"); }
-  if (filters.type) { where.push('type = ?'); params.push(filters.type); }
-  if (filters.entity_type) { where.push('entity_type = ?'); params.push(filters.entity_type); }
-  var limit = Math.min(filters.limit || 50, 200);
-  var offset = filters.offset || 0;
-  var sql = 'SELECT * FROM operator_inbox WHERE ' + where.join(' AND ') + ' ORDER BY CASE priority WHEN \'urgent\' THEN 0 WHEN \'normal\' THEN 1 ELSE 2 END, created_at DESC LIMIT ? OFFSET ?';
-  params.push(limit, offset);
-  return db.prepare(sql).all(...params);
-}
-
-export function markInboxItemRead(id) {
-  db.prepare("UPDATE operator_inbox SET status = 'read', read_at = datetime('now') WHERE id = ? AND status = 'unread'").run(id);
-}
-
-export function markInboxItemActioned(id) {
-  db.prepare("UPDATE operator_inbox SET status = 'actioned', read_at = COALESCE(read_at, datetime('now')) WHERE id = ?").run(id);
-}
-
-export function dismissInboxItem(id) {
-  db.prepare("UPDATE operator_inbox SET status = 'dismissed' WHERE id = ?").run(id);
-}
-
-export function countUnreadInbox(operatorId) {
-  var row = db.prepare("SELECT COUNT(*) as c FROM operator_inbox WHERE operator_id = ? AND status = 'unread'").get(operatorId);
-  return row ? row.c : 0;
-}
-
-export function countAllUnreadInbox() {
-  return db.prepare("SELECT operator_id, COUNT(*) as count FROM operator_inbox WHERE status = 'unread' GROUP BY operator_id").all();
-}
-
-// ======== RUNNER SPAWNS (dynamic agent swarm) ========
-
-export function createRunnerSpawn(tier, model, cwd, maxTurns, title, workContext, requestedBy) {
-  var result = db.prepare(
-    'INSERT INTO runner_spawns (tier, model, cwd, max_turns, title, work_context, requested_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
-  ).get(tier || 'agent', model || '', cwd || '', maxTurns || 50, title || '', JSON.stringify(workContext || {}), requestedBy || '');
-  return result.id;
-}
-
-export function getRunnerSpawn(id) {
-  var row = db.prepare('SELECT * FROM runner_spawns WHERE id = ?').get(id);
-  if (row) { try { row.work_context = JSON.parse(row.work_context); } catch (e) { row.work_context = {}; } }
-  return row;
-}
-
-export function listRunnerSpawns(status) {
-  var rows = status
-    ? db.prepare("SELECT * FROM runner_spawns WHERE status = ? ORDER BY created_at DESC LIMIT 100").all(status)
-    : db.prepare("SELECT * FROM runner_spawns ORDER BY created_at DESC LIMIT 100").all();
-  return rows.map(function (r) {
-    try { r.work_context = JSON.parse(r.work_context); } catch (e) { r.work_context = {}; }
-    return r;
-  });
-}
-
-export function claimRunnerSpawn(id, runnerId) {
-  db.prepare("UPDATE runner_spawns SET status = 'claimed', runner_id = ?, claimed_at = datetime('now') WHERE id = ? AND status = 'pending'").run(runnerId || 'runner', id);
-}
-
-export function doneRunnerSpawn(id, result, status) {
-  db.prepare("UPDATE runner_spawns SET status = ?, result = ?, done_at = datetime('now') WHERE id = ?").run(status || 'done', result || '', id);
 }
 
 // =============== NODE PROFILES — Stand Up Calibration ===============
