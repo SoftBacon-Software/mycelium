@@ -5,6 +5,20 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('ALTER TABLE am_facts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
   try { db.exec('ALTER TABLE am_facts ADD COLUMN last_accessed_at TEXT'); } catch (e) { /* already exists */ }
 
+  // Migration: bi-temporal validity + provenance-scoped trust (2026-07-22, memory-rework slice 1).
+  // valid_from/valid_to = world-time interval; verified_at = last ground-truth re-check;
+  // source_authority = how-validated (verified|directive|inferred), NOT who-spoke.
+  // Invariant (held by supersedeFact/pruneLowConfidence): valid_to IS NULL <=> superseded_by IS NULL <=> current.
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN valid_from TEXT'); } catch (e) { /* already exists */ }
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN valid_to TEXT'); } catch (e) { /* already exists */ }
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN verified_at TEXT'); } catch (e) { /* already exists */ }
+  try { db.exec("ALTER TABLE am_facts ADD COLUMN source_authority TEXT NOT NULL DEFAULT 'inferred'"); } catch (e) { /* already exists */ }
+  // Backfill existing rows so as-of queries are correct from day one.
+  try { db.exec('UPDATE am_facts SET valid_from = created_at WHERE valid_from IS NULL'); } catch (e) { /* */ }
+  try { db.exec('UPDATE am_facts SET valid_to = updated_at WHERE superseded_by IS NOT NULL AND valid_to IS NULL'); } catch (e) { /* */ }
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_valid ON am_facts(valid_to)'); } catch (e) { /* */ }
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_authority ON am_facts(source_authority)'); } catch (e) { /* */ }
+
   return {
     // -- Config --
     getConfig(key) {
@@ -24,10 +38,12 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Facts --
-    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId) {
+    // sourceAuthority (verified|directive|inferred) + validFrom are optional & appended,
+    // so existing 7-arg callers keep working (defaults: inferred, valid_from=now).
+    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom) {
       var result = db.prepare(
-        'INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
-      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null);
+        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now'))) RETURNING id"
+      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null);
       return result.id;
     },
 
@@ -60,11 +76,49 @@ export default function createAutoMemoryDB(db) {
     },
 
     supersedeFact(oldId, newId) {
-      db.prepare('UPDATE am_facts SET superseded_by = ? WHERE id = ?').run(newId, oldId);
+      // Close the validity interval (bi-temporal supersession) — don't just tombstone.
+      db.prepare("UPDATE am_facts SET superseded_by = ?, valid_to = datetime('now') WHERE id = ?").run(newId, oldId);
     },
 
     updateFactConfidence(id, confidence) {
       db.prepare("UPDATE am_facts SET confidence = ?, updated_at = datetime('now') WHERE id = ?").run(confidence, id);
+    },
+
+    // -- Provenance / bi-temporal (memory-rework slice 1) --
+
+    // A ground-truth re-check CONFIRMED the fact: stamp verified_at, optionally refresh
+    // confidence, and reset the access reference (a re-verified fact is "fresh").
+    reverifyFact(id, confidence) {
+      db.prepare(
+        "UPDATE am_facts SET verified_at = datetime('now'), confidence = COALESCE(?, confidence), last_accessed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+      ).run(confidence == null ? null : confidence, id);
+    },
+
+    // The re-verification queue: CURRENT, inferred (not directive/verified) facts never
+    // checked, or last checked longer than older_than_days ago. Aria's loop drains this.
+    factsDueForReverification(opts) {
+      opts = opts || {};
+      var olderThanDays = parseInt(opts.older_than_days) || 30;
+      var limit = Math.min(opts.limit || 50, 500);
+      return db.prepare(
+        "SELECT * FROM am_facts WHERE superseded_by IS NULL AND source_authority = 'inferred' " +
+        "AND (verified_at IS NULL OR verified_at < datetime('now', '-' || ? || ' days')) " +
+        "ORDER BY (verified_at IS NULL) DESC, COALESCE(verified_at, created_at) ASC LIMIT ?"
+      ).all(olderThanDays, limit);
+    },
+
+    // Bi-temporal "as of": facts whose validity interval [valid_from, valid_to) contains asOf.
+    // Answers "what did we believe on date X" — resolves the three-file contradiction problem.
+    factsAsOf(asOf, opts) {
+      opts = opts || {};
+      var where = ['valid_from IS NOT NULL', 'valid_from <= ?', '(valid_to IS NULL OR valid_to > ?)'];
+      var params = [asOf, asOf];
+      if (opts.agent_id) { where.push('agent_id = ?'); params.push(opts.agent_id); }
+      var limit = Math.min(opts.limit || 50, 500);
+      params.push(limit);
+      return db.prepare(
+        'SELECT * FROM am_facts WHERE ' + where.join(' AND ') + ' ORDER BY confidence DESC LIMIT ?'
+      ).all(...params);
     },
 
     // -- Consolidation --
@@ -127,16 +181,23 @@ export default function createAutoMemoryDB(db) {
 
     // Batch-update facts for decay: returns all facts not accessed in 24h with their timestamps
     getDecayableFacts() {
+      // Operator DIRECTIVES (stated intent/preference) do NOT decay — they hold until a new
+      // directive supersedes them. verified + inferred still decay (verified is re-checked via
+      // verified_at, not eroded to zero by time alone).
       return db.prepare(
-        "SELECT id, category, confidence, last_accessed_at, updated_at FROM am_facts WHERE superseded_by IS NULL AND (last_accessed_at IS NULL OR last_accessed_at < datetime('now', '-1 day'))"
+        "SELECT id, category, confidence, last_accessed_at, updated_at FROM am_facts WHERE superseded_by IS NULL AND source_authority != 'directive' AND (last_accessed_at IS NULL OR last_accessed_at < datetime('now', '-1 day'))"
       ).all();
     },
 
     pruneLowConfidence(threshold) {
-      // Mark facts below threshold as superseded (superseded_by = -1 signals decay-pruned)
-      // Age guard: don't prune facts less than 7 days old (may have low initial confidence)
+      // Decay-prune: SELF-supersede (superseded_by = own id) so the fact is "not current" +
+      // distinguishable from a merge, and FK-SAFE. (The old -1 sentinel violated the
+      // superseded_by -> am_facts(id) FK under foreign_keys=ON — verified 2026-07-22: it threw
+      // silently and NOTHING was ever pruned in prod. Self-id keeps the invariant
+      // valid_to IS NULL <=> superseded_by IS NULL <=> current.)
+      // Age guard: don't prune facts less than 7 days old (may have low initial confidence).
       var result = db.prepare(
-        "UPDATE am_facts SET superseded_by = -1 WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
+        "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
       ).run(threshold);
       return result.changes;
     },

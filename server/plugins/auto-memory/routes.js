@@ -44,6 +44,51 @@ export default function (core) {
     res.json({ ok: true });
   });
 
+  // POST /auto-memory/facts — create a fact directly (Aria's writer ADD branch; provenance-aware)
+  router.post('/facts', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var b = req.body || {};
+    if (!b.fact_text || String(b.fact_text).length < 10) return apiError(res, 400, 'fact_text (>=10 chars) is required');
+    var authority = b.source_authority || 'inferred';
+    if (['verified', 'directive', 'inferred'].indexOf(authority) === -1) {
+      return apiError(res, 400, 'source_authority must be one of: verified, directive, inferred');
+    }
+    var conf = (b.confidence == null) ? 0.8 : Number(b.confidence);
+    var id = db.createFact(b.agent_id || who, b.project_id || null, b.category || 'general',
+      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null);
+    try {
+      indexFactInMemory(core.db, id,
+        { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
+        b.agent_id || who, b.project_id || null);
+    } catch (e) { /* semantic-memory optional */ }
+    res.json({ ok: true, id: id, fact: db.getFact(id) });
+  });
+
+  // POST /auto-memory/facts/:id/reverify — a ground-truth re-check CONFIRMED it (stamp verified_at)
+  router.post('/facts/:id/reverify', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var id = parseIntParam(req.params.id);
+    if (!db.getFact(id)) return apiError(res, 404, 'Fact not found');
+    var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
+    db.reverifyFact(id, conf);
+    res.json({ ok: true, fact: db.getFact(id) });
+  });
+
+  // POST /auto-memory/facts/:id/supersede — a newer fact replaces this one (Aria's UPDATE branch)
+  router.post('/facts/:id/supersede', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var oldId = parseIntParam(req.params.id);
+    var newId = req.body && parseInt(req.body.new_id);
+    if (!newId) return apiError(res, 400, 'new_id is required');
+    if (!db.getFact(oldId)) return apiError(res, 404, 'Fact not found');
+    if (!db.getFact(newId)) return apiError(res, 400, 'new_id does not exist');
+    db.supersedeFact(oldId, newId);
+    res.json({ ok: true });
+  });
+
   // POST /auto-memory/extract — manually trigger extraction on text
   router.post('/extract', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
@@ -114,7 +159,7 @@ export default function (core) {
     // Add decay-related stats
     try {
       var belowThreshold = core.db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE superseded_by IS NULL AND confidence < 0.15').get().c;
-      var decayPruned = core.db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE superseded_by = -1').get().c;
+      var decayPruned = core.db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE superseded_by = id').get().c;
       stats.decay = {
         facts_below_threshold: belowThreshold,
         facts_decay_pruned: decayPruned
@@ -230,7 +275,7 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
       VALUES ('memory', ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, metadata = excluded.metadata, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId }));
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }));
   } catch (e) { /* semantic-memory not available or table doesn't exist */ }
 }
 
