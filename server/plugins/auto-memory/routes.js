@@ -25,6 +25,18 @@ export default function (core) {
     res.json(facts);
   });
 
+  // GET /auto-memory/facts/due-reverification — the re-verify queue: CURRENT inferred facts never
+  // checked or last checked > older_than_days ago. Admin-only (a cross-agent maintenance view).
+  // MUST be declared before /facts/:id or ':id' would swallow 'due-reverification'.
+  router.get('/facts/due-reverification', function (req, res) {
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    res.json(db.factsDueForReverification({
+      older_than_days: parseInt(req.query.older_than_days) || 30,
+      limit: parseInt(req.query.limit) || 50
+    }));
+  });
+
   // GET /auto-memory/facts/:id — get single fact
   router.get('/facts/:id', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
