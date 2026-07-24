@@ -7,4 +7,5 @@
 :HL["/squad/scout/scout-hero.png","image"]
 :HL["/squad/merlin/merlin-hero.png","image"]
 :HL["/squad/piper/piper-hero.png","image"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"bGOpjI2B2d7sRGd36Ocfb"}
+:HL["/squad/aria/aria-hero.jpg","image"]
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"063eznZFrgmQGsVbJxKHy"}
