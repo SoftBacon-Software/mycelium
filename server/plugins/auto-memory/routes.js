@@ -69,12 +69,18 @@ export default function (core) {
     var conf = (b.confidence == null) ? 0.8 : Number(b.confidence);
     var id = db.createFact(b.agent_id || who, b.project_id || null, b.category || 'general',
       String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null);
+    // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
+    // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
+    // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
+    var memoryIndex = { indexed: false, reason: 'not attempted' };
     try {
-      indexFactInMemory(core.db, id,
+      memoryIndex = indexFactInMemory(core.db, id,
         { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
         b.agent_id || who, b.project_id || null);
-    } catch (e) { /* semantic-memory optional */ }
-    res.json({ ok: true, id: id, fact: db.getFact(id) });
+    } catch (e) {
+      memoryIndex = { indexed: false, reason: e.message };
+    }
+    res.json({ ok: true, id: id, fact: db.getFact(id), memory_index: memoryIndex });
   });
 
   // POST /auto-memory/facts/:id/reverify — a ground-truth re-check CONFIRMED it (stamp verified_at)
@@ -115,7 +121,24 @@ export default function (core) {
 
     try {
       var facts = await extractFacts(db, config, text, who, project_id);
-      res.json({ ok: true, facts_extracted: facts.length, facts: facts });
+      // When 0 facts come back, "nothing durable to extract" and "the LLM was down"
+      // used to be indistinguishable (both: {ok:true, facts_extracted:0}). Surface the
+      // recent extraction-error health so a caller can tell them apart. extractFacts
+      // now logs LLM failures to am_extraction_errors, so this is populated on real
+      // breakage and empty on a legitimate "nothing here." (§F5)
+      var body = { ok: true, facts_extracted: facts.length, facts: facts };
+      if (facts.length === 0) {
+        try {
+          var es = db.getErrorStats();
+          var recent = db.getExtractionErrors(1);
+          body.extraction_health = {
+            total_errors: es.total,
+            errors_last_24h: es.last_24h,
+            last_error: recent.length ? { at: recent[0].created_at, message: (recent[0].error_message || '').slice(0, 200) } : null
+          };
+        } catch (e2) { /* non-critical */ }
+      }
+      res.json(body);
     } catch (e) {
       return apiError(res, 500, 'Extraction failed: ' + e.message);
     }
@@ -239,7 +262,17 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 
   try {
     var response = await callLLM(config, prompt);
-    if (!response) return [];
+    if (!response) {
+      // callLLM returns null only for provider='none' (expected — llm.js logs it) OR
+      // for an UNKNOWN provider. Only the latter is a breakage worth surfacing: a
+      // configured-but-unrecognized provider silently extracted 0 facts forever, and
+      // the /stats extraction_errors surface never saw it (this branch used to swallow
+      // it). Log it so the already-existing health surface works as intended. (§F5)
+      if (config.llm_provider && config.llm_provider !== 'none') {
+        try { db.logExtractionError(agentId, projectId, 'extract', 'LLM provider "' + config.llm_provider + '" returned no response (unknown or misconfigured)', text.substring(0, 500)); } catch (_) {}
+      }
+      return [];
+    }
 
     // Parse facts robustly (2026-07-06): response_format=json_object yields
     // {"facts":[...]}; parseFactArray also handles bare arrays + prose-wrapped JSON.
@@ -272,23 +305,43 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 
     return created;
   } catch (e) {
+    // An LLM outage (ollama down → HTTP error) throws here. Log it to
+    // am_extraction_errors so the /stats extraction_errors surface reflects it —
+    // previously this swallow left the outage totally invisible (0 facts extracted +
+    // 0 reported errors). The event-driven handlers wrap extractFacts in .catch +
+    // logExtractionError, but that .catch never fired because extractFacts caught
+    // internally and resolved with []. (§F5)
     console.error('[auto-memory] Extraction error:', e.message);
+    try { db.logExtractionError(agentId, projectId, 'extract', e.message, text.substring(0, 500)); } catch (_) {}
     return [];
   }
 }
 
+// Index a fact into semantic-memory's sm_embeddings so it is keyword/FTS searchable.
+// Returns a status object so the caller can surface a write that landed in am_facts
+// but DID NOT reach the searchable index — otherwise the fact exists but is invisible
+// to /memory/search until a manual reindex, and nobody knows. (no silent failures)
+//
+// NOTE on embedded:false — this path stores the row with a NULL embedding and does NOT
+// trigger auto-embed (there is no auto-memory backfill worker). The fact is keyword/
+// FTS searchable immediately but NOT vector-searchable until an admin runs POST
+// /memory/reindex or /memory/backfill-embeddings. We say so honestly rather than let
+// the caller believe a freshly-saved fact is already semantically retrievable.
+// See MEMORY-FAILURE-STATES.md §F4.
 function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
-  // Try to index in semantic-memory plugin's table if it exists
   try {
     coreDb.prepare || (function () { throw new Error('no db'); })();
-    // The sm_embeddings table may not exist if semantic-memory plugin isn't loaded
+    // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
       INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata)
       VALUES ('memory', ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, metadata = excluded.metadata, updated_at = datetime('now')
     `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }));
-  } catch (e) { /* semantic-memory not available or table doesn't exist */ }
+    return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
+  } catch (e) {
+    return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
+  }
 }
 
 // ---- Consolidation ----
