@@ -855,3 +855,161 @@ test('routes: expandOversizedRows calls getChunkSize once per request, not per r
   // Post-hoist: 1 (loop) + N (indexDoc re-chunks). Pre-hoist: N (loop) + N.
   assert.equal(chunkSizeCalls, 1 + N, 'getChunkSize hoisted above the loop (1 + N), not called per row (2N)');
 });
+
+// ---- Failure-state surfacing (MEMORY-FAILURE-STATES.md) ---------------------
+// A search that silently degraded to keyword, or a project filter that produced
+// a false-zero, used to look identical to a healthy result set. These pin the
+// honest effective-mode + degraded + index-health + project-filter signals so a
+// caller can tell "I got 3 mediocre hits because the embedding backend is down"
+// from "I got 3 good hits from a healthy index." See MEMORY-FAILURE-STATES.md §F1–F3.
+
+test('search: reports mode=keyword-fallback + degraded when the embedding provider is gone (was a silent mode:hybrid)', async function () {
+  // Seed while provider is still ollama so the doc embeds AND is keyword-searchable.
+  await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'deg-seed',
+    content_text: 'kerbin orbital insertion burn profile'
+  });
+  await waitFor(function () { return mem.countUnembedded() === 0; });
+
+  mem.setConfig('embedding_provider', 'none'); // simulate backend gone / unconfigured
+  try {
+    var r = await call('POST', '/memory/search', { query: 'kerbin orbital burn', mode: 'hybrid' });
+    assert.equal(r.status, 200);
+    // OLD behavior: echoed the REQUESTED mode ('hybrid') over keyword-only
+    // results — the caller had no signal that vector search never ran.
+    assert.equal(r.body.mode, 'keyword-fallback', 'effective mode is honest, not the requested hybrid');
+    assert.equal(r.body.requested_mode, 'hybrid');
+    assert.ok(r.body.degraded, 'degraded block present');
+    assert.equal(r.body.degraded.fell_back_to, 'keyword');
+    assert.ok(r.body.degraded.reason && r.body.degraded.reason.length > 0, 'reason populated');
+    assert.ok(r.body.index, 'index health block present');
+    assert.equal(typeof r.body.index.coverage_pct, 'number');
+    // The result itself is unchanged — surfacing only, no retrieval weakening.
+    var hit = r.body.results.filter(function (x) { return x.source_id === 'deg-seed'; });
+    assert.ok(hit.length >= 1, 'keyword result still surfaces the doc');
+  } finally {
+    mem.setConfig('embedding_provider', 'ollama');
+  }
+});
+
+test('search: happy-path hybrid reports mode=hybrid, no degraded, with index health', async function () {
+  await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'happy-seed',
+    content_text: 'duna transfer window opens roughly every 200 days'
+  });
+  await waitFor(function () { return mem.countUnembedded() === 0; });
+  var r = await call('POST', '/memory/search', { query: 'duna transfer window', mode: 'hybrid' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'hybrid', 'a healthy hybrid search stays hybrid');
+  assert.equal(r.body.degraded, undefined, 'no degraded block on a healthy search');
+  assert.equal(r.body.requested_mode, undefined, 'requested_mode only present when it differed');
+  assert.ok(r.body.index && r.body.index.coverage_pct >= 0, 'index health still surfaced');
+});
+
+test('search: a project_id filter that culls results surfaces project_filter (was a silent false-zero)', async function () {
+  await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'pf-a',
+    content_text: 'jool aerobraking depth at projtoken', metadata: { project_id: 'projAlpha' }
+  });
+  await call('POST', '/memory/index', {
+    source_type: 'm5max_memory', source_id: 'pf-b',
+    content_text: 'eve gravity assist via projtoken', metadata: { project_id: 'projBeta' }
+  });
+  await waitFor(function () { return mem.countUnembedded() === 0; });
+
+  // projAlpha scope: pf-a matches, pf-b is culled by the post-filter.
+  var rA = await call('POST', '/memory/search', { query: 'projtoken', project_id: 'projAlpha', limit: 10 });
+  assert.equal(rA.status, 200);
+  var aIds = rA.body.results.map(function (x) { return x.source_id; });
+  assert.ok(aIds.indexOf('pf-a') !== -1, 'projAlpha doc present');
+  assert.ok(aIds.indexOf('pf-b') === -1, 'projBeta doc filtered out');
+  assert.ok(rA.body.project_filter, 'project_filter signal present when the filter culled something');
+  assert.ok(rA.body.project_filter.results_before_filter >= 2, 'saw candidates before the filter ran');
+  assert.equal(rA.body.project_filter.results_after_filter, aIds.length);
+
+  // A scope with NO matching project: the false-zero case. Must be surfaced.
+  var rZ = await call('POST', '/memory/search', { query: 'projtoken', project_id: 'projZeta', limit: 10 });
+  assert.equal(rZ.body.count, 0, 'no projZeta results');
+  assert.ok(rZ.body.project_filter, 'false-zero is signalled, not silent');
+  assert.equal(rZ.body.project_filter.results_after_filter, 0);
+  assert.ok(rZ.body.project_filter.results_before_filter >= 2, '...but candidates DID exist');
+  assert.ok(/filtered out/.test(rZ.body.project_filter.hint), 'hint tells the caller memories exist');
+});
+
+// The optional rescue for the false-zero above: flagged, default OFF. With the
+// flag on, the candidate pool is widened before the post-filter so a relevant
+// memory ranked just below the default window still surfaces. Deterministic
+// here because every doc carries the identical FAKE_VECTOR, so vector recall
+// orders by updated_at DESC — we set those explicitly to control ranking.
+test('search: search_project_overfetch=true rescues a project-filter false-zero (flagged, default OFF)', async function () {
+  var odb = new Database(':memory:');
+  odb.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  odb.exec(PLATFORM_TABLES);
+  var omem = createMemoryDB(odb);
+  omem.setConfig('embedding_provider', 'ollama');
+  omem.setConfig('embedding_url', 'http://localhost:11434');
+  omem.setConfig('embedding_model', 'nomic-embed-text');
+
+  // 1 projAlpha doc (oldest) + 4 projBeta docs (newer). limit=2 => default
+  // window = limit*2 = 4, exactly filled by projBeta, crowding projAlpha out.
+  omem.index('m5max_memory', 'of-a', 'alpha content', { metadata: { project_id: 'ofAlpha' } });
+  for (var i = 0; i < 4; i++) {
+    omem.index('m5max_memory', 'of-b' + i, 'beta content ' + i, { metadata: { project_id: 'ofBeta' } });
+  }
+  for (var k = 0; k < 5; k++) {
+    omem.updateEmbedding('m5max_memory', k === 0 ? 'of-a' : 'of-b' + (k - 1), 0, FAKE_VECTOR, 'test');
+  }
+  // Force deterministic recency (datetime('now') is whole-second → ties otherwise).
+  odb.prepare("UPDATE sm_embeddings SET updated_at = '2026-01-01 00:00:00' WHERE source_id = 'of-a'").run();
+  for (var m = 0; m < 4; m++) {
+    odb.prepare("UPDATE sm_embeddings SET updated_at = ? WHERE source_id = ?").run('2026-01-02 00:00:0' + m, 'of-b' + m);
+  }
+
+  var oc = makeCore(odb);
+  var oa = express(); oa.use(express.json({ limit: '10mb' })); oa.use('/memory', createRoutes(oc));
+  var os = http.createServer(oa);
+  await new Promise(function (r) { os.listen(0, '127.0.0.1', r); });
+  var obase = 'http://127.0.0.1:' + os.address().port;
+
+  async function searchScoped(overfetch) {
+    omem.setConfig('search_project_overfetch', overfetch ? 'true' : 'false');
+    var res = await realFetch(obase + '/memory/search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-acting-as': 'tester' },
+      body: JSON.stringify({ query: 'zznomatch', project_id: 'ofAlpha', limit: 2, mode: 'hybrid' })
+    });
+    var body = await res.json();
+    return body.results.map(function (x) { return x.source_id; });
+  }
+  // 'zznomatch' hits nothing by keyword, so results come purely from vector
+  // recall (recency-ordered) — no FTS rank non-determinism.
+  var plain = await searchScoped(false);
+  var over = await searchScoped(true);
+  os.close(); odb.close();
+
+  // Deterministic: default window crowded projAlpha out entirely.
+  assert.equal(plain.length, 0, 'default path: projAlpha crowded out → false-zero');
+  assert.ok(over.indexOf('of-a') !== -1, 'overfetch surfaces the crowded-out projAlpha doc');
+});
+
+test('db: indexHealth() reports total/embedded/coverage/vector_scan_capped (lightweight, no GROUP BYs)', function () {
+  var hdb = new Database(':memory:');
+  hdb.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  var hmem = createMemoryDB(hdb);
+
+  var e = hmem.indexHealth();
+  assert.equal(e.total, 0);
+  assert.equal(e.embedded, 0);
+  assert.equal(e.coverage_pct, 0);
+  assert.strictEqual(e.vector_scan_capped, false);
+
+  hmem.index('note', 'a', 'first', {});
+  hmem.index('note', 'b', 'second', {});
+  hmem.updateEmbedding('note', 'a', 0, [0.1, 0.2, 0.3], 'test');
+
+  var h = hmem.indexHealth();
+  assert.equal(h.total, 2);
+  assert.equal(h.embedded, 1);
+  assert.equal(h.coverage_pct, 50);
+  assert.strictEqual(h.vector_scan_capped, false);
+  hdb.close();
+});

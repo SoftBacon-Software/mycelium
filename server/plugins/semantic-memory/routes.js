@@ -51,37 +51,78 @@ export default function (core) {
     var { query, source_types, namespace, project_id, limit, mode } = req.body;
     if (!query || typeof query !== 'string') return apiError(res, 400, 'query is required');
     limit = Math.min(parseInt(limit) || 10, 100);
-    mode = mode || 'hybrid';
+    var requestedMode = mode || 'hybrid';
 
     var opts = { limit: limit };
     if (source_types && Array.isArray(source_types)) opts.source_types = source_types;
     if (namespace) opts.namespace = namespace;
-    if (project_id) {
-      opts.project_id = project_id;
-    }
+    if (project_id) opts.project_id = project_id; // NOTE: searchKeyword/searchVector currently
+      // ignore this; the project scope is enforced post-query below. Kept on opts so the
+      // future in-DB filter (see MEMORY-FAILURE-STATES §F2) can pick it up without an API change.
 
+    // -- Optional overfetch when scoping by project (flagged, default OFF) ----------
+    // The project_id filter runs AFTER searchHybrid returns its top-N, so a relevant
+    // memory ranked just below N is silently dropped → a false-zero result set. Widening
+    // the candidate pool before the filter materially reduces that. Flagged because it
+    // widens the scan; OFF = bit-exact with the prior behavior. (§F2)
+    var overfetch = false;
+    try {
+      overfetch = db.getConfig('search_project_overfetch') === 'true' && !!project_id;
+    } catch (e) { /* config read is best-effort */ }
+    if (overfetch) opts.limit = Math.min(limit * 5, 100);
+
+    // -- Retrieval ------------------------------------------------------------------
     var results;
-    if (mode === 'keyword') {
+    var effectiveMode = requestedMode;
+    var embedFailReason = null; // null = no degradation; a string = why hybrid dropped to keyword
+
+    if (requestedMode === 'keyword') {
       results = db.searchKeyword(query, opts);
     } else {
-      // Generate query embedding for hybrid search
       var queryEmbedding = null;
       try {
         var config = db.getAllConfig();
-        if (config.embedding_provider && config.embedding_provider !== 'none') {
+        var providerConfigured = !!(config.embedding_provider && config.embedding_provider !== 'none');
+        if (providerConfigured) {
           queryEmbedding = await generateEmbedding(config, query);
+          if (!queryEmbedding) {
+            // drone provider returns null (the vector arrives async), or an unknown
+            // provider fell through — either way the query has no vector to rank with.
+            embedFailReason = 'embedding provider returned no vector (async-drone, unknown provider, or empty response)';
+          }
+        } else {
+          embedFailReason = 'no embedding provider configured (embedding_provider = ' + (config.embedding_provider || 'none') + ')';
         }
       } catch (e) {
+        embedFailReason = e.message;
         console.error('[semantic-memory] Query embedding failed, falling back to keyword:', e.message);
       }
-      results = db.searchHybrid(query, opts, queryEmbedding);
+
+      if (queryEmbedding) {
+        results = db.searchHybrid(query, opts, queryEmbedding);
+        effectiveMode = 'hybrid';
+      } else {
+        // Silent-degradation guard (house rule: no silent failures). Previously this
+        // returned mode:'hybrid' over keyword-only results — the caller had no signal
+        // that vector search never ran, and would answer confidently from a thinner
+        // recall. Now effectiveMode reports the truth and `degraded` explains it. The
+        // RESULT SET is unchanged; only the honesty changes. (§F1, §F3)
+        results = db.searchHybrid(query, opts, null);
+        effectiveMode = 'keyword-fallback';
+      }
     }
 
-    // Post-filter by project_id if specified (metadata-level filtering)
+    // -- Post-filter by project_id (metadata-level) --------------------------------
+    // NOTE: applied AFTER the limit, so it can produce false-zeros when relevant
+    // memories rank below the cutoff. We surface that (project_filter) instead of
+    // guessing; the overfetch flag above is the optional correctness fix. (§F2)
+    var unfilteredCount = results.length;
+    var projectCulled = false;
     if (project_id) {
       results = results.filter(function (r) {
         return r.metadata && r.metadata.project_id === project_id;
       });
+      projectCulled = results.length < unfilteredCount;
     }
 
     // Strip raw vectors from the response — 768 floats per result is pure
@@ -90,8 +131,42 @@ export default function (core) {
       var { embedding, ...rest } = r;
       return rest;
     });
+    if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page
 
-    res.json({ results: results, mode: mode, query: query, count: results.length });
+    // -- Response: honest mode + degradation + project-filter + index health --------
+    // Three mediocre hits from a 40%-covered index with the embedding backend down
+    // are NOT the same signal as three hits from a healthy 100%-covered index. Surface
+    // the difference instead of letting the caller answer from a gap. Mirrors the
+    // auto-memory/stats extraction_errors convention. (§F1–F3)
+    var response = { results: results, mode: effectiveMode, query: query, count: results.length };
+    if (effectiveMode !== requestedMode) response.requested_mode = requestedMode;
+    if (effectiveMode === 'keyword-fallback') {
+      response.degraded = {
+        reason: embedFailReason,
+        fell_back_to: 'keyword',
+        note: 'vector search unavailable; results are lexical (FTS5/LIKE) only'
+      };
+    }
+    if (project_id && projectCulled) {
+      response.project_filter = {
+        project_id: project_id,
+        results_before_filter: unfilteredCount,
+        results_after_filter: results.length,
+        hint: results.length === 0
+          ? 'all top candidates matched a different/no project scope — relevant memories likely exist but were filtered out; retry without project_id to confirm'
+          : 'some top candidates matched a different/no project scope and were dropped'
+      };
+    }
+    try {
+      var health = db.indexHealth();
+      response.index = {
+        total: health.total,
+        embedded: health.embedded,
+        coverage_pct: health.coverage_pct,
+        vector_scan_capped: health.vector_scan_capped
+      };
+    } catch (e) { /* index health is best-effort; never block a search on it */ }
+    res.json(response);
   }));
 
   // POST /memory/index — index content

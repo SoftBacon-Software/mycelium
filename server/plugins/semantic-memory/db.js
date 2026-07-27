@@ -353,6 +353,22 @@ export default function createMemoryDB(db) {
     },
 
     // -- Stats --
+    // Lightweight health snapshot for the search response — the four numbers a
+    // caller needs to judge whether a result set is complete + healthy (total,
+    // embedded, coverage %, vector-scan cap), WITHOUT the two GROUP BYs stats()
+    // runs. Search is a hotter path than GET /stats, so this stays cheap.
+    // Surfaced on every /memory/search response — see MEMORY-FAILURE-STATES.md §F3.
+    indexHealth() {
+      var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings').get().c;
+      var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NOT NULL').get().c;
+      return {
+        total: total,
+        embedded: withEmbedding,
+        coverage_pct: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
+        vector_scan_capped: withEmbedding > 5000 // mirrors the cap in searchVector()
+      };
+    },
+
     stats() {
       var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings').get().c;
       var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NOT NULL').get().c;
