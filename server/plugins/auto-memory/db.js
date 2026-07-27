@@ -19,6 +19,33 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_valid ON am_facts(valid_to)'); } catch (e) { /* */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_authority ON am_facts(source_authority)'); } catch (e) { /* */ }
 
+  // The inverse of indexFactInMemory() in routes.js. Every path that stops a fact
+  // being CURRENT must also stop it being SEARCHABLE — otherwise a retracted or
+  // superseded fact keeps ranking in /memory/search as though it were live, with
+  // nothing to tell the reader its source is gone. That is strictly worse than
+  // §F4's "written but not retrievable": this is "deleted but still retrieved".
+  //
+  // Lives here rather than in the route so all five removal paths are covered —
+  // deleteFact, supersedeFact, pruneLowConfidence, pruneOldSuperseded and
+  // pruneExcessFacts — not just the one an HTTP handler happens to call.
+  //
+  // Deletes by (source_type, source_id) with no chunk_index predicate, so a fact
+  // that was chunk-split loses all of its chunks. Mirrors semantic-memory's own
+  // deleteBySource (db.js:151). Returns rows removed; 0 when sm_embeddings does
+  // not exist, i.e. the semantic-memory plugin is not loaded — that is a normal
+  // deployment, not an error, which is why it is caught rather than surfaced.
+  function unindexFacts(ids) {
+    if (!ids || !ids.length) return 0;
+    try {
+      var stmt = db.prepare("DELETE FROM sm_embeddings WHERE source_type = 'memory' AND source_id = ?");
+      var removed = 0;
+      for (var id of ids) removed += stmt.run(String(id)).changes;
+      return removed;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   return {
     // -- Config --
     getConfig(key) {
@@ -73,11 +100,16 @@ export default function createAutoMemoryDB(db) {
 
     deleteFact(id) {
       db.prepare('DELETE FROM am_facts WHERE id = ?').run(id);
+      return unindexFacts([id]);
     },
 
     supersedeFact(oldId, newId) {
       // Close the validity interval (bi-temporal supersession) — don't just tombstone.
       db.prepare("UPDATE am_facts SET superseded_by = ?, valid_to = datetime('now') WHERE id = ?").run(newId, oldId);
+      // A superseded fact is no longer current, and listFacts() already hides it
+      // (`superseded_by IS NULL`). Drop it from the index too, or it keeps ranking
+      // in /memory/search against the very fact that replaced it.
+      return unindexFacts([oldId]);
     },
 
     updateFactConfidence(id, confidence) {
@@ -157,9 +189,16 @@ export default function createAutoMemoryDB(db) {
     // -- Pruning --
     pruneOldSuperseded(maxAge) {
       maxAge = maxAge || '30 days';
+      // Collect ids BEFORE the delete — afterwards there is nothing left to join
+      // against, and the index rows would be orphaned with no way to find them.
+      // Predicate is duplicated verbatim so the two statements cannot disagree.
+      var doomed = db.prepare(
+        "SELECT id FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
+      ).all(maxAge).map(function (r) { return r.id; });
       var result = db.prepare(
         "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
       ).run(maxAge);
+      unindexFacts(doomed);
       return result.changes;
     },
 
@@ -196,9 +235,16 @@ export default function createAutoMemoryDB(db) {
       // silently and NOTHING was ever pruned in prod. Self-id keeps the invariant
       // valid_to IS NULL <=> superseded_by IS NULL <=> current.)
       // Age guard: don't prune facts less than 7 days old (may have low initial confidence).
+      // Ids first: after the UPDATE these rows no longer match `superseded_by IS NULL`.
+      var doomed = db.prepare(
+        "SELECT id FROM am_facts WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
+      ).all(threshold).map(function (r) { return r.id; });
       var result = db.prepare(
         "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
       ).run(threshold);
+      // Decay-pruned facts are the ones the system judged least trustworthy —
+      // leaving them searchable would rank exactly the facts it decided to retire.
+      unindexFacts(doomed);
       return result.changes;
     },
 
@@ -208,9 +254,14 @@ export default function createAutoMemoryDB(db) {
       var count = db.prepare('SELECT COUNT(*) as c FROM am_facts WHERE agent_id = ?').get(agentId).c;
       if (count <= maxFacts) return 0;
       var toDelete = count - maxFacts;
+      // Same subquery the DELETE uses, run first so the ids survive the delete.
+      var doomed = db.prepare(
+        'SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?'
+      ).all(agentId, toDelete).map(function (r) { return r.id; });
       var result = db.prepare(
         'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
       ).run(agentId, toDelete);
+      unindexFacts(doomed);
       return result.changes;
     }
   };
