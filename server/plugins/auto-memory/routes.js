@@ -47,13 +47,18 @@ export default function (core) {
   });
 
   // DELETE /auto-memory/facts/:id — delete a fact (admin)
+  //
+  // Reports index removal the same way POST /facts reports index insertion: the
+  // caller is told whether the fact is actually gone from /memory/search, not just
+  // from am_facts. index_removed:0 on a fact that was indexed means the row is
+  // still searchable — the reader would otherwise have no way to know.
   router.delete('/facts/:id', function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
-    db.deleteFact(fact.id);
-    res.json({ ok: true });
+    var indexRemoved = db.deleteFact(fact.id);
+    res.json({ ok: true, index_removed: indexRemoved });
   });
 
   // POST /auto-memory/facts — create a fact directly (Aria's writer ADD branch; provenance-aware)
