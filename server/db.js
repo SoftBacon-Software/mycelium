@@ -8,7 +8,7 @@ import { getSleepMode, listInstanceConfig } from './db/config.js';
 import { listEvents } from './db/events.js';
 import { listBugs, countBugs } from './db/bugs.js';
 import { isNetworkAutonomous, getAvailableOperators, listOperators, getActiveStudioUsers } from './db/operators.js';
-import { getProject, listProjects } from './db/projects.js';
+import { getProject, listProjects, listOrgs } from './db/projects.js';
 import { getProjectConcepts, listConcepts, getConceptProjects } from './db/concepts.js';
 import { listPendingApprovalsByAgent, listApprovals } from './db/approvals.js';
 import { listPendingRequests, getUnreadMessages, markMessagesRead, listMessages, listTeamChat } from './db/messages.js';
