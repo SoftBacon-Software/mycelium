@@ -572,8 +572,13 @@ def execute_job(api, job, system_info, work_dir=None):
     if setup_cmd and not setup_marker.exists():
         print(f"  Running setup: {setup_cmd[:100]}...")
         try:
+            # Run setup as an argv list with shell=False so a setup string cannot
+            # be shell-interpreted on the drone (defense in depth; setup is also
+            # gated admin-only server-side). shlex.split honors quoting; posix=False
+            # keeps Windows backslash paths intact — mirrors the main command exec.
+            setup_argv = shlex.split(setup_cmd, posix=(os.name != "nt"))
             r = subprocess.run(
-                setup_cmd, shell=True, capture_output=True, text=True,
+                setup_argv, shell=False, capture_output=True, text=True,
                 timeout=1800, cwd=str(workspace),
                 env={**os.environ, "MYCELIUM_JOB_ID": str(job_id)}
             )

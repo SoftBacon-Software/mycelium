@@ -29,6 +29,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Coding-standards gate (jarvis docs/CODING-STANDARDS.md §3): correctness-
+      # focused eslint. Errors fail CI; warnings surface but don't block.
+      - name: Lint (eslint)
+        run: npm run lint
+
       - name: Run vitest
         run: npm test
 

@@ -23,6 +23,7 @@ import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
+import { securityHeadersMiddleware } from './lib/security-headers.js';
 
 // Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
 function isAdminKey(key) {
@@ -135,15 +136,11 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'X-Agent-Key']
 }));
 
-// Security headers
-app.use(function (req, res, next) {
-  res.set('X-Content-Type-Options', 'nosniff');
-  res.set('X-Frame-Options', 'DENY');
-  res.set('X-XSS-Protection', '0');
-  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  next();
-});
+// Security headers — policy centralised + unit-tested in lib/security-headers.js.
+// Adds Strict-Transport-Security and Content-Security-Policy (previously missing;
+// HSTS can only ever be an HTTP header, and the site shipped only a weak <meta>
+// CSP). Applied globally: CSP is inert on JSON responses and HSTS is wanted on all.
+app.use(securityHeadersMiddleware());
 
 app.use(express.json({
   limit: '1mb',

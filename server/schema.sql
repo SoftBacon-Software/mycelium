@@ -133,12 +133,17 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 -- Namespaced context storage
+-- project_id: NULL = shared/global (readable + writable swarm-wide, the legacy
+-- model); otherwise the owning project — cross-project agent access is denied
+-- by checkProjectScope (see F1 red-team fix). System-written keys (enforcement
+-- rules, api limits, standups) carry no project and stay shared.
 CREATE TABLE IF NOT EXISTS context_keys (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   namespace   TEXT NOT NULL,
   key         TEXT NOT NULL,
   data        TEXT NOT NULL DEFAULT '{}',
   category    TEXT NOT NULL DEFAULT 'durable',
+  project_id  TEXT,
   expires_at  TEXT,
   updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by  TEXT NOT NULL DEFAULT '',
@@ -148,11 +153,14 @@ CREATE TABLE IF NOT EXISTS context_keys (
 );
 
 -- Context version history (for rollback)
+-- project_id mirrors the key's owning project at change time so history reads +
+-- rollbacks can be project-scoped (history leaks overwritten secrets — F1).
 CREATE TABLE IF NOT EXISTS context_history (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   namespace   TEXT NOT NULL,
   key         TEXT NOT NULL,
   data        TEXT NOT NULL,
+  project_id  TEXT,
   changed_by  TEXT NOT NULL DEFAULT '',
   changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -137,3 +137,48 @@ describe('C-3 · drone artifact upload is admin-only, gated before multer', () =
     expect(res.body.ok).toBe(true)
   })
 })
+
+describe('C-4 · input_data.setup is admin-only (shell-executed on the drone)', () => {
+  test('a regular agent submitting input_data.setup is 403', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/drones/jobs')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ title: 'pwn', job_type: 'flux-test', input_data: { prompt: 'x', steps: 1, setup: 'pip install evil-pkg' } })
+    expect(res.status).toBe(403)
+  })
+
+  test('the metachar-free bypass (python -c) is also refused — SHELL_META does not catch it', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/drones/jobs')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ title: 'pwn2', job_type: 'flux-test', input_data: { setup: 'python -c "__import__(\'os\').system(\'id\')"' } })
+    expect(res.status).toBe(403)
+  })
+
+  test('a regular agent submitting setup via from-template is 403', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/drones/jobs/from-template')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ template_id: 'flux-test', input_data: { setup: 'touch /tmp/pwned' } })
+    expect(res.status).toBe(403)
+  })
+
+  test('a template job without setup still works (gate is not over-restrictive)', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/drones/jobs')
+      .set('X-Agent-Key', AGENT_KEY)
+      .send({ title: 'render', job_type: 'flux-test', input_data: { prompt: 'a cat', steps: 20 } })
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveProperty('id')
+  })
+
+  test('an admin may still supply setup (gate is not over-restrictive)', async () => {
+    const res = await request(app)
+      .post('/api/mycelium/drones/jobs')
+      .set('X-Admin-Key', ADMIN_KEY)
+      .set('X-Acting-As', 'greatness')
+      .send({ title: 'admin setup', command: 'echo hi', input_data: { setup: 'pip install -r requirements.txt' } })
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveProperty('id')
+  })
+})

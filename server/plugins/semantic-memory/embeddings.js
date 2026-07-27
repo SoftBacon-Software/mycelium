@@ -83,7 +83,17 @@ export async function generateEmbeddingBatch(config, texts, opts) {
     }
     return results;
   } else if (provider === 'openai') {
-    return embedOpenAIBatch(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, texts);
+    // OpenAI batch is a single fetch for ALL texts, so on ANY provider
+    // hiccup (missing key / HTTP>=400 / bad format / fetch reject) we
+    // degrade to per-item nulls — mirroring the ollama path above — instead
+    // of throwing an unhandled rejection that crashes the whole platform
+    // from a routine admin reindex during one API hiccup.
+    try {
+      return await embedOpenAIBatch(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, texts);
+    } catch (e) {
+      console.error('[semantic-memory] OpenAI batch embed failed:', e.message);
+      return texts.map(function () { return null; });
+    }
   }
 
   return texts.map(function () { return null; });

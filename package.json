@@ -23,7 +23,9 @@
     "start:printer:mock": "node printer-drone/index.js --mock",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint server sdk test",
+    "lint:fix": "eslint server sdk test --fix"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -41,7 +43,10 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.7"
   }

@@ -1,5 +1,5 @@
-// Bug routes — extracted verbatim from mycelium.js (god-file decomposition pilot,
-// 2026-07-03; see docs/specs/2026-07-03-god-file-decomposition.md).
+// Bug routes — extracted verbatim from mycelium.js (god-file decomposition,
+// 2026-07-08; see docs/specs/2026-07-03-god-file-decomposition.md).
 //
 // Handler bodies are UNCHANGED. Shared helpers arrive via `deps` (dependency
 // injection); DB functions are imported directly. The route contract is identical
@@ -72,7 +72,11 @@ export function registerBugRoutes(router, deps) {
     if (!who) return;
     var bug = getBug(parseIntParam(req.params.id));
     if (!bug) return res.status(404).json({ error: 'Bug not found' });
-    var agentId = req.body.agent_id || who;
+    if (!checkProjectScope(req, res, bug.project_id, bug.assignee)) return;
+    // Assignee derives from AUTH, not the client body: a regular agent may only
+    // claim for itself (the `who` value); only admin may assign on behalf of
+    // another agent via req.body.agent_id. (Mirrors the /messages directive gate.)
+    var agentId = (req._authIsAdmin && req.body.agent_id) ? req.body.agent_id : who;
     updateBug(bug.id, { assignee: agentId, status: 'in_progress' });
     emitEvent('bug_claimed', who, bug.project_id, who + ' claimed bug #' + bug.id, { bug_id: bug.id, agent: agentId });
     res.json({ ok: true, id: bug.id, assignee: agentId, status: 'in_progress' });

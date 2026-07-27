@@ -10,6 +10,18 @@ export default function (core) {
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError, parseIntParam } = core;
 
+  // Forward async errors from plugin handlers to Express's next(err). Plugin
+  // routers mount raw (unlike core routes), so an `async function` handler
+  // whose awaited promise rejects becomes an UNHANDLED rejection -> in Node
+  // that crashes the whole platform. This wraps a handler so rejections route
+  // through Express's error pipeline instead. Mirrors the core asyncHandler
+  // (routes/mycelium.js) — kept local because pluginCore doesn't export it.
+  function asyncHandler(fn) {
+    return function (req, res, next) {
+      return Promise.resolve(fn(req, res, next)).catch(next);
+    };
+  }
+
   // Fire-and-forget embedding after route-level indexing — same flow as the
   // event handlers. (POST /index used to store NULL embeddings forever; that
   // was the bulk of the unembedded backlog.)
@@ -272,7 +284,7 @@ export default function (core) {
   }
 
   // POST /memory/reindex — batch-embed all unembedded content (admin, async)
-  router.post('/reindex', async function (req, res) {
+  router.post('/reindex', asyncHandler(async function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
 
@@ -341,14 +353,14 @@ export default function (core) {
       remaining: remaining > 0,
       stats: db.stats()
     });
-  });
+  }));
 
   // POST /memory/backfill-embeddings — embed rows stored with NULL embeddings.
   // Safely re-runnable (only touches embedding IS NULL rows) and bounded per
   // call: ?limit= rows max (default 200, cap 1000), embedded in batches of 20.
   // Returns { processed, embedded, failed, queued, remaining } where remaining
   // is the total count of docs still lacking embeddings after this call.
-  router.post('/backfill-embeddings', async function (req, res) {
+  router.post('/backfill-embeddings', asyncHandler(async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
 
@@ -412,7 +424,7 @@ export default function (core) {
       queued: queued,
       remaining: db.countUnembedded()
     });
-  });
+  }));
 
   return router;
 }

@@ -1,6 +1,16 @@
 // Guardrails plugin DB helpers
 import { evaluateCondition } from './evaluate.js';
 
+// better-sqlite3 can only bind string/number/bigint/buffer/null — NOT objects or
+// booleans. Actor identity (checkAdmin/checkAgentOrAdmin may return an object or a
+// truthy flag, not a string) must be coerced before it hits a TEXT column.
+function bindStr(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object') return v.id || v.name || v.agent_id || v.agent || 'admin';
+  return v === true ? 'admin' : String(v);
+}
+
 export default function createGuardrailsDB(db) {
   // Migrate: add new columns if missing
   try { db.prepare("ALTER TABLE guardrail_rules ADD COLUMN version INTEGER DEFAULT 1").run(); } catch (e) { /* column exists */ }
@@ -18,7 +28,7 @@ export default function createGuardrailsDB(db) {
         'INSERT INTO guardrail_rules (name, description, trigger_event, conditions, enforcement, project_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
         name, description || '', triggerEvent, conditionsJson,
-        enforcement || 'warn', projectId || null, createdBy || ''
+        enforcement || 'warn', projectId || null, bindStr(createdBy)
       );
       return r.id;
     },
@@ -56,7 +66,7 @@ export default function createGuardrailsDB(db) {
       if (current) {
         db.prepare(
           'INSERT INTO guardrail_rule_history (rule_id, version, conditions, enforcement, changed_by) VALUES (?, ?, ?, ?, ?)'
-        ).run(id, current.version || 1, JSON.stringify(current.conditions), current.enforcement, fields.changed_by || '');
+        ).run(id, current.version || 1, JSON.stringify(current.conditions), current.enforcement, bindStr(fields.changed_by));
       }
 
       var sets = [];
@@ -69,7 +79,7 @@ export default function createGuardrailsDB(db) {
         params.push(conditionsJson);
       }
       if (fields.enforcement !== undefined) { sets.push('enforcement = ?'); params.push(fields.enforcement); }
-      if (fields.enabled !== undefined) { sets.push('enabled = ?'); params.push(fields.enabled); }
+      if (fields.enabled !== undefined) { sets.push('enabled = ?'); params.push(fields.enabled ? 1 : 0); }
       if (fields.trigger_event !== undefined) { sets.push('trigger_event = ?'); params.push(fields.trigger_event); }
       if (fields.project_id !== undefined) { sets.push('project_id = ?'); params.push(fields.project_id); }
       if (sets.length === 0) return;
@@ -91,7 +101,7 @@ export default function createGuardrailsDB(db) {
       var r = db.prepare(
         'INSERT INTO guardrail_violations (rule_id, rule_name, trigger_event, agent_id, project_id, enforcement, event_data, violation_detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id'
       ).get(
-        ruleId, ruleName, triggerEvent, agentId || '', projectId || '',
+        ruleId, ruleName, triggerEvent, bindStr(agentId), projectId || '',
         enforcement, eventDataJson, violationDetail || ''
       );
       return r.id;

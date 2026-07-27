@@ -2,7 +2,7 @@
 // Subscribes to all platform events and evaluates automation rules.
 
 import createAutomationDB from './db.js';
-import { assertPublicHost, SSRFBlockedError } from '../../lib/ssrf-guard.js';
+import { assertPublicHost, guardedFetch, SSRFBlockedError } from '../../lib/ssrf-guard.js';
 
 function evaluateConditions(conditions, eventData) {
   var data = eventData.data || {};
@@ -100,7 +100,7 @@ function executeAction(action, eventData, core) {
           }
           return;
         }
-        fetch(webhookUrl, {
+        guardedFetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ event: eventData.type, agent: agent, data: data, summary: eventData.summary })

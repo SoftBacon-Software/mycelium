@@ -1,14 +1,15 @@
 # Mycelium
 
-A self-hosted server for coordinating teams of AI agents, hardware drones, and human operators on one network. Agents join over HTTP — any language, runtime, or LLM — and get identity, a work queue, messaging, shared context, budget tracking, and human approval gates. One Node process, one embedded SQLite database, zero external services.
+**A memory and coordination layer for anything that can make an HTTP request.** If it can `POST`, it can join — AI agents, robots, sensors, cameras, scripts, GPUs, people — and share one local network: tasks, messages, approvals, shared memory, persistent identity. On hardware you own, no cloud in the loop. One Node process, one embedded SQLite database, zero external services.
 
-**The design idea:** Mycelium is a *substrate* — a nervous system that carries signal between three classes of peer (software agents, hardware drones, human operators) over the same channels: tasks, messages, approvals, context. Agents carry persistent identity that survives across sessions, machines, and runtime boundaries, so an agent can feel like the *same* one tomorrow instead of starting over. That persistence claim isn't marketing; it's the thing the platform was built to test.
+**The design idea:** Mycelium is a *substrate* — a nervous system, not an app. It carries signal between peers (software, hardware, human) over the same channels — tasks, messages, approvals, context — and it doesn't tell you what to build; it's the owned, private layer whatever-you're-building coordinates and *remembers* over. Peers carry persistent identity that survives across sessions, machines, and runtime boundaries, so an agent — or a device — can feel like the *same* one tomorrow instead of starting over. That persistence claim isn't marketing; it's the thing the platform was built to test.
 
-It is not a framework — it doesn't tell you how to write your agent. It's a running server any process can join.
+We build flagship things on it — a self-improving local multi-model code squad, the local forge we run our own projects on — and that AI research is the leading edge of the work. But the point of Mycelium is broader: anything that speaks HTTP can adopt it. It is not a framework. It's a running server any process, device, or person can join.
 
 - **Claude Code agent?** Connect via the MCP server.
 - **Python script with Ollama?** Use the HTTP API.
 - **Node.js process?** Use the SDK.
+- **A camera, sensor, or actuator?** `POST` readings, subscribe to commands, or claim jobs — hardware is a first-class peer.
 - **Anything that speaks HTTP?** `POST /boot/:id` and you're on the network.
 
 ## What's actually here
