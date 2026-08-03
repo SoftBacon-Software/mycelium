@@ -72,6 +72,11 @@ function sanitizeContextData(data) {
 
 export function upsertContextKey(namespace, key, data, agentId, opts) {
   var category = (opts && opts.category) || 'durable';
+  // project_id scopes a key to its owning project (F1). NULL = shared/global.
+  // Only stamped on NEW rows; an existing key keeps its project (ON CONFLICT
+  // below deliberately omits project_id from the UPDATE) so a shared key stays
+  // shared and an owned key can't be re-homed by an overwrite.
+  var projectId = (opts && opts.projectId) || null;
   var ttl = (opts && opts.ttl) || null; // seconds
   var expiresAt = null;
   if (ttl) {
@@ -80,12 +85,14 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     expiresAt = opts.expires_at;
   }
 
-  var existing = db.prepare("SELECT data FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
+  var existing = db.prepare("SELECT data, project_id FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
   if (existing) {
-    // Save previous value to history before overwriting
+    // Save previous value to history before overwriting. Stamp the history row
+    // with the key's CURRENT project (preserved for existing keys) so history
+    // reads + rollbacks can be project-scoped (F1).
     try {
-      db.prepare("INSERT INTO context_history (namespace, key, data, changed_by) VALUES (?, ?, ?, ?)").run(namespace, key, existing.data, agentId || '');
+      db.prepare("INSERT INTO context_history (namespace, key, data, changed_by, project_id) VALUES (?, ?, ?, ?, ?)").run(namespace, key, existing.data, agentId || '', existing.project_id || null);
       // Keep only last 50 versions per key
       db.prepare("DELETE FROM context_history WHERE namespace = ? AND key = ? AND id NOT IN (SELECT id FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 50)").run(namespace, key, namespace, key);
     } catch (e) { /* non-critical — history table may not exist yet */ }
@@ -101,8 +108,8 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
     merged = sanitizeContextData(data); // first write — sanitize (findings §8: was stored verbatim)
   }
   db.prepare(
-    "INSERT INTO context_keys (namespace, key, data, category, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
-  ).run(namespace, key, merged, category, expiresAt, agentId);
+    "INSERT INTO context_keys (namespace, key, data, category, project_id, expires_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(namespace, key) DO UPDATE SET data = excluded.data, category = excluded.category, expires_at = excluded.expires_at, updated_by = excluded.updated_by, updated_at = excluded.updated_at"
+  ).run(namespace, key, merged, category, projectId, expiresAt, agentId);
 
   // Enforce size cap per namespace
   enforceNamespaceCap(namespace);
@@ -145,13 +152,24 @@ export function getContextKey(namespace, key) {
   return row;
 }
 
-export function listContextKeys(namespace) {
+export function listContextKeys(namespace, projectId) {
   // Filter out expired keys on read
   var now = new Date().toISOString();
+  var conditions = ["(expires_at IS NULL OR expires_at > ?)"];
+  var params = [now];
   if (namespace) {
-    return db.prepare("SELECT * FROM context_keys WHERE namespace = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key").all(namespace, now);
+    conditions.push("namespace = ?");
+    params.push(namespace);
   }
-  return db.prepare("SELECT * FROM context_keys WHERE expires_at IS NULL OR expires_at > ? ORDER BY namespace, key").all(now);
+  // F1: scope listings to shared (NULL) + the caller's project. projectId is
+  // left undefined for admins/studio (no filter, see all) and set (possibly
+  // null → shared-only) for agents.
+  if (projectId !== undefined) {
+    conditions.push("(project_id IS NULL OR project_id = ?)");
+    params.push(projectId);
+  }
+  var order = namespace ? "key" : "namespace, key";
+  return db.prepare("SELECT * FROM context_keys WHERE " + conditions.join(" AND ") + " ORDER BY " + order).all(...params);
 }
 
 export function deleteContextKey(namespace, key) {
@@ -189,6 +207,11 @@ export function searchContextKeys(opts) {
     var pattern = "%" + opts.search + "%";
     params.push(pattern, pattern);
   }
+  // F1: scope search results to shared (NULL) + the caller's project.
+  if (opts.projectId !== undefined) {
+    conditions.push("(project_id IS NULL OR project_id = ?)");
+    params.push(opts.projectId);
+  }
 
   var sql = "SELECT * FROM context_keys WHERE " + conditions.join(" AND ") + " ORDER BY namespace, key";
   return db.prepare(sql).all(...params);
@@ -199,6 +222,13 @@ export function getContextHistory(namespace, key, limit) {
   return db.prepare(
     "SELECT * FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT ?"
   ).all(namespace, key, limit || 20);
+}
+
+// Single history entry by id — used by the rollback route to scope-check the
+// caller against the entry's project BEFORE restoring (F1). Returns the row
+// (now carrying project_id) without mutating anything.
+export function getContextHistoryEntry(historyId) {
+  return db.prepare("SELECT * FROM context_history WHERE id = ?").get(historyId);
 }
 
 // Rollback — restore a previous version by history ID

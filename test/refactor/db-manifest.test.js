@@ -6,10 +6,15 @@ import { describe, test, expect } from 'vitest';
 import { buildManifest, SNAPSHOT_PATH } from './db-manifest.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 
-const EXPECTED_EXPORT_COUNT = 306;
+// 307 since the F1 context-scoping backport (was 306): getContextHistoryEntry
+// is a NEW public export required for project-scoped rollback, and
+// listContextKeys went arity 1 -> 2 for its projectId filter. Both deltas were
+// diffed against the snapshot before this number moved — the count is a
+// deliberate second lock so a regenerated snapshot alone cannot hide drift.
+const EXPECTED_EXPORT_COUNT = 307;
 
 describe('db.js export manifest (decomposition gate)', () => {
-  test('public surface matches snapshot — 306 exports, stable types+arities', async () => {
+  test('public surface matches snapshot — 307 exports, stable types+arities', async () => {
     const manifest = await buildManifest();
 
     if (!existsSync(SNAPSHOT_PATH)) {
@@ -22,7 +27,7 @@ describe('db.js export manifest (decomposition gate)', () => {
     const golden = readFileSync(SNAPSHOT_PATH, 'utf8');
     const count = manifest.trim().split('\n').length;
 
-    // Sanity: the campaign expects exactly 306 exports. A net change here is a
+    // Sanity: the campaign expects exactly 307 exports. A net change here is a
     // red flag even if the snapshot were stale — catch count drift directly.
     expect(count).toBe(EXPECTED_EXPORT_COUNT);
 

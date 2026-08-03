@@ -126,6 +126,7 @@ getConcept:function:1
 getConceptProjects:function:1
 getContext:function:1
 getContextHistory:function:3
+getContextHistoryEntry:function:1
 getContextKey:function:2
 getDB:function:0
 getDroneDiagnostics:function:1
@@ -205,7 +206,7 @@ listChannelMembers:function:1
 listChannelMessages:function:2
 listChannels:function:1
 listConcepts:function:1
-listContextKeys:function:1
+listContextKeys:function:2
 listDroneJobs:function:1
 listDroneProfiles:function:0
 listDrones:function:0

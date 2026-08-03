@@ -105,6 +105,11 @@ export function initDBConnection() {
     // Smart Memory — access tracking for context keys
     ["context_keys", "access_count", "INTEGER NOT NULL DEFAULT 0"],
     ["context_keys", "last_accessed_at", "TEXT"],
+    // F1 (red-team) — project-scope context keys. Nullable: NULL = shared/global
+    // (legacy behavior preserved by checkProjectScope's no-project bypass).
+    // Existing rows backfill to NULL (shared); new agent writes stamp their project.
+    ["context_keys", "project_id", "TEXT"],
+    ["context_history", "project_id", "TEXT"],
     // Squad-loop repo resolution — a project's local checkout root so agents
     // working its tasks resolve relative paths in the right repo (not the
     // agent's CWD). Any squad sets this per project.

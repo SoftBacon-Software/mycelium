@@ -144,6 +144,11 @@ CREATE TABLE IF NOT EXISTS context_keys (
   updated_by  TEXT NOT NULL DEFAULT '',
   access_count     INTEGER NOT NULL DEFAULT 0,
   last_accessed_at TEXT,
+-- project_id: NULL = shared/global (readable + writable swarm-wide, the legacy
+-- model); otherwise the owning project — cross-project agent access is denied
+-- by checkProjectScope (see F1 red-team fix). System-written keys (enforcement
+-- rules, api limits, standups) carry no project and stay shared.
+  project_id  TEXT,
   UNIQUE(namespace, key)
 );
 
@@ -154,7 +159,10 @@ CREATE TABLE IF NOT EXISTS context_history (
   key         TEXT NOT NULL,
   data        TEXT NOT NULL,
   changed_by  TEXT NOT NULL DEFAULT '',
-  changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  changed_at  TEXT NOT NULL DEFAULT (datetime('now')),
+-- project_id mirrors the key's owning project at change time so history reads +
+-- rollbacks can be project-scoped (history leaks overwritten secrets — F1).
+  project_id  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_context_history_ns_key ON context_history(namespace, key);
 
