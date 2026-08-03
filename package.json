@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Mycelium — distributed development platform.",
+  "description": "Mycelium \u2014 distributed development platform.",
   "author": "SoftBacon Software",
   "license": "Apache-2.0",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
@@ -47,5 +47,13 @@
     "@vitest/coverage-v8": "^4.1.7",
     "supertest": "^7.2.2",
     "vitest": "^4.1.7"
+  },
+  "overrides": {
+    "@hono/node-server": "^2.0.12",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "brace-expansion": "^5.0.8",
+    "fast-uri": "^3.1.4",
+    "hono": "^4.12.32",
+    "postcss": "^8.5.23"
   }
 }
