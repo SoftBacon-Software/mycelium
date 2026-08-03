@@ -1,0 +1,62 @@
+{
+  "_note": "Deployment PROFILES. Mycelium is sized for a whole lab \u2014 26k lines, 56 tables, 285 endpoints, 16 plugins \u2014 and most embeddings need a fraction of that. A profile declares which route domains and plugins load; everything else is never mounted, so a slim deployment pays neither the boot cost nor the API surface. Domains not listed are ABSENT, not disabled: no routes, no handlers, no reachable endpoints. Set MYCELIUM_PROFILE=<name>; default 'full' preserves today's behaviour exactly.",
+  "profiles": {
+    "full": {
+      "description": "Everything. The lab substrate \u2014 the default, and what jetson01 runs.",
+      "domains": "*",
+      "plugins": "*"
+    },
+    "maintainer": {
+      "description": "Repo-maintainer: coordination, memory, team conventions, trust.",
+      "domains": [
+        "context",
+        "messages",
+        "tasks",
+        "misc",
+        "admin"
+      ],
+      "plugins": [
+        "auto-memory",
+        "semantic-memory"
+      ],
+      "_pillars": {
+        "coordination": "tasks + messages \u2014 what is queued, who is on it, what came back",
+        "memory": "context \u2014 facts, cards, the reference graph, keyed by repo+sha",
+        "conventions": "context namespace `conventions/<repo>` \u2014 the repo's own rules, partly derived from the parse, partly stated by the team. NOT YET MODELLED: a convention is a claim about the repo that can be grounded or violated, and a violation is a finding.",
+        "trust": "context namespace `trust/<repo>` \u2014 card trust levels, quarantine reasons, and the human verdict. Currently dies with the process, which is why the review queue cannot persist."
+      }
+    },
+    "edge": {
+      "description": "Field node \u2014 Pi/Jetson class. Presence, messages and context only; nothing that assumes a workstation.",
+      "domains": [
+        "context",
+        "messages",
+        "agents",
+        "misc"
+      ],
+      "plugins": [],
+      "_why": "A field node reports in, receives work, and carries local state. Everything else is coordination it does not perform."
+    },
+    "squad": {
+      "description": "Agent coordination without the product surfaces \u2014 what the local crew actually touches.",
+      "domains": [
+        "context",
+        "messages",
+        "agents",
+        "tasks",
+        "plans",
+        "bugs",
+        "misc",
+        "admin"
+      ],
+      "plugins": [
+        "workflows",
+        "auto-memory",
+        "semantic-memory",
+        "guardrails"
+      ]
+    }
+  },
+  "_measured": "2026-08-03: full = 15 route domains + 16 plugin dirs. maintainer = 3 domains + 2 plugins. The point is not lines of code \u2014 it is that an embedded deployment should not expose 285 endpoints to reach a card store.",
+  "_frame": "Mycelium is a LAYER \u2014 local memory + coordination for anything that can make an HTTP request. Profiles exist so attaching it costs a small, legible surface instead of a platform. A thing that needs a card store should not inherit drones, billing and channels to get one."
+}

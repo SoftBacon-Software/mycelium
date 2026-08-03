@@ -1008,6 +1008,57 @@ function dispatchWorkToIdleAgents(triggerContext) {
 
 // ---- Router ----
 
+
+// ---------------------------------------------------------------------------
+// DEPLOYMENT PROFILES (server/profiles.json)
+//
+// Mycelium is sized for the whole lab: 26k lines, 56 tables, 285 endpoints, 16
+// plugins. An embedded use — the repo-maintainer needs a card store and a query
+// — should not mount all of that. A profile names the route domains that load;
+// anything unlisted is never registered, so its endpoints do not exist rather
+// than existing-and-refusing. Default 'full' is byte-identical to previous
+// behaviour, so this is additive.
+// ---------------------------------------------------------------------------
+var SKIPPED_DOMAINS = [];
+var PROFILE_NAME = process.env.MYCELIUM_PROFILE || 'full';
+var PROFILE = (function () {
+  try {
+    // ESM: no __dirname. Resolve from this module's own URL so the profile is
+    // found regardless of the process working directory.
+    var here = path.dirname(new URL(import.meta.url).pathname);
+    var raw = fs.readFileSync(path.join(here, '..', 'profiles.json'), 'utf8');
+    var p = JSON.parse(raw).profiles[PROFILE_NAME];
+    if (!p) {
+      console.warn('[profile] unknown MYCELIUM_PROFILE=' + PROFILE_NAME + ' — using full');
+      return { domains: '*', plugins: '*' };
+    }
+    return p;
+  } catch (e) {
+    console.warn('[profile] profiles.json unreadable (' + e.message + ') — using full');
+    return { domains: '*', plugins: '*' };
+  }
+})();
+
+function domainEnabled(name) {
+  return PROFILE.domains === '*' || (PROFILE.domains || []).indexOf(name) !== -1;
+}
+
+// Registration is gated here rather than inside each module so an excluded
+// domain contributes NOTHING — no import cost, no handlers, no surface.
+function ifDomain(name, register) {
+  if (!domainEnabled(name)) {
+    SKIPPED_DOMAINS.push(name);
+    return function () {};
+  }
+  return register;
+}
+var SKIPPED_DOMAINS = [];
+
+if (PROFILE_NAME !== 'full') {
+  console.log('[profile] ' + PROFILE_NAME + ': ' +
+    (PROFILE.domains === '*' ? 'all' : PROFILE.domains.join(', ')) + ' domains');
+}
+
 var router = Router();
 
 // Apply project_id normalization (backward compat: accept project/game too)
@@ -1411,7 +1462,7 @@ router.put('/operators/:id/availability', asyncHandler(function (req, res) {
 // =============== PROJECTS ===============
 
 // ======== CONCEPTS / PROJECTS / SKILLS ======== (extracted -> ./concepts.js)
-registerConceptRoutes(router, {
+ifDomain('concepts', registerConceptRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent,
   parseIntParam, getAdminDisplayName, checkApprovalGate, getBugCategories,
 });
@@ -1461,7 +1512,7 @@ setInterval(function () {
 // ======== FILES (temp uploads) ======== (extracted -> ./assets.js)
 
 // =============== BUGS =============== (extracted -> ./bugs.js)
-registerBugRoutes(router, {
+ifDomain('bugs', registerBugRoutes)(router, {
   asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
   checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
   parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
@@ -1471,19 +1522,19 @@ registerBugRoutes(router, {
 // ======== TEAM CHAT (human-only) ======== (extracted -> ./messages.js)
 
 // ======== CHANNELS ======== (extracted -> ./channels.js)
-registerChannelRoutes(router, {
+ifDomain('channels', registerChannelRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, escapeHtml, parseIntParam,
   parseLimit, validateEnum, emitEvent, getAdminDisplayName, CHANNEL_STATUSES,
 });
 
 // ======== CONTEXT ======== (extracted -> ./context.js)
-registerContextRoutes(router, {
+ifDomain('context', registerContextRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent,
   checkProjectScope, agentCanAccessProject,
 });
 
 // ======== AGENTS (boot / work / agents / agent-templates) ======== (extracted -> ./agents.js)
-registerAgentRoutes(router, {
+ifDomain('agents', registerAgentRoutes)(router, {
   asyncHandler, checkAgent, checkAgentOrAdmin, checkAdmin, validateEnum,
   parseLimit, emitEvent, apiError, getAdminDisplayName, getInstanceUrl,
   buildMcpConfig, isAdminKey, invalidateAgentKeyCache, dispatchWorkToIdleAgents,
@@ -1491,14 +1542,14 @@ registerAgentRoutes(router, {
 });
 
 // ======== SPEND + RUNS + VOICE + GITHUB PROXY ======== (extracted -> ./misc.js)
-registerMiscRoutes(router, {
+ifDomain('misc', registerMiscRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   checkAdminOrOperator, checkProjectScope, emitEvent,
   getAdminDisplayName, checkEnforcementRules, mapSqliteConstraintError,
 });
 
 // ======== ADMIN (overview/config/kill-switch/health/reconciliation/stats) ======== (extracted -> ./admin.js)
-registerAdminRoutes(router, {
+ifDomain('admin', registerAdminRoutes)(router, {
   asyncHandler, checkAdmin, checkAgentOrAdmin, emitEvent, getAdminDisplayName,
   validateEnum, adminWriteLimiter, AGENT_STATUSES,
   getInstanceUrl, buildMcpConfig, displayName, getStudioUser,
@@ -1506,7 +1557,7 @@ registerAdminRoutes(router, {
 });
 
 // ======== MESSAGES + EVENTS + TEAM-CHAT + INBOX ======== (extracted -> ./messages.js)
-registerMessageRoutes(router, {
+ifDomain('messages', registerMessageRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   escapeHtml, parseIntParam, parseLimit, emitEvent, apiError,
   validateStringLength, MAX_CONTENT, checkEnforcementRules,
@@ -1515,20 +1566,20 @@ registerMessageRoutes(router, {
 });
 
 // ======== ASSETS + FILES + FILE-SERVER + WIDGETS ======== (extracted -> ./assets.js)
-registerAssetRoutes(router, {
+ifDomain('assets', registerAssetRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails, emitEvent,
   escapeHtml, parseIntParam, parseLimit, validateEnum, getAdminDisplayName,
   requireAuth, upload, ASSET_STATUSES, FILES_DIR, ARTIFACTS_DIR, FILE_TTL_MS,
 });
 
 // ======== TEAMS + ORGS + OPERATORS + TEAM-SETTINGS ======== (extracted -> ./teams.js)
-registerTeamRoutes(router, {
+ifDomain('teams', registerTeamRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkAdminOrOperator,
   emitEvent, getAdminDisplayName, apiError, mapSqliteConstraintError,
 });
 
 // ======== PLANS + APPROVALS ======== (extracted -> ./plans.js)
-registerPlansRoutes(router, {
+ifDomain('plans', registerPlansRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   checkProjectScope, checkApprovalGate, escapeHtml, parseIntParam,
   parseLimit, validateEnum, validateStringLength, warnSuspectTransition,
@@ -1536,7 +1587,7 @@ registerPlansRoutes(router, {
   MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
 });
 
-registerTaskRoutes(router, {
+ifDomain('tasks', registerTaskRoutes)(router, {
   asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   checkProjectScope, escapeHtml, parseIntParam, parseLimit, validateEnum,
   validateStringLength, warnSuspectTransition, emitEvent, dispatchWorkToIdleAgents,
@@ -1544,13 +1595,13 @@ registerTaskRoutes(router, {
 });
 
 // ======== WEBHOOKS + PLUGINS ======== (extracted -> ./plugins.js)
-registerPluginRoutes(router, {
+ifDomain('plugins', registerPluginRoutes)(router, {
   asyncHandler, checkAdmin, checkAgentOrAdmin, emitEvent, getAdminDisplayName,
   parseIntParam, parseLimit,
 });
 
 // ======== DRONES ======== (extracted -> ./drones.js)
-registerDroneRoutes(router, {
+ifDomain('drones', registerDroneRoutes)(router, {
   asyncHandler, checkAgent, checkAgentOrAdmin, checkAdmin, checkGuardrails,
   escapeHtml, apiError, parseLimit, parseIntParam, validateEnum, emitEvent,
   getAdminDisplayName, isAdminKey, getStudioUser, DRONE_JOB_STATUSES,
@@ -1581,7 +1632,7 @@ router.get('/docs', asyncHandler(function (req, res) {
 }));
 
 // ======== FEEDBACK ========
-registerFeedbackRoutes(router, {
+ifDomain('feedback', registerFeedbackRoutes)(router, {
   asyncHandler, checkAdmin, checkAgentOrAdmin, checkGuardrails,
   parseIntParam, apiError, emitEvent,
 });
