@@ -21,18 +21,18 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
-import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
+import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
 import { resolveTrustProxy } from './lib/trust-proxy.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 
-// Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
-function isAdminKey(key) {
-  var expected = process.env.ADMIN_KEY;
-  return key && expected && key.length === expected.length &&
-    crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected));
-}
+// isAdminKey (the timing-safe ADMIN_KEY comparator) is imported above from
+// ./routes/mycelium.js — the SOLE definition, already shared with the messages,
+// drones, and agents routes. A second local copy here could drift out of sync
+// with the constant-time compare; the dedup is pinned by the static-source
+// assertions in test/unit/db-agent-auth-cascade.test.js + test/smoke/admin-key-timing-safe.test.js.
+// checkVoiceAuth below calls the imported helper directly.
 function checkVoiceAuth(req, res) {
   var adminKey = req.headers['x-admin-key'];
   if (isAdminKey(adminKey)) return true;

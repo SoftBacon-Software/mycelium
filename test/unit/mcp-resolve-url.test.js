@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 
 // Regression test for the MCP "talks to .fyi instead of the configured instance"
@@ -94,11 +94,32 @@ describe('resolveUrl() — symmetric with resolveKey()', () => {
     expect(url).toBe(LOCAL)
   })
 
-  test('exported API_URL reflects resolveUrl of the process env at import time', () => {
-    // API_URL is a load-time const; with no MYCELIUM_API_URL in this test process's
-    // env or real settings, it should be a non-empty string (sanity that the const
-    // still resolves and is exported).
-    expect(typeof api.API_URL).toBe('string')
-    expect(api.API_URL.length).toBeGreaterThan(0)
+  test('exported API_URL equals resolveUrl() over the same inputs it loaded with', () => {
+    // API_URL is a load-time const (api.js: `const API_URL = resolveUrl()`); the
+    // no-arg resolveUrl() captures os.homedir() + process.env at import time, so
+    // the value is already baked before this test can observe it. We cannot inject
+    // a controlled env into that capture without re-importing the module — the
+    // exact import-order games the pure { home, env } helper was added to AVOID
+    // (see file header) — so an exact-value pin to a known literal is NOT cleanly
+    // expressible here.
+    //
+    // Strongest invariant that IS expressible: replay the SAME inputs the module
+    // used (real homedir + process.env) through resolveUrl and assert the baked
+    // const matches. This ties API_URL to the function the five tests above prove
+    // correct per-branch, without depending on what the environment resolves to.
+    //
+    // A regression that DECOUPLES API_URL from resolveUrl now FAILS: hardcoding
+    // the const to a stale literal (the deprecated .fyi host, the bug this file
+    // guards) or computing it from a different source than resolveUrl makes the
+    // literal ≠ resolveUrl({ home, env }) for the live inputs. The prior
+    // `typeof === 'string'` + length>0 could catch none of that — a wrong const is
+    // still a non-empty string.
+    //
+    // Ceiling: where settings.json + process.env carry no MYCELIUM_API_URL,
+    // resolveUrl returns the localhost default, so a hardcode of that exact
+    // default would coincidentally still pass. That is the inherent limit of
+    // load-time capture — unclosable without a re-import under controlled env —
+    // and is why the five branch tests above remain the per-branch guarantee.
+    expect(api.API_URL).toBe(api.resolveUrl({ home: homedir(), env: process.env }))
   })
 })

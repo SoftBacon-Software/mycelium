@@ -1,9 +1,8 @@
-import { describe, test, expect, beforeAll, afterAll } from 'vitest'
+import { describe, test, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import crypto from 'node:crypto'
 
 // Admin-key auth wiring + cascade integrity for the PUBLIC repo.
 //
@@ -19,10 +18,11 @@ import crypto from 'node:crypto'
 //   2. isAdminKey auth wiring — the comparator must stay constant-time with a
 //      length guard (a downgrade to === / == is a timing-side-channel auth
 //      bypass), AND it must actually be invoked on the protected route helpers.
-//      isAdminKey is a module-private helper (not exported), so the smoke test
-//      that re-implements it locally proves nothing about the shipped code; we
-//      pin BOTH the pure semantics AND the real source via static assertions so
-//      a regression in routes/mycelium.js fails the suite.
+//      isAdminKey IS exported (server/routes/mycelium.js:201, re-exported :1658),
+//      so Part A drives the REAL function against a synthetic ADMIN_KEY and Part B
+//      statically scans the shipped source (catches a === downgrade AND proves the
+//      protected helpers actually invoke isAdminKey). Behavioral + source-text
+//      guards on the same code, from complementary angles.
 //
 // db.js reads DATA_DIR at module-eval time, so set it before the dynamic import.
 // pool:'forks' (vitest.config.js) isolates this file's module state. initDB()
@@ -283,47 +283,71 @@ describe('deleteTask comment cleanup + return value', () => {
 })
 
 describe('isAdminKey auth wiring', () => {
-  // --- Part A: the pure comparator contract the route helper must satisfy. ---
-  // isAdminKey is module-private (not exported), so we pin the INTENDED semantics
-  // here and then verify (Part B) that the shipped source actually implements
-  // them — the local replica alone proves nothing about production code.
-  function isAdminKeyReplica(key, adminKey) {
-    return (
-      !!key &&
-      !!adminKey &&
-      key.length === adminKey.length &&
-      crypto.timingSafeEqual(Buffer.from(key), Buffer.from(adminKey))
-    )
-  }
+  // --- Part A: drive the REAL exported isAdminKey (no local replica). ---
+  // isAdminKey is exported from server/routes/mycelium.js (:201 defines it,
+  // :1658 re-exports it) — the old "module-private (not exported)" belief was
+  // stale. The prior block re-implemented the comparator here as isAdminKeyReplica
+  // and tested THAT copy; those cases passed identically whether the shipped helper
+  // was correct or broken, so they pinned nothing about production code. We now
+  // import the real function and exercise it directly.
+  //
+  // isAdminKey captures process.env.ADMIN_KEY at module-eval time
+  // (`var ADMIN_KEY = process.env.ADMIN_KEY`), so we set a SYNTHETIC key and import
+  // fresh. This string is NOT a real credential — it exists only in this test.
+  // pool:'forks' isolates this file's module state from the rest of the suite;
+  // vi.resetModules() gives a clean re-import so the captured key matches the env.
+  const SYNTHETIC_ADMIN_KEY = 'correct-horse-battery-staple-1234'
+  let isAdminKey
+  let savedAdminKey
 
-  const ADMIN_KEY = 'correct-horse-battery-staple-1234'
+  beforeAll(async () => {
+    savedAdminKey = process.env.ADMIN_KEY
+    process.env.ADMIN_KEY = SYNTHETIC_ADMIN_KEY
+    vi.resetModules()
+    ;({ isAdminKey } = await import('../../server/routes/mycelium.js'))
+  })
+
+  afterAll(() => {
+    // pool:'forks' isolates env per file anyway, but restore the original to be tidy.
+    if (savedAdminKey === undefined) delete process.env.ADMIN_KEY
+    else process.env.ADMIN_KEY = savedAdminKey
+  })
 
   test('accepts the exact admin key', () => {
-    expect(isAdminKeyReplica(ADMIN_KEY, ADMIN_KEY)).toBe(true)
+    expect(isAdminKey(SYNTHETIC_ADMIN_KEY)).toBe(true)
   })
 
   test('rejects a same-length but wrong key (constant-time path still says no)', () => {
-    const wrong = 'X'.repeat(ADMIN_KEY.length)
-    expect(wrong.length).toBe(ADMIN_KEY.length)
-    expect(isAdminKeyReplica(wrong, ADMIN_KEY)).toBe(false)
+    const wrong = 'X'.repeat(SYNTHETIC_ADMIN_KEY.length)
+    expect(wrong.length).toBe(SYNTHETIC_ADMIN_KEY.length)
+    expect(isAdminKey(wrong)).toBe(false)
   })
 
-  test('rejects a different-length key WITHOUT calling timingSafeEqual (length guard)', () => {
-    // timingSafeEqual throws on unequal buffer lengths; the guard must short-circuit.
-    expect(() => isAdminKeyReplica(ADMIN_KEY + 'extra', ADMIN_KEY)).not.toThrow()
-    expect(isAdminKeyReplica(ADMIN_KEY + 'extra', ADMIN_KEY)).toBe(false)
-    expect(isAdminKeyReplica(ADMIN_KEY.slice(0, -1), ADMIN_KEY)).toBe(false)
+  test('rejects a different-length key WITHOUT throwing (length guard short-circuits)', () => {
+    // crypto.timingSafeEqual throws on unequal buffer lengths; the length guard must
+    // short-circuit before the call. A regression that drops/breaks the guard (e.g.
+    // `key.length === key.length`) makes these THROW — caught here live, where the
+    // old replica (which kept its own private guard) would still pass.
+    expect(() => isAdminKey(SYNTHETIC_ADMIN_KEY + 'extra')).not.toThrow()
+    expect(isAdminKey(SYNTHETIC_ADMIN_KEY + 'extra')).toBe(false)
+    expect(isAdminKey(SYNTHETIC_ADMIN_KEY.slice(0, -1))).toBe(false)
   })
 
   test('rejects empty / undefined / null keys without throwing', () => {
-    expect(isAdminKeyReplica('', ADMIN_KEY)).toBe(false)
-    expect(isAdminKeyReplica(undefined, ADMIN_KEY)).toBe(false)
-    expect(isAdminKeyReplica(null, ADMIN_KEY)).toBe(false)
+    expect(isAdminKey('')).toBe(false)
+    expect(isAdminKey(undefined)).toBe(false)
+    expect(isAdminKey(null)).toBe(false)
   })
 
-  test('rejects everything when no admin key is configured (empty/undefined ADMIN_KEY)', () => {
-    expect(isAdminKeyReplica('anything', '')).toBe(false)
-    expect(isAdminKeyReplica('anything', undefined)).toBe(false)
+  test('rejects everything when no admin key is configured (unset ADMIN_KEY)', async () => {
+    // ADMIN_KEY is captured at import time, so clear it and re-import fresh.
+    delete process.env.ADMIN_KEY
+    vi.resetModules()
+    const { isAdminKey: unsetIsAdminKey } = await import('../../server/routes/mycelium.js')
+    expect(() => unsetIsAdminKey('anything')).not.toThrow()
+    expect(unsetIsAdminKey('anything')).toBe(false)
+    // Even the would-be-correct key must be rejected when nothing is configured.
+    expect(unsetIsAdminKey(SYNTHETIC_ADMIN_KEY)).toBe(false)
   })
 
   // --- Part B: the shipped source must implement that contract AND invoke it. ---
@@ -349,11 +373,18 @@ describe('isAdminKey auth wiring', () => {
     expect(body).not.toMatch(/key\s*===?\s*ADMIN_KEY\b/)
   })
 
-  test('index.js isAdminKey uses constant-time compare + length guard', () => {
-    const body = isAdminKeyBody(indexSrc)
-    expect(body).toContain('crypto.timingSafeEqual')
-    expect(body).toMatch(/key\.length\s*===?\s*expected\.length/)
-    expect(body).not.toMatch(/key\s*===?\s*expected\b(?!\.length)/)
+  test('index.js does NOT redefine isAdminKey — it imports the sole canonical one', () => {
+    // Collapse guarantee: server/routes/mycelium.js is the ONE definition of this
+    // auth primitive (the home messages/drones/agents routes already import from).
+    // index.js must import it, never re-declare a local copy — two definitions can
+    // drift silently (a timing-safe fix applied to one leaves the other stale). This
+    // fails the instant ANY local `function isAdminKey` reappears in index.js,
+    // whether that reappearing copy is correct or downgraded to `===`. The imported
+    // helper's correctness is pinned by the routes/mycelium.js body test above plus
+    // the real-helper Part A tests — so the ONE definition is now covered regardless
+    // of which file a future edit lands in.
+    expect(indexSrc, 'index.js must not redeclare isAdminKey').not.toMatch(/function\s+isAdminKey\s*\(/)
+    expect(indexSrc, 'index.js must still import/use isAdminKey').toMatch(/isAdminKey/)
   })
 
   test('protected route helpers actually invoke isAdminKey (not bypassed)', () => {
