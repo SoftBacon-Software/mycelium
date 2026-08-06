@@ -10,7 +10,9 @@
 
 - The module graph is a **DAG** (directed acyclic graph). There are **no import
   cycles** in the repo. A CI gate enforces this: `test/unit/import-graph.test.js`
-  fails if one is ever introduced.
+  fails if one is ever introduced — and the gate is itself tested to *prove* it
+  detects (a synthetic cyclic fixture asserts the analyzer finds planted cycles),
+  so "0 cycles" is a real result, not a vacuous pass.
 - The platform data layer is a **barrel facade** (`server/db.js`) over 28 entity
   modules. The barrel is a high-fan-in, high-fan-out hub. A **direction-blind**
   scanner will report its ~173-file neighborhood as "a cycle." **It is not.** All
