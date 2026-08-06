@@ -256,7 +256,7 @@ function buildMcpConfig(agentId, apiKey, instanceUrl) {
     mcpServers: {
       mycelium: {
         command: 'npx',
-        args: ['-y', '@softbacon/mycelium-mcp@latest'],
+        args: ['-y', 'mycelium-mcp@latest'],
         env: {
           MYCELIUM_API_KEY: apiKey,
           MYCELIUM_AGENT_ID: agentId,
