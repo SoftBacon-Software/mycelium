@@ -53,6 +53,49 @@ const PATTERNS = [
   /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+// Strip // line comments and /* */ block comments while preserving string and
+// template literals, so a doc comment that merely *mentions*
+// `import x from './y'` (see the CLI-help block in this very file) is not
+// mistaken for a real import edge. Without this, any comment containing an
+// import-looking line fabricates a phantom edge — which, for this file's own
+// self-referential help comment, showed up as a false self-loop the moment
+// self-edge tracking was fixed. Regex literals aren't specially handled, but an
+// import statement never shares a line with one in this repo, so no real
+// specifier is dropped.
+function stripComments(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const two = src[i] + src[i + 1];
+    if (two === '//') {
+      const nl = src.indexOf('\n', i);
+      i = nl === -1 ? n : nl; // stop at the newline (keep it, for tidy output)
+      continue;
+    }
+    if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? n : end + 2;
+      continue;
+    }
+    const c = src[i];
+    if (c === '"' || c === "'" || c === '`') {
+      // Copy the string literal verbatim (honoring \-escapes) so a // or /* that
+      // appears inside it (e.g. 'http://...', a URL) cannot start a comment.
+      out += c; i++;
+      while (i < n) {
+        const ch = src[i];
+        out += ch; i++;
+        if (ch === '\\') { if (i < n) { out += src[i]; i++; } continue; }
+        if (ch === c) break;
+      }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
 function walk(dir, acc) {
   let entries;
   try { entries = readdirSync(dir); } catch { return; }
@@ -83,6 +126,7 @@ export function analyzeImportGraph(root) {
   for (const f of files) {
     let txt;
     try { txt = readFileSync(f, 'utf8'); } catch { continue; }
+    txt = stripComments(txt);
     const baseDir = dirname(f);
     const specs = new Set();
     for (const re of PATTERNS) {
@@ -92,7 +136,13 @@ export function analyzeImportGraph(root) {
     }
     for (const s of specs) {
       const target = resolveSpec(s, baseDir, root);
-      if (target && fileSet.has(target) && target !== f) {
+      if (target && fileSet.has(target)) {
+        // Self-edges (a module importing itself) are kept in adj ON PURPOSE.
+        // They are excluded from `cycles` downstream by the size>1 SCC filter,
+        // but the `selfLoops` derivation (adj.get(f).has(f)) needs them present
+        // — a previous `&& target !== f` guard here starved it to an always-empty
+        // list, making the "no self-loops" gate silently vacuous (caught by the
+        // detector-correctness cases in test/unit/import-graph.test.js).
         adj.get(f).add(target);
         radj.get(target).add(f);
       }
