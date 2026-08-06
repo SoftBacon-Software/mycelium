@@ -161,8 +161,9 @@ export function startHeartbeat(mcpServer) {
   state.heartbeatTimer = setInterval(sendHeartbeat, IDLE_INTERVAL);
   // Send one immediately
   sendHeartbeat();
-  // Start SSE subscription — pass server so sleep_mode_on can wake this session
-  startSSE(null, state.mcpServer);
+  // Start SSE subscription — pass server so sleep_mode_on can wake this session.
+  // agentId is threaded in (dependency inversion) so sse.js need not import state.
+  startSSE(null, state.mcpServer, state.agentId);
 }
 
 export function stopHeartbeat() {

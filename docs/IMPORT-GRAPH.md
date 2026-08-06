@@ -3,7 +3,7 @@
 > For the next person reading this codebase: this is the map of what imports
 > what, written so you don't have to re-derive it. If you want the full
 > line-by-line proof behind the claims here, it lives in
-> [`IMPORT-CYCLE-2026-08-04.md`](./IMPORT-CYCLE-2026-08-04.md) (a point-in-time
+> [`IMPORT-CYCLE-2026-08-04.md`](./specs/IMPORT-CYCLE-2026-08-04.md) (a point-in-time
 > audit). This file is the living summary.
 
 ## TL;DR
@@ -11,9 +11,9 @@
 - The module graph is a **DAG** (directed acyclic graph). There are **no import
   cycles** in the repo. A CI gate enforces this: `test/unit/import-graph.test.js`
   fails if one is ever introduced.
-- The platform data layer is a **barrel facade** (`server/db.js`) over ~30 entity
+- The platform data layer is a **barrel facade** (`server/db.js`) over 28 entity
   modules. The barrel is a high-fan-in, high-fan-out hub. A **direction-blind**
-  scanner will report its ~147-file neighborhood as "a cycle." **It is not.** All
+  scanner will report its ~173-file neighborhood as "a cycle." **It is not.** All
   edges point inward to the barrel and downward to `core.js`; none point back.
 - One genuine 2-file cycle used to exist (`mcp/src/sse.js ↔ mcp/src/state.js`).
   It was broken by dependency inversion (see [The one real cycle, and how it was
@@ -29,7 +29,7 @@ entry points        server/index.js, server/boot.js, mcp/index.js,
                     runner/index.js, sdk/bin/*, admin-claude/index.js
         │
         ▼
-route / tool layer   server/routes/*.js  (16 domain modules + mycelium.js mount)
+route / tool layer   server/routes/*.js  (33 per-domain modules incl. the mycelium.js core mount)
                     server/plugins/*/routes.js
                     mcp/src/tools.js
         │
@@ -37,7 +37,7 @@ route / tool layer   server/routes/*.js  (16 domain modules + mycelium.js mount)
 barrel facade        server/db.js   (re-exports the whole data layer via export *)
         │
         ▼
-entity modules       server/db/*.js  (~30: agents, tasks, plans, channels, …)
+entity modules       server/db/*.js  (28: agents, tasks, plans, channels, …)
         │
         ▼
 graph sink           server/db/core.js  (owns the live `db` binding, stmt cache,
@@ -50,9 +50,9 @@ leaf helpers          server/migrate-table-names.js, server/lib/ssrf-guard.js, �
 
 The two things that make the graph look scary to a naive scanner:
 
-1. **The barrel (`server/db.js`)** has ~30 `export *` children and ~21 consumers
+1. **The barrel (`server/db.js`)** has 28 `export *` children and ~21 consumers
    (16 route modules, `index.js`, `plugins.js`, three plugin routers). Undirected
-   degree at the hub is ~96. Its undirected neighborhood is **147 files**. Every
+   degree at the hub is ~96. Its undirected neighborhood is **173 files** (as of 2026-08-25 — run `node tools/import-graph.js` for the current number). Every
    edge is either *into* the barrel (a consumer) or *downward* (barrel → entity →
    `core.js` → leaf). No edge returns. That is a star, not a loop.
 2. **Entry points** (`admin-claude/index.js`, `server/index.js`, …) have an
@@ -110,7 +110,7 @@ the same cached `agentId` value flows to the same place.
 This has happened once already: an automated pass reported a "72-file import
 cycle around `server/db/*`," suppressed it as too big to auto-fix, and a human
 brief landed on the assumption it was real. It was the barrel's undirected
-neighborhood (the 147-file WCC above), mislabeled.
+neighborhood (the 173-file WCC above), mislabeled.
 
 Two scanner failure modes produce this:
 

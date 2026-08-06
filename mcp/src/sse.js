@@ -3,7 +3,6 @@
 // relevant events (messages, directives, requests) to the agent.
 
 import { API_URL, API_KEY, ROLE } from './api.js';
-import { getState } from './state.js';
 
 var RECONNECT_DELAY = 5000;
 var controller = null;
@@ -13,9 +12,15 @@ var connected = false;
 export function isSSEConnected() { return connected; }
 
 var mcpServerRef = null;
+// agentId is threaded in from the caller (state.js / index.js) instead of pulled
+// via getState(). The getState import was the sse.js -> state.js half of the old
+// sse <-> state cycle; state.js still owns the lifecycle (it imports startSSE).
+// See docs/IMPORT-GRAPH.md.
+var agentIdRef = null;
 
-export function startSSE(onEvent, mcpServer) {
+export function startSSE(onEvent, mcpServer, agentId) {
   if (mcpServer) mcpServerRef = mcpServer;
+  agentIdRef = agentId || null;
   stopSSE();
   connect(onEvent);
 }
@@ -27,7 +32,6 @@ export function stopSSE() {
 }
 
 async function connect(onEvent) {
-  var st = getState();
   // Build URL — auth via X-Agent-Key / X-Admin-Key headers (set below)
   var url = API_URL + '/events/stream';
 
@@ -74,7 +78,7 @@ async function connect(onEvent) {
           try {
             var event = JSON.parse(line.slice(6));
             if (event.type === 'connected') continue; // Skip connection confirmation
-            handleEvent(event, st.agentId, onEvent);
+            handleEvent(event, agentIdRef, onEvent);
           } catch {
             // Ignore parse errors
           }

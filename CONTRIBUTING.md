@@ -70,6 +70,11 @@ Especially open an issue first for:
 
 ## Code style
 
+Module imports must stay acyclic: the repo's import graph is a DAG, mapped in
+[docs/IMPORT-GRAPH.md](docs/IMPORT-GRAPH.md) and enforced by
+`test/unit/import-graph.test.js` (run `node tools/import-graph.js` for the
+current picture).
+
 Mycelium lints with **ESLint** (`eslint.config.js`):
 
 ```bash
