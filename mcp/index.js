@@ -51,5 +51,5 @@ if (role === 'agent') {
   startHeartbeat(server);
 } else {
   // Admin mode: start SSE for sleep mode wake-up even without heartbeat
-  startSSE(null, server);
+  startSSE(null, server, agentId);
 }
