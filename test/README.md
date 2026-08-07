@@ -29,8 +29,16 @@ npm run test:coverage
 
 ## What CI does
 
-`.github/workflows/test.yml` runs `npm ci && npm test` on every PR
-and push to `master`. Failed tests block PRs from auto-merging.
+`.github/workflows/test.yml` runs `npm ci`, `npm run lint`, and
+`npm test` on every PR and push to `master`. Failures block a PR from
+auto-merging.
+
+`npm test` exercises the same test surface CI grades: the vitest suite
+(`test/**/*.test.js`) **and** the plugin `node:test` suites
+(`server/plugins/*/test.js`). So a green local `npm test` now matches
+CI on tests — no silent local-green ≠ CI-green gap. Lint stays a
+separate `npm run lint` step (it runs in CI too, but is not part of
+`npm test`).
 
 ## What's NOT tested yet
 
