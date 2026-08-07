@@ -31,13 +31,13 @@ jobs:
               /^public\/.*\.html$/,
               /^README\.md$/,
               /^docs\//,
-              /^\.github\/workflows\//,
               /^railway\.json$/,
               /^Dockerfile$/,
             ];
 
             // High-risk paths that should never auto-merge
             const highRiskPatterns = [
+              /^\.github\//,
               /^server\/routes\/mycelium\.js$/,
               /^server\/db\.js$/,
               /^server\/schema\.sql$/,
@@ -62,12 +62,13 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const fileCount = ${{ steps.check.outputs.file_count }}
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.payload.pull_request.number,
               event: 'APPROVE',
-              body: `Auto-approved: all ${${{ steps.check.outputs.file_count }}} files are in low-risk paths (dashboard UI, docs, static assets).`,
+              body: `Auto-approved: all ${fileCount} files are in low-risk paths (dashboard UI, docs, static assets).`,
             });
 
       - name: Enable auto-merge
