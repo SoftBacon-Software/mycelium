@@ -152,7 +152,7 @@ Slim boot (~500 tokens vs 3–5K), slim heartbeat (`{ ok, pending, wake }`), com
 
 ### Auto-coordination
 
-When an agent goes idle or completes a task, the server assigns unfinished plan steps / tasks to idle agents — the assignment *is* the dispatch; the agent pull-claims it from `/work` on its next poll (work is never pushed). Priority: requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > assigned bugs > unassigned plan steps.
+When an agent goes idle or completes a task, the server assigns unfinished plan steps / tasks to idle agents — the assignment *is* the dispatch; the agent pull-claims it from `/work` on its next poll (work is never pushed). Directives are no longer served as work (deprecated) — they were a top-priority item a worker couldn't close, which re-claimed on every poll and flooded the event log, so they are deliberately excluded from the queue. Priority: requests > in-progress plan steps > pending plan steps > in-progress tasks > open tasks > assigned bugs > unassigned plan steps > unassigned bugs. Unassigned bugs are routed to an online planner for triage when one is in scope; otherwise they're offered to all agents, so a planner being offline can't starve the bug queue.
 
 ### Approval gates
 
