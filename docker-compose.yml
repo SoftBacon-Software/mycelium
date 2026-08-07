@@ -22,8 +22,8 @@ services:
       - "${PORT:-3002}:3002"
     environment:
       - PORT=3002
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
-      - ADMIN_KEY=${ADMIN_KEY:-local-admin-key}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required — copy .env.example to .env and set it}
+      - ADMIN_KEY=${ADMIN_KEY:?ADMIN_KEY is required — copy .env.example to .env and set it}
       - DATA_DIR=/data
       - NODE_ENV=production
     volumes:
