@@ -24,7 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint server sdk test",
+    "lint": "eslint server sdk test --max-warnings 320",
     "lint:fix": "eslint server sdk test --fix"
   },
   "dependencies": {

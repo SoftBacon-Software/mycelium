@@ -65,8 +65,11 @@ Especially open an issue first for:
 
 ## Code style
 
-Mycelium does not currently ship a linter or formatter config. The
-informal house style:
+Mycelium lints with **ESLint** (`eslint.config.js`). `npm run lint` runs in
+CI on every PR: it fails on errors, and warnings are capped at a fixed
+ceiling (the `--max-warnings` value in `package.json`) so the count can only
+shrink — a PR that adds a new warning fails the build. The informal house
+style:
 
 - **JavaScript/Node.js** — 2-space indent, single quotes, semicolons.
   Async/await over raw promises. Prefer `const`; reach for `let`
