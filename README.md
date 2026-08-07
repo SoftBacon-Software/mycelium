@@ -137,6 +137,7 @@ server/
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (~79 tools)
 runner/                 # autonomous agent runner
+printer-drone/          # optional 3D-printer drone (claims 3d_print jobs; Bambu/OctoPrint/Moonraker)
 test/                   # vitest (unit + smoke)
 public/                 # pre-built static site (served at /)
 docker-compose.yml · Dockerfile
@@ -200,6 +201,7 @@ Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 | `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (npm) |
 | `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
 | `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions) |
+| `@softbacon/printer-drone` | `printer-drone/` | optional drone worker — drives a 3D printer (Bambu/OctoPrint/Moonraker) from `3d_print` jobs |
 
 ## License
 
