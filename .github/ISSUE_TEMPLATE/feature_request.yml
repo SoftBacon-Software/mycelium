@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a new feature or a change to existing behavior
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Per [`CONTRIBUTING`](../CONTRIBUTING.md), please open an issue first to
+        discuss the approach **before writing code** — especially for new API
+        endpoints, schema changes, new plugins, auth / approvals / kill-switch
+        paths, or changes to the SDK public API. Maintainers will weigh in on
+        whether something belongs in the core vs in a plugin.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The use case or pain point. What are you unable to do today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What approach are you proposing?
+      description: How you'd solve it, and any alternatives you considered.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this touch?
+      description: Helps route the discussion. Leave as "Other" if unsure.
+      options:
+        - Other
+        - API endpoint
+        - Schema / storage
+        - Plugin
+        - SDK public API
+        - Auth / approvals / kill-switch
+    validations:
+      required: true

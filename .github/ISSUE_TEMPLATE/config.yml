@@ -1,0 +1,9 @@
+# Issue template chooser config.
+# A blank issue stays available for the "open an issue first to discuss approach"
+# flow described in CONTRIBUTING.md; the structured templates above are the
+# default landing surface so a first-time contributor never faces an empty box.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/SoftBacon-Software/mycelium/blob/master/SECURITY.md
+    about: Report security issues privately per SECURITY.md — please do not open a public issue for vulnerabilities.

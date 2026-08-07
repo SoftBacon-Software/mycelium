@@ -1,0 +1,58 @@
+name: Bug report
+description: Report something in Mycelium that isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. If this is a **security
+        vulnerability**, please follow [`SECURITY.md`](../SECURITY.md) instead —
+        do not open a public issue for it.
+  - type: textarea
+    id: what-tried
+    attributes:
+      label: What did you try to do?
+      description: What behavior you expected to see.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened instead?
+      description: The actual behavior, including any error output you saw.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mycelium version / commit hash
+      description: The version you're running, or the commit you built from.
+      placeholder: "e.g. v0.1.0, or commit 6d1d630"
+    validations:
+      required: true
+  - type: textarea
+    id: repro-steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that triggers the bug.
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: false
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: Is it reproducible?
+      options:
+        - "Yes — every time"
+        - "Sometimes"
+        - "No, it happened once"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any relevant output. **Redact secrets first** — API keys, tokens, ADMIN_KEY, JWTs, passwords.
+      render: shell
+    validations:
+      required: false
