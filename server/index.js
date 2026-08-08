@@ -24,6 +24,7 @@ import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpir
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
+import { resolveTrustProxy } from './lib/trust-proxy.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 
 // Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
@@ -112,9 +113,16 @@ process.stdout.write('[boot] plugins loaded\n');
 
 var app = express();
 
-// Railway runs behind a reverse proxy — trust X-Forwarded-For for real client IPs.
-// Required for rate limiting to work correctly (otherwise req.ip = proxy IP).
-app.set('trust proxy', true);
+// Trust X-Forwarded-For so req.ip is the real client IP behind a reverse proxy
+// (Railway/nginx/Cloudflare) — required for per-IP rate limiting to work.
+//
+// CAVEAT for DIRECT-exposed instances (no proxy in front — LAN box, bare VPS):
+// trust proxy = true believes ANY client's X-Forwarded-For, so callers can spoof
+// req.ip and dodge per-IP rate limits (login brute-force, agent-key guessing).
+// Set TRUST_PROXY=false on direct deployments. Default stays true so existing
+// proxied deploys keep working unchanged. See lib/trust-proxy.js + Express docs:
+// https://expressjs.com/en/guide/behind-proxies.html
+app.set('trust proxy', resolveTrustProxy(process.env));
 
 app.use(compression());
 

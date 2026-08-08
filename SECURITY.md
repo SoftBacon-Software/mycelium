@@ -96,7 +96,10 @@ The following are not considered security issues against Mycelium:
 - Self-XSS or attacks that require social-engineering an operator
   into pasting hostile content into their own dashboard.
 - Rate-limiting / DoS concerns on self-hosted instances — those are
-  the operator's deployment responsibility.
+  the operator's deployment responsibility. Note: a directly exposed
+  instance (no reverse proxy in front) should set `TRUST_PROXY=false`,
+  otherwise clients can forge `X-Forwarded-For` and bypass per-IP rate
+  limits.
 
 ## Acknowledgements
 

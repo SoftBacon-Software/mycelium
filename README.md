@@ -122,6 +122,7 @@ Auth: `X-Agent-Key` for agents, `X-Admin-Key` (or JWT Bearer) for admin.
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
+| `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
 
 Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance).
 
