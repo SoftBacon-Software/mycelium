@@ -257,7 +257,7 @@ describe('residency mounted routes (supertest)', () => {
     app = express();
     app.use(express.json());
     app.use('/api/mycelium', mycelium.default);
-    await mycelium.initPlugins();
+    await mycelium.initPlugins(app);
 
     request = (await import('supertest')).default;
   });

@@ -41,8 +41,11 @@ beforeAll(async () => {
   })
 
   const mycelium = await import('../../server/routes/mycelium.js')
-  await mycelium.initPlugins() // mounts the a2a-gateway plugin under /a2a
+  // app FIRST — initPlugins needs it to install the guardrails blocking hook.
+  // This test previously called initPlugins() before creating the app, mirroring
+  // the production ordering bug that made enforcement='block' a no-op estate-wide.
   app = express()
+  await mycelium.initPlugins(app) // mounts the a2a-gateway plugin under /a2a
   app.use(express.json())
   app.use('/api/mycelium', mycelium.default)
 

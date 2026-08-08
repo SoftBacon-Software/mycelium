@@ -106,12 +106,18 @@ process.stdout.write('[boot] DB ready\n');
 // Initialize email (after DB, before routes — non-fatal if RESEND_KEY missing)
 initEmail();
 
-// Load plugins (after DB init, before routes are used)
-process.stdout.write('[boot] loading plugins...\n');
-await initPlugins();
-process.stdout.write('[boot] plugins loaded\n');
-
+// The express app MUST exist before plugins load. Plugins that install a hook
+// on the app (guardrails' blocking check) receive it as `core.app`; when this
+// ran the other way round `core.app` was undefined, `registerHooks`' `if
+// (core.app)` never fired, and `checkGuardrails` fail-opened on EVERY request.
+// All 14 enforcement='block' call sites were no-ops from the day they landed.
+// Found 2026-08-08 by the dead-instrument audit.
 var app = express();
+
+// Load plugins (after DB init AND after `app` exists, before routes are used)
+process.stdout.write('[boot] loading plugins...\n');
+await initPlugins(app);
+process.stdout.write('[boot] plugins loaded\n');
 
 // Trust X-Forwarded-For so req.ip is the real client IP behind a reverse proxy
 // (Railway/nginx/Cloudflare) — required for per-IP rate limiting to work.

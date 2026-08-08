@@ -277,7 +277,19 @@ function asyncHandler(fn) {
 
 // Pre-action guardrail check — blocks mutations if a guardrail rule with enforcement='block' fires
 function checkGuardrails(req, res, eventType, eventData) {
-  if (!req.app._guardrailsCheck) return true;
+  if (!req.app._guardrailsCheck) {
+    // Fail-open is correct ONLY when the guardrails plugin is genuinely not
+    // installed. It is NOT correct when the plugin loaded but its hook did not
+    // attach — that state looks enforced and is not, which is exactly what
+    // happened until 2026-08-08. Say so once, loudly, per process.
+    if (!checkGuardrails._warned) {
+      checkGuardrails._warned = true;
+      console.warn('[guardrails] NO BLOCKING HOOK INSTALLED - every '
+        + "enforcement='block' rule is a no-op for this process. If the "
+        + 'guardrails plugin is loaded, this is a WIRING BUG, not config.');
+    }
+    return true;
+  }
   var result = req.app._guardrailsCheck(eventType, eventData);
   if (!result.allowed) {
     res.status(403).json({
@@ -1841,8 +1853,16 @@ registerInboxRoutes(router, {
 
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
-export async function initPlugins() {
+export async function initPlugins(app) {
+  if (!app) {
+    // Fail LOUD. A missing app silently disables guardrail blocking, which
+    // is exactly how this went unnoticed for the plugin system's whole life.
+    throw new Error('initPlugins(app) requires the express app - without it '
+      + 'the guardrails blocking hook cannot install and every '
+      + "enforcement='block' rule silently becomes a no-op");
+  }
   var pluginCore = {
+    app: app,
     db: getDB(),
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
