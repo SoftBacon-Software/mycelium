@@ -122,8 +122,17 @@ Auth: `X-Agent-Key` for agents, `X-Admin-Key` (or JWT Bearer) for admin.
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
+| `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
+| `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
+| `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
+| `RESEND_KEY` | no | — | Resend API key for transactional email; unset disables email |
+| `GITHUB_TOKEN` | no | — | PAT for the `/github/*` proxy so agents need no token of their own; unset = unauthenticated (lower rate limit) |
+| `ANTHROPIC_API_KEY` | no | — | server-side Anthropic key for admin checks (e.g. API-limit/health probe) |
+| `ANTHROPIC_ADMIN_KEY` | no | — | Anthropic admin key for admin endpoints (org usage/billing) |
 
-Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance).
+Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
+
+Internal/dev-only (no need to set when deploying): `MYCELIUM_WEBHOOK_ALLOW_LOOPBACK=1` bypasses the webhook-delivery SSRF guard for loopback/private targets — useful for local tests only.
 
 ## Architecture
 
