@@ -24,6 +24,7 @@ import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpir
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
+import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 
 // Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
 function isAdminKey(key) {
@@ -310,10 +311,17 @@ var server = app.listen(PORT, function () {
   }
 });
 
+// ---- mDNS/Bonjour advertiser: publish _mycelium._tcp so a from-scratch agent
+// can DISCOVER this instance on the LAN (deploy-or-join's DISCOVER arm). Fail-
+// soft: returns null (loud log) if multicast / the dep is unavailable — the API
+// keeps serving either way. See lib/mdns-advertise.js. ----
+var mdnsAdvertiser = await startMdnsAdvertising(PORT, { version: APP_VERSION });
+
 // ---- Graceful shutdown: stop worker plugins, close DB ----
 import { stopAllWorkers } from './plugins.js';
 function gracefulShutdown(signal) {
   console.log('[shutdown] ' + signal + ' received, stopping workers...');
+  if (mdnsAdvertiser) mdnsAdvertiser.stop();   // stop advertising before closing
   stopAllWorkers();
   server.close(function () {
     try { getDB().close(); console.log('[shutdown] DB closed'); } catch (e) { /* */ }
