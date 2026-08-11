@@ -32,7 +32,7 @@ function tryAutoTriggerDrone() {
     join(dirname(fileURLToPath(import.meta.url)), '../../mycelium/tools/drone_mode.sh');
 
   if (!droneKey) return; // no key configured, skip
-  if (_droneProcess && !_droneProcess.exitCode !== null) return; // already running
+  if (_droneProcess && _droneProcess.exitCode === null) return; // still running — exitCode is null until the process exits
 
   if (!existsSync(droneWorker)) {
     logger.debug(null, `Auto-drone: drone_mode.sh not found at ${droneWorker}`);
