@@ -34,7 +34,7 @@ function registerDual(server, studioName, description, schema, handler) {
 function safeParseJSON(str, fallback) {
   if (!str) return fallback !== undefined ? fallback : {};
   try { return JSON.parse(str); } catch (e) {
-    throw new Error('Invalid JSON: ' + e.message + ' — input: ' + str.substring(0, 100));
+    throw new Error('Invalid JSON: ' + e.message + ' — input: ' + str.substring(0, 100), { cause: e });
   }
 }
 
@@ -913,7 +913,7 @@ export function registerTools(server) {
       if (args.data) {
         try { updates.data = JSON.parse(args.data); } catch { updates.data = args.data; }
       }
-      var result = await apiPut('/widgets/' + args.widget_id, updates);
+      await apiPut('/widgets/' + args.widget_id, updates);
       return text('Widget #' + args.widget_id + ' updated');
     }
   );
@@ -1246,7 +1246,7 @@ export function registerTools(server) {
       if (args.description) body.description = args.description;
       if (args.type) body.type = args.type;
       if (args.org_id) body.org_id = args.org_id;
-      var result = await apiPost('/projects', body);
+      await apiPost('/projects', body);
       return text('Created project: ' + args.id + ' (' + args.name + ')');
     }
   );
@@ -1585,7 +1585,7 @@ export function registerTools(server) {
       status: { type: 'string', description: 'New status (default: ready)' }
     },
     async function (params) {
-      var res = await apiPut('/assets/' + params.asset_id, {
+      await apiPut('/assets/' + params.asset_id, {
         status: params.status || 'ready',
         path: params.path || ''
       });
@@ -1975,14 +1975,6 @@ function formatOverview(data) {
   }
 
   return lines.join('\n');
-}
-
-function formatContact(c) {
-  return '#' + c.id + ' [' + c.status + '] ' + c.name +
-    (c.outlet ? ' (' + c.outlet + ')' : '') +
-    (c.tier ? ' ' + c.tier : '') +
-    (c.email ? ' <' + c.email + '>' : '') +
-    ' — ' + c.type;
 }
 
 // ===== GITHUB =====

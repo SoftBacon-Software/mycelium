@@ -394,7 +394,7 @@ export class Orchestrator {
       await new Promise(r => setTimeout(r, 60000)); // check every minute
       if (!this.running) break;
 
-      for (const [agentId, { config: agentConfig, state }] of this.agents) {
+      for (const [agentId, { state }] of this.agents) {
         // Hung session detection
         if (state.active && state.lastSession > 0) {
           const sessionAge = Date.now() - state.lastSession;
@@ -542,7 +542,7 @@ export class Orchestrator {
 
   getStatus() {
     const agents = {};
-    for (const [id, { config, state }] of this.agents) {
+    for (const [id, { state }] of this.agents) {
       const sessionAgeMs = state.lastSession ? Date.now() - state.lastSession : null;
       agents[id] = {
         active: state.active,

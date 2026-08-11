@@ -8,7 +8,6 @@
 // Ref: https://github.com/Doridian/OpenBambuAPI/blob/main/mqtt.md
 
 import mqtt from 'mqtt';
-import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { PrinterProvider } from './base.js';
 

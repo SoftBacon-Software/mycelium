@@ -16,7 +16,7 @@ export class PrinterProvider {
 
   // Send gcode file to printer and start printing
   // Returns: { ok: true } or throws
-  async uploadAndPrint(gcodePath, filename) { throw new Error('Not implemented'); }
+  async uploadAndPrint(_gcodePath, _filename) { throw new Error('Not implemented'); }
 
   // Abort current print
   async cancel() { throw new Error('Not implemented'); }

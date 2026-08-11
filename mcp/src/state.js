@@ -1,6 +1,6 @@
 // Session state and auto-heartbeat management
 
-import { apiPost, apiPut } from './api.js';
+import { apiPost } from './api.js';
 import { startSSE, stopSSE } from './sse.js';
 
 var IDLE_INTERVAL = 5 * 60 * 1000;    // 5 min when idle

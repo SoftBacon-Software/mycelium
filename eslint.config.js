@@ -19,7 +19,9 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ['server/**/*.{js,mjs}', 'sdk/**/*.{js,mjs}', 'test/**/*.{js,mjs}'],
+    // Keep this dir list in sync with the `lint` script in package.json —
+    // test/unit/lint-scope-parity.test.js asserts the two match.
+    files: ['server/**/*.{js,mjs}', 'sdk/**/*.{js,mjs}', 'test/**/*.{js,mjs}', 'mcp/**/*.{js,mjs}', 'runner/**/*.{js,mjs}', 'printer-drone/**/*.{js,mjs}'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

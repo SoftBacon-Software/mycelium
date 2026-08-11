@@ -35,7 +35,7 @@ function buildConfigFromEnv() {
   try {
     agents = JSON.parse(agentsJson);
   } catch (e) {
-    throw new Error(`RUNNER_AGENTS is not valid JSON: ${e.message}`);
+    throw new Error(`RUNNER_AGENTS is not valid JSON: ${e.message}`, { cause: e });
   }
 
   return {
@@ -58,7 +58,7 @@ export function loadConfig(configPath) {
     try {
       raw = JSON.parse(process.env.RUNNER_CONFIG);
     } catch (e) {
-      throw new Error(`RUNNER_CONFIG env var is not valid JSON: ${e.message}`);
+      throw new Error(`RUNNER_CONFIG env var is not valid JSON: ${e.message}`, { cause: e });
     }
   }
 

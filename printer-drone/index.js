@@ -11,7 +11,6 @@
 
 import { readFile, mkdir, rm } from 'fs/promises';
 import { join, basename, extname } from 'path';
-import { existsSync } from 'fs';
 import { MyceliumAPI } from './src/api.js';
 import { Slicer } from './src/slicer.js';
 import { JobMonitor } from './src/monitor.js';

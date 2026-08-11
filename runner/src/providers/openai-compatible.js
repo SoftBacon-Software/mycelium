@@ -32,7 +32,7 @@ const BASH_TOOL_DEF = {
   },
 };
 
-function executeBash(command, agentId) {
+function executeBash(command, _agentId) {
   const result = spawnSync('bash', ['-c', command], {
     timeout: 30000,
     maxBuffer: 1024 * 1024,

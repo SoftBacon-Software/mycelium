@@ -4,7 +4,7 @@
 import { writeFileSync, existsSync } from 'fs';
 import { createInterface } from 'readline';
 import { resolve, join } from 'path';
-import { platform, homedir, hostname } from 'os';
+import { platform, homedir } from 'os';
 import { pathToFileURL } from 'url';
 
 // Default target is the operator's OWN instance — a local one unless they say
