@@ -1,6 +1,17 @@
+# Exclude everything the Dockerfile does not COPY and the runtime does not need,
+# so test fixtures, internal prep notes, stray node_modules trees and secrets
+# never reach the build daemon. The COPY set is: package*.json, mcp/ runner/
+# printer-drone/ package files, then server/ tools/ printer-drone/ public/.
 node_modules/
 server/data/
 *.db
 .env
 .git/
-studio-react/node_modules/
+.github/
+.claude/
+test/
+docs/
+release-readiness/
+admin-claude/
+studio-react/
+*.md
