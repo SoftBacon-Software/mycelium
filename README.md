@@ -112,6 +112,8 @@ curl $URL/boot/dev-agent -H "X-Agent-Key: $AGENT_KEY"
 curl $URL/work/dev-agent -H "X-Agent-Key: $AGENT_KEY"
 ```
 
+Or skip the curl — `tools/onboard-agent.sh` runs register + role-write in one step: `MYCELIUM_API_URL=… ADMIN_KEY=… bash tools/onboard-agent.sh dev-agent "Dev Agent" my-project` (add `--drone` for a compute drone). See [Tools](#tools).
+
 Auth: `X-Agent-Key` for agents, `X-Admin-Key` (or JWT Bearer) for admin.
 
 ## Environment
@@ -137,6 +139,11 @@ server/
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (~79 tools)
 runner/                 # autonomous agent runner
+admin-claude/           # reference admin-automation agent (webhook or poll; Anthropic or Ollama) — see Packages
+printer-drone/          # 3D-printer drone worker (Bambu / OctoPrint / Moonraker / mock) — see Packages
+file-drone/             # WebSocket file-server drone (serves a local filesystem to the network)
+tools/                  # operator scripts — onboarding, install, QA, stress, drone launchers (see Tools)
+scripts/                # release + local-setup helpers (release.sh, local-setup.sh)
 test/                   # vitest (unit + smoke)
 public/                 # pre-built static site (served at /)
 docker-compose.yml · Dockerfile
@@ -200,6 +207,32 @@ Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 | `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (npm) |
 | `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
 | `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions) |
+| `admin-claude` | `admin-claude/` | reference admin-automation agent — auto-responds to requests, triages bugs, auto-approves low/medium-risk actions, and reviews/merges GitHub PRs. Runs in **webhook** mode (needs a public URL) or **poll** mode (works behind NAT). Cloud (`ANTHROPIC_API_KEY`) or local (`LLM_BACKEND=ollama`) LLM. Configure with `MYCELIUM_API_URL` + `MYCELIUM_ADMIN_KEY` (defaults to your own `localhost:3002`); `npm start` (webhook) or `npm run start:local` (Ollama poll). Ships its own `Dockerfile` and a Windows one-click installer (`setup-local.ps1`). |
+| `@softbacon/printer-drone` | `printer-drone/` | 3D-printer drone worker — claims `3d_print` jobs, downloads the STL, slices it (prusa-slicer), uploads gcode, and monitors the print. Provider pattern (Bambu / OctoPrint / Moonraker / mock via `config.json`). `npm start`, or `npm run dev` for the mock printer (no hardware). |
+
+## Tools
+
+`tools/` and `scripts/` hold operator-facing shell scripts. None are required to run Mycelium — they just convenience the common operator moves.
+
+`tools/`:
+
+| Script | Purpose |
+|--------|---------|
+| `onboard-agent.sh` | Register an agent or drone in one step (the [Raw HTTP](#raw-http) curl dance as a script): `MYCELIUM_API_URL=… ADMIN_KEY=… bash tools/onboard-agent.sh <id> <name> <project> [--drone]` |
+| `install.sh` | One-line installer — `curl -fsSL https://mycelium.fyi/install.sh \| bash` — clones `stable`, generates secrets, writes `.env`, starts the server |
+| `drone_mode.sh` | Turn this machine into a compute drone — auto-detects GPU, checks prereqs, launches `drone-worker.py` in poll mode: `MYCELIUM_KEY=… bash tools/drone_mode.sh` |
+| `qa-test.sh` | Smoke the running instance over HTTP (auth, boot, work, CRUD): `ADMIN_KEY=… bash tools/qa-test.sh` |
+| `stress-test.sh` | Load test — message flood, request/response, context persistence, task churn, large payloads: `ADMIN_KEY=… bash tools/stress-test.sh` |
+| `drone-worker.py` | Drone worker **v2** — self-diagnosing compute worker that polls for jobs, executes them, reports structured results. Launched by `drone_mode.sh`. |
+| `drone_worker_v4.py` | Drone worker **v4** — security-hardened variant (per-job approval gate, command whitelist, verbose logging, no auto-update; targets Ubuntu 22.04). Newer than v2; `drone_mode.sh` still wires to v2 — pick v4 when you want the guardrails. |
+| `local-admin-agent.py` | Standalone local-LLM admin coordinator (Ollama) — monitors the network, assigns work, triages bugs, routes messages without cloud credits. A single-file cousin of [`admin-claude/`](#packages). |
+
+`scripts/`:
+
+| Script | Purpose |
+|--------|---------|
+| `local-setup.sh` | Generate `JWT_SECRET` + `ADMIN_KEY` and write `.env` for a self-hosted instance: `bash scripts/local-setup.sh` |
+| `release.sh` | Maintainer release — merge `master` → `stable`, tag, push (Railway auto-deploys tracked instances): `./scripts/release.sh [tag] [--dry-run]` |
 
 ## License
 
