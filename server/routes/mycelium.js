@@ -908,8 +908,34 @@ function agentCanHandle(agent, workItem) {
   return true;
 }
 
+// ---- Kill switch (admin freeze) ----
+// PUT /admin/override {action:'freeze'} sets instance_config.admin_status to
+// 'frozen' (admin.js). README.md:22 promises this "freezes ALL work routing"
+// and the override response (admin.js:70) says "All work assignments paused."
+// Both work-dispensing vectors — the live pull-claim path GET /work/:agentId
+// and auto-dispatch (dispatchWorkToIdleAgents, from heartbeat / task-complete)
+// — honor it. isFrozen() is the single source of truth; assertNotFrozen() sends
+// the 503 for HTTP handlers. This lifts the (formerly lone) POST /work/request
+// guard so every work path shares one check instead of each re-deriving it.
+function isFrozen() {
+  return getInstanceConfig('admin_status') === 'frozen';
+}
+
+// HTTP-handler guard: returns true (after sending 503) when frozen, so callers
+// early-return — `if (assertNotFrozen(res)) return;`. Must run BEFORE any queue
+// build / auto-claim transaction so a frozen instance serves no work at all.
+function assertNotFrozen(res) {
+  if (!isFrozen()) return false;
+  res.status(503).json({ error: 'Claude Admin is frozen. Work routing paused. Contact a human operator.' });
+  return true;
+}
+
 // ---- Auto-dispatch: push work to idle agents ----
 function dispatchWorkToIdleAgents(triggerContext) {
+  // Kill switch: never assign work while frozen — "the assignment IS the
+  // dispatch" (README.md:157), and admin.js:70 says all assignments pause.
+  // Returning [] is a clean no-op; call sites already gate on length > 0.
+  if (isFrozen()) return [];
   var idleAgents = getIdleAgents();
   if (idleAgents.length === 0) return [];
 
@@ -1261,6 +1287,11 @@ router.get('/work/:agentId', asyncHandler(function (req, res) {
   }
   var agent = getAgent(agentId);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  // Kill switch: when frozen, serve no queue and run no auto-claim transaction
+  // (README.md:22 "freezes all work routing"). Must precede buildWorkQueue so a
+  // frozen instance returns 503 with no queue and no claimed item.
+  if (assertNotFrozen(res)) return;
 
   // Build work queue directly — no full boot payload needed
   var db = getDB();
@@ -1772,11 +1803,9 @@ router.post('/work/request', asyncHandler(function (req, res) {
   var who = checkAgent(req, res);
   if (!who) return;
 
-  // Check if Claude Admin is frozen
-  var adminStatus = getInstanceConfig('admin_status');
-  if (adminStatus === 'frozen') {
-    return res.status(503).json({ error: 'Claude Admin is frozen. Work routing paused. Contact a human operator.' });
-  }
+  // Kill switch — lifted into assertNotFrozen(), shared with GET /work/:agentId
+  // and dispatchWorkToIdleAgents so every work path honors the freeze.
+  if (assertNotFrozen(res)) return;
 
   var { type, target, description, priority } = req.body;
   if (!type) return res.status(400).json({ error: 'type required (task_request, asset_request, work_request)' });
