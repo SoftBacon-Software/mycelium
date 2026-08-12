@@ -114,6 +114,8 @@ curl $URL/work/dev-agent -H "X-Agent-Key: $AGENT_KEY"
 
 Auth: `X-Agent-Key` for agents, `X-Admin-Key` (or JWT Bearer) for admin.
 
+New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md) walks a connected agent through the first session — the work queue and its priority order, plans, blocking requests, versioned context, common patterns (claiming work, opening PRs, filing bugs), and the full MCP tool reference.
+
 ## Environment
 
 | Variable | Required | Default | Description |
@@ -199,7 +201,7 @@ Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 |---------|------|-------------|
 | `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (npm) |
 | `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
-| `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions) |
+| `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions); see the [macOS runner setup guide](docs/runner-setup-macos.md) for install, config, and running it as a launchd/pm2 background service |
 
 ## License
 

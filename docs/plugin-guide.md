@@ -182,6 +182,16 @@ export default function (core) {
     res.json({ id: id });
   });
 
+  // Update item
+  router.put('/items/:id', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var id = parseIntParam(req.params.id);
+    if (!db.get(id)) return apiError(res, 404, 'Item not found');
+    db.update(id, req.body);
+    res.json({ ok: true, item: db.get(id) });
+  });
+
   // Delete item — admin only
   router.delete('/items/:id', function (req, res) {
     var who = checkAdmin(req, res);
@@ -453,3 +463,16 @@ See the `build-in-public` plugin in `server/plugins/build-in-public/` for a comp
 - **Test with curl**: Routes mount at `/api/mycelium/<routePrefix>/`. Test with admin key: `-H "X-Admin-Key: YOUR_KEY"`.
 - **Check the dashboard**: The Plugins page shows your plugin's status, version, and tool count after loading.
 - **JSON columns**: Store complex data as JSON text columns. Parse on read in your `db.js` helpers.
+
+## Checklist for a Complete Plugin
+
+1. [ ] `plugin.json` with a unique `name` matching the directory
+2. [ ] `schema.sql` with `CREATE TABLE IF NOT EXISTS`, tables prefixed `mycelium_<pluginname>_`
+3. [ ] `db.js` exporting a factory function with CRUD helpers
+4. [ ] `routes.js` with an auth check (`checkAgentOrAdmin` / `checkAdmin`) on every endpoint
+5. [ ] `handlers.js` if the plugin reacts to events (optional)
+6. [ ] `mcp-tools.json` with `mycelium_<pluginname>_`-prefixed tools (optional)
+7. [ ] `gatedActions` declared for any operation that needs human approval (optional)
+8. [ ] Events emitted for significant actions via `core.emitEvent()`
+9. [ ] Server restarted so the plugin loads
+10. [ ] Plugin visible and enabled on the dashboard Plugins page
