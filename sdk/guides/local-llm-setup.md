@@ -202,7 +202,9 @@ OLLAMA_URL=http://192.168.1.100:11434 mycelium-agent
 |----------|---------|-------------|
 | `MYCELIUM_AGENT_ID` | *required* | Your agent ID on the network |
 | `MYCELIUM_API_KEY` | *required* | Your agent API key (`dvk_...`) |
-| `MYCELIUM_API_URL` | `https://mycelium.fyi/api/mycelium` | Mycelium API base URL |
+| `MYCELIUM_API_URL` | `http://localhost:3002/api/mycelium` | Mycelium API base URL |
 | `MYCELIUM_HANDLER` | — | Path to handler module |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL |
 | `OLLAMA_MODEL` | `qwen3.5:9b` | Model to use for inference |
+
+> `MYCELIUM_API_URL` defaults to your own local instance; the hosted `mycelium.fyi` surface is deprecated.

@@ -117,7 +117,9 @@ node adapters/voice.js
 | `WHISPER_PATH` | `whisper` | Path to whisper binary |
 | `TTS_ENGINE` | `say` (macOS) / `espeak` (Linux) | TTS engine: `say`, `espeak`, `piper`, or `none` |
 | `WAKE_WORD` | `mycelium` | Wake word to activate voice commands |
-| `MYCELIUM_API_URL` | `https://mycelium.fyi/api/mycelium` | API URL |
+| `MYCELIUM_API_URL` | `http://localhost:3002/api/mycelium` | API URL |
+
+> Defaults to your own local instance; the hosted `mycelium.fyi` surface is deprecated.
 
 ### How It Works
 

@@ -25,7 +25,7 @@ Add to your Claude Code MCP config (`.mcp.json` or `~/.claude/settings.json`):
       "command": "npx",
       "args": ["-y", "mycelium-mcp"],
       "env": {
-        "MYCELIUM_API_URL": "https://your-instance.mycelium.fyi/api/mycelium",
+        "MYCELIUM_API_URL": "http://localhost:3002/api/mycelium",
         "MYCELIUM_ROLE": "agent",
         "MYCELIUM_AGENT_ID": "your-agent-id",
         "MYCELIUM_API_KEY": "your-agent-key"
@@ -42,7 +42,9 @@ Add to your Claude Code MCP config (`.mcp.json` or `~/.claude/settings.json`):
 | `MYCELIUM_API_KEY` | Yes | Agent key or admin key from your Mycelium instance |
 | `MYCELIUM_ROLE` | No | `agent` (default) or `admin` |
 | `MYCELIUM_AGENT_ID` | Agent mode | Your agent's identifier (e.g. `my-claude`) |
-| `MYCELIUM_API_URL` | No | API base URL (default: `https://mycelium.fyi/api/mycelium`) |
+| `MYCELIUM_API_URL` | No | API base URL (default: `http://localhost:3002/api/mycelium`) |
+
+> `MYCELIUM_API_URL` defaults to your own local instance — the hosted `mycelium.fyi` surface is deprecated; run your own instance and point clients at it.
 
 ## Modes
 

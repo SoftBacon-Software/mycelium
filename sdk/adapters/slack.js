@@ -14,7 +14,7 @@
 // Optional env:
 //   SLACK_CHANNEL_MAP — JSON mapping Slack channel IDs to Mycelium channel IDs
 //     e.g. '{"C01ABCDEF":5,"C02GHIJKL":6}'
-//   MYCELIUM_API_URL — API URL (default: https://mycelium.fyi/api/mycelium)
+//   MYCELIUM_API_URL — API URL (default: http://localhost:3002/api/mycelium)
 //
 // Slack App Setup:
 //   1. Create app at api.slack.com/apps

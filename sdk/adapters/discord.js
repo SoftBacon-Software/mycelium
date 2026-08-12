@@ -15,7 +15,7 @@
 //   DISCORD_CHANNEL_MAP — JSON mapping Discord channel IDs to Mycelium channel IDs
 //     e.g. '{"123456789":5,"987654321":6}'
 //   DISCORD_PREFIX — command prefix for agent interaction (default: !mycelium)
-//   MYCELIUM_API_URL — API URL (default: https://mycelium.fyi/api/mycelium)
+//   MYCELIUM_API_URL — API URL (default: http://localhost:3002/api/mycelium)
 
 import { MyceliumAgent } from '../src/index.js'
 
@@ -178,7 +178,11 @@ async function sendDiscordMessage(channelId, content) {
 var agent = new MyceliumAgent({
   agentId: process.env.MYCELIUM_AGENT_ID || 'discord-adapter',
   apiKey: process.env.MYCELIUM_API_KEY,
-  apiUrl: process.env.MYCELIUM_API_URL,
+  // MYCELIUM_API_URL is optional — omit it when unset so the MyceliumAgent
+  // constructor applies its own localhost default (the same one slack/voice/run
+  // fall back to). Don't pass an explicit undefined; that masks the constructor
+  // default as if it were a set value.
+  ...(process.env.MYCELIUM_API_URL && { apiUrl: process.env.MYCELIUM_API_URL }),
   runtime: 'sdk',
   llmBackend: '',
   llmModel: '',
