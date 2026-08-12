@@ -38,7 +38,8 @@ beforeAll(async () => {
   db.exec(schema);
 
   // Faked core: auth always passes (we're testing the embed path, not auth),
-  // apiError/parseIntParam mirror the real helpers.
+  // apiError/parseIntParam/asyncHandler mirror the real pluginCore helpers
+  // (semantic-memory sources asyncHandler from core now, not a private copy).
   const core = {
     db,
     auth: {
@@ -49,6 +50,9 @@ beforeAll(async () => {
     parseIntParam: (v, d) => {
       const n = parseInt(v, 10);
       return isNaN(n) ? d : n;
+    },
+    asyncHandler: (fn) => function (req, res, next) {
+      return Promise.resolve(fn(req, res, next)).catch(next);
     },
   };
 

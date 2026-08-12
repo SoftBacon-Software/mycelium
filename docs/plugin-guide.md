@@ -196,6 +196,25 @@ export default function (core) {
 }
 ```
 
+**Async route handlers:** if a handler is `async` (or returns a promise that may
+reject), wrap it in `core.asyncHandler` so a rejection routes through Express's
+error pipeline (500) instead of crashing the server. Express 4 does **not**
+forward rejected promises from `async` handlers, and an unhandled rejection hits
+the platform's process-global backstop — `process.exit(1)` in `index.js` —
+killing the whole daemon (every connected agent, every in-flight task). The
+loader wraps every plugin handler at mount time via `guardPluginRouter`, so a
+rejection always 500s rather than crashing; wrap explicitly anyway — it
+documents which routes can reject and is defense-in-depth:
+
+```javascript
+router.post('/reindex', core.asyncHandler(async function (req, res) {
+  var who = checkAgentOrAdmin(req, res);
+  if (!who) return;
+  await doAsyncWork();        // a throw/reject here -> next(err) -> 500
+  res.json({ ok: true });
+}));
+```
+
 ### The `core` Object
 
 Your plugin receives `core` with these utilities:
@@ -203,6 +222,7 @@ Your plugin receives `core` with these utilities:
 | Property | Type | Description |
 |----------|------|-------------|
 | `core.db` | Object | Raw `better-sqlite3` database handle. Use for prepared statements. |
+| `core.asyncHandler(fn)` | Function | Wrap an `async` route handler so a rejected promise 500s via the error handler instead of crashing the server (see Async route handlers above). |
 | `core.auth.checkAgentOrAdmin(req, res)` | Function | Returns username/agent ID or sends 401. Use for any authenticated endpoint. |
 | `core.auth.checkAdmin(req, res)` | Function | Returns username or sends 403. Use for operator-only endpoints. |
 | `core.auth.getAdminDisplayName(req)` | Function | Safe display name for the current admin user. |

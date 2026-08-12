@@ -1847,6 +1847,12 @@ export async function initPlugins() {
     auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
     apiError, parseIntParam, validateEnum,
+    // asyncHandler: shared async-route wrapper so plugin authors can self-protect
+    // (forward a rejected promise to next(err) -> 500) using the SAME helper core
+    // routes use, instead of each plugin shipping a private copy. The loader's
+    // guardPluginRouter also covers this seam at mount time; this is the
+    // explicit/defense-in-depth path for plugin route handlers.
+    asyncHandler,
     // Event hook registration — plugins call core.onEvent(type, fn)
     onEvent: registerEventHook,
     // Inbox routing helpers for plugins
