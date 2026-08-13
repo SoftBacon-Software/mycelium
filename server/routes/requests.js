@@ -62,6 +62,15 @@ export function registerRequestRoutes(router, deps) {
     res.json(result);
   }));
 
+  // RESOLVER OWNERSHIP — OPEN (pinned by test/unit/request-lifecycle.test.js,
+  // [OWNERSHIP-OPEN] cases). This handler authenticates the caller
+  // (checkAgentOrAdmin) but does NOT require the caller to be the request's
+  // to_agent or from_agent: ANY authenticated agent may acknowledge or resolve
+  // ANY request, and the optional `response` below is then posted from the
+  // caller to the asker. The sibling PUT /messages/:id/resolve is identically
+  // open and no ownership guard has ever existed here. This pins the current
+  // behavior — if you restrict resolution to to_agent / from_agent / admin,
+  // flip the [OWNERSHIP-OPEN] assertions from 200 to 403.
   router.put('/requests/:id', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
