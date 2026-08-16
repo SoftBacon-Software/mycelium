@@ -13,7 +13,8 @@ TAG="${1:?usage: deploy-jetson.sh <annotated-tag> [--dry-run]}"
 DRY="${2:-}"
 BOX=jetson01.local
 TREE=/home/grb/mycelium                       # NOT ~/Projects/mycelium (a decoy)
-NPM=/home/grb/.nvm/versions/node/v25.9.0/bin/npm   # nvm: not on PATH over ssh
+NODE_BIN=/home/grb/.nvm/versions/node/v25.9.0/bin  # nvm: nothing is on PATH over ssh
+NPM="$NODE_BIN/npm"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -125,7 +126,7 @@ STOPPED=1
 ssh "$BOX" "cd $TREE && git fetch -q origin '+refs/tags/${TAG}:refs/tags/${TAG}' && git checkout -f '$TAG'"
 if ! ssh "$BOX" "cd $TREE && git diff --quiet '$PREV' HEAD -- package-lock.json"; then
   echo "lockfile changed — npm ci"
-  ssh "$BOX" "cd $TREE && $NPM ci --omit=dev"
+  ssh "$BOX" "cd $TREE && PATH=$NODE_BIN:\$PATH $NPM ci --omit=dev"
 else
   echo "lockfile unchanged — skipping npm ci"
 fi
@@ -152,7 +153,7 @@ if ! VERIFY_JSON="$JSON" node --input-type=module -e "
   STOPPED=1   # down again — a failure DURING rollback must still restore
   ssh "$BOX" "cd $TREE && git checkout -f '$PREV'"
   ssh "$BOX" "cd $TREE && tar xzf /home/grb/backups/node_modules-$STAMP.tgz" || \
-    ssh "$BOX" "cd $TREE && $NPM ci --omit=dev" || true
+    ssh "$BOX" "cd $TREE && PATH=$NODE_BIN:\$PATH $NPM ci --omit=dev" || true
   ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service"
   STOPPED=0   # rollback restarted it; do not let the trap restore twice
   sleep 10
