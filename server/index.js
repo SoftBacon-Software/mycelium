@@ -24,6 +24,8 @@ import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpir
 import myceliumRoutes, { initPlugins } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
+import { resolveTrustProxy } from './lib/trust-proxy.js';
+import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 
 // Lightweight auth check for voice endpoints (reuses JWT_SECRET/ADMIN_KEY from env)
 function isAdminKey(key) {
@@ -104,16 +106,29 @@ process.stdout.write('[boot] DB ready\n');
 // Initialize email (after DB, before routes — non-fatal if RESEND_KEY missing)
 initEmail();
 
-// Load plugins (after DB init, before routes are used)
-process.stdout.write('[boot] loading plugins...\n');
-await initPlugins();
-process.stdout.write('[boot] plugins loaded\n');
-
+// The express app MUST exist before plugins load. Plugins that install a hook
+// on the app (guardrails' blocking check) receive it as `core.app`; when this
+// ran the other way round `core.app` was undefined, `registerHooks`' `if
+// (core.app)` never fired, and `checkGuardrails` fail-opened on EVERY request.
+// All 14 enforcement='block' call sites were no-ops from the day they landed.
+// Found 2026-08-08 by the dead-instrument audit.
 var app = express();
 
-// Railway runs behind a reverse proxy — trust X-Forwarded-For for real client IPs.
-// Required for rate limiting to work correctly (otherwise req.ip = proxy IP).
-app.set('trust proxy', true);
+// Load plugins (after DB init AND after `app` exists, before routes are used)
+process.stdout.write('[boot] loading plugins...\n');
+await initPlugins(app);
+process.stdout.write('[boot] plugins loaded\n');
+
+// Trust X-Forwarded-For so req.ip is the real client IP behind a reverse proxy
+// (Railway/nginx/Cloudflare) — required for per-IP rate limiting to work.
+//
+// CAVEAT for DIRECT-exposed instances (no proxy in front — LAN box, bare VPS):
+// trust proxy = true believes ANY client's X-Forwarded-For, so callers can spoof
+// req.ip and dodge per-IP rate limits (login brute-force, agent-key guessing).
+// Set TRUST_PROXY=false on direct deployments. Default stays true so existing
+// proxied deploys keep working unchanged. See lib/trust-proxy.js + Express docs:
+// https://expressjs.com/en/guide/behind-proxies.html
+app.set('trust proxy', resolveTrustProxy(process.env));
 
 app.use(compression());
 
@@ -310,10 +325,17 @@ var server = app.listen(PORT, function () {
   }
 });
 
+// ---- mDNS/Bonjour advertiser: publish _mycelium._tcp so a from-scratch agent
+// can DISCOVER this instance on the LAN (deploy-or-join's DISCOVER arm). Fail-
+// soft: returns null (loud log) if multicast / the dep is unavailable — the API
+// keeps serving either way. See lib/mdns-advertise.js. ----
+var mdnsAdvertiser = await startMdnsAdvertising(PORT, { version: APP_VERSION });
+
 // ---- Graceful shutdown: stop worker plugins, close DB ----
 import { stopAllWorkers } from './plugins.js';
 function gracefulShutdown(signal) {
   console.log('[shutdown] ' + signal + ' received, stopping workers...');
+  if (mdnsAdvertiser) mdnsAdvertiser.stop();   // stop advertising before closing
   stopAllWorkers();
   server.close(function () {
     try { getDB().close(); console.log('[shutdown] DB closed'); } catch (e) { /* */ }

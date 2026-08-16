@@ -8,11 +8,20 @@ export function registerHooks(core) {
   var db = createGuardrailsDB(core.db);
 
   // Expose checkAction for pre-mutation checks by route handlers
-  if (core.app) {
-    core.app._guardrailsCheck = function (eventType, eventData) {
-      return db.checkAction(eventType, eventData);
-    };
+  // NOT optional. `if (core.app)` used to swallow this: the express app was
+  // created AFTER initPlugins ran (index.js), so core.app was always undefined,
+  // the hook never installed, and checkGuardrails fail-opened on every request
+  // — all 14 enforcement='block' sites were no-ops for the plugin system's
+  // entire life. Found 2026-08-08 by the dead-instrument audit. A missing app
+  // is now a hard error, not a silent skip.
+  if (!core.app) {
+    throw new Error('guardrails: core.app missing - the blocking hook cannot '
+      + 'install, so enforcement=block would silently do nothing. Refusing to '
+      + 'load in a state where the guardrail looks active but is not.');
   }
+  core.app._guardrailsCheck = function (eventType, eventData) {
+    return db.checkAction(eventType, eventData);
+  };
 
   core.onEvent('*', function (eventData) {
     try {
