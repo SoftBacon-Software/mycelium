@@ -59,6 +59,11 @@ Especially open an issue first for:
   - Plugin work: `plugin/<plugin-name>/<short-description>`
 - One concern per PR. No drive-by refactors bundled with feature work.
 - All changes via PR — no direct pushes to `master`.
+  - *Maintainer exception:* the maintainer pushes **maintenance** directly —
+    deploy machinery, runbooks, dependency and advisory fixes, tags, and
+    landing already-reviewed branches. Feature work goes through a PR like
+    everyone else's. Stated plainly because branch protection reports those
+    pushes, and an unexplained bypass reads worse than a documented one.
 - Delete the branch after merge.
 - PR description should answer: what changed, why, and how you
   tested it.
