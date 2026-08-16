@@ -87,10 +87,42 @@ fi
 
 # --- 4. stop, ship, deps, start ----------------------------------------------
 # Stop FIRST: Restart=always would otherwise relaunch into a half-updated tree.
+#
+# STOPPED guards the window in which the substrate is down. Anything that exits
+# non-zero in here — set -e, a failed ssh, a Ctrl-C — must not leave the box
+# dead. On 2026-08-16 it did exactly that: `git fetch --tags` returned non-zero
+# over three stale tags it declined to clobber, set -e killed the script one
+# line after the stop, and the platform stayed down until a human noticed.
+# Being stranded down is a worse failure than any deploy this script can ship.
 say "deploy"
 SUDO="$(security find-generic-password -s velum-sudo-jetson01 -w)"
+STOPPED=0
+
+restore_on_abort() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$STOPPED" -eq 1 ]; then
+    echo
+    echo "!!! DEPLOY ABORTED (exit $rc) WITH THE SERVICE STOPPED — restoring $PREV"
+    ssh "$BOX" "cd $TREE && git checkout -f '$PREV'" || true
+    ssh "$BOX" "cd $TREE && tar xzf /home/grb/backups/node_modules-$STAMP.tgz" 2>/dev/null || true
+    ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl reset-failed mycelium.service" || true
+    ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service" || true
+    sleep 10
+    if bash "$HERE/lib/jetson-verify.sh"; then
+      echo "restored: the box is back on $PREV and verifying green"
+    else
+      echo "RESTORE FAILED — INTERVENE. DB backup: /home/grb/backups/mycelium-$STAMP.db"
+    fi
+  fi
+}
+trap restore_on_abort EXIT
+
 ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl stop mycelium.service"
-ssh "$BOX" "cd $TREE && git fetch --tags origin && git checkout -f '$TAG'"
+STOPPED=1
+# Fetch ONLY the tag being deployed, forced. `git fetch --tags` fails wholesale
+# if any unrelated tag would be clobbered, which has nothing to do with this
+# deploy and must not abort it.
+ssh "$BOX" "cd $TREE && git fetch -q origin '+refs/tags/${TAG}:refs/tags/${TAG}' && git checkout -f '$TAG'"
 if ! ssh "$BOX" "cd $TREE && git diff --quiet '$PREV' HEAD -- package-lock.json"; then
   echo "lockfile changed — npm ci"
   ssh "$BOX" "cd $TREE && $NPM ci --omit=dev"
@@ -98,6 +130,7 @@ else
   echo "lockfile unchanged — skipping npm ci"
 fi
 ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service"
+STOPPED=0   # service is up again; the abort-restore no longer applies
 sleep 10
 
 # --- 5. verify behaviour; roll back on any red -------------------------------
@@ -116,10 +149,12 @@ if ! VERIFY_JSON="$JSON" node --input-type=module -e "
 "; then
   say "ROLLING BACK to $PREV"
   ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl stop mycelium.service"
+  STOPPED=1   # down again — a failure DURING rollback must still restore
   ssh "$BOX" "cd $TREE && git checkout -f '$PREV'"
   ssh "$BOX" "cd $TREE && tar xzf /home/grb/backups/node_modules-$STAMP.tgz" || \
     ssh "$BOX" "cd $TREE && $NPM ci --omit=dev" || true
   ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service"
+  STOPPED=0   # rollback restarted it; do not let the trap restore twice
   sleep 10
   if bash "$HERE/lib/jetson-verify.sh"; then
     echo "rollback verified green — the box is back where it was"
