@@ -25,3 +25,10 @@ tools/logs/
 # Deployment-local agent avatars (crew faces are instance data, never shipped in the public repo)
 public/avatars/*
 !public/avatars/README.md
+
+# Generated on the deploy host by scripts/deploy-jetson.sh — git is the truth,
+# that file is a convenience. Never hand-edited, never committed.
+/DEPLOYED_VERSION
+# Artifact of the 2026-08-16 conversion: the old broken worktree pointer, kept
+# on the box as a safety net.
+/.git.broken-pointer.bak
