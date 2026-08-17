@@ -6,7 +6,7 @@
 // to before extraction — enforced by test/refactor/route-manifest.mjs.
 import crypto from 'crypto';
 import {
-  updateAgent, getAgent, updateAgentHeartbeat, updateAgentKey,
+  updateAgent, getAgent, updateAgentHeartbeat, updateAgentKey, deriveAgentPresence,
   createSavepoint, pruneSavepoints, updateDroneDiagnostics,
   upsertContextKey, getContextKey, buildCalibrationBlock,
   getUnreadMessages, markMessagesRead, listPendingApprovalsByAgent,
@@ -212,7 +212,10 @@ export function registerAgentRoutes(router, deps) {
   router.get('/agents', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    res.json(listAgents());
+    // Presence derives from heartbeat age at the boundary (roster-truth,
+    // 2026-08-17): a stale 'online' reads offline; stored offline/retired/
+    // paused pass through. Velum and roster.py read THIS shape.
+    res.json(listAgents().map(function (a) { return deriveAgentPresence(a); }));
   }));
 
   // Agent profiles — MUST be before /agents/:id to avoid route shadowing
@@ -236,7 +239,7 @@ export function registerAgentRoutes(router, deps) {
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     // Don't leak key hash
     var { api_key_hash, ...safe } = agent;
-    res.json(safe);
+    res.json(deriveAgentPresence(safe));
   }));
 
   // Update agent profile (avatar_url, name)
@@ -260,6 +263,16 @@ export function registerAgentRoutes(router, deps) {
       if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
       if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);
       if (req.body.runtime !== undefined) fields.runtime = req.body.runtime;
+      if (req.body.status !== undefined) {
+        // The ONLY status this editor accepts is 'retired' — the labelled-
+        // not-deleted state for ghost records (roster-truth, 2026-08-17).
+        // Presence (online/idle/busy/offline) belongs to heartbeats alone; a
+        // retired agent that heartbeats again simply comes back online.
+        if (req.body.status !== 'retired') {
+          return res.status(400).json({ error: "status can only be set to 'retired' here; presence derives from heartbeats" });
+        }
+        fields.status = 'retired';
+      }
     }
     // Self-update fields (agent can only set on themselves)
     if (who === req.params.id || req._authIsAdmin) {

@@ -100,7 +100,7 @@ var artifactStorage = multer.diskStorage({
 });
 var artifactUpload = multer({ storage: artifactStorage, limits: { fileSize: 500 * 1024 * 1024 } });
 import {
-  createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent,
+  createAgent, getAgent, listAgents, listAllAgentsIncludingDrones, updateAgentHeartbeat, updateAgentKey, deleteAgent, updateAgent, markAgentOffline,
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   createProject, listProjects, getProject, updateProject, deleteProject,
   createTask, getTask, listTasks, updateTask,
@@ -1654,7 +1654,7 @@ setInterval(function () {
         var lastSeen = new Date(drone.last_heartbeat).getTime();
         var minutesAgo = (Date.now() - lastSeen) / 60000;
         if (minutesAgo > 30) {
-          updateAgentHeartbeat(drone.id, 'offline', '');
+          markAgentOffline(drone.id);  // no heartbeat stamp (roster-truth)
           emitEvent('drone_offline_detected', '__system__', 'drone', 'Drone ' + drone.id + ' flagged offline — no heartbeat for ' + Math.round(minutesAgo) + ' minutes', { drone_id: drone.id, minutes_since_heartbeat: Math.round(minutesAgo) });
         }
       }
@@ -1929,7 +1929,10 @@ function runHealthPatrol() {
 
   var staleAgents = getStaleAgents(staleAgentMins);
   for (var a of staleAgents) {
-    updateAgentHeartbeat(a.id, 'offline', '');
+    // markAgentOffline, NOT updateAgentHeartbeat: the sweeper must never stamp
+    // last_heartbeat, or the column stops meaning "when the agent last spoke"
+    // and every swept row reads offline-with-a-fresh-heartbeat (roster-truth).
+    markAgentOffline(a.id);
     emitEvent('health_patrol', '__system__', null, 'Agent ' + a.id + ' marked offline (no heartbeat in ' + staleAgentMins + ' min)', { agent_id: a.id, last_heartbeat: a.last_heartbeat });
     results.actions.push({ type: 'agent_offline', agent_id: a.id });
   }
@@ -1951,7 +1954,7 @@ function runHealthPatrol() {
 
   var staleDrns = getStaleDrones(staleDroneMins);
   for (var d of staleDrns) {
-    updateAgentHeartbeat(d.id, 'offline', '');
+    markAgentOffline(d.id);  // no heartbeat stamp — see the agent sweep above
     try { releaseStaleClaimedJobs(d.id); } catch (e) { /* non-critical */ }
     emitEvent('health_patrol', '__system__', null, 'Drone ' + d.id + ' marked offline + jobs released', { drone_id: d.id });
     results.actions.push({ type: 'drone_offline', drone_id: d.id });

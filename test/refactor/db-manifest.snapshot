@@ -1,3 +1,4 @@
+AGENT_PRESENCE_STALE_SECONDS:number:
 GATED_ACTIONS:object:6
 acknowledgeMessage:function:1
 addChannelMember:function:4
@@ -94,6 +95,7 @@ deleteTeam:function:1
 deleteTeamSetting:function:2
 deleteWebhook:function:1
 deleteWidget:function:1
+deriveAgentPresence:function:2
 dismissInboxItem:function:1
 dispatchWebhook:function:3
 doneRunnerSpawn:function:3
@@ -239,6 +241,7 @@ listWebhookDeliveries:function:1
 listWebhooks:function:1
 listWidgets:function:1
 logAgentSpend:function:8
+markAgentOffline:function:1
 markApprovalExecuted:function:1
 markChannelRead:function:3
 markInboxItemActioned:function:1

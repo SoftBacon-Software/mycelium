@@ -53,6 +53,38 @@ export function updateAgentHeartbeat(id, status, workingOn) {
     WHERE id = ?`).run(status || 'online', workingOn || '', id);
 }
 
+// ── status follows the heartbeat (2026-08-17 roster-truth) ───────────────────
+// Velum rendered agents as dormant while the operator was actively talking to
+// them. Two causes, both fixed here:
+//   (1) the sweepers wrote offline through updateAgentHeartbeat(), which
+//       re-stamps last_heartbeat = now — so the column stopped meaning "when
+//       the agent last spoke" and started meaning "when the platform last
+//       wrote the row", manufacturing offline-with-fresh-heartbeat rows.
+//       markAgentOffline() is the sweepers' writer now: no stamp.
+//   (2) status was a raw stored byte at read time. deriveAgentPresence()
+//       demotes a present-claiming row whose heartbeat is stale to 'offline'
+//       at the API boundary. It NEVER promotes: a stored 'offline' under a
+//       fresh heartbeat is a deliberate shutdown (the SDK's goodbye), and
+//       'retired'/'paused' are operator states only an explicit write moves.
+export function markAgentOffline(id) {
+  stmt('dvMarkOffline', "UPDATE agents SET status = 'offline', working_on = '' WHERE id = ?").run(id);
+}
+
+// Mirrors the health patrol's default staleness bar (patrol_stale_agent_minutes = 15).
+export const AGENT_PRESENCE_STALE_SECONDS = 15 * 60;
+const PRESENCE_STATUSES = new Set(['online', 'idle', 'busy']);
+
+export function deriveAgentPresence(row, nowMs) {
+  if (!row || !PRESENCE_STATUSES.has(row.status)) return row;
+  // last_heartbeat is naive-UTC 'YYYY-MM-DD HH:MM:SS' (datetime('now')) — parse as UTC.
+  var hb = row.last_heartbeat ? Date.parse(String(row.last_heartbeat).replace(' ', 'T') + 'Z') : NaN;
+  var ageS = ((nowMs === undefined ? Date.now() : nowMs) - hb) / 1000;
+  if (!Number.isFinite(ageS) || ageS >= AGENT_PRESENCE_STALE_SECONDS) {
+    return Object.assign({}, row, { status: 'offline' });
+  }
+  return row;
+}
+
 export function updateAgentKey(id, apiKeyHash) {
   stmt('dvUpdateAgentKey', 'UPDATE agents SET api_key_hash = ? WHERE id = ?').run(apiKeyHash, id);
 }
@@ -74,7 +106,9 @@ export function updateAgent(id, fields) {
   if (fields.system_diagnostics !== undefined && typeof fields.system_diagnostics !== 'string') {
     fields = Object.assign({}, fields, { system_diagnostics: JSON.stringify(fields.system_diagnostics) });
   }
-  buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime']);
+  // 'status' is writable here ONLY for the retirement path — the PUT route
+  // rejects every status value except 'retired'; presence comes from heartbeats.
+  buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime', 'status']);
 }
 
 // ---- Agent Templates ----

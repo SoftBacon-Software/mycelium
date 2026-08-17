@@ -6,10 +6,12 @@ import { describe, test, expect } from 'vitest';
 import { buildManifest, SNAPSHOT_PATH } from './db-manifest.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 
-const EXPECTED_EXPORT_COUNT = 308;
+// 311 = 308 (decomposition baseline) + 3 roster-truth additions (2026-08-17):
+// markAgentOffline, deriveAgentPresence, AGENT_PRESENCE_STALE_SECONDS.
+const EXPECTED_EXPORT_COUNT = 311;
 
 describe('db.js export manifest (decomposition gate)', () => {
-  test('public surface matches snapshot — 308 exports, stable types+arities', async () => {
+  test('public surface matches snapshot — 311 exports, stable types+arities', async () => {
     const manifest = await buildManifest();
 
     if (!existsSync(SNAPSHOT_PATH)) {
