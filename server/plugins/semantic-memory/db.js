@@ -353,6 +353,21 @@ export default function createMemoryDB(db) {
     },
 
     // -- Stats --
+    // List rows of a given source_type, newest first — query-free retrieval for
+    // always-on content (e.g. standing preferences injected every turn
+    // regardless of the current query). Added 2026-08-18.
+    listByType(sourceType, opts) {
+      opts = opts || {};
+      var namespace = opts.namespace || null;
+      var limit = Math.min(parseInt(opts.limit, 10) || 20, 100);
+      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at '
+              + 'FROM sm_embeddings WHERE source_type = ? AND chunk_index = 0';
+      var args = [sourceType];
+      if (namespace) { sql += ' AND namespace = ?'; args.push(namespace); }
+      sql += ' ORDER BY created_at DESC LIMIT ?'; args.push(limit);
+      return db.prepare(sql).all(...args);
+    },
+
     stats() {
       var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings').get().c;
       var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NOT NULL').get().c;

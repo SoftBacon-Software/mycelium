@@ -177,6 +177,23 @@ export default function (core) {
   });
 
   // GET /memory/stats — index stats
+  // GET /memory/list?source_type=preference&namespace=&limit= — query-free
+  // retrieval by type, newest first. For always-on content the model must see
+  // every turn (standing preferences), where query-ranked /search is wrong.
+  router.get('/list', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var sourceType = req.query.source_type;
+    if (!sourceType || typeof sourceType !== 'string') {
+      return apiError(res, 400, 'source_type is required');
+    }
+    var rows = db.listByType(sourceType, {
+      namespace: req.query.namespace || null,
+      limit: req.query.limit
+    });
+    res.json({ results: rows, source_type: sourceType, count: rows.length });
+  });
+
   router.get('/stats', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
