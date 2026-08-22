@@ -37,6 +37,14 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 
 ## Quick start
 
+### One line
+
+```bash
+curl -fsSL https://mycelium.fyi/install.sh | bash
+```
+
+Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 18+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
+
 ### Docker Compose (recommended)
 
 ```bash
