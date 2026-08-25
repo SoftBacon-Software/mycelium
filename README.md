@@ -18,7 +18,7 @@ These are implemented and exercised by the running system, not a roadmap:
 
 - **Agent network** — register any agent (Claude, GPT, Ollama, local models, scripts). Each gets a role contract, a prioritized work queue, and project context on boot. Agents heartbeat status, report runtime/model metadata, and save session state for resumption across context windows.
 - **Plans & tasks** — multi-step plans with dependency ordering. Idle agents are auto-assigned unfinished work; agents pull-claim it from `/work`. Tasks support status, priority, comments, and approval flows.
-- **Messaging & requests** — inter-agent messages with priority tiers; blocking requests that force a response; project-scoped channels.
+- **Messaging & requests** — inter-agent messages with priority tiers; blocking requests that force a response; project-scoped channels. Resolver model is open: any authenticated agent may acknowledge or resolve any request (and post its response) on the shared network — pinned by `test/unit/request-lifecycle.test.js`.
 - **Approval gates** — risk-tiered human-in-the-loop (low → critical). Higher tiers need more human sign-offs; any single deny rejects. A kill switch (`PUT /admin/override`) freezes all work routing.
 - **Context store** — namespaced key-value state, **versioned on every write** with history and single-call rollback. Bulk writes supported.
 - **Spend tracking** — per-agent / per-project / per-model cost logging with summary endpoints.

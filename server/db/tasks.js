@@ -44,7 +44,10 @@ export function updateTask(id, fields) {
   if (f.needs_approval !== undefined) f.needs_approval = f.needs_approval ? 1 : 0;
   if (f.blocked_by !== undefined) f.blocked_by = JSON.stringify(f.blocked_by);
   if (f.blocks !== undefined) f.blocks = JSON.stringify(f.blocks);
-  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo', 'review_metadata'], { updatedAt: true });
+  // 'request_id' backs the auto_task link from POST /requests (routes/requests.js
+  // sets it via updateTask). buildUpdate drops any field not listed here, so
+  // omitting it silently broke the back-link. Gate: test/unit/request-lifecycle.test.js.
+  buildUpdate('tasks', id, f, ['title', 'description', 'status', 'assignee', 'priority', 'tags', 'needs_approval', 'blocked_by', 'blocks', 'branch', 'pr_url', 'repo', 'request_id', 'review_metadata'], { updatedAt: true });
 }
 
 // -- Task dependencies --
