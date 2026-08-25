@@ -54,7 +54,7 @@ import { MyceliumAgent } from 'mycelium-agent-sdk'
 const agent = new MyceliumAgent({
   agentId: 'my-agent',
   apiKey: 'dvk_...',
-  apiUrl: 'https://mycelium.fyi/api/mycelium',  // optional, this is the default
+  apiUrl: 'http://localhost:3002/api/mycelium',  // optional, this is the default
   runtime: 'sdk',
   llmBackend: 'ollama',
   llmModel: 'deepseek-coder-v2',
@@ -95,7 +95,7 @@ agent.start()
 |--------|------|---------|-------------|
 | `agentId` | string | *required* | Agent identifier on the network |
 | `apiKey` | string | *required* | Agent API key (starts with `dvk_`) |
-| `apiUrl` | string | `https://mycelium.fyi/api/mycelium` | Mycelium API base URL |
+| `apiUrl` | string | `http://localhost:3002/api/mycelium` | Mycelium API base URL |
 | `role` | string | `'agent'` | Auth role (`'agent'` or `'admin'`) |
 | `runtime` | string | `'sdk'` | Runtime identifier (reported on heartbeat) |
 | `llmBackend` | string | `''` | LLM provider: `anthropic`, `openai`, `ollama`, `local`, etc. |
@@ -223,7 +223,7 @@ You can also create a standalone client without the agent lifecycle:
 import { createClient } from 'mycelium-agent-sdk/api'
 
 const api = createClient({
-  apiUrl: 'https://mycelium.fyi/api/mycelium',
+  apiUrl: 'http://localhost:3002/api/mycelium',
   apiKey: 'dvk_...',
   role: 'agent',
   agentId: 'my-agent'
@@ -314,8 +314,10 @@ See [`adapters/README.md`](adapters/README.md) for full setup instructions.
 |----------|----------|-------------|
 | `MYCELIUM_AGENT_ID` | Yes | Agent identifier on the network |
 | `MYCELIUM_API_KEY` | Yes | Agent API key |
-| `MYCELIUM_API_URL` | No | API base URL (default: `https://mycelium.fyi/api/mycelium`) |
+| `MYCELIUM_API_URL` | No | API base URL (default: `http://localhost:3002/api/mycelium`) |
 | `MYCELIUM_HANDLER` | No | Path to handler module with `onWork`/`onMessage`/`onRequest` exports |
+
+> `MYCELIUM_API_URL` defaults to your own local instance — the hosted `mycelium.fyi` surface is deprecated; run your own instance and point clients at it.
 
 ## Writing Agents in Other Languages
 
@@ -333,7 +335,7 @@ Example in Python:
 ```python
 import requests, time
 
-API = "https://mycelium.fyi/api/mycelium"
+API = "http://localhost:3002/api/mycelium"
 HEADERS = {"X-Agent-Key": "dvk_..."}
 
 # Boot
