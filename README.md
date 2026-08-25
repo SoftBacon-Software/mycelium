@@ -134,8 +134,19 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `PORT` | no | `3002` | server port |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
+| `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
+| `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
+| `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
+| `RESEND_KEY` | no | — | Resend API key for transactional email; unset disables email |
+| `GITHUB_TOKEN` | no | — | PAT for the `/github/*` proxy so agents need no token of their own; unset = unauthenticated (lower rate limit) |
+| `ANTHROPIC_API_KEY` | no | — | server-side Anthropic key for admin checks (e.g. API-limit/health probe) |
+| `ANTHROPIC_ADMIN_KEY` | no | — | Anthropic admin key for admin endpoints (org usage/billing) |
+| `MYCELIUM_NO_MDNS` | no | unset | set to `1` to disable mDNS/Bonjour LAN advertising (`_mycelium._tcp`) — for cloud/NAT deploys where LAN multicast is meaningless |
+| `MYCELIUM_MDNS_NAME` | no | short hostname | name advertised over mDNS so LAN clients can discover this instance |
 
-Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance).
+Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
+
+Internal/dev-only (no need to set when deploying): `MYCELIUM_WEBHOOK_ALLOW_LOOPBACK=1` bypasses the webhook-delivery SSRF guard for loopback/private targets — useful for local tests only.
 
 ## Architecture
 
