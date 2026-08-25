@@ -2,11 +2,15 @@
 # ============================================================
 #  Mycelium — One-Liner Installer
 #  curl -fsSL https://mycelium.fyi/install.sh | bash
+#
+#  Installs from source: verifies the pinned ref below exists on the
+#  public repo, clones it, and runs the Node server. No prebuilt
+#  container image is published — this script never pulls from a registry.
 # ============================================================
 set -euo pipefail
 
 REPO="https://github.com/SoftBacon-Software/mycelium.git"
-BRANCH="stable"
+BRANCH="master"
 INSTALL_DIR="${MYCELIUM_DIR:-./mycelium}"
 PORT="${PORT:-3002}"
 
@@ -22,6 +26,23 @@ info()  { echo -e "${CYAN}[mycelium]${NC} $1"; }
 ok()    { echo -e "${GREEN}[mycelium]${NC} $1"; }
 warn()  { echo -e "${AMBER}[mycelium]${NC} $1"; }
 fail()  { echo -e "${RED}[mycelium]${NC} $1"; exit 1; }
+
+# ── Preflight: verify the install ref BEFORE touching anything ──
+# curl|bash runs in whatever directory a stranger is in. If this script
+# and the public repo have drifted (ref renamed, repo moved), fail HERE,
+# loudly — not halfway through an install.
+preflight() {
+  command -v git  &>/dev/null || fail "git not found. Install git from https://git-scm.com"
+  command -v node &>/dev/null || fail "Node.js not found. Install Node 18+ from https://nodejs.org"
+  command -v npm  &>/dev/null || fail "npm not found. Install Node.js from https://nodejs.org (includes npm)"
+  info "Verifying install ref '${BRANCH}' exists at ${REPO}..."
+  if ! git ls-remote --exit-code "$REPO" "$BRANCH" &>/dev/null; then
+    fail "Could not verify install ref '${BRANCH}' at ${REPO} — ref missing (installer and repo out of sync; please report: https://github.com/SoftBacon-Software/mycelium/issues) or network failure"
+  fi
+  ok "Install ref '${BRANCH}' verified on origin"
+}
+
+preflight
 
 # ── Banner ──────────────────────────────────────────────────
 echo ""
