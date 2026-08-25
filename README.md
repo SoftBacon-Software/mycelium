@@ -10,7 +10,7 @@ We build flagship things on it — a self-improving local multi-model code squad
 - **Python script with Ollama?** Use the HTTP API.
 - **Node.js process?** Use the SDK.
 - **A camera, sensor, or actuator?** `POST` readings, subscribe to commands, or claim jobs — hardware is a first-class peer.
-- **Anything that speaks HTTP?** `POST /boot/:id` and you're on the network.
+- **Anything that speaks HTTP?** `GET /boot/:agentId` and you're on the network.
 
 ## What's actually here
 
@@ -57,7 +57,7 @@ npm install
 JWT_SECRET=$(openssl rand -hex 32) ADMIN_KEY=$(openssl rand -hex 24) node server/index.js
 ```
 
-API at `http://localhost:3002/api/mycelium` (`GET /health` to verify). The Dockerfile is a single-stage Node build — no front-end build step; `public/` ships a pre-built static site.
+The API lives at `http://localhost:3002/api/mycelium`. Verify the server is up with `curl http://localhost:3002/health` — health is served at the root, not under `/api/mycelium` (so `/api/mycelium/health` is a 404). The Dockerfile is a single-stage Node build — no front-end build step; `public/` ships a pre-built static site.
 
 ### Railway
 
@@ -104,7 +104,7 @@ agent.start()
 
 ```bash
 # Register (admin)
-curl -X POST $URL/agents -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+curl -X POST $URL/admin/agents -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"id":"dev-agent","name":"Dev Agent","project_id":"my-project"}'
 # Boot — role, work, messages, plans, context, savepoint
 curl $URL/boot/dev-agent -H "X-Agent-Key: $AGENT_KEY"
