@@ -8,19 +8,12 @@ export default function (core) {
   var router = Router();
   var db = createMemoryDB(core.db);
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
-  var { apiError, parseIntParam } = core;
-
-  // Forward async errors from plugin handlers to Express's next(err). Plugin
-  // routers mount raw (unlike core routes), so an `async function` handler
-  // whose awaited promise rejects becomes an UNHANDLED rejection -> in Node
-  // that crashes the whole platform. This wraps a handler so rejections route
-  // through Express's error pipeline instead. Mirrors the core asyncHandler
-  // (routes/mycelium.js) — kept local because pluginCore doesn't export it.
-  function asyncHandler(fn) {
-    return function (req, res, next) {
-      return Promise.resolve(fn(req, res, next)).catch(next);
-    };
-  }
+  // asyncHandler comes from core now (routes/mycelium.js exports it on
+  // pluginCore), retiring the private copy this file used to ship. The loader's
+  // guardPluginRouter also wraps every plugin handler at mount time, so an
+  // explicit asyncHandler() wrap on a route is defense-in-depth, not load-
+  // bearing — but it documents which routes can reject.
+  var { apiError, parseIntParam, asyncHandler } = core;
 
   // Fire-and-forget embedding after route-level indexing — same flow as the
   // event handlers. (POST /index used to store NULL embeddings forever; that
@@ -39,8 +32,10 @@ export default function (core) {
     });
   }
 
-  // POST /memory/search — hybrid search
-  router.post('/search', async function (req, res) {
+  // POST /memory/search — hybrid search. Wrapped in asyncHandler (rejected
+  // promise from generateEmbedding/searchHybrid -> next(err) -> 500) — the
+  // same class /reindex + /backfill already guard; /search had been missed.
+  router.post('/search', asyncHandler(async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var { query, source_types, namespace, project_id, limit, mode } = req.body;
@@ -87,7 +82,7 @@ export default function (core) {
     });
 
     res.json({ results: results, mode: mode, query: query, count: results.length });
-  });
+  }));
 
   // POST /memory/index — index content
   router.post('/index', function (req, res) {
