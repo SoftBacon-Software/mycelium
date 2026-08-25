@@ -3,37 +3,62 @@
 Run from repo root:
 
 ```
-npm test            # one-off run
+npm test            # one-off run (vitest)
 npm run test:watch  # re-run on file change
 npm run test:coverage
 ```
 
 ## Layout
 
-- `smoke/` — fast tests that exercise critical paths (health check,
-  schema apply, auth helper correctness). Must pass on every PR.
-- `integration/` — exercise real routes against a live server with
-  a temp SQLite DB. Slower but higher-confidence.
-- `helpers/` — shared setup utilities (temp DBs, server boot, auth
-  token generation).
+Three directories live under `test/`:
+
+- `smoke/` — fast tests over the critical paths (health check, schema
+  apply, license/version metadata, admin-key timing-safety). Must pass
+  on every PR.
+- `unit/` — focused tests for modules, routes, DB helpers, and auth.
+  This is the bulk of the suite, run against a fresh temp/in-memory
+  SQLite (never the dev DB). It also holds the **guard tests** — tests
+  that read repo files and assert a structural invariant instead of
+  runtime behavior, e.g. `schema-drift.test.js` (schema.sql vs db.js
+  migrations stay in sync). Add new behavioral tests here.
+- `refactor/` — **decomposition gates** that lock the platform's
+  structure against a committed snapshot, so a refactor can't silently
+  drop a route or a DB export. Each pairs a generator (`.mjs`) with a
+  golden snapshot (`.snapshot`):
+  - `route-manifest` — every mounted Express route (METHOD + path +
+    middleware chain). Diff with
+    `node test/refactor/route-manifest.mjs --check`.
+  - `db-manifest` — the `db.js` public export surface (308 exports,
+    types + arities). Diff with
+    `node test/refactor/db-manifest.mjs --check`; `db-manifest.test.js`
+    also runs that same check inside `npm test`.
+
+  If a gate reports drift, regenerate the snapshot with `--write` only
+  when the change is intentional, and call it out in the PR.
 
 ## Writing a new test
 
-1. Place it under `test/smoke/` or `test/integration/` matching its
-   scope.
+1. Place it under `test/smoke/` (broad critical-path checks) or
+   `test/unit/` (focused module/route/guard coverage).
 2. Use vitest's `describe` / `test` / `expect` API.
-3. Import shared helpers from `test/helpers/`.
-4. Each test must clean up its own temp files / DBs in `afterEach`
-   or `afterAll`.
-5. Run locally with `npm test` before opening a PR.
+3. Each test must clean up its own temp files / DBs in `afterEach` or
+   `afterAll`.
+4. Run locally with `npm test` before opening a PR.
 
 ## What CI does
 
-`.github/workflows/test.yml` runs `npm ci && npm test` on every PR
-and push to `master`. Failed tests block PRs from auto-merging.
+`.github/workflows/test.yml` runs on every PR and push to `master`:
+
+1. `npm run lint` — ESLint over `server sdk test`. **Errors fail CI;
+   warnings don't** (the tree currently carries ~320 warnings, 0
+   errors).
+2. `npm test` — the vitest suite (`smoke/` + `unit/` + the
+   vitest-wrapped `refactor/` gate).
+3. Plugin `node:test` suites at `server/plugins/*/test.js`.
+
+A failing test or a lint error blocks the PR from merging.
 
 ## What's NOT tested yet
 
-This is v0.1.0 — the test suite is brand new. Many routes have no
-coverage. Contributions welcome — PRs that add tests for previously
-untested code paths are strongly encouraged.
+Coverage is incomplete — many routes have no direct test. PRs that add
+tests for previously-untested paths are strongly encouraged.
