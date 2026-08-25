@@ -133,6 +133,24 @@ fresh temp DB). See `test/README.md` for layout + conventions. PRs that add cove
 for previously-untested code paths are especially welcome — v0.1.0
 shipped with smoke coverage only.
 
+## Releases
+
+Mycelium follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+[Semantic Versioning](https://semver.org/). `CHANGELOG.md` is the source of
+truth for what shipped in each version.
+
+Cutting a release:
+
+1. Bump `version` in `package.json` (and `sdk/package.json` if the SDK moved).
+2. Move the accumulated entries under `[Unreleased]` in `CHANGELOG.md` into a
+   new dated heading — `## [<new-version>] - YYYY-MM-DD` — and open a fresh,
+   empty `[Unreleased]` section above it.
+3. Create an **annotated** tag locally:
+   `git tag -a v<X.Y.Z> -m "<X.Y.Z> — <one-line summary>"`.
+4. Do **not** push the tag. Publishing tags is the maintainer's call.
+
+One concern per release — don't bundle a release with unrelated refactors.
+
 ## Plugin development
 
 Plugins live in `server/plugins/<plugin-name>/` and are auto-discovered
