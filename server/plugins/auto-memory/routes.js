@@ -77,7 +77,7 @@ export default function (core) {
     // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
     // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
     // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
-    var memoryIndex = { indexed: false, reason: 'not attempted' };
+    var memoryIndex; // assigned on both paths below
     try {
       memoryIndex = indexFactInMemory(core.db, id,
         { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
@@ -116,7 +116,7 @@ export default function (core) {
   router.post('/extract', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    var { text, agent_id, project_id } = req.body;
+    var { text, project_id } = req.body;
     if (!text) return apiError(res, 400, 'text is required');
 
     var config = db.getAllConfig();
@@ -366,10 +366,8 @@ Return a JSON object (no markdown, no explanation):
   "insights": [{ "category": "...", "fact_text": "...", "confidence": 0.0-1.0 }]
 }`;
 
-export async function runConsolidation(db, config, core) {
+export async function runConsolidation(db, config, _core) {
   var startTime = Date.now();
-  var lastConsolidation = db.getLastConsolidation();
-  var since = lastConsolidation ? lastConsolidation.run_at : '2000-01-01';
 
   // Get recent facts
   var recentFacts = db.listFacts({ limit: 200 });

@@ -220,10 +220,10 @@ export default function createMemoryDB(db) {
           likeParams.push(opts.namespace);
         }
         likeParams.push(fetchLimit);
-        var rows = db.prepare(
+        var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
         ).all(...likeParams);
-        return this.collapseChunks(rows.map(function (r) {
+        return this.collapseChunks(likeRows.map(function (r) {
           try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
           r.score = 1.0; // no ranking for LIKE fallback
           return r;

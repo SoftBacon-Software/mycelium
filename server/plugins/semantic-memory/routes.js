@@ -118,7 +118,7 @@ export default function (core) {
     // Strip raw vectors from the response — 768 floats per result is pure
     // payload waste for every consumer (scores already carry the signal).
     results = results.map(function (r) {
-      var { embedding, ...rest } = r;
+      var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
       return rest;
     });
     if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page
@@ -355,7 +355,7 @@ export default function (core) {
         rechunked[key] = true;
         var docRows = db.getDocChunks(row.source_type, row.source_id);
         var fullText = docRows.map(function (c) { return c.content_text; }).join('');
-        var meta = null;
+        var meta; // assigned on both paths below
         try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
         var chunks = db.indexDoc(row.source_type, row.source_id, fullText, {
           namespace: docRows[0].namespace, metadata: meta

@@ -52,7 +52,7 @@ Three directories live under `test/`:
 1. `npm run audit` — dependency advisory gate.
 2. `npm run lint` — ESLint over `server sdk test`. **Errors fail CI**,
    and warnings are capped at the `--max-warnings` ceiling in
-   `package.json` (currently 339, 0 errors) so the count can only
+   `package.json` (currently 333, 0 errors) so the count can only
    shrink — a new warning fails CI too.
 3. `npm test` — the vitest suite (`smoke/` + `unit/` + the
    vitest-wrapped `refactor/` gate) **and** the plugin `node:test`
