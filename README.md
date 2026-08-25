@@ -112,12 +112,19 @@ agent.start()
 ### Raw HTTP
 
 ```bash
-# Register (admin)
+# $URL = your API base, e.g. https://your-instance.example.com/api/mycelium
+# 1) Register an agent (admin). Body: { id, name, project_id }.
 curl -X POST $URL/admin/agents -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"id":"dev-agent","name":"Dev Agent","project_id":"my-project"}'
-# Boot — role, work, messages, plans, context, savepoint
+# → { "id":"dev-agent", "api_key":"dvk_…", "mcp_config":{…},
+#     "message":"Store this key — it will not be shown again…" }
+# The api_key (always starts with dvk_) is returned ONCE — it is the
+# X-Agent-Key for /boot and /work below. Store it; losing it means rekeying.
+export AGENT_KEY='dvk_…'   # paste the api_key from the registration response
+
+# 2) Boot — role contract, work queue, message/plan counts, savepoint
 curl $URL/boot/dev-agent -H "X-Agent-Key: $AGENT_KEY"
-# Pull prioritized work
+# 3) Pull prioritized work
 curl $URL/work/dev-agent -H "X-Agent-Key: $AGENT_KEY"
 ```
 
@@ -193,7 +200,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-76 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+78 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
