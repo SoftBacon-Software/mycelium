@@ -34,6 +34,21 @@ export function registerSpendRoutes(router, deps) {
     res.json({ ok: true });
   }));
 
+  // AUTHZ NOTE (OPEN — Gilbert's call, do not flip silently): this per-agent
+  // read authenticates `who` but does NOT compare it to req.params.agentId, so
+  // TODAY any authenticated agent can read ANY other agent's spend log (costs,
+  // models, tokens, project membership). That is inconsistent with the other
+  // per-agent reads, which all isolate: /work/:agentId (mycelium.js — `who !==
+  // agentId` -> 403), /boot/:agentId, and the savepoint routes (agents.js).
+  // That isolation pattern was set by the security-hardening "IDOR fixes"
+  // commit (832d447, 2026-03-05); spend was added 3 days later (f277f79,
+  // 2026-03-08) without picking up the guard, and nothing in history asserts
+  // spend should be open — so this reads as a forgotten check, not a policy.
+  // The CURRENT (open) behavior is pinned by
+  // test/unit/spend-routes-behavior.test.js; that test REDS if a guard is
+  // added, deliberately, so the semantic only changes with intent. To isolate:
+  // add `if (who !== req.params.agentId) return res.status(403)...` here and
+  // flip that test to expect 403 + document spend as isolated in README.md.
   router.get('/spend/:agentId', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
