@@ -63,3 +63,19 @@ jobs:
             echo "=== node --test $f ==="
             node --test "$f"
           done
+
+  # Runtime smoke for the recommended Docker install path — the half that
+  # test/unit/docker-hardening.test.js (the static gate) explicitly punted to a
+  # manual README step. Builds the real image, boots via the Dockerfile's actual
+  # CMD (server/boot.js — an entrypoint no unit test imports), curls /health to
+  # 200+db_ok, and confirms the non-root uid (1000) the static gate pins. Kept
+  # OUT of `npm test` (no daemon assumption locally); ubuntu-latest ships Docker.
+  # See scripts/docker-smoke.sh.
+  docker-smoke:
+    name: docker smoke (boot.js + /health + non-root)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Docker runtime smoke
+        run: bash scripts/docker-smoke.sh

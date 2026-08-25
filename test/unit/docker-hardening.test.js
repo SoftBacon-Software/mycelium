@@ -15,9 +15,11 @@ import { resolve, dirname } from 'node:path'
 // It also pins `npm ci --omit=dev` (the --production alias is deprecated on
 // npm v9+, which node:22-slim ships as npm 10).
 //
-// The runtime smoke (docker build + run + curl /health + `id -u` == 1000) lives
-// in the README verify step — this static gate is the regression guard that a
-// stranger reproduces in `npm test` without a Docker daemon.
+// The runtime smoke (docker build + run + curl /health + `id -u` == 1000) is
+// automated in scripts/docker-smoke.sh and runs in CI (job `docker-smoke` in
+// .github/workflows/test.yml). This static gate is the COMPLEMENTARY regression
+// guard — it needs no Docker daemon, so a stranger still catches a USER/
+// .dockerignore regression in plain `npm test`.
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const dockerfile = readFileSync(resolve(ROOT, 'Dockerfile'), 'utf8')
