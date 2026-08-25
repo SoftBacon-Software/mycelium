@@ -13,7 +13,7 @@
 // full MCP handshake; richer MCP coverage can layer on top without conflict.
 
 import { describe, test, expect } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,33 +44,52 @@ describe('mcp boot (mcp/index.js startup guard + stdio server)', () => {
     expect(result.stderr, 'stderr should name MYCELIUM_API_KEY').toMatch(/MYCELIUM_API_KEY/)
   })
 
-  // KNOWN-BROKEN POSITIVE PATH — SKIP WITH REASON (the brief's sanctioned idiom,
-  // not a hollow skip). This boot smoke surfaced a real master regression that
-  // NO existing test catches (mcp has no boot smoke on master — until now).
-  //
-  // `mcp/index.js` does NOT reach its "running" line on master HEAD with the
-  // current dependency tree: registerTools() (mcp/index.js:32) throws because
-  // mcp/src/tools.js registers each tool with a JSON-schema-descriptor object
-  //   e.g. { auto_claim: { type: 'boolean', description: '…' } }
-  // but @modelcontextprotocol/sdk 1.30.0's McpServer.tool() requires a Zod
-  // *raw shape* (values must be Zod schemas). Its isZodRawShapeCompat() rejects
-  // the descriptor, the arg parser then mistakes it for ToolAnnotations, sees
-  // nested objects, and throws:
-  //   "Tool mycelium_get_work expected a Zod schema or ToolAnnotations, but
-  //    received an unrecognized object"
-  // The crash is synchronous and role/env-independent — `npm run start:mcp`
-  // fails on every boot. The likely trigger is the root override bump to
-  // @modelcontextprotocol/sdk ^1.30.0 (commit 6d1d630 "fix(deps): patch 7
-  // advisories via overrides"); tools.js was written for an older SDK that
-  // accepted these descriptors. Confirmed against a clean, lockfile-deterministic
-  // tree (zod 4.4.3, single deduped instance — not a dual-zod skew).
-  //
-  // Fix (out of THIS brief's scope — one concern per branch): convert each
-  // tool's descriptor to a Zod raw shape, e.g.
-  //   { auto_claim: z.boolean().describe('Auto-claim the top work item …') }
-  // Once that lands, UN-SKIP this test and assert the "running" boot line.
-  test.skip('POSITIVE: with a key, stands up the stdio server and reaches the "running" line (currently broken — see comment)', () => {
-    // When un-skipped: spawn `node mcp/index.js` with MYCELIUM_API_KEY set, poll
-    // stderr for /Mycelium MCP server running/, SIGTERM, assert exit 0.
+  // POSITIVE: with a key, stands up the stdio server and reaches the "running" line
+  test('POSITIVE: with a key, stands up the stdio server and reaches the "running" line', (t) => {
+    const env = { ...process.env, MYCELIUM_API_KEY: 'dummy' }
+
+    const proc = spawn('node', [MCP_ENTRY], {
+      cwd: REPO_ROOT,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stderr = ''
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    const cleanup = () => {
+      proc.kill()
+    }
+
+    t.signal?.addEventListener('cancel', cleanup)
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup()
+        reject(new Error('Test timed out waiting for "running" line'))
+      }, 10000)
+
+      proc.on('exit', (code) => {
+        clearTimeout(timeout)
+        if (stderr.includes('Mycelium MCP server running')) {
+          resolve()
+        } else {
+          cleanup()
+          reject(new Error('Server did not reach "running" line. stderr: ' + stderr))
+        }
+      })
+
+      // Also check stderr periodically for the running line
+      const checkInterval = setInterval(() => {
+        if (stderr.includes('Mycelium MCP server running')) {
+          clearTimeout(timeout)
+          clearInterval(checkInterval)
+          cleanup()
+          resolve()
+        }
+      }, 100)
+    })
   })
 })

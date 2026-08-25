@@ -22,7 +22,12 @@ function registerDual(server, studioName, description, schema, handler) {
       return { content: [{ type: 'text', text: 'Error in ' + myceliumName + ': ' + msg }], isError: true };
     }
   };
-  server.tool(myceliumName, description, schema, safeHandler);
+  // Convert JSON-schema to Zod raw shape if needed (SDK 1.30 requirement)
+  var zodSchema = schema;
+  if (schema && typeof schema === 'object' && !('parse' in schema)) {
+    zodSchema = pluginSchemaToZod(schema);
+  }
+  server.tool(myceliumName, description, zodSchema, safeHandler);
 }
 
 // Safely parse a JSON string param, returning fallback on failure
