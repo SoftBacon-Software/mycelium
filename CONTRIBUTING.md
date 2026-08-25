@@ -86,8 +86,27 @@ gate. The informal house style:
 - **JavaScript/Node.js** — 2-space indent, single quotes, semicolons.
   Async/await over raw promises. Prefer `const`; reach for `let`
   when reassignment is genuinely the clearest pattern.
-- **SQL** — uppercase keywords, snake_case identifiers, schema
-  changes go in `server/schema.sql` (one canonical source).
+- **SQL** — uppercase keywords, snake_case identifiers. Schema changes touch
+  TWO places, not one, because `server/schema.sql` is `CREATE TABLE IF NOT
+  EXISTS` — a no-op on a database that already has the table:
+  - **Adding a COLUMN requires BOTH edits:**
+    1. add the column to the table's `CREATE TABLE` in `server/schema.sql`
+       (this is what FRESH databases get); AND
+    2. append a matching `[table, column, definition]` entry to the `migrations`
+       array in `server/db/core.js` (e.g.
+       `["tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"]`). On every boot
+       that array is applied as idempotent `ALTER TABLE ... ADD COLUMN`
+       statements, BEFORE schema.sql, and it is the ONLY thing that carries the
+       column to EXISTING databases — `CREATE TABLE IF NOT EXISTS` will not
+       extend a table that already exists, so a column added only to schema.sql
+       silently misses every persistent instance that upgrades. The `definition`
+       MUST mirror the schema.sql column's `DEFAULT` / `NOT NULL` so legacy rows
+       backfill identically.
+  - **Adding a new TABLE needs NO `migrations` entry** — a brand-new
+    `CREATE TABLE` applies to fresh and existing databases alike (`IF NOT
+    EXISTS` only skips tables that already exist, and a new table doesn't).
+  `server/schema.sql` stays the canonical column set; the `migrations` array is
+  the upgrade bridge that keeps existing databases in sync with it.
 - **Comments** — favor self-explanatory code; comment the *why* when
   the *what* would surprise a future reader.
 

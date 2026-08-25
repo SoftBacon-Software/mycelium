@@ -22,33 +22,18 @@ export var DB_PATH = path.join(DATA_DIR, 'mycelium.db');
 
 export var db;
 
-// Composed initDB lives in the barrel (server/db.js): it calls initDBConnection()
-// then the three entity seeds + the log line. Splitting here keeps the module
-// graph a strict DAG — core never imports the entity modules that own the seeds.
-export function initDBConnection() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
-  db.pragma('synchronous = NORMAL');
-  db.pragma('foreign_keys = ON');
-
-  // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
-  migrateGameToProjectId();
-
-  // Migration: rename dv_* tables to clean names BEFORE schema.sql runs
-  migrateTableNames(db);
-
-  // Upgrade bridges (idempotent). These run BEFORE schema.exec so that an OLD
-  // production DB — whose legacy CREATE TABLE bodies predate these columns — has
-  // the columns added before schema.sql's CREATE INDEX statements reference them.
-  //
-  // On a FRESH DB the target tables don't exist yet, so each guarded ALTER simply
-  // no-ops (caught below); schema.sql then creates fully-formed tables because it
-  // is now the canonical source of truth and already declares every one of these
-  // columns. Net result: fresh init == live schema, and old DBs still upgrade.
-  var migrations = [
+// =============== Schema migration bridge (existing-DB upgrades) ===============
+// schema.sql is `CREATE TABLE IF NOT EXISTS` — a no-op on a DB that already has
+// the table — so a column added to a CREATE TABLE only reaches FRESH databases.
+// Existing/persistent DBs get new columns from THIS array, applied as idempotent
+// `ALTER TABLE ... ADD COLUMN` statements during init (before schema.sql, so any
+// CREATE INDEX referencing a migrated column succeeds). Adding a column? Edit
+// schema.sql AND append an entry here — see CONTRIBUTING.md ("SQL"). Each `def`
+// MUST mirror the schema.sql column's DEFAULT/NOT NULL so legacy rows backfill
+// identically on upgrade. New TABLES need NO entry here: a fresh CREATE TABLE
+// applies to every DB; this bridge exists only for COLUMNS on tables that
+// already exist (which CREATE TABLE IF NOT EXISTS will not extend).
+export var migrations = [
     ["tasks", "blocked_by", "TEXT NOT NULL DEFAULT '[]'"],
     ["tasks", "blocks", "TEXT NOT NULL DEFAULT '[]'"],
     ["tasks", "needs_approval", "INTEGER NOT NULL DEFAULT 0"],
@@ -116,11 +101,47 @@ export function initDBConnection() {
     ["projects", "repo_path", "TEXT NOT NULL DEFAULT ''"],
     // Bounded self-heal: how many auto-retries a plan step has spent (retry policy).
     ["plan_steps", "attempt_count", "INTEGER NOT NULL DEFAULT 0"],
-  ];
+];
 
+// Apply every migration above to `db` as idempotent ALTER TABLE ADD COLUMN
+// statements (the "already exists" error is swallowed). Exported so the
+// legacy-upgrade path is testable against a hand-seeded old DB without booting
+// the whole server (test/unit/schema-migration-bridge.test.js). This is the REAL
+// apply loop initDBConnection runs — do NOT copy the list elsewhere; a second
+// copy rots (test/unit/schema-drift.test.js already carries a stale partial one).
+export function applyMigrations(db) {
   for (var [table, col, def] of migrations) {
     try { db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def); } catch (e) { /* already exists */ }
   }
+}
+
+// Composed initDB lives in the barrel (server/db.js): it calls initDBConnection()
+// then the three entity seeds + the log line. Splitting here keeps the module
+// graph a strict DAG — core never imports the entity modules that own the seeds.
+export function initDBConnection() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('foreign_keys = ON');
+
+  // Migration: rename game -> project_id columns BEFORE schema (which references project_id)
+  migrateGameToProjectId();
+
+  // Migration: rename dv_* tables to clean names BEFORE schema.sql runs
+  migrateTableNames(db);
+
+  // Upgrade bridges (idempotent). These run BEFORE schema.exec so that an OLD
+  // production DB — whose legacy CREATE TABLE bodies predate these columns — has
+  // the columns added before schema.sql's CREATE INDEX statements reference them.
+  // On a FRESH DB the target tables don't exist yet, so each guarded ALTER no-ops
+  // (the "already exists" miss is swallowed inside applyMigrations); schema.sql
+  // then creates fully-formed tables. The migrations array + applyMigrations() are
+  // exported at module scope (above) so the legacy-upgrade path is unit-testable
+  // directly — see test/unit/schema-migration-bridge.test.js.
+  applyMigrations(db);
 
   // Team columns upgrade bridge (idempotent). Same contract as the loop above:
   // on an OLD DB these add team_id / primary_team_id before schema.exec indexes
