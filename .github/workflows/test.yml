@@ -42,7 +42,8 @@ jobs:
         run: npm run audit
 
       # Coding-standards gate (jarvis docs/CODING-STANDARDS.md §3): correctness-
-      # focused eslint. Errors fail CI; warnings surface but don't block.
+      # focused eslint. Errors fail CI; warnings are capped at the current
+      # count (--max-warnings in package.json), so a new warning fails CI too.
       - name: Lint (eslint)
         run: npm run lint
 

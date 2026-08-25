@@ -26,7 +26,7 @@
     "test:plugins": "if ls server/plugins/*/test.js >/dev/null 2>&1; then node --test server/plugins/*/test.js; else echo 'No plugin test files found — skipping'; fi",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint server sdk test",
+    "lint": "eslint server sdk test --max-warnings 339",
     "lint:fix": "eslint server sdk test --fix",
     "audit": "npm audit --omit=dev --audit-level=high"
   },

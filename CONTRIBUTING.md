@@ -73,15 +73,16 @@ Especially open an issue first for:
 Mycelium lints with **ESLint** (`eslint.config.js`):
 
 ```bash
-npm run lint        # eslint server sdk test
+npm run lint        # eslint server sdk test --max-warnings <ceiling>
 npm run lint:fix    # same, with --fix
 ```
 
 CI runs `npm run lint` on every PR (`.github/workflows/test.yml`).
-**Errors fail the build; warnings do not.** The tree is currently clean on
-errors but carries ~320 warnings, so don't block a first PR on a warning-free
-lint — but anything that adds a new error (or turns a warning into one) will
-gate. The informal house style:
+**Errors fail the build**, and warnings are capped at a fixed ceiling (the
+`--max-warnings` value in `package.json`) so the count can only shrink — a
+PR that adds a new warning fails the build. The tree is currently clean on
+errors and sits at the ceiling on warnings, so don't block a first PR on a
+warning-free lint — just don't add new ones. The informal house style:
 
 - **JavaScript/Node.js** — 2-space indent, single quotes, semicolons.
   Async/await over raw promises. Prefer `const`; reach for `let`
