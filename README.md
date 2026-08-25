@@ -34,6 +34,7 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 - **Voice adapter** (`sdk/adapters/voice.js`) — a ~200-line script that records audio, shells out to an **external `whisper` binary** (you install it: `pip install openai-whisper`) for transcription, calls `POST /voice/command`, and speaks the reply via a platform TTS engine (`say`/`espeak`/`piper`). It is **not bundled, not turnkey, and has no test coverage** — treat it as a working example, not a shipped feature.
 - **Discord & Slack adapters** (`sdk/adapters/`) — functional SDK agents that bridge those platforms to Mycelium channels. Real, but bring your own bot tokens.
 - **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
+- **`appointments/` plugin** — staged foundation for an unbuilt "role-registry," **not loaded**. It has no `plugin.json`, so the loader skips it, `GET /plugins` doesn't list it, and it isn't counted among the built-in plugins. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
 
 ## Quick start
 
