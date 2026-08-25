@@ -742,7 +742,7 @@ function emitEvent(type, agentId, projectId, summary, data) {
   // DB, where createEvent stores it as a JSON string — so live broadcasts
   // re-stringify to match: every SSE consumer receives `data` as a JSON
   // *string* on both paths. "Fixing" this forks the live vs replay format
-  // and breaks existing clients. See docs/audit-2026-07-core-hardening.md.
+  // and breaks existing clients. See docs/specs/audit-2026-07-core-hardening.md.
   if (sseClients.size > 0) {
     var payload = 'data: ' + JSON.stringify({ ...eventObj, data: JSON.stringify(eventObj.data) }) + '\n\n';
     sseClients.forEach(function (client) {
