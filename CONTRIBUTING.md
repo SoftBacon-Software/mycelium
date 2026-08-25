@@ -199,3 +199,12 @@ maintainer, set the tone you want contributors to mirror.
 
 By contributing, you agree your contributions will be licensed under
 the same license as the project (see [`LICENSE`](./LICENSE)).
+
+## Runbooks & design docs
+
+Operational runbooks and landed design docs live outside `docs/`:
+
+- [Jetson deploy runbook](runbooks/jetson-deploy.md)
+- [Jetson legacy-file supersession](runbooks/jetson-legacy-file-supersession.md)
+- [Jetson orderly-deploy plan](superpowers/plans/2026-08-16-jetson-orderly-deploy.md)
+- [Jetson deploy design](superpowers/specs/2026-08-16-jetson-mycelium-deploy-design.md)
