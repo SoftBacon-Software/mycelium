@@ -56,6 +56,14 @@ function makeCore(db) {
     },
     apiError: apiError,
     parseIntParam: parseIntParam,
+    // Mirrors the pluginCore contract: routes.js destructures asyncHandler
+    // from core (routes/mycelium.js exports it via pluginCore since the
+    // crash-isolation work). Same body as production.
+    asyncHandler: function (fn) {
+      return function (req, res, next) {
+        Promise.resolve(fn(req, res, next)).catch(next);
+      };
+    },
     validateEnum: function () { return true; },
     emitEvent: function () {},
     onEvent: function (type, fn) {

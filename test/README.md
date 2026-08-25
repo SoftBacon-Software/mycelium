@@ -49,14 +49,24 @@ Three directories live under `test/`:
 
 `.github/workflows/test.yml` runs on every PR and push to `master`:
 
-1. `npm run lint` — ESLint over `server sdk test`. **Errors fail CI;
+1. `npm run audit` — dependency advisory gate.
+2. `npm run lint` — ESLint over `server sdk test`. **Errors fail CI;
    warnings don't** (the tree currently carries ~320 warnings, 0
    errors).
-2. `npm test` — the vitest suite (`smoke/` + `unit/` + the
-   vitest-wrapped `refactor/` gate).
-3. Plugin `node:test` suites at `server/plugins/*/test.js`.
+3. `npm test` — the vitest suite (`smoke/` + `unit/` + the
+   vitest-wrapped `refactor/` gate) **and** the plugin `node:test`
+   suites (via the chained `test:plugins` script).
+4. Plugin `node:test` suites at `server/plugins/*/test.js` again as a
+   dedicated step (belt-and-suspenders; same glob).
 
 A failing test or a lint error blocks the PR from merging.
+
+`npm test` exercises the same test surface CI grades: the vitest suite
+(`test/**/*.test.js`) **and** the plugin `node:test` suites
+(`server/plugins/*/test.js`). So a green local `npm test` matches
+CI on tests — no silent local-green ≠ CI-green gap. Lint stays a
+separate `npm run lint` step (it runs in CI too, but is not part of
+`npm test`).
 
 ## What's NOT tested yet
 

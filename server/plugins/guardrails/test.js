@@ -25,6 +25,10 @@ function makeCore(db) {
   return {
     db: db,
     _subscriptions: subscriptions,
+    // Mirrors the pluginCore contract: registerHooks hard-errors when
+    // core.app is missing (the blocking hook installs _guardrailsCheck on
+    // the express app — see handlers.js). A plain object is enough here.
+    app: {},
     auth: {
       checkAgentOrAdmin(req, res) {
         if (req.headers && req.headers['x-test-deny']) { res.status(401).json({ error: 'Authentication required' }); return false; }
