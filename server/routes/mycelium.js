@@ -1208,9 +1208,14 @@ var _generateEmbedding = null;
     _createMemoryDB = dbMod.default;
     var embedMod = await import('../plugins/semantic-memory/embeddings.js');
     _generateEmbedding = embedMod.generateEmbedding;
-    console.log('[mycelium] Smart boot dependencies loaded');
+    // Log to stderr, not stdout. This IIFE runs at module import, and
+    // test/refactor/route-manifest.mjs introspects the router by importing it.
+    // Any stdout here leaks into the manifest output, which a line-counting
+    // consumer (e.g. the endpoint-count gate) misreads as an extra route.
+    // Stderr is the right channel for diagnostics anyway.
+    console.error('[mycelium] Smart boot dependencies loaded');
   } catch (e) {
-    console.log('[mycelium] Smart boot deps not available (semantic-memory plugin not loaded):', e.message);
+    console.error('[mycelium] Smart boot deps not available (semantic-memory plugin not loaded):', e.message);
   }
 })();
 
