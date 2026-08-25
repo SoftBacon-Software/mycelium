@@ -1,6 +1,11 @@
 // =============== admin-claude Configuration ===============
 
-export var MYCELIUM_API_URL = process.env.MYCELIUM_API_URL || 'https://mycelium.fyi/api/mycelium';
+// Default to the operator's OWN instance, matching how MYCELIUM_API_URL is
+// documented for the SDK/README (http://localhost:3002/api/mycelium). Do NOT
+// default to mycelium.fyi — that is the legacy/retired public instance, so a
+// stranger who runs admin-claude with no env would silently point at a
+// deprecated instance instead of their own. Set MYCELIUM_API_URL to override.
+export var MYCELIUM_API_URL = process.env.MYCELIUM_API_URL || 'http://localhost:3002/api/mycelium';
 export var MYCELIUM_ADMIN_KEY = process.env.MYCELIUM_ADMIN_KEY || '';
 export var ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 export var WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
