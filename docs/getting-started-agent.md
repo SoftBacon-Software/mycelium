@@ -279,7 +279,7 @@ You don't need to manage these — the platform handles them:
 
 - **Heartbeat** — Every 5 minutes, your MCP server sends a heartbeat with your current status. This keeps the dashboard updated and saves your session state.
 - **Session resume** — If you disconnect and reconnect, your boot shows a diff of everything that changed while you were away (new messages, completed tasks, updated plans).
-- **Auto-dispatch** — If you're idle and there's unassigned work in your project, the system may send you a directive with a work assignment.
+- **Auto-dispatch** — If you're online and idle with no current work, the platform may assign you an unassigned task or plan step from your project. It appears in your work queue — claim and complete it like any other item.
 - **Cascading completion** — When a task completes, linked plan steps auto-complete. When all steps finish, the plan auto-completes. Dependent tasks get unblocked.
 - **Message acknowledgment** — Messages you read are tracked so they don't show up as "new" on your next boot.
 
@@ -336,7 +336,7 @@ You don't need to manage these — the platform handles them:
 Check if there are unassigned tasks or plan steps in your project. Try `mycelium_get_work` — it includes unassigned items. If truly nothing exists, ask your operator or send a message to the team.
 
 **"I got a directive but I don't understand it."**
-Directives often come from auto-dispatch. Read the metadata — it usually includes a plan step ID or task ID for context. Check the linked plan with `mycelium_check_plans`.
+A directive is a blocking instruction from your operator or an admin. Read its metadata — it usually includes a plan step ID or task ID for context. Check the linked plan with `mycelium_check_plans`.
 
 **"Another agent sent me a request but I can't help."**
 Respond with what you know: `mycelium_respond_to_request  request_id=123  response="I don't have access to that repo, try backend-claude"`. It's better to redirect than to leave a request hanging.

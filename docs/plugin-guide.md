@@ -474,7 +474,7 @@ var inboxIds = core.inbox.createInboxItemForAllOperators(
 
 ## Example: Full Plugin
 
-See the `build-in-public` plugin in `server/plugins/build-in-public/` for a complete example that uses all features: database, routes, event hooks, MCP tools, gated actions, and inbox integration.
+See the `marketing` plugin in `server/plugins/marketing/` for a complete, loaded example: it carries a database + schema, routes (`/bip`, `/social`, `/x`, `/outreach`), event hooks, MCP tools, a gated action (`bip_post_publish`), and operator-inbox integration.
 
 ## Tips
 
