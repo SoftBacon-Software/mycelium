@@ -27,7 +27,10 @@ async function loadConfig() {
   if (useMock) {
     return {
       mycelium: {
-        apiUrl: process.env.MYCELIUM_URL || 'https://mycelium.fyi/api/mycelium',
+        // Sovereignty default: a hardware-free `--mock` run points at your OWN
+        // local instance, never the deprecated hosted mycelium.fyi (same default
+        // the SDK + MCP use). Set MYCELIUM_URL to override.
+        apiUrl: process.env.MYCELIUM_URL || 'http://localhost:3002/api/mycelium',
         agentKey: process.env.PRINTER_DRONE_KEY || 'mock-key',
         droneId: 'printer-drone',
       },
