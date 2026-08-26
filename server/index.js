@@ -25,6 +25,7 @@ import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
 import { resolveTrustProxy } from './lib/trust-proxy.js';
+import { createTurnCredentialIssuer } from './lib/turn-secret.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 import { routeUsageCounter } from './lib/route-usage.js';
 
@@ -62,8 +63,12 @@ if (!process.env.ADMIN_KEY || !process.env.JWT_SECRET) {
   console.error('FATAL: ADMIN_KEY and JWT_SECRET must be set');
   process.exit(1);
 }
-if (!process.env.TURN_SECRET) {
-  console.warn('[mycelium] TURN_SECRET not set — using default OpenRelay secret. Set TURN_SECRET env var for production.');
+// Resolved ONCE here — every TURN credential this boot issues is keyed by the
+// same secret. Never re-resolve per request (per-boot stability is the
+// contract; see lib/turn-secret.js).
+var turnCredentials = createTurnCredentialIssuer(process.env);
+if (turnCredentials.generated) {
+  console.warn('[mycelium] TURN_SECRET not set — generated a per-boot random TURN credential secret. Credentials from this boot will NOT authenticate against external TURN relays until TURN_SECRET is set to the relay\'s shared secret.');
 }
 
 // Initialize database
@@ -279,12 +284,9 @@ app.get('/api/voice/peers', function (req, res) {
 
 app.get('/api/voice/turn-credentials', function (req, res) {
   if (!checkVoiceAuth(req, res)) return;
-  var secret = process.env.TURN_SECRET || 'openrelayprojectsecret';
-  var expiry = Math.floor(Date.now() / 1000) + 24 * 3600;
-  var username = expiry + ':studiouser';
-  var hmac = crypto.createHmac('sha1', secret);
-  hmac.update(username);
-  var credential = hmac.digest('base64');
+  var creds = turnCredentials.issue(Date.now());
+  var username = creds.username;
+  var credential = creds.credential;
   res.json({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
