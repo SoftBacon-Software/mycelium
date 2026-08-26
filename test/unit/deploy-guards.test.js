@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest'
 import {
   assertDeployableTag,
+  assertBoxResolvesTag,
   parseDriftVerdict,
   renderDeployedVersion,
   decideRollback,
@@ -119,5 +120,89 @@ describe('renderDeployedVersion', () => {
     })
     expect(out).toMatch(/git is the truth/)
     expect(out).toMatch(/do not hand-edit/)
+  })
+})
+
+describe('assertBoxResolvesTag', () => {
+  // 2026-08-26: an annotated tag existed only on the Mac. Every local guard
+  // passed, backups ran, the service was STOPPED — and only then did the box
+  // fail with "couldn't find remote ref". The lsRemote input here must be the
+  // output of `ssh box "cd tree && git ls-remote origin refs/tags/T refs/tags/T^{}"`
+  // — asked ON the box, against ITS origin — because only the box's view of the
+  // tag decides whether the later fetch can succeed.
+  const NAME = 'deploy-2026-08-26'
+  const COMMIT = '882bd19d8cf9c5dcab03df68afac5ed64c17023c'
+  const TAGOBJ = 'f5be5069e216278fd0458bec64fbb369c7dcf664'
+  const annotated =
+    `${TAGOBJ}\trefs/tags/${NAME}\n` +
+    `${COMMIT}\trefs/tags/${NAME}^{}\n`
+
+  test("empty output is THE 2026-08-26 failure — an unpushed tag must be refused before any mutation", () => {
+    // git ls-remote exits 0 with empty stdout when the ref does not exist, so
+    // only the parse can refuse this. The exit code is not a guard.
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: '' }))
+      .toThrow(/push/i)
+  })
+
+  test('whitespace-only output is refused the same way', () => {
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: '\n  \n' }))
+      .toThrow(/push/i)
+  })
+
+  test('accepts an annotated tag whose peeled commit matches the local tag', () => {
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: annotated }))
+      .not.toThrow()
+  })
+
+  test('refuses when the remote tag peels to a DIFFERENT commit, naming both shas', () => {
+    // The fetch is forced (+refs/tags/...), so the box would silently deploy
+    // whatever the remote holds — not what the local guards just validated.
+    const drifted =
+      `${TAGOBJ}\trefs/tags/${NAME}\n` +
+      `aaaa000000000000000000000000000000000000\trefs/tags/${NAME}^{}\n`
+    let err
+    try { assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: drifted }) } catch (e) { err = e }
+    expect(err).toBeDefined()
+    expect(err.message).toContain(COMMIT)
+    expect(err.message).toContain('aaaa000000000000000000000000000000000000')
+  })
+
+  test('refuses a lightweight remote tag even at the right commit', () => {
+    // No ^{} line means the remote object IS the commit — a lightweight tag.
+    // The annotated-tag rule holds for what the box will actually fetch.
+    const lightweight = `${COMMIT}\trefs/tags/${NAME}\n`
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: lightweight }))
+      .toThrow(/annotated/i)
+  })
+
+  test('error text from a failed remote query is refused, not parsed as success', () => {
+    expect(() => assertBoxResolvesTag({
+      name: NAME, localCommit: COMMIT,
+      lsRemote: 'fatal: unable to access https://github.com/...: Could not resolve host\n',
+    })).toThrow(/cannot resolve/i)
+  })
+
+  test('only the EXACT ref counts — a near-miss tag name does not resolve this one', () => {
+    const nearMiss =
+      `${TAGOBJ}\trefs/tags/${NAME}-rc\n` +
+      `${COMMIT}\trefs/tags/${NAME}-rc^{}\n`
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: COMMIT, lsRemote: nearMiss }))
+      .toThrow(/push/i)
+  })
+
+  test('output with shell metacharacters is data, not code', () => {
+    // Like the porcelain input, lsRemote arrives through the environment and
+    // nothing may evaluate it.
+    expect(() => assertBoxResolvesTag({
+      name: NAME, localCommit: COMMIT,
+      lsRemote: '`whoami`\trefs/tags/${HOME}\n',
+    })).toThrow(/push/i)
+  })
+
+  test('a missing name or local commit is refused outright', () => {
+    expect(() => assertBoxResolvesTag({ name: '', localCommit: COMMIT, lsRemote: annotated }))
+      .toThrow(/name/)
+    expect(() => assertBoxResolvesTag({ name: NAME, localCommit: '', lsRemote: annotated }))
+      .toThrow(/commit/i)
   })
 })

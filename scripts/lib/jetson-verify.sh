@@ -34,13 +34,17 @@ fi
 
 # 2. mDNS advertiser — the capability that dies quietly.
 #
-# Match an actual "Add" RECORD, not merely the service name. dns-sd echoes what
-# it is browsing for in its own header ("Browsing for _mycelium._tcp.local"), so
-# a naive `grep "$MDNS_SERVICE"` matches its own query and can NEVER fail. That
-# version was written first and caught by browsing a service nobody advertises;
-# it still reported ok. A gate that greps its own input is not a gate.
-if dns-sd -t 8 -B "$MDNS_SERVICE" local 2>/dev/null \
-     | grep -qE "^[0-9:. ]+Add[[:space:]]+.*${MDNS_SERVICE}"; then
+# Delegated to mdns-wait.sh: condition-based waiting with a bounded deadline
+# (MDNS_DEADLINE_S, default 45s). A single fixed browse window raced avahi on
+# 2026-08-26 — seconds after a restore's `systemctl start` it reported
+# mdns=FAIL over a restore that had succeeded, and the deploy script printed
+# "RESTORE FAILED — INTERVENE" for nothing. The wait passes the moment an Add
+# record appears and still goes red for a genuinely absent advertiser once the
+# deadline expires. It also keeps the older lesson: match an actual "Add"
+# RECORD, never the header that echoes the query — a gate that greps its own
+# input can NEVER fail. Its diagnostics go to stderr; stdout here stays the
+# name=ok/name=FAIL contract the deploy script parses.
+if bash "$(cd "$(dirname "$0")" && pwd)/mdns-wait.sh" "$MDNS_SERVICE"; then
   report mdns ok
 else
   report mdns FAIL
