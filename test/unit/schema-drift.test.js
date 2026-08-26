@@ -106,7 +106,7 @@ describe('Schema Drift Test', () => {
     
     // Combine all migrations into one list of [table, column] pairs
     const allMigrations = [
-      ...migrations.map(([table, column, def]) => [table, column]),
+      ...migrations.map(([table, column, _def]) => [table, column]),
       ...teamColumns.map(([table, column]) => [table, column])
     ];
 

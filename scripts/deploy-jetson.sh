@@ -30,6 +30,29 @@ node --input-type=module -e "
   console.log('guard ok: ${TAG}')
 "
 
+# The local guard cannot speak for the box. On 2026-08-26 an annotated tag that
+# existed only on this Mac passed every check above, backups ran, the service
+# was STOPPED — and only then did the box's fetch die on "couldn't find remote
+# ref". Ask the BOX to resolve the tag from ITS origin (the exact remote the
+# fetch in step 4 will contact) before anything is touched. Note ls-remote
+# exits 0 with EMPTY output for a missing ref, so the ssh exit code alone
+# proves nothing — the parse in assertBoxResolvesTag is the guard.
+say "guard: box resolves $TAG"
+LOCAL_COMMIT="$(git rev-parse "$TAG^{commit}")"
+if ! LS_REMOTE="$(ssh "$BOX" "cd $TREE && git ls-remote origin 'refs/tags/${TAG}' 'refs/tags/${TAG}^{}'" 2>&1)"; then
+  echo "REFUSING: cannot ask $BOX to resolve $TAG from its origin:" >&2
+  echo "$LS_REMOTE" | sed 's/^/  /' >&2
+  echo "The step-4 fetch would hit the same wall — with the service down." >&2
+  exit 1
+fi
+# Passed through the ENVIRONMENT, never interpolated into the JS source, same
+# as the porcelain output below: remote refs are untrusted data.
+LS_REMOTE="$LS_REMOTE" node --input-type=module -e "
+  import { assertBoxResolvesTag } from '${HERE}/lib/deploy-guards.js'
+  assertBoxResolvesTag({ name: '${TAG}', localCommit: '${LOCAL_COMMIT}', lsRemote: process.env.LS_REMOTE || '' })
+  console.log('box resolves ${TAG} -> ${LOCAL_COMMIT}')
+"
+
 # --- 2. refuse a dirty box ---------------------------------------------------
 # That drift is somebody's undeployed work. Overwriting it silently is how the
 # 08-07 files got lost track of in the first place.

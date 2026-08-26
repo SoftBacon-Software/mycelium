@@ -35,6 +35,77 @@ export function assertDeployableTag({ objectType, isAncestorOfMaster, name }) {
 }
 
 /**
+ * Refuse a tag the BOX cannot resolve — before anything is touched.
+ *
+ * The local guard above cannot speak for the remote checkout: on 2026-08-26 an
+ * annotated tag that existed only on the Mac passed every local check, backups
+ * ran, the service was STOPPED, and only then did the box's fetch die with
+ * "couldn't find remote ref". The abort trap restored, but the substrate was
+ * down for a fault that was knowable before any mutation.
+ *
+ * `lsRemote` must be the output of
+ *   ssh box "cd tree && git ls-remote origin refs/tags/T 'refs/tags/T^{}'"
+ * asked ON the box against ITS origin — the exact remote the later fetch will
+ * contact. Three facts about that output (pinned in a scratch repo and against
+ * jetson01 itself):
+ *   - a missing ref is EMPTY stdout with EXIT 0, so only this parse can refuse
+ *     an unpushed tag; the exit code is not a guard
+ *   - an annotated tag is two lines: "<tagsha>\trefs/tags/T" + "<commitsha>\trefs/tags/T^{}"
+ *   - a lightweight tag has no ^{} line (its ref sha IS the commit)
+ *
+ * The peeled commit must equal the LOCAL tag's commit: the fetch is forced
+ * (+refs/tags/...), so on a name collision the box would silently deploy
+ * whatever the remote holds, not what the local guards just validated.
+ *
+ * Like the porcelain input, `lsRemote` is untrusted DATA passed through the
+ * environment; nothing here evaluates it.
+ *
+ * @param {{name: string, localCommit: string, lsRemote: string|null|undefined}} target
+ * @throws {Error} when the box could not deploy this tag
+ */
+export function assertBoxResolvesTag({ name, localCommit, lsRemote }) {
+  if (!name) {
+    throw new Error('remote tag guard: name is required')
+  }
+  if (!localCommit) {
+    throw new Error(`remote tag guard ${name}: localCommit is required`)
+  }
+  const rows = (lsRemote || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+    .map((l) => l.split(/\s+/))
+    .filter((cols) => cols.length === 2)
+  const exact = rows.find(([, ref]) => ref === `refs/tags/${name}`)
+  const peeled = rows.find(([, ref]) => ref === `refs/tags/${name}^{}`)
+  if (!exact) {
+    const extra = (lsRemote || '').trim()
+    throw new Error(
+      `deploy target ${name}: the box cannot resolve refs/tags/${name} from its ` +
+      'origin (ls-remote returned no matching ref' +
+      (extra ? `; it said: ${extra}` : '') + '). ' +
+      `An unpushed tag passes every local guard and then kills the deploy AFTER ` +
+      `the service is stopped — push it first: git push origin ${name}`
+    )
+  }
+  if (!peeled) {
+    throw new Error(
+      `deploy target ${name}: the remote tag is LIGHTWEIGHT (no ^{} peel line). ` +
+      'The box fetches the REMOTE object, so the annotated-tag rule must hold ' +
+      `there too. Push the annotated tag: git push -f origin ${name}`
+    )
+  }
+  if (peeled[0] !== localCommit) {
+    throw new Error(
+      `deploy target ${name}: the remote tag peels to ${peeled[0]} but the local ` +
+      `tag peels to ${localCommit}. The forced fetch would make the box deploy ` +
+      'the REMOTE version — not what these guards just validated. Reconcile the ' +
+      'tags deliberately before deploying.'
+    )
+  }
+}
+
+/**
  * Turn `git status --porcelain` output into a drift verdict.
  *
  * Input is untrusted DATA — filenames may contain backticks or ${...}. It is
