@@ -171,7 +171,7 @@ describe('docs inventory accuracy', () => {
     // the doc is lying again. Sourced from the 2026-08-06 reconciliation.
     const stale = [
       [/291/, `the endpoint count is ${ROUTE_COUNT}, not 291`],
-      [/57\s+tables/i, `the table count is ${TABLE_COUNT}, not 57`],
+      [/56\s+tables/i, `the table count is ${TABLE_COUNT}, not 56 (x_read_ledger added 2026-08-29)`],
       [/150\+/, '"150+" tests was retired'],
       [/40\s+files/, `the test-file count is ${TEST_FILE_COUNT}, not 40`],
       [/no linter/i, 'ESLint is configured (eslint.config.js) and runs in CI'],

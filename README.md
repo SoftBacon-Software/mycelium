@@ -163,7 +163,7 @@ Internal/dev-only (no need to set when deploying): `MYCELIUM_WEBHOOK_ALLOW_LOOPB
 server/
   index.js              # Express app + WebSocket
   db.js                 # SQLite (better-sqlite3, WAL mode)
-  schema.sql            # full base schema (56 tables; plugins add their own)
+  schema.sql            # full base schema (57 tables; plugins add their own)
   routes/               # 285 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
   plugins/              # plugin system (13 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
@@ -179,7 +179,7 @@ public/                 # pre-built static site (served at /)
 docker-compose.yml · Dockerfile
 ```
 
-**Stack:** Express.js, better-sqlite3 (WAL), plain Node. Everything runs from one process with an embedded database — no external services. The base schema has 56 tables (agents, tasks, plans, messages, channels, approvals, drones, concepts, versioned context, bugs, assets, plugins, operators, events, spend, widgets, skills, teams, profiles); plugins create more at boot.
+**Stack:** Express.js, better-sqlite3 (WAL), plain Node. Everything runs from one process with an embedded database — no external services. The base schema has 57 tables (agents, tasks, plans, messages, channels, approvals, drones, concepts, versioned context, bugs, assets, plugins, operators, events, spend, widgets, skills, teams, profiles); plugins create more at boot.
 
 An earlier React dashboard (`studio-react/`) was retired in June 2026; the operator UI is now a native macOS app ([`mycelium-app`](https://github.com/SoftBacon-Software/mycelium-app), separate repo, in development). References to `/studio` in old docs point to the retired one.
 
@@ -206,7 +206,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-90 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+91 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 

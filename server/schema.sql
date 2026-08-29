@@ -925,3 +925,14 @@ CREATE TABLE IF NOT EXISTS bip_drafts (
 CREATE INDEX IF NOT EXISTS idx_bip_drafts_status ON bip_drafts(status);
 CREATE INDEX IF NOT EXISTS idx_bip_drafts_event ON bip_drafts(trigger_event);
 CREATE INDEX IF NOT EXISTS idx_bip_drafts_created ON bip_drafts(created_at DESC);
+
+-- X read-side quota ledger (2026-08-29): every read API call is recorded;
+-- the /x/mentions and /x/read routes REFUSE past the monthly cap (fail-closed
+-- budget against tier quotas; plugin_config key read_monthly_cap, default 90).
+CREATE TABLE IF NOT EXISTS x_read_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  called_at TEXT NOT NULL DEFAULT (datetime('now')),
+  endpoint TEXT NOT NULL,
+  http_status INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_x_read_ledger_at ON x_read_ledger(called_at);

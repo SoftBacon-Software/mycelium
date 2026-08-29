@@ -7,6 +7,16 @@ export default function createXDB(db) {
   }
 
   return {
+    recordRead(endpoint, status) {
+      stmt('xReadRec', "INSERT INTO x_read_ledger (endpoint, http_status) VALUES (?, ?)").run(endpoint, status == null ? null : status);
+    },
+
+    monthReadCount() {
+      return stmt('xReadCount',
+        "SELECT COUNT(*) AS n FROM x_read_ledger WHERE called_at >= datetime('now', 'start of month')"
+      ).get().n;
+    },
+
     createPost(fields) {
       var result = stmt('xCreate',
         "INSERT INTO x_posts (project_id, tweet_text, thread_id, thread_position, source, source_id, status, posted_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"

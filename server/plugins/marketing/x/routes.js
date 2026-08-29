@@ -4,13 +4,87 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import createXDB from './db.js';
-import { sendTweet, getCredentials } from './twitter.js';
+import { sendTweet, getCredentials, getMe, getMentions, getTweet, searchConversation } from './twitter.js';
 // Note: crypto still needed for thread UUID generation
 
 export default function (core) {
   var router = Router();
   var db = createXDB(core.db);
   var { apiError, parseIntParam } = core;
+
+
+  // ── Read side (2026-08-29): mentions + thread reading, quota-guarded ──
+  // Fail-closed monthly budget: every upstream call is ledgered; past the cap
+  // the route refuses WITH the ledger state (a refusal must carry its receipt).
+
+  function readBudget(res) {
+    var cap = parseInt(db.getConfig ? (db.getConfig('read_monthly_cap') || '90') : '90', 10);
+    var used = db.monthReadCount();
+    if (used >= cap) {
+      res.status(429).json(apiError('x read budget exhausted: ' + used + '/' + cap +
+        " this month (plugin_config key 'read_monthly_cap' raises it)"));
+      return null;
+    }
+    return { cap: cap, used: used };
+  }
+
+  function credsOr402(res) {
+    var creds = getCredentials(core.db);
+    if (!creds) { res.status(402).json(apiError('x credentials not configured')); return null; }
+    return creds;
+  }
+
+  // GET /x/mentions — pull the mentions timeline (since the stored watermark)
+  router.get('/mentions', function (req, res) {
+    var budget = readBudget(res); if (!budget) return;
+    var creds = credsOr402(res); if (!creds) return;
+
+    function withUserId(next) {
+      var row = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'x-posting' AND key = 'own_user_id'").get();
+      if (row && row.value) return next(row.value);
+      getMe(creds).then(function (me) {
+        db.recordRead('users/me', me.status);
+        if (me.status !== 200 || !me.data || !me.data.data) {
+          return res.status(502).json(apiError('users/me failed (' + me.status + '): ' + JSON.stringify(me.data).slice(0, 300)));
+        }
+        core.db.prepare("INSERT OR REPLACE INTO plugin_config (plugin_name, key, value) VALUES ('x-posting', 'own_user_id', ?)").run(me.data.data.id);
+        next(me.data.data.id);
+      }).catch(function (e) { res.status(502).json(apiError('users/me error: ' + e.message)); });
+    }
+
+    withUserId(function (uid) {
+      var wm = core.db.prepare("SELECT value FROM plugin_config WHERE plugin_name = 'x-posting' AND key = 'mentions_since_id'").get();
+      getMentions(uid, creds, req.query.all === '1' ? null : (wm && wm.value)).then(function (r) {
+        db.recordRead('mentions', r.status);
+        if (r.status !== 200) {
+          return res.status(502).json(apiError('mentions failed (' + r.status + '): ' + JSON.stringify(r.data).slice(0, 300)));
+        }
+        var tweets = (r.data && r.data.data) || [];
+        if (tweets.length) {
+          core.db.prepare("INSERT OR REPLACE INTO plugin_config (plugin_name, key, value) VALUES ('x-posting', 'mentions_since_id', ?)").run(tweets[0].id);
+        }
+        res.json({ mentions: tweets, includes: (r.data && r.data.includes) || {}, budget: { used: budget.used + 1, cap: budget.cap } });
+      }).catch(function (e) { res.status(502).json(apiError('mentions error: ' + e.message)); });
+    });
+  });
+
+  // GET /x/read/:tweetId — one tweet + best-effort thread (tier decides search)
+  router.get('/read/:tweetId', function (req, res) {
+    var budget = readBudget(res); if (!budget) return;
+    var creds = credsOr402(res); if (!creds) return;
+    getTweet(req.params.tweetId, creds).then(function (t) {
+      db.recordRead('tweet', t.status);
+      if (t.status !== 200) {
+        return res.status(502).json(apiError('tweet lookup failed (' + t.status + '): ' + JSON.stringify(t.data).slice(0, 300)));
+      }
+      var convo = t.data && t.data.data && t.data.data.conversation_id;
+      if (!convo || req.query.thread === '0') return res.json({ tweet: t.data, thread: null });
+      searchConversation(convo, creds).then(function (th) {
+        db.recordRead('search', th.status);
+        res.json({ tweet: t.data, thread: th.status === 200 ? th.data : { unavailable: true, status: th.status, detail: JSON.stringify(th.data).slice(0, 200) } });
+      }).catch(function () { res.json({ tweet: t.data, thread: { unavailable: true } }); });
+    }).catch(function (e) { res.status(502).json(apiError('tweet error: ' + e.message)); });
+  });
 
   // ── Draft Management ──
 
