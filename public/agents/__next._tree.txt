@@ -5,7 +5,6 @@
 :HL["/squad/lucy/lucy-hero.png","image"]
 :HL["/squad/echo/echo-hero.png","image"]
 :HL["/squad/scout/scout-hero.png","image"]
-:HL["/squad/merlin/merlin-hero.png","image"]
 :HL["/squad/piper/piper-hero.png","image"]
 :HL["/squad/aria/aria-hero.jpg","image"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"wD8x_luI2_Po4stjlUFr_"}
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"agents","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"Vp0S2QloVIp0EmXep8T7P"}
