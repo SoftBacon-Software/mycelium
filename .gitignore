@@ -32,3 +32,4 @@ public/avatars/*
 # Artifact of the 2026-08-16 conversion: the old broken worktree pointer, kept
 # on the box as a safety net.
 /.git.broken-pointer.bak
+.claude/worktrees/
