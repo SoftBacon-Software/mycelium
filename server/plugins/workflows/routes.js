@@ -22,9 +22,14 @@ export default function (core) {
   }
 
   // POST /workflows — fire a workflow. Body: { name, spec:{invocations:[...]},
-  // shape?, project_id? }. Validation mirrors workflow_scheduler.schedule
+  // shape?, params?, project_id? }. Validation mirrors workflow_scheduler.schedule
   // (duplicate ids / unknown deps / cycles) so a runner never claims an
-  // unschedulable record.
+  // unschedulable record. shape:'repair' additionally requires spec.params —
+  // checked HERE, at fire time, because the defect is provable from the record
+  // alone: the runner can only reject it at claim time, after the workflow has
+  // sat in PENDING behind whatever the preflight was waiting on (wf380 lost an
+  // hour that way). The message is the runner's own _parse_repair_params text
+  // so a caller sees the same words whichever layer catches it.
   router.post('/', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
@@ -37,6 +42,10 @@ export default function (core) {
     if (!spec || typeof spec !== 'object') return apiError(res, 400, 'spec object (or top-level invocations array) is required');
     var invalid = validateInvocations(spec.invocations);
     if (invalid) return apiError(res, 400, invalid);
+    if (String(req.body.shape || '').toLowerCase() === 'repair' &&
+        (!spec.params || typeof spec.params !== 'object' || Array.isArray(spec.params))) {
+      return apiError(res, 400, 'repair shape requires spec.params (dict)');
+    }
     var id = db.createWorkflow(name, req.body.shape, spec, req.body.project_id, who);
     core.emitEvent('workflow_created', who, req.body.project_id || '',
       who + ' fired workflow: ' + name + ' (' + spec.invocations.length + ' invocations)',

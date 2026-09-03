@@ -16,7 +16,11 @@
         },
         "shape": {
           "type": "string",
-          "description": "Display label: fanout | pipeline | repair | custom (default custom)"
+          "description": "fanout | pipeline | repair | custom (default custom). repair is RUNNER-EXECUTED: it requires params and runs the bounded code→verify→replan loop, where gate_cmd (not a model verdict) decides each round."
+        },
+        "params": {
+          "type": "object",
+          "description": "spec.params. REQUIRED for shape:'repair' — {task_brief, verify_brief, coder:{agent,model}, verifier:{agent,model}, planner?:{agent,model}, max_rounds?, gate_cmd?, gate_cwd?}. The request is rejected at fire time without it. Optional on any shape: max_iter (per-agent turn cap), wall_timeout_s (per-workflow)."
         },
         "project_id": {
           "type": "string",

@@ -363,3 +363,86 @@ test('status: terminal workflow rejects field-only mutation', async function () 
   assert.equal(mutate2.status, 400);
   assert.match(mutate2.body.error, /terminal/);
 });
+
+// (d) shape:'repair' requires spec.params — rejected AT FIRE TIME with the
+// runner's own message, so the defect never reaches the runner's claim seam
+// (wf380: a param-less repair sat PENDING behind the runner's preflight for an
+// hour before dying there).
+test('create: repair without spec.params is rejected 400 at fire time', async function () {
+  var body = {
+    name: 'repair: no params',
+    shape: 'repair',
+    spec: { invocations: [{ id: 'repair', agent: 'lucy', brief: '(loop)', deps: [] }] }
+  };
+  var r = await call('POST', '/workflows', body);
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /repair shape requires spec\.params/);
+
+  // a non-object params is the same defect
+  var arr = await call('POST', '/workflows', Object.assign({}, body, {
+    spec: { invocations: body.spec.invocations, params: ['nope'] }
+  }));
+  assert.equal(arr.status, 400);
+  assert.match(arr.body.error, /repair shape requires spec\.params/);
+
+  // case-insensitive on the shape label
+  var upper = await call('POST', '/workflows', Object.assign({}, body, { shape: 'Repair' }));
+  assert.equal(upper.status, 400);
+
+  // the flat MCP-tool form (top-level invocations/params) is validated the same
+  var flat = await call('POST', '/workflows', {
+    name: 'repair: flat, no params',
+    shape: 'repair',
+    invocations: [{ id: 'repair', agent: 'lucy', brief: '(loop)', deps: [] }]
+  });
+  assert.equal(flat.status, 400);
+  assert.match(flat.body.error, /repair shape requires spec\.params/);
+});
+
+// (e) repair WITH params (the flat MCP-tool form) round-trips into spec.params
+// — the runner executes the loop from there, so the field must survive.
+test('create: repair with params fires 200 and lands in spec.params', async function () {
+  var params = {
+    task_brief: 'Fix the ordering bug.',
+    verify_brief: 'PASS only if the check fails on a shuffled list.',
+    coder: { agent: 'lucy', model: 'qwen' },
+    verifier: { agent: 'echo', model: 'qwen' },
+    gate_cmd: 'bash tools/summon_gate.sh',
+    gate_cwd: '/tmp/repo'
+  };
+  var r = await call('POST', '/workflows', {
+    name: 'repair: gated',
+    shape: 'repair',
+    invocations: [
+      { id: 'repair', agent: 'lucy', brief: '(repair loop)', deps: [] },
+      { id: 'verify', agent: 'echo', brief: '(repair loop)', deps: ['repair'] }
+    ],
+    params: params
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.workflow.status, 'pending');
+  var full = (await call('GET', '/workflows/' + r.body.workflow.id)).body;
+  assert.deepEqual(full.spec.params, params);
+  assert.equal(full.shape, 'repair');
+
+  // the canonical {spec:{params}} form round-trips identically
+  var canon = await call('POST', '/workflows', {
+    name: 'repair: canonical form',
+    shape: 'repair',
+    spec: { invocations: [{ id: 'repair', agent: 'lucy', brief: '(loop)', deps: [] }],
+            params: params }
+  });
+  assert.equal(canon.status, 200);
+  var canonFull = (await call('GET', '/workflows/' + canon.body.workflow.id)).body;
+  assert.deepEqual(canonFull.spec.params, params);
+
+  // params are OPTIONAL on a non-repair shape (flat form — optional tuning only)
+  var other = await call('POST', '/workflows', {
+    name: 'fanout with params', shape: 'fanout',
+    invocations: [{ id: 'w0', agent: 'scout', brief: 'research A', deps: [] }],
+    params: { max_iter: 8 }
+  });
+  assert.equal(other.status, 200);
+  var otherFull = (await call('GET', '/workflows/' + other.body.workflow.id)).body;
+  assert.deepEqual(otherFull.spec.params, { max_iter: 8 });
+});
