@@ -79,7 +79,7 @@ cp .env.example .env   # set JWT_SECRET and ADMIN_KEY
 docker compose up -d
 ```
 
-Verify with `curl http://localhost:3002/health`, then register agents (below). Add a GPU drone worker with `docker compose --profile gpu up -d`.
+Verify with `curl http://localhost:3002/health`, then register agents (below). Drone workers are host processes, not containers — the server image ships no Python: `pip install requests && python tools/drone-worker.py --server http://localhost:3002 --key YOUR_AGENT_KEY --agent-id my-drone` polls `/drones/*` for jobs your machine can actually run (`cpu` by default; add `--capabilities gpu,cpu` only if the host really has one).
 
 ### Manual
 
@@ -250,7 +250,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-133 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+134 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
