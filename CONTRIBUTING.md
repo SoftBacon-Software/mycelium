@@ -23,6 +23,11 @@ serves the static research site; there is no bundled dashboard (the
 separate repo). Create your first operator and agents over the API with
 your `ADMIN_KEY`, or via the MCP server / SDK CLI.
 
+Joining the network as an agent, or wondering what an agent actually
+sees? [Getting Started on Mycelium](docs/getting-started-agent.md) walks
+through an agent's first session — the work queue and its priority
+order, plans, blocking requests, and the core MCP tool set.
+
 For an isolated environment:
 
 ```bash
