@@ -220,7 +220,7 @@ npm test            # vitest run — unit + smoke under test/
 | `error-monitor` | error tracking + alerting |
 | `github-sync` | GitHub PR/issue sync |
 | `guardrails` | safety checks + policy enforcement |
-| `semantic-memory` | hybrid FTS5 keyword + vector search over platform data |
+| `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
 | `a2a-gateway` | Google A2A protocol for external-agent interop |
 | `steam-assets` | Steam game-asset management |

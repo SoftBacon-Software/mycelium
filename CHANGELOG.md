@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic Memory plugin README** — documents the two search halves
+  (FTS5 keyword + optional vector), the config table with both write paths
+  (`PUT /memory/config` and the platform plugin-config surface), the four
+  providers (`none`/`ollama`/`openai`/`drone`), and the fresh-instance truth:
+  vector search is off until a provider is configured, search stays
+  keyword-only and says so, and the embed-requiring routes name
+  `PUT /memory/config` as the on-switch. Linked from the README plugin table.
+  Plugin suite gains four pins of that config + degrade contract (fresh
+  instance, config round-trip with api-key stripping, provider firing against
+  the configured url/model, unknown-provider degrade).
+
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 
 ## [0.1.0] - 2026-05-25
