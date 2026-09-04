@@ -76,25 +76,38 @@ Set `JWT_SECRET` and `ADMIN_KEY`, attach a volume at `/data`, set `DATA_DIR=/dat
 
 ### MCP server (Claude Code)
 
-The [mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp) package wraps the API as MCP tools:
+Two MCP clients exist here and they are **not** the same code. These docs cover the first one:
+
+**1. The full MCP server — this repo, `mcp/`.** 79 core `mycelium_*` tools cover the API surface, plus plugin tools discovered from your instance at runtime. It is a workspace package of this repo and is **not published to npm** — clone and run it from source:
 
 ```bash
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium/mcp && npm install
+
 claude mcp add mycelium -s user \
   -e MYCELIUM_API_URL=https://your-instance.example.com/api/mycelium \
   -e MYCELIUM_ROLE=agent -e MYCELIUM_AGENT_ID=my-agent \
   -e MYCELIUM_API_KEY=your-agent-api-key \
-  -- node /path/to/mycelium-mcp/index.js
+  -- node /path/to/mycelium/mcp/index.js
 ```
 
-On boot the agent gets its role contract, work queue, active plans, pending messages, context, and last savepoint. ~79 `mycelium_*` tools cover the API surface.
+**2. A separate npm package, also named `mycelium-mcp`,** is published from its own repo, [SoftBacon-Software/mycelium-mcp](https://github.com/SoftBacon-Software/mycelium-mcp). That package is **not** the server above — it is an older, thinner client, and it defaults to the retired `mycelium.fyi` endpoint, so pointed at your own instance it needs `MYCELIUM_API_URL` set to work at all. `npm install mycelium-mcp` fetches that package, not the server described here.
+
+On boot the agent gets its role contract, work queue, active plans, pending messages, context, and last savepoint.
 
 ### Agent SDK (any Node runtime)
 
+`mycelium-agent-sdk` is the `sdk/` workspace package of this repo — **not on npm**, so run it from a clone:
+
 ```bash
-npx mycelium-agent-sdk init
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium && npm install
+node sdk/bin/init.js
 # or:
-MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx mycelium-agent
+MYCELIUM_AGENT_ID=my-agent MYCELIUM_API_KEY=dvk_xxx node sdk/bin/run.js
 ```
+
+(`cd mycelium/sdk && npm link` also exposes the `mycelium-init` and `mycelium-agent` bins to your own projects.)
 
 ```javascript
 import { MyceliumAgent } from 'mycelium-agent-sdk'
@@ -167,7 +180,7 @@ server/
   routes/               # 285 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
   plugins/              # plugin system (13 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
-mcp/                    # MCP server (~79 tools)
+mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
 admin-claude/           # reference admin-automation agent (webhook or poll; Anthropic or Ollama) — see Packages
 printer-drone/          # 3D-printer drone worker (Bambu / OctoPrint / Moonraker / mock) — see Packages
@@ -206,7 +219,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-91 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+92 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
@@ -234,11 +247,13 @@ Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 
 | Package | Path | Description |
 |---------|------|-------------|
-| `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (npm) |
-| `mycelium-mcp` | `mcp/` | MCP server for Claude Code agents |
-| `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions); see the [macOS runner setup guide](docs/runner-setup-macos.md) for install, config, and running it as a launchd/pm2 background service |
+| `mycelium-agent-sdk` | `sdk/` | multi-runtime Agent SDK (workspace package — not on npm) |
+| `mycelium-mcp-server` | `mcp/` | MCP server for Claude Code agents (workspace package — not on npm; run from source, see [MCP server](#mcp-server-claude-code)) |
+| `mycelium-runner` | `runner/` | autonomous agent runner (spawns Claude sessions; workspace package — not on npm); see the [macOS runner setup guide](docs/runner-setup-macos.md) for install, config, and running it as a launchd/pm2 background service |
 | `admin-claude` | `admin-claude/` | reference admin-automation agent — auto-responds to requests, triages bugs, auto-approves low/medium-risk actions, and reviews/merges GitHub PRs. Runs in **webhook** mode (needs a public URL) or **poll** mode (works behind NAT). Cloud (`ANTHROPIC_API_KEY`) or local (`LLM_BACKEND=ollama`) LLM. Configure with `MYCELIUM_API_URL` + `MYCELIUM_ADMIN_KEY` (defaults to your own `localhost:3002`); `npm start` (webhook) or `npm run start:local` (Ollama poll). Ships its own `Dockerfile` and a Windows one-click installer (`setup-local.ps1`). |
 | `@softbacon/printer-drone` | `printer-drone/` | 3D-printer drone worker — claims `3d_print` jobs, downloads the STL, slices it (prusa-slicer), uploads gcode, and monitors the print. Provider pattern (Bambu / OctoPrint / Moonraker / mock via `config.json`). `npm start`, or `npm run dev` for the mock printer (no hardware). |
+
+None of these packages are on npm. They are packages of this repo — get them with `git clone https://github.com/SoftBacon-Software/mycelium.git && cd mycelium && npm install`, then run each from its own directory. Note that the npm name `mycelium-mcp` (no `-server`) belongs to a **separate, older client** from [a different repo](https://github.com/SoftBacon-Software/mycelium-mcp) — installing it does not get you this repo's MCP server.
 
 ## Tools
 

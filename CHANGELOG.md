@@ -44,10 +44,11 @@ system for AI-powered teams." Tagged at
   `printer-drone` reference drones.
 - **Plugin system** — drop-in plugins with their own schema, migrations,
   routes, event hooks, and MCP tools (`server/plugins/`).
-- **Agent SDK** (`sdk/`, npm `mycelium-agent-sdk`) — multi-runtime SDK with
-  Discord, Slack, and Voice adapters.
-- **MCP server** (`mcp/`, npm `mycelium-mcp`) — exposes the API as MCP tools
-  for Claude Code.
+- **Agent SDK** (`sdk/`, workspace package `mycelium-agent-sdk` — not on npm) —
+  multi-runtime SDK with Discord, Slack, and Voice adapters.
+- **MCP server** (`mcp/`, workspace package `mycelium-mcp-server` — not on npm;
+  originally mislabeled `mycelium-mcp` here, a name that belongs to a separate
+  repo's client) — exposes the API as MCP tools for Claude Code.
 - **Autonomous runner** (`runner/`) — hosted-agent runner with workspace and
   health checks; Docker and Railway deploy configs.
 
