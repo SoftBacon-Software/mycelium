@@ -21,6 +21,10 @@ Three directories live under `test/`:
   that read repo files and assert a structural invariant instead of
   runtime behavior, e.g. `schema-drift.test.js` (schema.sql vs db.js
   migrations stay in sync). Add new behavioral tests here.
+  - `schema-drift.test.js` derives its input from source: it imports the live
+    `migrations` array from `server/db/core.js` rather than keeping a hand
+    copy — a copied list rots (the old copy was missing two entries while the
+    suite stayed green).
 - `refactor/` — **decomposition gates** that lock the platform's
   structure against a committed snapshot, so a refactor can't silently
   drop a route or a DB export. Each pairs a generator (`.mjs`) with a
