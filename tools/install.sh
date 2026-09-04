@@ -33,7 +33,7 @@ fail()  { echo -e "${RED}[mycelium]${NC} $1"; exit 1; }
 # loudly — not halfway through an install.
 preflight() {
   command -v git  &>/dev/null || fail "git not found. Install git from https://git-scm.com"
-  command -v node &>/dev/null || fail "Node.js not found. Install Node 18+ from https://nodejs.org"
+  command -v node &>/dev/null || fail "Node.js not found. Install Node 20+ from https://nodejs.org"
   command -v npm  &>/dev/null || fail "npm not found. Install Node.js from https://nodejs.org (includes npm)"
   info "Verifying install ref '${BRANCH}' exists at ${REPO}..."
   if ! git ls-remote --exit-code "$REPO" "$BRANCH" &>/dev/null; then
@@ -57,12 +57,12 @@ info "Checking prerequisites..."
 
 # Node.js
 if ! command -v node &>/dev/null; then
-  fail "Node.js not found. Install Node 18+ from https://nodejs.org"
+  fail "Node.js not found. Install Node 20+ from https://nodejs.org"
 fi
 
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-if [ "$NODE_VERSION" -lt 18 ]; then
-  fail "Node.js $NODE_VERSION found, but 18+ is required. Update from https://nodejs.org"
+if [ "$NODE_VERSION" -lt 20 ]; then
+  fail "Node.js $NODE_VERSION found, but 20+ is required. Update from https://nodejs.org"
 fi
 ok "Node.js $(node -v)"
 

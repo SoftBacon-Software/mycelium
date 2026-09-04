@@ -68,7 +68,7 @@ A customer deployment starts at L0 and adds L1 when it wants persistence with pe
 curl -fsSL https://mycelium.fyi/install.sh | bash
 ```
 
-Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 18+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
+Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 20+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
 
 ### Docker Compose (recommended)
 
@@ -82,6 +82,8 @@ docker compose up -d
 Verify with `curl http://localhost:3002/health`, then register agents (below). Add a GPU drone worker with `docker compose --profile gpu up -d`.
 
 ### Manual
+
+Requires Node 20 or later — `engines` in package.json enforces the same floor (CI tests Node 20 and 22).
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
@@ -247,7 +249,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-131 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+132 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
@@ -300,6 +302,10 @@ None of these packages are on npm. They are packages of this repo — get them w
 | `release.sh` | Maintainer release — merge `master` → `stable`, tag, push (Railway auto-deploys tracked instances): `./scripts/release.sh [tag] [--dry-run]` |
 | `deploy-jetson.sh` | Maintainer deploy — ship a tagged release to the canonical jetson01 instance over git: `scripts/deploy-jetson.sh <annotated-tag> [--dry-run]` |
 | `docker-smoke.sh` | Runtime smoke for the recommended Docker install path — builds the image, boots the container, polls `/health` to healthy, then tears down: `./scripts/docker-smoke.sh` |
+
+## Contributing
+
+Bug reports, fixes, and new plugins are welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the quick start, code style, and the gates a PR must pass. Small, obviously-correct fixes can go straight to a PR; for anything else, open an issue first to discuss the approach.
 
 ## License
 

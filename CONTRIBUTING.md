@@ -7,6 +7,8 @@ useful work to do.
 
 ## Quick start
 
+Prerequisite: Node 20 or later — `engines` in package.json enforces the same floor, and CI tests Node 20 and 22.
+
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
 cd mycelium
@@ -123,7 +125,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 131 files across `test/unit/`,
+There's a vitest suite under `test/` — 132 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 

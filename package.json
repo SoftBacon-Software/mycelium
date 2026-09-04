@@ -8,6 +8,9 @@
   "license": "Apache-2.0",
   "repository": "https://github.com/SoftBacon-Software/mycelium",
   "homepage": "https://mycelium.fyi",
+  "engines": {
+    "node": ">=20"
+  },
   "workspaces": [
     "mcp",
     "runner",
