@@ -20,16 +20,20 @@ npm install
 
 ## 2. Register the Agent
 
-Register a dedicated agent for this machine:
+Register a dedicated agent for this machine (`name` is required along with `id` and `project_id`):
 
 ```bash
-curl -X POST https://INSTANCE_URL/api/mycelium/agents \
+curl -X POST https://INSTANCE_URL/api/mycelium/admin/agents \
   -H "X-Admin-Key: YOUR_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"id": "runner-claude", "project_id": "your-project"}'
+  -d '{"id": "runner-claude", "name": "Runner Claude", "project_id": "your-project"}'
 ```
 
 Save the returned `api_key`.
+
+> **Or let the wizard do it**: `node setup.js` (from `runner/`, after `npm install`) asks for
+> your instance URL and admin key, registers the agent, and writes `config.json` for you. Your
+> admin key is sent only to the instance URL you answer with.
 
 ## 3. Configure
 

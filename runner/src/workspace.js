@@ -57,7 +57,9 @@ export function ensureWorkspace(agentConfig) {
 
     // Configure git user for commits
     try {
-      git(['-C', dest, 'config', 'user.email', `${agentConfig.id}@mycelium.fyi`]);
+      // .local is non-routable — a placeholder identity, not a host. The old
+      // address pointed commits at a retired third-party domain.
+      git(['-C', dest, 'config', 'user.email', `${agentConfig.id}@mycelium.local`]);
       git(['-C', dest, 'config', 'user.name', agentConfig.id]);
     } catch (e) { /* non-critical */ }
 

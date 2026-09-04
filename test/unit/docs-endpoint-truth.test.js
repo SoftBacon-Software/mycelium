@@ -31,8 +31,19 @@
 // REGISTERED (present in the live stack), not that it succeeds unauthenticated.
 // A registered-but-gated route is a pass — the route is real. A 404 (path not
 // registered at all) is the only failure.
+//
+// Scope growth (runner-platform-truth, 2026-09-04): the scan set is no longer
+// just the two entry docs. docs/*.md files that teach a PLATFORM API call — a
+// host-qualified curl whose URL path runs under the documented /api/mycelium
+// base — are derived and added automatically (no file is named here), and only
+// their platform citations are checked: a docs/ curl aimed at another process
+// (the runner package ships its own `localhost:8080 /health,/ready` health
+// server) describes a route table this gate does not build. This is what
+// catches docs/runner-setup-macos.md teaching `POST .../agents`, which the app
+// never registered — only GET /agents is mounted; registration is
+// POST /admin/agents — so the stranger's first command in that doc 404'd.
 import { describe, test, expect, beforeAll, afterAll } from 'vitest'
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -42,6 +53,29 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..', '..')
 const ENTRY_DOCS = ['README.md', 'CONTRIBUTING.md']
 const SUB_ROUTER_BASE = '/api/mycelium'
+
+// docs/*.md files that teach a PLATFORM API call join the scan set. The set is
+// DERIVED by scanning docs/ — never named — so a lying doc added tomorrow is
+// caught with no edit here. A host-qualified curl to a NON-platform path (the
+// runner's own health server, a vendored service) does not qualify: that is a
+// different process, and the live app built below is not it.
+const DOCS_DIR = join(ROOT, 'docs')
+const PLATFORM_CURL_RE = /\bcurl\b[^\n]*?https?:\/\/[^\s/]+(\/api\/mycelium\/\S*)/
+function citesPlatformApi(rel) {
+  return PLATFORM_CURL_RE.test(readFileSync(join(ROOT, rel), 'utf8'))
+}
+const DOC_DOCS = (() => {
+  try {
+    return readdirSync(DOCS_DIR)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => join('docs', f))
+      .filter(citesPlatformApi)
+  } catch {
+    return [] // docs/ absent — the entry docs are still scanned
+  }
+})()
+const SCANNED_DOCS = [...ENTRY_DOCS, ...DOC_DOCS]
+const isEntryDoc = (doc) => ENTRY_DOCS.includes(doc)
 
 // --- live route set (built once) --------------------------------------------
 const ADMIN_KEY = 'docs-truth-admin-key-0123456789abcdef0123456789abcdef'
@@ -209,7 +243,13 @@ function extract(doc, name) {
 
 let citations
 beforeAll(() => {
-  citations = ENTRY_DOCS.flatMap((d) => extract(d, d))
+  citations = SCANNED_DOCS.flatMap((d) => extract(d, d)).filter(
+    // Non-entry docs are checked for their PLATFORM citations only (see the
+    // DOCS_DIR note): bare `METHOD /path` prose and /api/mycelium-scoped or
+    // $URL citations stay in universe; a host-qualified curl aimed elsewhere
+    // (the runner's localhost:8080 health server) is another process's surface.
+    (c) => isEntryDoc(c.doc) || !c.exact || c.path.startsWith(SUB_ROUTER_BASE + '/')
+  )
 })
 
 describe('entry docs cite only routes the live app registers', () => {
@@ -217,15 +257,19 @@ describe('entry docs cite only routes the live app registers', () => {
     expect(routes.length, 'app-routes.mjs returned zero routes — build failed or stack shape changed').toBeGreaterThan(0)
   })
 
-  test('extractor is alive — entry docs cite at least one HTTP path', () => {
+  test('extractor is alive — scanned docs cite at least one HTTP path', () => {
     expect(citations.length, 'found zero citations; extractor may be broken').toBeGreaterThan(0)
+  })
+
+  test('docs/ scan set is derived and non-empty (a platform-curl doc exists to police)', () => {
+    expect(DOC_DOCS.length, 'no docs/*.md teaches a platform API curl — either docs/ moved or the derivation broke').toBeGreaterThan(0)
   })
 
   test('every cited path resolves (404 = fail)', () => {
     const missing = citations.filter((c) => !resolves(c))
     if (missing.length) {
       throw new Error(
-        'Entry docs cite HTTP paths the app does NOT register ' +
+        'Docs cite HTTP paths the app does NOT register ' +
           '(a stranger copying them gets a 404):\n' +
           missing
             .map((c) => `  - ${c.method} ${c.path}  <- ${c.doc}:L${c.line} "${c.token}"`)

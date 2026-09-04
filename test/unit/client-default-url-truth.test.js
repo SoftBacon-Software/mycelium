@@ -1,6 +1,7 @@
-import { describe, test } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { describe, test, expect, vi, afterEach } from 'vitest'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { extname, join, relative } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 // Regression gate for the "published docs lie about the MYCELIUM_API_URL default"
@@ -32,8 +33,18 @@ import { fileURLToPath } from 'node:url'
 // describes a NON-default (e.g. an example pointing at an example.com host) and
 // justify it. NEVER add a .fyi "default" here — fix the doc instead. If a doc
 // says .fyi is the default and the code says localhost, the DOC is wrong.
+//
+// Runner extension (2026-09-04, runner-platform-truth): the RUNNER package had
+// the worst version of the same bug — its setup wizard HARDCODED .fyi as the
+// only target with no override, sent `X-Admin-Key: <what the operator typed>`
+// to it on every call, and persisted it into the generated config.json. The
+// `runner package platform truth` describe below extends this gate's idiom to
+// runner/: same derivation authorities, a zero-.fyi scan over runner/**, and a
+// driven wizard proving the admin key goes only to the URL the operator
+// answered. Same package family, same authority, one gate.
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url)).replace(/\/$/, '')
+const RUNNER_DIR = join(ROOT, 'runner')
 
 // { file: '<repo-relative path>', url: '<exact url>', reason: '...' }
 // Empty: every client-package doc that names a MYCELIUM_API_URL default must
@@ -217,5 +228,186 @@ describe('client-package MYCELIUM_API_URL default tells the truth', () => {
     if (extractOptOrDefault('sdk/src/agent.js') !== codeDefault) {
       throw new Error('sdk/src/agent.js constructor default drifted from the code default')
     }
+  })
+})
+
+// --- runner extension: helpers ---------------------------------------------
+
+// Every text file (js/json/md) under runner/, node_modules skipped and the
+// operator's own gitignored config.json skipped — the gate polices SHIPPED
+// truth, not a local operator's working file.
+function runnerTextFiles() {
+  const out = []
+  const EXTS = new Set(['.js', '.json', '.md'])
+  const walk = (dir) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === 'config.json') continue
+      const p = join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.isFile() && EXTS.has(extname(e.name))) out.push(p)
+    }
+  }
+  walk(RUNNER_DIR)
+  return out
+}
+
+describe('runner package platform truth', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  test('setup.js default is derived from the live || fallback and equals the platform-wide default', () => {
+    const runnerDefault = extractEnvOrDefault('runner/setup.js')
+    if (runnerDefault === null) {
+      throw new Error(
+        'runner/setup.js no longer resolves MYCELIUM_API_URL with a `|| <literal>` fallback — ' +
+          'the default the wizard ships is unparsed and unverified. Restore the derivation ' +
+          'site this gate reads, or update this gate to the new shape.'
+      )
+    }
+    // The same authorities the client-package tests above derive from.
+    const fromMcp = extractEnvOrDefault('mcp/src/api.js')
+    const fromInit = extractEnvOrDefault('sdk/bin/init.js')
+    if (fromMcp === null || fromInit === null) {
+      throw new Error(
+        'the platform default authorities (mcp/src/api.js, sdk/bin/init.js) no longer carry a ' +
+          'MYCELIUM_API_URL || <literal> fallback — update this gate to the new derivation source.'
+      )
+    }
+    if (fromMcp !== fromInit) {
+      throw new Error(`platform defaults disagree: mcp/src/api.js="${fromMcp}" vs sdk/bin/init.js="${fromInit}"`)
+    }
+    expect(
+      runnerDefault,
+      `runner/setup.js default "${runnerDefault}" != the platform default "${fromMcp}" — ` +
+        `the runner drifted from the rest of the house. Fix setup.js.`
+    ).toBe(fromMcp)
+    expect(
+      runnerDefault.includes('mycelium.fyi'),
+      `runner/setup.js defaults to mycelium.fyi — a third-party host is not the operator's instance`
+    ).toBe(false)
+  })
+
+  test('no runner/ file asserts mycelium.fyi anywhere (js + json + md) — allow-list is EMPTY', () => {
+    const hits = []
+    const files = runnerTextFiles()
+    expect(files.length, 'runner/ scan found no js/json/md files — the package moved or the walker broke').toBeGreaterThan(0)
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      const rel = relative(ROOT, file)
+      text.split('\n').forEach((line, i) => {
+        if (line.includes('mycelium.fyi')) {
+          hits.push(`${rel}:${i + 1}  ${line.trim().slice(0, 140)}`)
+        }
+      })
+    }
+    expect(
+      hits,
+      'runner/ names mycelium.fyi — a retired third-party host that is NOT the platform. ' +
+        'The runner target is the operator\'s own instance (setup.js asks for it; config ' +
+        'carries it). Fix the file. If a hit is genuinely cosmetic (not a platform target), ' +
+        'prefer fixing it to a neutral value over allow-listing — the git user.email was ' +
+        'fixed to a .local placeholder, not allow-listed:\n'
+    ).toEqual([])
+  })
+
+  test('the wizard sends the admin key ONLY to the URL the operator answered, and wires config.json there', async () => {
+    let setup
+    try {
+      setup = await import(join(RUNNER_DIR, 'setup.js'))
+    } catch (e) {
+      throw new Error(
+        `runner/setup.js is no longer importable (${e.message}) — the wizard credential path is unverified`,
+        { cause: e }
+      )
+    }
+    if (typeof setup.runSetup !== 'function') {
+      throw new Error(
+        'runner/setup.js no longer exports runSetup() — the wizard credential path cannot be ' +
+          'driven, so nothing verifies where the operator\'s admin key is sent. Restore the ' +
+          'injectable surface (ask/fetchImpl/configDir) this gate drives.'
+      )
+    }
+
+    // The operator answers a URL that is .fyi's opposite. If setup.js ever
+    // reverts to a hardcoded const, the stub records the key going there and
+    // this reds — without a single packet leaving the machine.
+    const ANSWERED = 'http://my-instance.test:3999/api/mycelium'
+    const calls = []
+    const fetchImpl = async (url, init) => {
+      calls.push({ url: String(url), method: init?.method || 'GET' })
+      return {
+        ok: true,
+        json: async () => (init?.method === 'POST' ? { api_key: 'dvk_test' } : []),
+      }
+    }
+    const configDir = mkdtempSync(join(tmpdir(), 'myc-runner-wizard-'))
+
+    // Answer the prompts in order: admin key, instance URL, pick "register
+    // new", display name, agent id (default), project id, cwd (default),
+    // mcp path (default), model (default). Empty env forces the key prompt.
+    vi.stubEnv('MYCELIUM_ADMIN_KEY', '')
+    const answers = [
+      'test-admin-key-not-real',
+      ANSWERED,
+      '1',
+      'Test Machine',
+      '',
+      'my-project',
+      '',
+      '',
+      '',
+    ]
+    try {
+      await setup.runSetup({
+        ask: async () => answers.shift() ?? '',
+        fetchImpl,
+        configDir,
+      })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+
+    expect(calls.length, 'the wizard made no API calls — the flow under test is broken').toBeGreaterThan(0)
+    const offTarget = calls.filter((c) => !c.url.startsWith(ANSWERED + '/'))
+    expect(
+      offTarget,
+      `the wizard contacted a host the operator did not answer. Every admin-key-bearing ` +
+        `request must go to the answered instance (${ANSWERED}). Off-target calls:\n` +
+        offTarget.map((c) => `  ${c.method} ${c.url}`).join('\n')
+    ).toEqual([])
+    expect(
+      calls.filter((c) => c.url.includes('mycelium.fyi')),
+      'the wizard sent a request to mycelium.fyi'
+    ).toEqual([])
+
+    // The persistence half: config.json on disk points the runner (and the
+    // agent's MCP env) at the answered instance, never anywhere else.
+    const config = JSON.parse(readFileSync(join(configDir, 'config.json'), 'utf8'))
+    expect(
+      config.mycelium.apiUrl,
+      `config.json mycelium.apiUrl is not the URL the operator answered`
+    ).toBe(ANSWERED)
+    const mcpEnv = config.agents?.[0]?.mcpServers?.mycelium?.env
+    if (mcpEnv) {
+      expect(
+        mcpEnv.MYCELIUM_API_URL,
+        `config.json wires the agent's MYCELIUM_API_URL somewhere other than the answered instance`
+      ).toBe(ANSWERED)
+    }
+    for (const c of calls) {
+      expect(
+        c.url.includes('test-admin-key-not-real'),
+        'the admin key leaked into a request URL (keys travel in headers, never the URL)'
+      ).toBe(false)
+    }
+
+    rmSync(configDir, { recursive: true, force: true })
   })
 })
