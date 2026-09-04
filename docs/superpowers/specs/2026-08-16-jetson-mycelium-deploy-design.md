@@ -1,28 +1,28 @@
-# Orderly deploys for Mycelium on jetson01 — design
+# Orderly deploys for Mycelium on the substrate host — design
 
 **Date:** 2026-08-16 · **Status:** approved, not yet implemented
 **Author:** m5Max · **Approved by:** Gilbert
 
 ## The problem
 
-Deploying the platform to jetson01 is a hand operation with no record that can be
+Deploying the platform to the box is a hand operation with no record that can be
 trusted. Five things compound:
 
 1. **Two trees on the box, and the documented one is wrong.** The running server's
-   cwd is `/home/grb/mycelium` (`systemd` unit: `WorkingDirectory=/home/grb/mycelium`,
-   `ExecStart=/home/grb/mycelium/start-platform.sh`, `User=grb`, `Restart=always`).
-   `~/Projects/mycelium` on the Jetson is a stale decoy. The current runbook names
+   cwd is `<deploy-tree>` (`systemd` unit: `WorkingDirectory=<deploy-tree>`,
+   `ExecStart=<deploy-tree>/start-platform.sh`, `User=<user>`, `Restart=always`).
+   `~/Projects/mycelium` on the box is a stale decoy. The current runbook names
    the decoy, so three separate checks on 2026-08-16 reported "the mDNS advertiser
    is absent" when it is present in the real tree.
 
 2. **`DEPLOYED_VERSION` is stale and unenforced.** It reads
-   `commit: 03d374d2`, `branch: security-backport-20260802`, `deployed: 2026-08-03`.
+   `commit: 03d374d2`, `branch: <a stale security-backport line>`, `deployed: 2026-08-03`.
    But `server/lib/mdns-advertise.js` on the box is dated **2026-08-07** — files
    landed after the stamp and nothing updated it. The only record of what is
    deployed is currently false, and no mechanism would have caught that.
 
 3. **Deploys come from whatever branch had the fix.** The deployed commit is from
-   `security-backport-20260802`, not `master`. There is no trunk to deploy *from*:
+   a stale security-backport branch, not `master`. There is no trunk to deploy *from*:
    **48 of 55 local branches are unmerged into `master`.**
 
 4. **`node_modules` is deliberately desynced.** The stamp says
@@ -30,9 +30,9 @@ trusted. Five things compound:
    That caveat is a standing drift generator.
 
 5. **Git is unusable on the box — for one fixable reason.** `git` 2.34.1 IS
-   installed. `/home/grb/mycelium/.git` is a *file* containing
-   `gitdir: /Users/grb/Projects/mycelium/.git/worktrees/mycelium-deploy`, a path
-   that exists only on the Mac. Every git command therefore fails, which is why
+   installed. `<deploy-tree>/.git` is a *file* containing
+   `gitdir: /Users/<user>/Projects/mycelium/.git/worktrees/mycelium-deploy`, a path
+   that exists only on the workstation. Every git command therefore fails, which is why
    the runbook resorts to content-hash comparison. Fix the pointer and that whole
    class of workaround disappears.
 
@@ -54,8 +54,8 @@ why the box has drifted further. That loop is the thing to break.
 
 - **`git` 2.34.1 is installed on the Jetson.** The only thing broken is the `.git`
   pointer. §2 is therefore a pointer fix, not a tooling problem.
-- **The deployed commit `03d374d2` is reachable** — it lives on
-  `security-backport-20260802`, which is pushed to `origin` and `backup`. §2 can
+- **The deployed commit `03d374d2` is reachable** — it lives on the stale
+  security-backport branch, which is pushed to `origin` and `backup`. §2 can
   position the checkout at exactly what the box claims to be.
 - **`master` does NOT contain the deployed commit** (53 commits on the backport
   branch are not in master). This is expected, not alarming: the backport line took
@@ -65,7 +65,7 @@ why the box has drifted further. That loop is the thing to break.
   version leap does not regress SSRF/IDOR/HSTS/CSP/drone hardening. This must be
   re-confirmed per-fix during §1 rather than taken from this paragraph.
 - **`server/data/`, `.env` and `node_modules` are all gitignored.** Later checkouts
-  will leave the 150 MB database, secrets, and installed deps alone. This is what
+  will leave the live database, secrets, and installed deps alone. This is what
   makes approach A safe without a state migration.
 - **One piece of unshipped work found:** `server/profiles.json` (deployment
   profiles, commit `79f0b7e`) is on the backport branch but on neither `master` nor
@@ -87,7 +87,7 @@ becomes the record of what is deployed. `git describe` answers "what is running"
 2026-08-07 when the stray files landed.
 
 Rejected: *release directories + symlink flip* (atomic, seconds-long rollback, but
-requires migrating a live 150 MB `mycelium.db` and `.env` out of the tree — the
+requires migrating the live `mycelium.db` and `.env` out of the tree — the
 risky operation we are trying to make rare; revisit once the trunk is clean).
 Rejected: *containers* (right long-term answer, wrong change this week: arm64 image
 pipeline + DB volume migration + a new failure surface, all at once).
@@ -115,8 +115,8 @@ The step that kills the disease. **No file contents change.**
 2. DB backup via Python `sqlite3.Connection.backup()` against a `file:...?mode=ro`
    URI (hot, WAL-consistent; there is no `sqlite3` CLI on the box). Then
    `PRAGMA integrity_check` **the result** and print row counts. A backup you did
-   not open is not a backup. The real DB is `server/data/mycelium.db` (~150 MB);
-   the repo-root `mycelium.db` is a 0-byte decoy.
+   not open is not a backup. The real DB is `server/data/mycelium.db` (size and
+   table count: ops-local); the repo-root `mycelium.db` is a 0-byte decoy.
 3. Replace the broken `.git` pointer with a real repository positioned at the
    commit the box claims (`03d374d2`), non-destructively — the working tree is not
    touched, so `git status` then reports the true drift for the first time.
@@ -131,7 +131,7 @@ throughout, and `git status` output is captured as the drift record.
 
 `scripts/deploy-jetson.sh`, versioned alongside the code. Every step fails loud.
 
-1. **Preflight** — box reachable by name (`jetson01.local`, not an IP); working
+1. **Preflight** — box reachable by name (`<host>`, not an IP); working
    tree **clean**, else refuse. That check *is* the drift detector.
 2. **Refuse anything but an annotated tag reachable from `master`.** No branches,
    no bare commits.
@@ -140,12 +140,14 @@ throughout, and `git status` output is captured as the drift record.
 5. **Dependencies** — `npm ci` when `package-lock.json` changed, retiring the
    "CODE ONLY" caveat. Note `node` is nvm-managed and **not on PATH for
    non-interactive SSH**; use the absolute path or source nvm explicitly.
-6. **Restart** — `systemctl restart mycelium.service`; sudo password from the Mac
-   keychain (`security find-generic-password -s velum-sudo-jetson01 -w` piped to
-   `sudo -S -p ""`). Copy files as `grb` so nothing lands root-owned.
+6. **Restart** — `systemctl restart mycelium.service`; sudo password fetched from
+   the operator workstation's keychain by the script (item name and retrieval
+   line are ops-local: `docs/runbooks/jetson-deploy.LOCAL.md` — a public page
+   naming both is a map for any reader). Copy files as `<user>` so nothing lands
+   root-owned.
 7. **Verify behaviour, not exit codes** — "service is active" is not proof:
    - `/health` returns ok;
-   - `dns-sd -B _mycelium._tcp` shows the `jetson01` advertiser (the capability
+   - `dns-sd -B _mycelium._tcp` shows the box's advertiser (the capability
      that silently dies if the advertiser is lost);
    - smoke legs 3 (substrate), 4 (coordination) and 7 (discover) pass from the Mac.
 8. **Auto-rollback** on any verification failure: `git checkout <previous>`,
@@ -155,11 +157,12 @@ throughout, and `git status` output is captured as the drift record.
 
 ### §4 — Make future drift loud
 
-A `lab_check` probe asserting the box's `git describe` matches the expected tag and
-the working tree is clean. Nothing today would notice a repeat of 08-07.
+A drift probe in the lab's private health checker asserting the box's
+`git describe` matches the expected tag and the working tree is clean. Nothing
+today would notice a repeat of 08-07.
 
-Also retire the wrong path from `reference_jetson_deploy_runbook`: the deploy tree
-is `/home/grb/mycelium`.
+Also retire the wrong path from the internal runbook memory: the deploy tree is
+the one the systemd unit names (`<deploy-tree>`).
 
 ### §5 — Prove the rollback by breaking it on purpose
 

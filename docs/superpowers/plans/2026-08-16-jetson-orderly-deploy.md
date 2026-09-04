@@ -2,24 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace hand `cp -a` deploys to jetson01 with a real git checkout on the box plus a versioned deploy script that refuses drift, verifies behaviour, and auto-rolls-back.
+**Goal:** Replace hand `cp -a` deploys with a real git checkout on the box plus a versioned deploy script that refuses drift, verifies behaviour, and auto-rolls-back.
 
-**Architecture:** The Jetson's `/home/grb/mycelium` becomes a genuine git repository (today its `.git` is a file pointing at a Mac-only path, which is the sole reason git "doesn't work" there). Deployable units are annotated tags reachable from `master`. Decision rules that must never silently pass — is this a valid tag, is the tree clean, should we roll back — live in a pure ESM module under vitest; the orchestration that must talk to ssh/systemd lives in shell.
+**Architecture:** The Jetson's `<deploy-tree>` becomes a genuine git repository (today its `.git` is a file pointing at a Mac-only path, which is the sole reason git "doesn't work" there). Deployable units are annotated tags reachable from `master`. Decision rules that must never silently pass — is this a valid tag, is the tree clean, should we roll back — live in a pure ESM module under vitest; the orchestration that must talk to ssh/systemd lives in shell.
 
 **Tech Stack:** Node 25 (ESM, `"type": "module"`), vitest, bash, Python 3.10 (on the Jetson, for the sqlite backup — there is no `sqlite3` CLI there), systemd, avahi/mDNS.
 
 ## Global Constraints
 
-- **The deploy tree is `/home/grb/mycelium`.** NOT `~/Projects/mycelium` — that is a stale decoy tree on the Jetson. Every path in this plan is the real one.
-- **Address the box by name: `jetson01.local`.** Never an IP.
-- **Node on the Jetson is nvm-managed and NOT on PATH**, even in a login shell. Use the absolute path `/home/grb/.nvm/versions/node/v25.9.0/bin/node` (and `.../bin/npm`).
+- **The deploy tree is `<deploy-tree>`.** NOT `~/Projects/mycelium` — that is a stale decoy tree on the Jetson. Every path in this plan is the real one.
+- **Address the box by name: `<host>`.** Never an IP.
+- **Node on the Jetson is nvm-managed and NOT on PATH**, even in a login shell. Use the absolute path `<node-bin>` (and `.../bin/npm`).
 - **Never put backticks in a `git commit -m` message.** Use `git commit -F <file>`. Backticks inside a double-quoted bash string are command substitution; this previously uninstalled 46 packages from a live venv.
 - **zsh does not word-split unquoted `$(...)`.** Pass file lists to `tar` with `-T <filelist>`.
 - **`export COPYFILE_DISABLE=1`** before any `tar` on macOS, or AppleDouble `._` files ride along and break `*.js` globs.
-- **Copy files to the box as `grb`.** Only `systemctl` needs sudo; sudo password comes from the Mac keychain: `security find-generic-password -s velum-sudo-jetson01 -w` piped to `sudo -S -p ""`.
+- **Copy files to the box as `<user>`.** Only `systemctl` needs sudo; the sudo password is fetched from the operator workstation's keychain by the script (item name and retrieval line are ops-local: `docs/runbooks/jetson-deploy.LOCAL.md`).
 - **Verify behaviour, not exit codes.** "Service is active" is not proof of a working deploy.
-- **The real database is `/home/grb/mycelium/server/data/mycelium.db`** (~150 MB). The repo-root `mycelium.db` is a 0-byte decoy.
-- **Service unit facts:** `User=grb`, `WorkingDirectory=/home/grb/mycelium`, `ExecStart=/home/grb/mycelium/start-platform.sh`, `Restart=always`, `RestartSec=5`.
+- **The real database is `<deploy-tree>/server/data/mycelium.db`** (~150 MB). The repo-root `mycelium.db` is a 0-byte decoy.
+- **Service unit facts:** `User=<user>`, `WorkingDirectory=<deploy-tree>`, `ExecStart=<deploy-tree>/start-platform.sh`, `Restart=always`, `RestartSec=5`.
 
 ---
 
@@ -52,7 +52,7 @@ The box's copy is the ground truth for what works. If they differ, the branch is
 ```bash
 cd ~/Projects/mycelium
 git show feature/m5max/mdns-advertiser:server/lib/mdns-advertise.js | shasum -a 256
-ssh jetson01.local 'sha256sum ~/mycelium/server/lib/mdns-advertise.js'
+ssh <host> 'sha256sum ~/mycelium/server/lib/mdns-advertise.js'
 ```
 
 Expected: identical hashes. If they differ, stop and diff the contents before proceeding — do not merge a version that was never run.
@@ -75,7 +75,7 @@ A deploy will delete `server/db/boot.js`, `server/db/overview.js`, `server/db/wo
 cd ~/Projects/mycelium
 for f in server/db/boot.js server/db/overview.js server/db/workqueue.js server/routes/misc.js; do
   echo "=== $f ==="
-  ssh jetson01.local "grep -oE '^(export )?(async )?function [a-zA-Z_]+|^module.exports' ~/mycelium/$f 2>/dev/null" | head -20
+  ssh <host> "grep -oE '^(export )?(async )?function [a-zA-Z_]+|^module.exports' ~/mycelium/$f 2>/dev/null" | head -20
 done
 ```
 
@@ -171,7 +171,7 @@ import {
   decideRollback,
 } from '../../scripts/lib/deploy-guards.js'
 
-// These guards exist because jetson01 was deployed by hand from whatever branch
+// These guards exist because the box was deployed by hand from whatever branch
 // held the fix, and DEPLOYED_VERSION went stale without anyone noticing (stamped
 // 08-03 while files dated 08-07 sat on the box). Each rule below is one way that
 // happened, turned into a refusal.
@@ -191,7 +191,7 @@ describe('assertDeployableTag', () => {
 
   test('rejects a tag not reachable from master — the branch-deploy habit', () => {
     expect(() => assertDeployableTag({
-      objectType: 'tag', isAncestorOfMaster: false, name: 'security-backport-20260802',
+      objectType: 'tag', isAncestorOfMaster: false, name: 'the stale security-backport line',
     })).toThrow(/master/)
   })
 
@@ -272,7 +272,7 @@ Expected: FAIL — cannot resolve `../../scripts/lib/deploy-guards.js`.
 Create `scripts/lib/deploy-guards.js`:
 
 ```javascript
-// Decision rules for deploying Mycelium to jetson01.
+// Decision rules for deploying Mycelium to the box.
 //
 // Kept pure and separate from scripts/deploy-jetson.sh so each rule is testable
 // without a Jetson. Every rule here is a past failure turned into a refusal:
@@ -293,7 +293,7 @@ export function assertDeployableTag({ objectType, isAncestorOfMaster, name }) {
   if (!isAncestorOfMaster) {
     throw new Error(
       `deploy target ${name}: not reachable from master. Deploying from a side ` +
-      'branch is how the box ended up on security-backport-20260802 while master ' +
+      'branch is how the box ended up on the stale security-backport line while master ' +
       'moved on without it.'
     )
   }
@@ -371,7 +371,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 
-// jetson01 has no sqlite3 CLI and a live WAL, so backups go through Python's
+// the box has no sqlite3 CLI and a live WAL, so backups go through Python's
 // sqlite3.Connection.backup(). The rule that matters: the script must OPEN the
 // result and integrity-check it. A copy that was never opened has hidden a
 // corrupt backup before.
@@ -439,7 +439,7 @@ Create `scripts/lib/jetson-db-backup.py`:
 #!/usr/bin/env python3
 """Hot, WAL-consistent backup of the Mycelium database, verified by opening it.
 
-Runs on jetson01, which has no sqlite3 CLI. The source is live and has a WAL, so
+Runs on the box, which has no sqlite3 CLI. The source is live and has a WAL, so
 a file copy is not a backup -- this uses sqlite3.Connection.backup() against a
 read-only URI. It then OPENS the result and integrity-checks it, because a copy
 nobody opened has hidden a corrupt backup before.
@@ -548,7 +548,7 @@ Create `scripts/lib/jetson-verify.sh`:
 
 ```bash
 #!/usr/bin/env bash
-# Behavioural verification of a jetson01 deploy, run FROM THE MAC.
+# Behavioural verification of a box deploy, run FROM THE MAC.
 #
 # "systemctl is-active" is not proof. Each check below is a capability that has
 # broken silently before. mdns is here because DISCOVER -- the deploy-or-join
@@ -556,7 +556,7 @@ Create `scripts/lib/jetson-verify.sh`:
 # looks perfectly healthy.
 set -uo pipefail
 
-SUBSTRATE="${SUBSTRATE_URL:-http://jetson01.local:3002}"
+SUBSTRATE="${SUBSTRATE_URL:-http://<host>:3002}"
 SMOKE="${SMOKE_SCRIPT:-$HOME/Projects/mycelium-agent/scripts/smoke_mycelium_agent.sh}"
 rc=0
 
@@ -640,16 +640,16 @@ Create `scripts/deploy-jetson.sh`:
 
 ```bash
 #!/usr/bin/env bash
-# Deploy a tagged Mycelium release to jetson01. See
+# Deploy a tagged Mycelium release to the box. See
 # docs/superpowers/specs/2026-08-16-jetson-mycelium-deploy-design.md
 set -euo pipefail
 
 TAG="${1:?usage: deploy-jetson.sh <annotated-tag> [--dry-run]}"
 DRY="${2:-}"
-BOX=jetson01.local
-TREE=/home/grb/mycelium                       # NOT ~/Projects/mycelium (decoy)
-NODE=/home/grb/.nvm/versions/node/v25.9.0/bin/node
-NPM=/home/grb/.nvm/versions/node/v25.9.0/bin/npm
+BOX=<host>
+TREE=<deploy-tree>                       # NOT ~/Projects/mycelium (decoy)
+NODE=<node-bin>
+NPM=<npm-bin>
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -691,9 +691,9 @@ echo "rollback point: $PREV"
 # the box is still at a commit that predates it, so an in-tree path would fail
 # exactly when the backup matters most. /tmp is always current.
 scp -q "$HERE/lib/jetson-db-backup.py" "$BOX:/tmp/jetson-db-backup.py"
-ssh "$BOX" "mkdir -p /home/grb/backups && python3 /tmp/jetson-db-backup.py \
-  $TREE/server/data/mycelium.db /home/grb/backups/mycelium-$STAMP.db"
-ssh "$BOX" "cd /home/grb && tar czf backups/node_modules-$STAMP.tgz -C $TREE node_modules" || true
+ssh "$BOX" "mkdir -p <backup-dir> && python3 /tmp/jetson-db-backup.py \
+  $TREE/server/data/mycelium.db <backup-dir>/mycelium-$STAMP.db"
+ssh "$BOX" "cd <home> && tar czf backups/node_modules-$STAMP.tgz -C $TREE node_modules" || true
 
 if [ "$DRY" = "--dry-run" ]; then
   echo "DRY RUN: stopping before any change. Guards passed, backup taken."
@@ -703,14 +703,18 @@ fi
 # --- 4. stop, ship, deps, start ---------------------------------------------
 # Stop first: Restart=always would otherwise relaunch into a half-updated tree.
 say "deploy"
-SUDO="$(security find-generic-password -s velum-sudo-jetson01 -w)"
-ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl stop mycelium.service"
+# sudo_over_ssh <action> runs `systemctl <action> mycelium.service` as root on
+# the box over ssh. It feeds sudo's password from stdin, read from the operator
+# workstation's keychain. The item name and the retrieval line are
+# deployment-local (docs/runbooks/jetson-deploy.LOCAL.md) and are deliberately
+# not reproduced here: a public plan that names both is a map for any reader.
+sudo_over_ssh stop
 ssh "$BOX" "cd $TREE && git fetch --tags origin && git checkout -f '$TAG'"
 if ! ssh "$BOX" "cd $TREE && git diff --quiet '$PREV' HEAD -- package-lock.json"; then
   echo "lockfile changed — npm ci"
   ssh "$BOX" "cd $TREE && $NPM ci --omit=dev"
 fi
-ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service"
+sudo_over_ssh start
 sleep 10
 
 # --- 5. verify behaviour, roll back on any red -------------------------------
@@ -725,10 +729,10 @@ if ! node --input-type=module -e "
   console.log('all checks green')
 "; then
   say "ROLLING BACK to $PREV"
-  ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl stop mycelium.service"
+  sudo_over_ssh stop
   ssh "$BOX" "cd $TREE && git checkout -f '$PREV'"
   ssh "$BOX" "cd $TREE && $NPM ci --omit=dev" || true
-  ssh "$BOX" "echo '$SUDO' | sudo -S -p '' systemctl start mycelium.service"
+  sudo_over_ssh start
   sleep 10
   bash "$HERE/lib/jetson-verify.sh" && echo "rollback verified green" || echo "ROLLBACK ALSO RED — INTERVENE"
   exit 1
@@ -783,7 +787,7 @@ git commit -F /tmp/deploy-msg.txt
 The step that kills the disease. **No file contents change and the service is never restarted.**
 
 **Files:**
-- Modify (on the Jetson): `/home/grb/mycelium/.git` (broken pointer → real repository)
+- Modify (on the Jetson): `<deploy-tree>/.git` (broken pointer → real repository)
 
 **Interfaces:**
 - Consumes: nothing
@@ -802,18 +806,18 @@ Expected: all `=ok`. Do not proceed if not.
 
 ```bash
 export COPYFILE_DISABLE=1
-ssh jetson01.local 'cd /home/grb/mycelium && \
+ssh <host> 'cd <deploy-tree> && \
   find . -type f -not -path "./node_modules/*" -not -path "./server/data/*" -not -path "./.git*" > /tmp/tree-files.txt && \
-  tar czf /home/grb/backups/pre-convert-$(date -u +%Y%m%dT%H%M%SZ).tgz -T /tmp/tree-files.txt'
+  tar czf <backup-dir>/pre-convert-$(date -u +%Y%m%dT%H%M%SZ).tgz -T /tmp/tree-files.txt'
 ```
 
 - [ ] **Step 3: Verified DB backup**
 
 ```bash
-scp scripts/lib/jetson-db-backup.py jetson01.local:/tmp/
-ssh jetson01.local 'mkdir -p /home/grb/backups && python3 /tmp/jetson-db-backup.py \
-  /home/grb/mycelium/server/data/mycelium.db \
-  /home/grb/backups/pre-convert.db'
+scp scripts/lib/jetson-db-backup.py <host>:/tmp/
+ssh <host> 'mkdir -p <backup-dir> && python3 /tmp/jetson-db-backup.py \
+  <deploy-tree>/server/data/mycelium.db \
+  <backup-dir>/pre-convert.db'
 ```
 
 Expected: JSON with `"integrity": "ok"` and non-zero row counts. **Read the numbers.** If `tables` is 0, stop.
@@ -823,7 +827,7 @@ Expected: JSON with `"integrity": "ok"` and non-zero row counts. **Read the numb
 ```bash
 cd ~/Projects/mycelium
 git bundle create /tmp/mycelium.bundle --all
-scp /tmp/mycelium.bundle jetson01.local:/tmp/
+scp /tmp/mycelium.bundle <host>:/tmp/
 ```
 
 - [ ] **Step 5: Convert the pointer non-destructively**
@@ -831,8 +835,8 @@ scp /tmp/mycelium.bundle jetson01.local:/tmp/
 `git reset --mixed` moves HEAD and the index but leaves every working-tree file untouched — so this reveals drift without changing a byte of running code.
 
 ```bash
-ssh jetson01.local 'set -e
-  cd /home/grb/mycelium
+ssh <host> 'set -e
+  cd <deploy-tree>
   mv .git .git.broken-pointer.bak
   git init -q
   git remote add origin /tmp/mycelium.bundle
@@ -846,7 +850,7 @@ ssh jetson01.local 'set -e
 - [ ] **Step 6: Capture the drift record**
 
 ```bash
-ssh jetson01.local 'cd /home/grb/mycelium && git status --porcelain' | tee /tmp/jetson-drift-2026-08-16.txt
+ssh <host> 'cd <deploy-tree> && git status --porcelain' | tee /tmp/jetson-drift-2026-08-16.txt
 wc -l /tmp/jetson-drift-2026-08-16.txt
 ```
 
@@ -855,7 +859,7 @@ Expected: `server/lib/mdns-advertise.js` appears (the 08-07 arrival), plus whate
 - [ ] **Step 7: Confirm state paths are ignored so future checkouts leave them alone**
 
 ```bash
-ssh jetson01.local 'cd /home/grb/mycelium && for p in server/data .env node_modules; do
+ssh <host> 'cd <deploy-tree> && for p in server/data .env node_modules; do
   printf "%-14s " "$p"; git check-ignore -q "$p" && echo ignored || echo "NOT IGNORED — STOP"; done'
 ```
 
@@ -874,7 +878,7 @@ Expected: identical, all `=ok`. The service was never restarted.
 - [ ] **Step 9: Point the origin at the real remote and re-fetch**
 
 ```bash
-ssh jetson01.local 'cd /home/grb/mycelium && \
+ssh <host> 'cd <deploy-tree> && \
   git remote set-url origin https://github.com/SoftBacon-Software/mycelium.git && \
   git remote -v'
 ```
@@ -946,7 +950,7 @@ Expected: `mdns=FAIL`, `VERIFICATION RED: mdns`, then `ROLLING BACK`, then `roll
 ```bash
 cd ~/Projects/mycelium
 bash scripts/lib/jetson-verify.sh; echo "EXIT=$?"
-ssh jetson01.local 'cd /home/grb/mycelium && git describe --tags && git status --porcelain | wc -l'
+ssh <host> 'cd <deploy-tree> && git describe --tags && git status --porcelain | wc -l'
 ```
 
 Expected: all `=ok`, `EXIT=0`, tree clean, and the commit back at the pre-test one.
@@ -970,7 +974,7 @@ git branch -D test/deploy-rollback-proof
 
 **Interfaces:**
 - Consumes: Tasks 2, 6, 7, 8
-- Produces: jetson01 running `deploy-2026-08-16`.
+- Produces: the box running `deploy-2026-08-16`.
 
 - [ ] **Step 1: Dry run first**
 
@@ -1003,7 +1007,7 @@ Expected: all five verifications green, `DEPLOYED_VERSION` regenerated, `EXIT=0`
 - [ ] **Step 4: Confirm provenance is now self-describing**
 
 ```bash
-ssh jetson01.local 'cd /home/grb/mycelium && git describe --tags && git status --porcelain | wc -l && cat DEPLOYED_VERSION'
+ssh <host> 'cd <deploy-tree> && git describe --tags && git status --porcelain | wc -l && cat DEPLOYED_VERSION'
 ```
 
 Expected: `deploy-2026-08-16`, `0` drift lines, and a stamp whose tag matches `git describe`. The stamp and git agreeing is the whole point.
@@ -1021,8 +1025,14 @@ Expected: 7/7 PASS, matching the 2026-08-16 baseline.
 
 ### Task 10: Make future drift loud
 
+> The probe lives in the lab's private tooling tree, not this repo — its path,
+> function name, and expected-tag variable are deployment-local (see
+> `docs/runbooks/jetson-deploy.LOCAL.md`). The verbatim draft this task once
+> carried was redacted into the contract below during the 2026-09-04 ops split;
+> the contract is the part a stranger can use.
+
 **Files:**
-- Modify: `~/Projects/jarvis/squad/lab_check.py` (add `check_jetson_deploy_drift`)
+- Modify: the lab's private health checker (different tree)
 
 **Interfaces:**
 - Consumes: Task 7 (the box is a real checkout)
@@ -1030,67 +1040,31 @@ Expected: 7/7 PASS, matching the 2026-08-16 baseline.
 
 - [ ] **Step 1: Read the existing check pattern**
 
-```bash
-grep -n "^def check_" ~/Projects/jarvis/squad/lab_check.py | head -10
-sed -n "/def check_omlx_prefill_guard/,/^def /p" ~/Projects/jarvis/squad/lab_check.py | head -40
-```
+Follow whatever shape the checker's neighbouring checks use for returning status
+and registration.
 
-Follow whatever shape the neighbouring checks use for returning status.
+- [ ] **Step 2: Add the check — the drift contract**
 
-- [ ] **Step 2: Add the check**
+Over ssh with a short connect timeout and BatchMode, the probe reads
+`git status --porcelain` and `git describe --tags` from the deploy tree and
+returns:
 
-```python
-def check_jetson_deploy_drift():
-    """The box must match a known tag and carry no uncommitted drift.
+- could not read git state ⇒ **FAIL** ("could not determine" is not "passed");
+- any uncommitted change ⇒ **FAIL** (drift is somebody's undeployed work);
+- described tag not matching the expected tag ⇒ **FAIL**;
+- host unreachable ⇒ **SKIP** (a LAN outage is not drift — but it is not PASS
+  either);
+- otherwise **PASS** with the described tag and a clean tree.
 
-    Nothing noticed when files landed on jetson01 on 2026-08-07 while
-    DEPLOYED_VERSION still read 08-03. Now git answers, and this asks.
-    """
-    tree = "/home/grb/mycelium"
-    expected = os.environ.get("JETSON_EXPECTED_TAG", "deploy-2026-08-16")
-    cmd = [
-        "ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", "jetson01.local",
-        f"cd {tree} && git status --porcelain | wc -l && git describe --tags 2>/dev/null",
-    ]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        return ("FAIL", "jetson01 unreachable (ssh timeout)")
-    if out.returncode != 0:
-        return ("FAIL", f"ssh failed: {out.stderr.strip()[:120]}")
-
-    lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
-    if len(lines) < 2:
-        return ("FAIL", f"could not read git state (got: {lines})")
-    drift_count, described = lines[0], lines[1]
-
-    if drift_count != "0":
-        return ("FAIL", f"{drift_count} uncommitted change(s) in {tree} — deploy drift")
-    if not described.startswith(expected):
-        return ("FAIL", f"box is at '{described}', expected '{expected}'")
-    return ("PASS", f"{described}, tree clean")
-```
-
-Register it alongside the other checks, following whatever registration shape Step 1 revealed.
+The expected tag is overridable by environment variable, so an intentional
+deploy updates the expectation instead of silencing the check.
 
 - [ ] **Step 3: Prove it can go red**
 
-```bash
-ssh jetson01.local 'touch /home/grb/mycelium/DRIFT_CANARY'
-python3 ~/Projects/jarvis/squad/lab_check.py 2>&1 | grep -i jetson
-ssh jetson01.local 'rm /home/grb/mycelium/DRIFT_CANARY'
-python3 ~/Projects/jarvis/squad/lab_check.py 2>&1 | grep -i jetson
-```
+Touch a canary file in the deploy tree, run the checker, expect FAIL; remove it,
+run again, expect PASS. A check that cannot fail is not a check.
 
-Expected: FAIL with the canary present, PASS once removed. A check that cannot fail is not a check.
-
-- [ ] **Step 4: Commit**
-
-```bash
-cd ~/Projects/jarvis
-git add squad/lab_check.py
-git commit -F /tmp/labcheck-msg.txt
-```
+- [ ] **Step 4: Commit in the checker's own tree**
 
 ---
 
@@ -1106,7 +1080,7 @@ git commit -F /tmp/labcheck-msg.txt
 
 - [ ] **Step 1: Write the runbook**
 
-Create `docs/runbooks/jetson-deploy.md` covering: the tree is `/home/grb/mycelium` (and `~/Projects/mycelium` on the box is a decoy — this cost three wrong conclusions on 2026-08-16); deploy with `bash scripts/deploy-jetson.sh <annotated-tag>`; git is the record, `DEPLOYED_VERSION` is a convenience; rollback is automatic on red and manual via `git checkout <prev> && systemctl restart`; the drift captured in Task 7 Step 6; whether the box fetches from GitHub or needs a bundle (from Task 7 Step 9).
+Create `docs/runbooks/jetson-deploy.md` covering: the tree is `<deploy-tree>` (and `~/Projects/mycelium` on the box is a decoy — this cost three wrong conclusions on 2026-08-16); deploy with `bash scripts/deploy-jetson.sh <annotated-tag>`; git is the record, `DEPLOYED_VERSION` is a convenience; rollback is automatic on red and manual via `git checkout <prev> && systemctl restart`; the drift captured in Task 7 Step 6; whether the box fetches from GitHub or needs a bundle (from Task 7 Step 9).
 
 - [ ] **Step 2: Commit**
 
@@ -1118,7 +1092,7 @@ git commit -F /tmp/runbook-msg.txt
 
 - [ ] **Step 3: Correct the memory**
 
-Rewrite `~/.claude/projects/-Users-grb-Projects/memory/reference_jetson_deploy_runbook.md`: the deploy tree is `/home/grb/mycelium`; git DOES work there now; "verify by content hash" is superseded by `git status`; keep the DB-decoy, keychain-sudo, `COPYFILE_DISABLE` and `tar -T` traps, which remain true.
+Rewrite the lab's internal runbook memory: the deploy tree is `<deploy-tree>`; git DOES work there now; "verify by content hash" is superseded by `git status`; keep the DB-decoy, keychain-sudo, `COPYFILE_DISABLE` and `tar -T` traps, which remain true.
 
 - [ ] **Step 4: Merge the branch to master and push**
 

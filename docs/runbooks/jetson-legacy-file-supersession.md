@@ -1,6 +1,6 @@
 # Jetson legacy files: supersession evidence (2026-08-16)
 
-Deploying `master` to jetson01 **deletes four files** that exist on the box and
+Deploying `master` to the box **deletes four files** that exist on the box and
 on no mainline branch. This document is the evidence that each is superseded
 rather than orphaned. It was produced before the deletion, not after.
 
@@ -9,7 +9,7 @@ what justifies it.
 
 ## Why they exist
 
-The box was last deployed on 2026-08-03 from `security-backport-20260802`. That
+The box was last deployed on 2026-08-03 from a stale security-backport branch. That
 line carried its own **god-file decomposition Phase 3** (2026-07-12): `db.js` was
 split into `db/{boot,overview,workqueue}.js`, and SPEND/RUNS/GITHUB/VOICE were
 extracted from `routes/mycelium.js` into `routes/misc.js`.
