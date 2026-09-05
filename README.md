@@ -195,6 +195,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `BACKUP_INTERVAL_HOURS` | no | `24` | hours between in-place SQLite backups (env overrides `instance_config` `backup_interval_hours`) |
 | `MAX_BACKUPS` | no | `3` | how many SQLite backups to keep before pruning the oldest (env overrides `instance_config` `max_backups`) |
 | `AUTO_MEMORY_LLM_KEEP_ALIVE` | no | `10m` | ollama `keep_alive` for the auto-memory extraction LLM so a small model isn't held resident forever; `0` evicts it right after each request |
+| `MYCELIUM_GIT_SHA` | no | resolved from git at boot | commit hash served as `commit_sha` at `/health` (bug reports ask for version + commit). Container images carry no `.git`, so pass it at build time: `--build-arg GIT_SHA="$(git rev-parse --short HEAD)"`. Neither source → `unknown` |
 
 Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
 
@@ -249,7 +250,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-132 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+133 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 

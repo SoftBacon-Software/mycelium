@@ -8,6 +8,14 @@ COPY mcp/package*.json mcp/
 COPY runner/package*.json runner/
 COPY printer-drone/package*.json printer-drone/
 RUN npm ci --omit=dev
+# Runtime instance identity: the image carries no .git (see .dockerignore), so
+# the server cannot ask git which commit it is — pass the sha in at build time.
+# Build with:
+#   docker build --build-arg GIT_SHA="$(git rev-parse --short HEAD)" .
+# Left unset the server degrades to commit_sha:"unknown"; boot never dies on it.
+# (Kept below `npm ci` so a sha-only rebuild reuses the dependency layer.)
+ARG GIT_SHA=unknown
+ENV MYCELIUM_GIT_SHA=$GIT_SHA
 COPY server/ server/
 COPY tools/ tools/
 COPY printer-drone/ printer-drone/

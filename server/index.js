@@ -19,6 +19,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
@@ -57,6 +58,35 @@ var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var PORT = process.env.PORT || 3002;
 var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 var APP_VERSION = pkgJson.version || '0.0.0';
+
+// ---- Runtime instance identity: which commit is this? ----
+// APP_VERSION is read once from package.json, so between releases EVERY
+// instance on earth reports the same frozen string, and no instance could
+// answer the "commit hash" half of the bug-report ask (CONTRIBUTING "Reporting
+// bugs"). Resolution order, asked once here at boot and cached:
+//   1. MYCELIUM_GIT_SHA env var — the deployment seam. Containers/PaaS deploys
+//      have no .git to ask (the Dockerfile copies none and .dockerignore
+//      excludes it), so image builds pass the sha in via ARG/ENV.
+//   2. `git rev-parse --short HEAD` with cwd = repo root (works from a
+//      worktree too). A source checkout gets truth this way.
+//   3. 'unknown' on ANY failure — no git binary, not a repo, spawn error.
+//      Fail-soft on purpose: boot must not gain a new way to die.
+var COMMIT_SHA = (function () {
+  var fromEnv = process.env.MYCELIUM_GIT_SHA;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim();
+  try {
+    var out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      encoding: 'utf8'
+    });
+    var sha = String(out).trim();
+    return sha || 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+})();
 
 // ---- Startup validation ----
 if (!process.env.ADMIN_KEY || !process.env.JWT_SECRET) {
@@ -245,7 +275,8 @@ app.get('/health', function (req, res) {
     db_ok: dbOk,
     agents_online: agentsOnline,
     memory_usage_mb: Math.round(mem.rss / 1024 / 1024),
-    version: APP_VERSION
+    version: APP_VERSION,
+    commit_sha: COMMIT_SHA
   });
 });
 
