@@ -67,7 +67,7 @@ const TEST_FILE_COUNT = listTestFiles().length;
 // machine but absent from a clean checkout, so assert against it only when it
 // exists. On CI it is simply not in the map and not checked.
 const DOCS = {};
-for (const rel of ['README.md', 'CLAUDE.md', '.claude/CLAUDE.md']) {
+for (const rel of ['README.md', 'CLAUDE.md', 'CONTRIBUTING.md', '.claude/CLAUDE.md']) {
   const full = join(ROOT, rel);
   if (existsSync(full)) DOCS[rel] = readFileSync(full, 'utf8');
 }

@@ -1,7 +1,7 @@
 # Contributing to Mycelium
 
 Thanks for being here. Mycelium is small enough that one good
-contributor makes a real difference, and big enough (~291 endpoints,
+contributor makes a real difference, and big enough (~285 endpoints,
 13 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
@@ -118,7 +118,8 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/`. Run it locally before opening
+There's a vitest suite under `test/` — 91 files across `test/unit/`,
+`test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
 ```bash
