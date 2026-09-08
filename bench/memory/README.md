@@ -21,6 +21,12 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #   --judge-model ID        (default Laguna-XS-2.1-mlx-oq4e-agentic-ours)
 #   --handlabels FILE       judge-agreement vs a hand-scored set (see below)
 #   --from-results DIR      rebuild the receipt from a finished run's own output
+#
+# re-judge a saved run under the CURRENT judge rubric (task 168):
+#   node bench/memory/run.mjs --from-results bench/memory/results/<runId> \
+#     --rejudge --handlabels bench/memory/handlabels/<file>.json --receipt
+# (judge-only: no answerer calls, no platform calls; writes judged.rejudge.jsonl
+#  + summary.rejudge.json beside the originals and a `<runId>-rejudge` receipt)
 ```
 
 Cost: $0 — the answerer and the judge are both local models.
@@ -51,7 +57,7 @@ Every result row and the receipt carry:
 { "date_utc", "git_sha", "git_dirty", "harness",
   "dataset": {name, file, sha256, licence, url, items_available},
   "answerer": {model, url_host, temperature, max_tokens},
-  "judge": {model, url_host},
+  "judge": {model, url_host, judge_prompt_version},
   "retrieval": {budget, chunking, source_type, namespace, server_mode},
   "platform": {url_host, version, embedding_provider, embedding_model, chunk_size},
   "n", "selection_rule", "notes" }
@@ -83,6 +89,36 @@ to emit exactly one label: EXACT / PARTIAL / WRONG. Unparsable judge replies
 count as wrong AND are reported (`unparsed`) — a judge that cannot answer is
 not silently a pass.
 
+**The label rule (judge prompt v2, `judge-prompt.2`)** — the rubric is applied
+in this order:
+
+- **WRONG** — the answer does not state the gold fact: any refusal, "I don't
+  know" / "not in my memory", a restatement of context or memory without the
+  fact itself, an answer to a different question, or an answer asserting a
+  different fact.
+- **PARTIAL** — the answer states part of the gold fact correctly (a name
+  without the date, a number off only by rounding, one of two items). If no
+  part of the gold fact appears, the label is WRONG, not PARTIAL.
+- **EXACT** — the answer states the gold fact, however phrased.
+
+The version is stamped into every regime (`judge.judge_prompt_version`) and
+into every rejudge summary/receipt: two runs judged under different rubric
+versions are not comparable, and the stamp is what makes that visible.
+
+Why v2 exists: v1 defined PARTIAL as "same topic, but incomplete", and the
+judge spent it on refusals and restated-context non-answers — all four
+hand-vs-judge disagreements of run `2026-09-08-p1-185920` ran one way
+(hand=wrong, judge=partial). Task 168 made a non-answer wrong by rule and
+re-judged the saved run; see that run's `-rejudge` receipt.
+
+**Re-judging a saved run** (`--rejudge`): re-runs ONLY the judge over the
+run's saved answers (`<arm>.rows.jsonl`) — no answerer calls, no platform
+calls. Writes `judged.rejudge.jsonl` + `summary.rejudge.json` beside the
+originals (originals are never touched; an existing rejudge output is refused,
+not overwritten) and, with `--receipt`, a `<runId>-rejudge` receipt carrying
+the new scores, the old scores, the judge-agreement number, and a regime block
+recording `judge_prompt_version` + which run was re-judged.
+
 **Validation:** before any number is quoted, hand-score ≥20 sampled (question,
 gold, answer) triples, write `bench/memory/handlabels/<date>-<n>.json`:
 
@@ -113,6 +149,7 @@ provisional.
 ```
 run.mjs        CLI (thin)            judge.mjs    local judge + label parsing + agreement
 core.mjs       runBench (DI; what tests drive)    regime.mjs   the stamp
+rejudge.mjs    re-judge saved answers (DI; what tests drive)
 split.mjs      registry + sha256 gate + selection receipt.mjs markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
 arms/          arm_none, arm_mycelium, registry

@@ -12,7 +12,8 @@ import path from 'node:path';
 import { loadSplit, selectItems, BENCH_DIR } from './split.mjs';
 import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.mjs';
 import { makeOpenAIChat } from './answer.mjs';
-import { makeJudge, agreement } from './judge.mjs';
+import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
+import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
@@ -31,7 +32,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === 'receipt' || key === 'keep') { out[key] = true; continue; }
+    if (key === 'receipt' || key === 'keep' || key === 'rejudge') { out[key] = true; continue; }
     out[key] = argv[++i];
   }
   return out;
@@ -66,6 +67,79 @@ async function waitForEmbeddings(platform, { beforeStats, timeoutMs = 8 * 60 * 1
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // ---------------- from-results + --rejudge: re-judge the saved answers ------
+  // Re-runs ONLY the judge over the run's saved answers (<arm>.rows.jsonl):
+  // no answerer calls, no platform calls. Writes judged.rejudge.jsonl +
+  // summary.rejudge.json beside the originals (originals never touched) and,
+  // with --receipt, a `<runId>-rejudge` receipt whose regime block records the
+  // judge prompt version and which run was re-judged.
+  if (args['from-results'] && args.rejudge) {
+    const dir = path.resolve(args['from-results']);
+    const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
+    const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
+    const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
+    const judgeFn = makeJudge({ chat: judgeChat });
+
+    let fd = null;
+    try {
+      const result = await rejudgeRun({
+        dir,
+        judgeFn,
+        judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
+        judgePromptVersion: JUDGE_PROMPT_VERSION,
+        generatedAtUtc: utcStamp(new Date()),
+        onJudged: (row) => {
+          if (fd === null) fd = fs.openSync(path.join(dir, 'judged.rejudge.jsonl'), 'w');
+          fs.writeSync(fd, JSON.stringify(row) + '\n');
+        },
+        log: (m) => console.error(`[rejudge] ${m}`),
+      });
+      const summaryFile = path.join(dir, 'summary.rejudge.json');
+      fs.writeFileSync(summaryFile, JSON.stringify(result.summary, null, 2));
+
+      let judgeAgreement = null;
+      let handlabelsMeta = null;
+      if (args.handlabels) {
+        const hl = JSON.parse(fs.readFileSync(args.handlabels, 'utf8'));
+        judgeAgreement = agreement(result.judged, hl.items);
+        handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
+      }
+
+      let receiptFile = null;
+      if (args.receipt) {
+        const dirRel = path.relative(REPO_ROOT, dir);
+        const md = renderReceipt({
+          runId: result.summary.run_id,
+          summary: result.summary,
+          agreement: judgeAgreement,
+          handlabels: handlabelsMeta,
+          commands: [
+            `node bench/memory/run.mjs --from-results ${dirRel.startsWith('..') ? dir : dirRel} --rejudge` +
+              `${args.handlabels ? ` --handlabels ${args.handlabels}` : ''} --receipt`,
+          ],
+          rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
+          generatedAt: utcStamp(new Date()),
+        });
+        receiptFile = writeReceipt(result.summary.run_id, md);
+        console.error(`[run] receipt: ${receiptFile}`);
+      }
+
+      console.log(JSON.stringify({
+        rejudged_from: result.summary.rejudged_from,
+        judge_prompt_version: JUDGE_PROMPT_VERSION,
+        judged_file: path.relative(REPO_ROOT, result.judgedFilePath),
+        summary_file: path.relative(REPO_ROOT, summaryFile),
+        agreement: judgeAgreement
+          ? { n: judgeAgreement.n, agree: judgeAgreement.agree, rate: judgeAgreement.rate }
+          : null,
+        receipt: receiptFile ? path.relative(REPO_ROOT, receiptFile) : null,
+      }, null, 2));
+    } finally {
+      if (fd !== null) fs.closeSync(fd);
+    }
+    return;
+  }
 
   // ---------------- from-results mode: regenerate receipt from evidence -------
   if (args['from-results']) {
@@ -163,7 +237,7 @@ async function main() {
       citation: split.spec.citation,
     },
     answerer: { model: answerModel, url_host: new URL(answerUrl).host, temperature: 0, max_tokens: ANSWER_MAX_TOKENS },
-    judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
+    judge: { model: judgeModel, url_host: new URL(judgeUrl).host, judge_prompt_version: JUDGE_PROMPT_VERSION },
     retrieval: {
       budget,
       chunking: 'one memory row per haystack session (server-side chunk-aware split for oversized rows)',

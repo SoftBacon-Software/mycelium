@@ -4,9 +4,23 @@
 
 export const LABELS = ['exact', 'partial', 'wrong'];
 
+// Version of the label rubric below — stamped into every regime (fresh runs)
+// and into every rejudge summary/receipt. Bump when the rubric changes: two
+// runs judged under different rubrics are not comparable.
+// v1 (implicit, never stamped): PARTIAL was "same topic, but incomplete", and
+//   the judge spent it on refusals and restated-context non-answers — all four
+//   hand-vs-judge disagreements of run 2026-09-08-p1-185920 ran one way
+//   (hand=wrong, judge=partial).
+// v2 (2026-09-08, task 168): a non-answer is WRONG by rule. WRONG leads the
+//   rubric (does not state the gold fact — refusals, "not in my memory",
+//   restated context without the fact, a different question); PARTIAL now
+//   REQUIRES part of the gold fact on the table.
+export const JUDGE_PROMPT_VERSION = 'judge-prompt.2';
+
 export const JUDGE_SYSTEM =
   'You are a strict, fair grader for a memory benchmark. You compare an assistant\'s answer ' +
-  'to a gold reference answer and output exactly one word. No explanation.';
+  'to a gold reference answer and output exactly one word. No explanation. ' +
+  'An answer that does not state the gold fact is WRONG, never PARTIAL.';
 
 export function judgePrompt({ question, gold, answer }) {
   return [
@@ -14,10 +28,14 @@ export function judgePrompt({ question, gold, answer }) {
     `Gold reference answer: ${gold}`,
     `Assistant answer: ${answer}`,
     '',
-    'Score the assistant answer:',
-    '- EXACT: it states the gold fact, essentially equivalent wording is fine.',
-    '- PARTIAL: partly right — same topic, but incomplete, vague, or imprecise compared to the gold.',
-    '- WRONG: factually incorrect, asserts something different, or does not answer the question.',
+    'Score the assistant answer. Apply these rules in order:',
+    '- WRONG: the answer does not state the gold fact. Any refusal or "I don\'t know" /',
+    '  "not in my memory" is WRONG; so is a restatement of context or memory without the',
+    '  fact itself, an answer to a different question, and an answer asserting a different fact.',
+    '- PARTIAL: the answer states part of the gold fact correctly — a name without the date,',
+    '  a number off only by rounding, one of two items. If no part of the gold fact appears,',
+    '  the label is WRONG, not PARTIAL.',
+    '- EXACT: the answer states the gold fact; essentially equivalent wording is fine.',
     '',
     'Respond with exactly one word: EXACT, PARTIAL, or WRONG.',
   ].join('\n');

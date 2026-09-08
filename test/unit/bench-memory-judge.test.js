@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLabel, tally, agreement, makeJudge, judgePrompt } from '../../bench/memory/judge.mjs';
+import { parseLabel, tally, agreement, makeJudge, judgePrompt, JUDGE_SYSTEM, JUDGE_PROMPT_VERSION } from '../../bench/memory/judge.mjs';
 import { stripThink } from '../../bench/memory/answer.mjs';
 
 describe('bench/memory judge label parsing', () => {
@@ -87,6 +87,56 @@ describe('bench/memory judge against a fake model', () => {
   it('the prompt instructs one word and defines the three labels', () => {
     const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
     for (const word of ['EXACT', 'PARTIAL', 'WRONG']) expect(p).toContain(word);
+  });
+});
+
+describe('bench/memory judge prompt v2 — a non-answer is WRONG, never PARTIAL', () => {
+  it('stamps the rubric version', () => {
+    expect(JUDGE_PROMPT_VERSION).toBe('judge-prompt.2');
+  });
+
+  it('the rubric leads with does-not-state-the-gold-fact => WRONG and names every non-answer shape', () => {
+    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
+    expect(p).toMatch(/WRONG: the answer does not state the gold fact/);
+    expect(p).toMatch(/not in my memory/i);
+    expect(p).toMatch(/restatement of context or memory without the\s+fact/);
+    expect(p).toMatch(/different question/);
+    // the rules are ordered: WRONG first, so a grader cannot reach PARTIAL
+    // without first passing the non-answer test
+    expect(p.indexOf('WRONG: the answer does not state')).toBeLessThan(p.indexOf('PARTIAL: the answer states part'));
+  });
+
+  it('PARTIAL requires part of the gold fact on the table — and says what happens otherwise', () => {
+    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
+    expect(p).toMatch(/PARTIAL: the answer states part of the gold fact correctly/);
+    expect(p).toMatch(/If no part of the gold fact appears,\n\s*the label is WRONG, not PARTIAL/);
+    // v1's lenient phrasing must not survive anywhere in the prompt
+    expect(p).not.toMatch(/same topic, but incomplete/);
+  });
+
+  it('EXACT keeps the however-phrased contract', () => {
+    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
+    expect(p).toMatch(/EXACT: the answer states the gold fact; essentially equivalent wording is fine/);
+  });
+
+  it('the system prompt carries the never-partial rule', () => {
+    expect(JUDGE_SYSTEM).toMatch(/strict, fair grader/);
+    expect(JUDGE_SYSTEM).toMatch(/does not state the gold fact is WRONG, never PARTIAL/);
+  });
+
+  it('makeJudge sends the v2 rubric and still parses the one-word reply', async () => {
+    let sawPrompt = null;
+    const judge = makeJudge({
+      chat: async ({ system, user }) => {
+        sawPrompt = user;
+        expect(system).toMatch(/never PARTIAL/);
+        return { text: 'WRONG', hadThink: false };
+      },
+    });
+    const r = await judge({ question: 'How many years?', gold: '43', answer: 'I do not have that in my memory.' });
+    expect(r.label).toBe('wrong');
+    expect(sawPrompt).toContain('Gold reference answer: 43');
+    expect(sawPrompt).toMatch(/does not state the gold fact/);
   });
 });
 

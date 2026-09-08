@@ -15,23 +15,39 @@ export function renderReceipt({
   cleanup = null,
   handlabels = null,
   writeInfo = null,
+  rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
   generatedAt,
 }) {
+  const scoreRow = ([name, a]) => {
+    const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
+    return `| ${name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`;
+  };
   const L = [];
   L.push(`# Receipt — memory benchmark P1 skeleton (${runId})`);
   L.push('');
   L.push(`Generated: ${generatedAt}`);
+  if (rejudge) {
+    L.push('');
+    L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`.`);
+    L.push('The answers are the original run\'s own (no answerer calls, no platform calls) — only the');
+    L.push('judge labels were re-computed. The original run\'s scores are rendered below the new ones.');
+  }
   L.push('');
   L.push('## Scores');
   L.push('');
   L.push('| arm | n | exact | partial | wrong | p1_score |');
   L.push('|---|---|---|---|---|---|');
-  for (const [name, a] of Object.entries(summary.arms)) {
-    const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
-    L.push(`| ${name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`);
-  }
+  for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a]));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
+  if (rejudge && summary.original?.arms) {
+    L.push('');
+    L.push(`Original run \`${rejudge.ofRunId}\` scores (pre-rejudge, from the run's own summary):`);
+    L.push('');
+    L.push('| arm | n | exact | partial | wrong | p1_score |');
+    L.push('|---|---|---|---|---|---|');
+    for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a]));
+  }
   L.push('');
   if (summary.arms.mycelium?.retrieval_modes) {
     L.push(`Retrieval modes observed (mycelium arm, per query): ${JSON.stringify(summary.arms.mycelium.retrieval_modes)}`);
@@ -86,9 +102,17 @@ export function renderReceipt({
   L.push('');
   L.push('## Artifacts');
   L.push('');
-  L.push(`- rows: \`bench/memory/results/${runId}/\` (<arm>.rows.jsonl + judged.jsonl — the raw evidence for every number above)`);
-  L.push(`- summary: \`bench/memory/results/${runId}/summary.json\``);
-  L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
+  if (rejudge) {
+    L.push(`- rows (the saved answers, unchanged): \`bench/memory/results/${rejudge.ofRunId}/\` (<arm>.rows.jsonl)`);
+    L.push(`- judged (rejudge): \`bench/memory/results/${rejudge.ofRunId}/judged.rejudge.jsonl\``);
+    L.push(`- summary (rejudge): \`bench/memory/results/${rejudge.ofRunId}/summary.rejudge.json\``);
+    L.push(`- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
+    L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
+  } else {
+    L.push(`- rows: \`bench/memory/results/${runId}/\` (<arm>.rows.jsonl + judged.jsonl — the raw evidence for every number above)`);
+    L.push(`- summary: \`bench/memory/results/${runId}/summary.json\``);
+    L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
+  }
   L.push('');
   return L.join('\n');
 }
