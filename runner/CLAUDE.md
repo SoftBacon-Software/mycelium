@@ -15,6 +15,7 @@ Autonomous agent runner for the Mycelium platform. Polls Mycelium for work, spaw
 
 ```bash
 npm install                         # Install dependencies
+node setup.js                       # Interactive wizard — asks for instance URL + admin key, writes config.json
 node index.js                       # Run with config.json
 node index.js config.railway.json   # Run with Railway config
 LOG_LEVEL=debug node index.js       # Debug logging

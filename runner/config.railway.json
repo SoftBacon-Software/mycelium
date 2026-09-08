@@ -1,6 +1,6 @@
 {
   "mycelium": {
-    "apiUrl": "https://mycelium.fyi/api/mycelium",
+    "apiUrl": "https://your-mycelium-instance/api/mycelium",
     "adminKey": "env:MYCELIUM_ADMIN_KEY"
   },
   "defaults": {
@@ -23,7 +23,7 @@
           "command": "node",
           "args": ["/mcp/index.js"],
           "env": {
-            "MYCELIUM_API_URL": "https://mycelium.fyi/api/mycelium",
+            "MYCELIUM_API_URL": "https://your-mycelium-instance/api/mycelium",
             "MYCELIUM_ROLE": "agent",
             "MYCELIUM_API_KEY": "env:ADMIN_BOT_KEY",
             "MYCELIUM_AGENT_ID": "admin-bot"
