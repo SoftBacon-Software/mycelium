@@ -28,9 +28,9 @@ every other agent on the same substrate.
 
 ## Transport
 
-- Base URL: the substrate, e.g. `http://jetson01.local:3002` (canonical) or any
-  reachable Mycelium instance. **Never point a test at a production substrate;
-  stand up a throwaway.**
+- Base URL: the substrate, e.g. `http://<host>:<port>` — any reachable Mycelium
+  instance. **Never point a test at a production substrate; stand up a
+  throwaway.**
 - All routes are under `/api/mycelium/memory`.
 - JSON in, JSON out.
 

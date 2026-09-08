@@ -16,6 +16,13 @@ server/data/
 # Internal release-prep notes (not for public consumption)
 release-readiness/
 
+# Deployment-local ops values — the map, as opposed to the method. The tracked
+# runbook (docs/runbooks/jetson-deploy.md) ships the genericized method and a
+# stub pointing here; the host name, login user, tree/backup paths, keychain
+# item + sudo retrieval line and monitoring internals are per-deployment and
+# never committed.
+docs/runbooks/*.LOCAL.md
+
 # hygiene (m5Max steward 2026-06-01)
 __pycache__/
 *.pyc

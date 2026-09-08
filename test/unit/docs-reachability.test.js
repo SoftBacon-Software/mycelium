@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -32,10 +33,28 @@ function collectMarkdown(dir) {
 
 const docsFiles = collectMarkdown(docsDir)
 
+// Gitignored files are not public docs and sit outside this gate's universe —
+// most importantly docs/runbooks/*.LOCAL.md, the per-deployment ops values the
+// 2026-09-04 ops-detail split deliberately keeps untracked. check-ignore (not
+// ls-files) is the oracle: an untracked-but-addable new guide stays gated, while
+// a file the repo has explicitly refused to ship does not demand an entry-doc
+// link it can never honestly get.
+const gitIgnored = (() => {
+  const rels = docsFiles.map((f) => path.relative(root, f))
+  if (!rels.length) return new Set()
+  const res = spawnSync('git', ['check-ignore', '--stdin'], {
+    cwd: root,
+    input: rels.join('\n'),
+    encoding: 'utf8',
+  })
+  return new Set((res.stdout || '').split('\n').filter((l) => l.trim()))
+})()
+
 describe('docs reachability from entry docs', () => {
   test('every docs/*.md is linked from README/CONTRIBUTING or filed under an exempt subdir', () => {
     const orphans = docsFiles
       .map((full) => {
+        if (gitIgnored.has(path.relative(root, full))) return null
         const rel = path.relative(docsDir, full).split(path.sep)
         const basename = path.basename(full)
         const inExemptSubdir = exemptSubdirs.includes(rel[0])
