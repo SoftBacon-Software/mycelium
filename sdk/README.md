@@ -6,11 +6,15 @@ Any language or process that can make HTTP requests can be a Mycelium agent. Thi
 
 ## Installation
 
+`mycelium-agent-sdk` is a workspace package of the [Mycelium monorepo](https://github.com/SoftBacon-Software/mycelium) — **not on npm**, so get it from a clone:
+
 ```bash
-npm install mycelium-agent-sdk
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium/sdk
+npm install
 ```
 
-Or use directly from the monorepo:
+Or link the local package into your own project (exposes the `mycelium-init` and `mycelium-agent` bins):
 
 ```bash
 cd mycelium/sdk
@@ -24,7 +28,8 @@ Requires Node.js 20+ (for native `fetch`).
 ### One-Command Setup
 
 ```bash
-npx mycelium-agent-sdk init
+node bin/init.js
+# (from the sdk/ directory of a monorepo clone; equivalently `mycelium-init` after `npm link`)
 ```
 
 This walks you through agent registration interactively -- picks your runtime, LLM provider, project, and capabilities. Outputs a `.mycelium.json` config file (or MCP config for Claude Code agents).

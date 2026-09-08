@@ -1,14 +1,19 @@
 {
-  "name": "mycelium-mcp",
+  "name": "mycelium-mcp-server",
   "version": "1.2.0",
   "description": "Mycelium MCP server — gives Claude agents native tools with auto-heartbeat and protocol enforcement for the Mycelium platform",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "mycelium-mcp": "./index.js"
+    "mycelium-mcp-server": "./index.js"
   },
   "scripts": {
     "start": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SoftBacon-Software/mycelium.git",
+    "directory": "mcp"
   },
   "keywords": [
     "mcp",

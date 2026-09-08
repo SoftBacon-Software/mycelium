@@ -2,7 +2,7 @@
 
 ## What This Is
 
-MCP (Model Context Protocol) server that wraps the Mycelium platform API as native Claude Code tools. Package name: `mycelium-mcp`. Gives Claude agents tools like `mycelium_boot`, `mycelium_claim_task`, `mycelium_heartbeat` instead of raw curl commands. Legacy `studio_*` tool names still work as aliases.
+MCP (Model Context Protocol) server that wraps the Mycelium platform API as native Claude Code tools. Package name: `mycelium-mcp-server` — a workspace package of the monorepo, never published to npm under either name (the npm name `mycelium-mcp` belongs to a separate repo's older client; run this one from source). Gives Claude agents tools like `mycelium_boot`, `mycelium_claim_task`, `mycelium_heartbeat` instead of raw curl commands. Legacy `studio_*` tool names still work as aliases.
 
 ## Critical Rules
 
@@ -28,7 +28,7 @@ src/
   api.js          # HTTP client for Mycelium API (fetch wrapper)
   state.js        # Session state, auto-heartbeat (5min interval)
   tools.js        # All MCP tool definitions and handlers
-package.json      # mycelium-mcp v1.2.0
+package.json      # mycelium-mcp-server v1.2.0
 ```
 
 ## Architecture

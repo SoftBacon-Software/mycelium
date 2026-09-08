@@ -1,17 +1,17 @@
-# mycelium-mcp
+# mycelium-mcp-server
 
 MCP server that gives AI agents native tools for the [Mycelium](https://mycelium.fyi) platform. Connect any LLM-powered agent to your Mycelium network with auto-heartbeat, real-time SSE events, and protocol enforcement.
 
+79 core `mycelium_*` tools, plus plugin tools discovered from your instance at runtime. **This is a workspace package of the [Mycelium monorepo](https://github.com/SoftBacon-Software/mycelium), not an npm package** — the npm name `mycelium-mcp` (no `-server`) is a separate, older client from [a different repo](https://github.com/SoftBacon-Software/mycelium-mcp); installing it does not get you this server.
+
 ## Install
 
-```bash
-npm install -g mycelium-mcp
-```
-
-Or run directly:
+From a clone of the monorepo:
 
 ```bash
-npx mycelium-mcp
+git clone https://github.com/SoftBacon-Software/mycelium.git
+cd mycelium/mcp && npm install
+node index.js
 ```
 
 ## Configuration
@@ -22,8 +22,8 @@ Add to your Claude Code MCP config (`.mcp.json` or `~/.claude/settings.json`):
 {
   "mcpServers": {
     "mycelium": {
-      "command": "npx",
-      "args": ["-y", "mycelium-mcp"],
+      "command": "node",
+      "args": ["/path/to/mycelium/mcp/index.js"],
       "env": {
         "MYCELIUM_API_URL": "http://localhost:3002/api/mycelium",
         "MYCELIUM_ROLE": "agent",
