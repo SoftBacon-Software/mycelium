@@ -27,11 +27,22 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 
 // --- real values, computed from source -------------------------------------
 
-// Tables: count lines in the base schema containing `CREATE TABLE` (same method as
-// `grep -c 'CREATE TABLE' server/schema.sql`).
+// Tables: count the schema's CREATE TABLE *statement* lines — anchored so the keyword
+// must OPEN the line (leading whitespace tolerated). A bare /CREATE TABLE/ line count is
+// inflated by every COMMENT that quotes the keyword, and schema.sql carries two such
+// comments (the "now native CREATE TABLE columns above" note and the "CREATE TABLE IF
+// NOT EXISTS keeps both paths idempotent" note) — that is exactly how the docs came to
+// ship 56 and then 57 tables for a 55-table schema. Matching the `CREATE TABLE IF NOT
+// EXISTS` prefix instead is no better: the second comment quotes that full prefix, and a
+// future statement written without IF NOT EXISTS would be silently undercounted. Same
+// method as `grep -icE '^\s*CREATE TABLE' server/schema.sql`, cross-checked against
+// `sqlite3 :memory: < server/schema.sql` (55 non-sqlite_ tables when this was written).
+// Accepted residual blind spot: a line inside a /* block comment */ beginning with
+// CREATE TABLE would still count — schema.sql uses only `--` line comments and its
+// statements are machine-written; SQL parsing is not worth the dependency.
 const TABLE_COUNT = read('server/schema.sql')
   .split('\n')
-  .filter((line) => /CREATE TABLE/.test(line)).length;
+  .filter((line) => /^\s*CREATE TABLE/i.test(line)).length;
 
 // Routes: one per non-blank line of the committed route-manifest snapshot. The snapshot
 // itself is kept current by the route-manifest gate (`node test/refactor/route-manifest.mjs
@@ -171,7 +182,11 @@ describe('docs inventory accuracy', () => {
     // the doc is lying again. Sourced from the 2026-08-06 reconciliation.
     const stale = [
       [/291/, `the endpoint count is ${ROUTE_COUNT}, not 291`],
-      [/56\s+tables/i, `the table count is ${TABLE_COUNT}, not 56 (x_read_ledger added 2026-08-29)`],
+      [/56\s+tables/i, `the table count is ${TABLE_COUNT}, not 56 — that number already counted a schema.sql comment line`],
+      // 57 is the number the bare-keyword derivation most recently blessed into the docs
+      // (two comment lines quoting CREATE TABLE), so it is the one that would creep back
+      // through this list's blind spot. Both stale numbers banned; see TABLE_COUNT above.
+      [/57\s+tables/i, `the table count is ${TABLE_COUNT}, not 57 — the bare-keyword count included two schema.sql comment lines`],
       [/150\+/, '"150+" tests was retired'],
       [/40\s+files/, `the test-file count is ${TEST_FILE_COUNT}, not 40`],
       [/no linter/i, 'ESLint is configured (eslint.config.js) and runs in CI'],
