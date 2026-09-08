@@ -18,6 +18,7 @@ import createRoutes from './routes.js';
 import createMemoryDB from './db.js';
 import { registerHooks } from './handlers.js';
 import { chunkText } from './chunking.js';
+import { generateEmbedding } from './embeddings.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1020,4 +1021,229 @@ test('db: indexHealth() reports total/embedded/coverage/vector_scan_capped (ligh
   assert.equal(h.coverage_pct, 50);
   assert.strictEqual(h.vector_scan_capped, false);
   hdb.close();
+});
+
+// ---- Fresh-instance config + degrade contract ------------------------------
+// The plugin ships enabled:true with NO embedding provider configured
+// (generateEmbedding defaults `embedding_provider || 'none'`). These four
+// tests pin what a stranger gets BEFORE any configuration, and the two
+// half-behaviors they meet:
+//
+//   graceful half — POST /search still works, keyword-only, and says so
+//                   (mode:'keyword-fallback' + degraded.reason). Pinned
+//                   GREEN on master where written (the honest-mode fix
+//                   predates this test; routes.js §F1 comment).
+//   loud half     — POST /reindex and POST /backfill-embeddings answer 400
+//                   naming `PUT /memory/config`, the only pointer to the
+//                   on-switch. Also pinned GREEN on master where written.
+//
+// GREEN-on-arrival is expected and honest: these are PINS of the shipped
+// contract (the file header says so), not reds manufactured against master.
+// What keeps them from being vacuous is the bite matrix — each assertion
+// below was proven RED by injecting the opposite behavior (default flipped
+// to ollama / key-strip removed / auto-embed skipped / loud-400 silenced /
+// unknown-provider throw), then restoring. See the branch, not this file,
+// for that history.
+//
+// Every test here builds its OWN isolated DB + server: the shared fixture
+// above boots with ollama pre-configured, which is exactly the state a
+// fresh instance is NOT in.
+
+// Spins up an isolated plugin app on a fresh in-memory DB (same shape as the
+// expandOversizedRows N+1 test) and returns { db, mem, call } — call() has the
+// same signature as the shared helper but is bound to this server.
+async function freshInstance() {
+  var iso = new Database(':memory:');
+  iso.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  iso.exec(PLATFORM_TABLES);
+  var core = makeCore(iso);
+  var app = express();
+  app.use(express.json({ limit: '10mb' }));
+  app.use('/memory', createRoutes(core));
+  var srv = http.createServer(app);
+  await new Promise(function (r) { srv.listen(0, '127.0.0.1', r); });
+  var b = 'http://127.0.0.1:' + srv.address().port;
+  async function isoCall(method, p, body, headers) {
+    var res = await realFetch(b + p, {
+      method: method,
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers || {}),
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    var json = null;
+    try { json = await res.json(); } catch (e) { /* non-JSON */ }
+    return { status: res.status, body: json };
+  }
+  return {
+    db: iso,
+    mem: createMemoryDB(iso),
+    call: isoCall,
+    close: function () { srv.close(); iso.close(); }
+  };
+}
+
+// THE PAIR on one fresh instance: config unset + search still answers +
+// embed-requiring routes name the switch. The contract is the pair — a
+// fresh install that either lost search or lost the pointer would strand
+// the flagship feature in a different direction.
+test('config: fresh instance has no provider — GET /config says nothing is set, search still answers keyword-only, embed routes name PUT /memory/config', async function () {
+  var f = await freshInstance();
+  try {
+    // The fresh truth: no embedding_provider key AT ALL (getAllConfig is {}).
+    // generateEmbedding's `|| 'none'` default is what makes this "off".
+    var g = await f.call('GET', '/memory/config');
+    assert.equal(g.status, 200);
+    assert.equal('embedding_provider' in g.body, false, 'fresh config carries no embedding_provider — vector search is OFF');
+    // The same truth at the unit level, through the same getter the routes
+    // read: an unconfigured store yields no vector. (The route layer checks
+    // the raw config itself, so this is the only pin on the DEFAULT — flip
+    // `|| 'none'` in embeddings.js and THIS is the line that goes red.)
+    assert.equal(await generateEmbedding(f.mem.getAllConfig(), 'probe text'), null, 'the unconfigured default produces no embedding');
+
+    // Indexing works without a provider — the row just stores a NULL vector.
+    var r = await f.call('POST', '/memory/index', {
+      source_type: 'note', source_id: 'fresh-1',
+      content_text: 'kerbin orbital insertion burn profile'
+    });
+    assert.equal(r.status, 200);
+    var row = f.db.prepare("SELECT embedding FROM sm_embeddings WHERE source_id = 'fresh-1'").get();
+    assert.equal(row.embedding, null, 'no provider → NULL embedding, index still succeeds');
+
+    // Graceful half: search answers 200 with results, and says it fell back.
+    var s = await f.call('POST', '/memory/search', { query: 'kerbin orbital burn' });
+    assert.equal(s.status, 200);
+    assert.equal(s.body.mode, 'keyword-fallback', 'search is honest about the missing vector half');
+    assert.match(s.body.degraded.reason, /no embedding provider configured/, 'degraded.reason names the missing config');
+    assert.ok(s.body.results.some(function (x) { return x.source_id === 'fresh-1'; }), 'keyword results still surface the doc');
+
+    // Loud half: the embed-requiring routes refuse with the pointer, not silence.
+    var rx = await f.call('POST', '/memory/reindex', {});
+    assert.equal(rx.status, 400);
+    assert.match(rx.body.error, /No embedding provider configured\. Set via PUT \/memory\/config/, 'reindex names the on-switch');
+
+    var rb = await f.call('POST', '/memory/backfill-embeddings');
+    assert.equal(rb.status, 400);
+    assert.match(rb.body.error, /No embedding provider configured\. Set via PUT \/memory\/config/, 'backfill names the on-switch');
+  } finally {
+    f.close();
+  }
+});
+
+// Round-trip: what PUT accepts, GET returns — with the api_key stripped on
+// the read side but still persisted (redaction is response-only). Extends
+// the PUT-leak test above by pinning the VALUE half of the round trip: GET
+// must reflect the provider/model/url that were set, not just omit the key.
+test('config: PUT /memory/config round-trips provider/model/url into GET and strips embedding_api_key', async function () {
+  var f = await freshInstance();
+  try {
+    var put = await f.call('PUT', '/memory/config', {
+      embedding_provider: 'ollama',
+      embedding_model: 'mymodel',
+      embedding_url: 'http://embed.internal:9999',
+      embedding_api_key: 'sk-roundtrip-secret'
+    });
+    assert.equal(put.status, 200);
+    assert.equal(put.body.config.embedding_api_key, undefined, 'PUT response redacts the key');
+    assert.equal(put.body.config.embedding_provider, 'ollama');
+
+    var g = await f.call('GET', '/memory/config');
+    assert.equal(g.status, 200);
+    assert.equal(g.body.embedding_provider, 'ollama', 'GET reflects the configured provider');
+    assert.equal(g.body.embedding_model, 'mymodel', 'GET reflects the configured model');
+    assert.equal(g.body.embedding_url, 'http://embed.internal:9999', 'GET reflects the configured url');
+    assert.equal(g.body.embedding_api_key, undefined, 'GET strips the api key');
+
+    // Redaction is response-only: the key is still persisted for the provider.
+    assert.equal(f.mem.getConfig('embedding_api_key'), 'sk-roundtrip-secret', 'key still persisted');
+  } finally {
+    f.close();
+  }
+});
+
+// Provider fires: with a provider configured, an index write must reach the
+// CONFIGURED url + model (not just any ollama) and the vector must land in
+// search. The recorder replaces global.fetch wholesale — nothing here can
+// touch a real localhost:11434 or api.openai.com.
+test('provider fires: index embeds against the CONFIGURED url and model, and the vector round-trips into search', async function () {
+  var f = await freshInstance();
+  var seen = [];
+  global.fetch = function (url, opts) {
+    seen.push({ url: String(url), body: JSON.parse((opts && opts.body) || '{}') });
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embeddings: [FAKE_VECTOR] }); }
+    });
+  };
+  try {
+    var cfg = await f.call('PUT', '/memory/config', {
+      embedding_provider: 'ollama',
+      embedding_model: 'my-embed-model',
+      embedding_url: 'http://embed.test:9999'
+    });
+    assert.equal(cfg.status, 200);
+
+    var r = await f.call('POST', '/memory/index', {
+      source_type: 'note', source_id: 'fires-1',
+      content_text: 'duna transfer window arithmetic'
+    });
+    assert.equal(r.status, 200);
+
+    var ok = await waitFor(function () { return seen.length > 0; });
+    assert.ok(ok, 'an embed call was made');
+    var docCall = seen[0];
+    assert.equal(docCall.url, 'http://embed.test:9999/api/embed', 'the CONFIGURED url is used, not a hard-coded default');
+    assert.equal(docCall.body.model, 'my-embed-model', 'the CONFIGURED model is used');
+    assert.equal(docCall.body.input, 'duna transfer window arithmetic', 'the indexed text is what gets embedded');
+
+    // The stored vector round-trips into search as a real hybrid result.
+    await waitFor(function () {
+      var d = f.db.prepare("SELECT embedding FROM sm_embeddings WHERE source_id = 'fires-1'").get();
+      return d && d.embedding;
+    });
+    var s = await f.call('POST', '/memory/search', { query: 'duna transfer window' });
+    assert.equal(s.body.mode, 'hybrid', 'search reports the vector half running');
+    assert.equal(s.body.degraded, undefined, 'no degraded block on a configured provider');
+    assert.ok(s.body.results.some(function (x) { return x.source_id === 'fires-1'; }), 'the doc surfaces');
+  } finally {
+    global.fetch = realFetch;
+    f.close();
+  }
+});
+
+// Unknown provider: the end of generateEmbedding's chain warns and returns
+// null — no throw, no crash, and the index write still succeeds (with a NULL
+// vector, which backfill can pick up later once the config is fixed).
+test('unknown provider: generateEmbedding warns and returns null, index still succeeds, search degrades honestly', async function () {
+  // Unit half: the end-of-chain contract, called directly.
+  var warnings = [];
+  var realWarn = console.warn;
+  console.warn = function () { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+  var nullVector;
+  try {
+    nullVector = await generateEmbedding({ embedding_provider: 'bogus' }, 'some text');
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(nullVector, null, 'unknown provider resolves null — no throw');
+  assert.ok(warnings.some(function (w) { return /Unknown embedding provider/.test(w) && /bogus/.test(w); }), 'the warn names the bogus provider — not a silent null');
+
+  // Route half: with the bogus provider configured, indexing still succeeds
+  // (row stored, NULL embedding) and search still answers with the honest
+  // degrade rather than a 500.
+  var f = await freshInstance();
+  try {
+    await f.mem.setConfig('embedding_provider', 'bogus');
+    var r = await f.call('POST', '/memory/index', {
+      source_type: 'note', source_id: 'bogus-1', content_text: 'laythe tides arithmetic'
+    });
+    assert.equal(r.status, 200, 'index succeeds under a bogus provider');
+    var row = f.db.prepare("SELECT embedding FROM sm_embeddings WHERE source_id = 'bogus-1'").get();
+    assert.equal(row.embedding, null, 'bogus provider stores a NULL vector, not a crash');
+
+    var s = await f.call('POST', '/memory/search', { query: 'laythe tides' });
+    assert.equal(s.status, 200);
+    assert.equal(s.body.mode, 'keyword-fallback');
+    assert.match(s.body.degraded.reason, /provider/, 'degraded.reason explains the vector half is unavailable');
+  } finally {
+    f.close();
+  }
 });
