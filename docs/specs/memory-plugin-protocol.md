@@ -116,12 +116,22 @@ server ever returned.)
 `hybrid` combines keyword and vector similarity; `keyword` skips embedding and is
 the correct fallback when the substrate has no embedding model configured.
 
+### Bench namespaces are invisible to plain recall
+
+A row whose `source_type` starts with `bench_` or whose `namespace` starts with
+`bench-` is excluded from search results unless the request names that
+`source_type` in `source_types` or that `namespace` in `namespace`. A benchmark
+harness that writes into the shared index therefore cannot pollute an agent's
+recall, and can still read back its own rows by naming them. Invisibility is
+not deletion — a finished run purges with the admin call below.
+
 ## Optional calls
 
 | call | route | use |
 |---|---|---|
 | stats | `GET /api/mycelium/memory/stats` | count / health of the store |
 | delete | `DELETE /api/mycelium/memory/index/{source_type}/{source_id}` | forget one item |
+| bulk purge | `DELETE /api/mycelium/memory/index?source_type=<t>[&namespace=<n>]` | **admin only** — delete every row matching the exact filter; at least one filter required (refused otherwise); returns `{deleted: N}`. How a finished benchmark run cleans up after itself. |
 | bulk write | `POST /api/mycelium/memory/index/bulk` | `{items: [ …index bodies… ]}` |
 
 ## Conformance

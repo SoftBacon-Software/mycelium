@@ -2,6 +2,41 @@
 
 import { cosineSimilarity } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
+
+// -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
+// Benchmark harnesses write into the ONE index live recall reads from (task
+// 163's Mycelium arm left 3,104 rows with source_type bench_longmemeval /
+// namespace bench-p1-2026-09-08-*; they outranked real agent memories on every
+// unfiltered search). Rule: a bench row — source_type starting 'bench_' OR
+// namespace starting 'bench-' — is returned by the search functions ONLY when
+// the request itself names a bench source_type in source_types or a bench
+// namespace in namespace. Those are exact-match filters, so naming one bench
+// type/namespace cannot leak another; a request that names no bench filter at
+// all sees no bench rows. Enforced in the query layer (not post-filter) so the
+// caller's `limit` is spent on visible rows instead of being burned on hidden
+// ones before the slice.
+var BENCH_TYPE_PREFIX = 'bench_';
+var BENCH_NS_PREFIX = 'bench-';
+
+function benchOptIn(opts) {
+  opts = opts || {};
+  if (Array.isArray(opts.source_types) &&
+      opts.source_types.some(function (t) {
+        return typeof t === 'string' && t.indexOf(BENCH_TYPE_PREFIX) === 0;
+      })) return true;
+  if (typeof opts.namespace === 'string' && opts.namespace.indexOf(BENCH_NS_PREFIX) === 0) return true;
+  return false;
+}
+
+// Static SQL for the exclusion — no parameters, the prefixes are the constants
+// above and nothing user-supplied is interpolated. substr() instead of LIKE so
+// the '_' in the type prefix is a literal, not a single-char wildcard.
+// COALESCE guards NULL namespace: NULL LIKE/substr = NULL, and a bare NOT(...)
+// would silently drop every NULL-namespace row with it.
+var BENCH_HIDDEN_SQL =
+  "NOT (substr(COALESCE(source_type,''),1," + BENCH_TYPE_PREFIX.length + ") = '" + BENCH_TYPE_PREFIX + "'" +
+  " OR substr(COALESCE(namespace,''),1," + BENCH_NS_PREFIX.length + ") = '" + BENCH_NS_PREFIX + "')";
+
 export default function createMemoryDB(db) {
   return {
 
@@ -151,6 +186,23 @@ export default function createMemoryDB(db) {
       db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
     },
 
+    // Admin bulk purge by exact filter — how a finished benchmark run cleans up
+    // after itself (task 163's 3,104 bench rows were only reachable one
+    // (source_type, source_id) pair at a time before this). At least one filter
+    // is required: the route refuses a bare purge, and this returns null rather
+    // than guess. FTS stays in sync through the sm_fts_delete trigger. Returns
+    // the number of rows deleted.
+    purge(filters) {
+      filters = filters || {};
+      var where = [];
+      var params = [];
+      if (filters.source_type) { where.push('source_type = ?'); params.push(filters.source_type); }
+      if (filters.namespace) { where.push('namespace = ?'); params.push(filters.namespace); }
+      if (where.length === 0) return null; // never delete unfiltered
+      var info = db.prepare('DELETE FROM sm_embeddings WHERE ' + where.join(' AND ')).run(...params);
+      return info.changes;
+    },
+
     // -- Search --
     // Collapse chunked docs to their best-scoring chunk so one big doc
     // can't flood a result page. Input must be sorted best-first; keeps
@@ -189,6 +241,7 @@ export default function createMemoryDB(db) {
         where.push('namespace = ?');
         params.push(opts.namespace);
       }
+      if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
 
       params.push(fetchLimit);
 
@@ -219,6 +272,7 @@ export default function createMemoryDB(db) {
           likeWhere.push('namespace = ?');
           likeParams.push(opts.namespace);
         }
+        if (!benchOptIn(opts)) likeWhere.push(BENCH_HIDDEN_SQL);
         likeParams.push(fetchLimit);
         var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
@@ -246,6 +300,7 @@ export default function createMemoryDB(db) {
         where.push('namespace = ?');
         params.push(opts.namespace);
       }
+      if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
 
       // Cap rows loaded for JS-side cosine sim to prevent DoS on large tables
       var vectorCap = 5000;

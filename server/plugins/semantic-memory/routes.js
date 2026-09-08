@@ -7,7 +7,7 @@ import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from '
 export default function (core) {
   var router = Router();
   var db = createMemoryDB(core.db);
-  var { checkAgentOrAdmin, checkAdmin } = core.auth;
+  var { checkAgentOrAdmin, checkAdmin, getAdminDisplayName } = core.auth;
   // asyncHandler comes from core now (routes/mycelium.js exports it on
   // pluginCore), retiring the private copy this file used to ship. The loader's
   // guardPluginRouter also wraps every plugin handler at mount time, so an
@@ -35,6 +35,12 @@ export default function (core) {
   // POST /memory/search — hybrid search. Wrapped in asyncHandler (rejected
   // promise from generateEmbedding/searchHybrid -> next(err) -> 500) — the
   // same class /reindex + /backfill already guard; /search had been missed.
+  //
+  // Bench-namespace rule (2026-09-08): rows whose source_type starts 'bench_'
+  // or whose namespace starts 'bench-' are EXCLUDED here unless the request
+  // names that source_type in `source_types` or that namespace in `namespace`.
+  // Enforced in the query layer (db.js searchKeyword/searchVector) so `limit`
+  // is spent on visible rows; to recall a benchmark's own writes, name them.
   router.post('/search', asyncHandler(async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
@@ -244,6 +250,40 @@ export default function (core) {
     if (!who) return;
     db.remove(req.params.sourceType, req.params.sourceId);
     res.json({ ok: true });
+  });
+
+  // DELETE /memory/index?source_type=<t>[&namespace=<n>] — admin bulk purge by
+  // exact filter. A finished benchmark run cleans up after itself here: task
+  // 163's Mycelium arm left 3,104 bench_longmemeval rows in the one index live
+  // recall reads from, and the per-row DELETE above is not a cleanup story at
+  // that scale. Admin key / admin studio JWT only (checkAdmin — an agent key
+  // must never be able to bulk-wipe memory), refuses without at least one
+  // exact filter (a bare DELETE would take the whole index), and writes one
+  // attributable log line. Bench rows are invisible to unfiltered search (see
+  // db.js) but invisibility is not deletion — this is how they actually leave.
+  // Filter values must be non-empty strings: a malformed value 400s rather
+  // than being silently dropped from the WHERE (that would purge by the
+  // remaining filter and delete rows the caller never named).
+  router.delete('/index', function (req, res) {
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    function filterArg(v) {
+      if (v === undefined) return null;          // not supplied
+      if (typeof v !== 'string' || v.length === 0) return undefined; // malformed
+      return v;
+    }
+    var sourceType = filterArg(req.query.source_type);
+    var namespace = filterArg(req.query.namespace);
+    if (sourceType === undefined || namespace === undefined) {
+      return apiError(res, 400, 'source_type and namespace must be non-empty strings');
+    }
+    if (!sourceType && !namespace) {
+      return apiError(res, 400, 'refusing unfiltered purge — pass source_type and/or namespace');
+    }
+    var deleted = db.purge({ source_type: sourceType, namespace: namespace });
+    console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
+      (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
+    res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
   });
 
   // GET /memory/stats — index stats
