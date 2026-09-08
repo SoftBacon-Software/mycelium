@@ -60,6 +60,21 @@ response-only. Both config routes are **admin-only**.
 project post-filtering) is also honored, but is only settable through the
 platform plugin-config path above, not `PUT /memory/config`.
 
+### Bench namespaces are invisible to plain recall
+
+Since 2026-09-08: a row whose `source_type` starts with `bench_` or whose
+`namespace` starts with `bench-` does not appear in `/search` results — in any
+mode, keyword or hybrid — unless the request itself names that `source_type` in
+`source_types` or that `namespace` in `namespace`. Both are exact-match
+filters, so naming one bench type/namespace never leaks another.
+
+Why: benchmark harnesses write into the same index live recall reads from, and
+3,104 benchmark rows once outranked real memories on every unfiltered search.
+The rule keeps a benchmark's writes inspectable by the harness that made them
+and invisible to everyone else. Invisibility is not deletion — a finished run
+cleans up with the admin purge: `DELETE /memory/index?source_type=<t>`
+(and/or `?namespace=<n>`).
+
 ### Providers
 
 - **`none`** (default) — keyword-only search, no embed calls made.
@@ -89,10 +104,11 @@ All routes are under `/api/mycelium/memory`.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/search` | agent/admin | Hybrid search. Body: `query` (required), `source_types`, `namespace`, `project_id`, `limit`, `mode` (`hybrid`/`keyword`). Reports `mode`, `degraded`, `index` health. |
+| POST | `/search` | agent/admin | Hybrid search. Body: `query` (required), `source_types`, `namespace`, `project_id`, `limit`, `mode` (`hybrid`/`keyword`). Reports `mode`, `degraded`, `index` health. Bench rows (see below) are hidden unless requested by name. |
 | POST | `/index` | agent/admin | Index one doc. Body: `source_type`, `source_id`, `content_text`, optional `namespace`, `metadata`. |
 | POST | `/index/bulk` | agent/admin | Up to 100 docs per request. |
 | DELETE | `/index/:sourceType/:sourceId` | agent/admin | Remove a doc (all chunks). |
+| DELETE | `/index?source_type=&namespace=` | admin | Bulk purge by exact filter (at least one required — an unfiltered purge is refused). How a finished benchmark run cleans up after itself. Returns `{deleted: N}`. |
 | GET | `/list?source_type=` | agent/admin | Query-free retrieval by type, newest first — for always-on content. |
 | GET | `/stats` | agent/admin | Index counts, coverage, per-type/per-namespace breakdowns. |
 | GET / PUT | `/config` | admin | Read (key stripped) / write provider config. |
