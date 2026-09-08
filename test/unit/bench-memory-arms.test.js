@@ -267,4 +267,41 @@ describe('OpenAI-compatible chat adapter', () => {
     });
     await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(/-> 500/);
   });
+
+  it('errors loud when a thinking model spends the whole budget in reasoning_content', async () => {
+    // qwen3.8 on llama.cpp puts reasoning in a separate field that still
+    // spends max_tokens — content comes back "" and must not grade as an answer.
+    const chat = makeOpenAIChat({
+      url: 'http://fake:1/v1',
+      model: 'qwen3.8:27b',
+      fetchImpl: async () => ({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ finish_reason: 'length', message: { content: '', reasoning_content: '<think>hmm '.repeat(200) } }],
+          }),
+      }),
+    });
+    await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(
+      /empty answer \(finish_reason=length, reasoning_content_chars=\d+.*raise max_tokens/
+    );
+  });
+
+  it('grades only the content when reasoning arrives in its own field', async () => {
+    const chat = makeOpenAIChat({
+      url: 'http://fake:1/v1',
+      model: 'qwen3.8:27b',
+      fetchImpl: async () => ({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ finish_reason: 'stop', message: { content: '21 months.', reasoning_content: 'thinking...' } }],
+          }),
+      }),
+    });
+    const r = await chat({ system: 's', user: 'u' });
+    expect(r.text).toBe('21 months.');
+    expect(r.reasoningLen).toBe(11);
+    expect(r.finishReason).toBe('stop');
+  });
 });

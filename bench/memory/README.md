@@ -116,6 +116,7 @@ core.mjs       runBench (DI; what tests drive)    regime.mjs   the stamp
 split.mjs      registry + sha256 gate + selection receipt.mjs markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
 arms/          arm_none, arm_mycelium, registry
+tools/         cleanup-run.mjs — remove a crashed run's rows from the platform
 data/          gitignored corpora      results/     committed run evidence
 receipts/      committed receipts      handlabels/  committed hand-scored sets
 test-fixtures/ hermetic fixture split (sha-pinned, committed)
@@ -123,3 +124,12 @@ test-fixtures/ hermetic fixture split (sha-pinned, committed)
 
 Tests: `test/unit/bench-memory-*.test.js` — hermetic (fake arm, fake judge,
 fake platform server; no network, no keychain, no dataset).
+
+## Known model quirks the harness guards
+
+- **Thinking models spend `max_tokens` on reasoning.** qwen3.8 on the 3090's
+  llama.cpp returns its reasoning in a separate `reasoning_content` field that
+  still consumes the completion budget — at 256 tokens with a large memory
+  context the answer came back as `content: ""`. The answerer default is 1024
+  and the chat adapter throws loudly (`empty answer (finish_reason=…,
+  reasoning_content_chars=…)`) instead of letting a blank grade as an answer.

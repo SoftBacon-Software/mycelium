@@ -26,8 +26,8 @@
     "test:plugins": "if ls server/plugins/*/test.js >/dev/null 2>&1; then node --test server/plugins/*/test.js; else echo 'No plugin test files found — skipping'; fi",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint server sdk test mcp runner printer-drone --max-warnings 338",
-    "lint:fix": "eslint server sdk test mcp runner printer-drone --fix",
+    "lint": "eslint server sdk test mcp runner printer-drone bench --max-warnings 338",
+    "lint:fix": "eslint server sdk test mcp runner printer-drone bench --fix",
     "audit": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {

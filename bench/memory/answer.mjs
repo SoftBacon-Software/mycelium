@@ -42,10 +42,23 @@ export function makeOpenAIChat({ url, model, apiKey = null, temperature = 0, max
       if (!res.ok) throw new Error(`chat ${model} -> ${res.status}: ${text.slice(0, 200)}`);
       let json;
       try { json = JSON.parse(text); } catch { throw new Error(`chat ${model}: non-JSON body: ${text.slice(0, 200)}`); }
-      const content = json?.choices?.[0]?.message?.content;
+      const message = json?.choices?.[0]?.message;
+      const content = message?.content;
       if (typeof content !== 'string') throw new Error(`chat ${model}: no content in response`);
+      const finishReason = json?.choices?.[0]?.finish_reason ?? null;
+      const reasoningLen = typeof message?.reasoning_content === 'string' ? message.reasoning_content.length : 0;
       const stripped = stripThink(content);
-      return { text: stripped.text, hadThink: stripped.hadThink, raw: content };
+      if (!stripped.text) {
+        // Thinking models (qwen3.8 on llama.cpp) emit their reasoning in a
+        // separate `reasoning_content` field that still spends max_tokens: a
+        // too-small budget leaves content empty with nothing on the table.
+        throw new Error(
+          `chat ${model}: empty answer (finish_reason=${finishReason}, ` +
+          `reasoning_content_chars=${reasoningLen}, content_chars=${content.length}) — ` +
+          `the model spent its whole token budget thinking; raise max_tokens`
+        );
+      }
+      return { text: stripped.text, hadThink: stripped.hadThink, raw: content, reasoningLen, finishReason };
     } finally {
       clearTimeout(timer);
     }

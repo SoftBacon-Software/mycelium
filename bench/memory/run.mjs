@@ -8,7 +8,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { loadSplit, selectItems, BENCH_DIR } from './split.mjs';
 import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.mjs';
@@ -16,8 +15,8 @@ import { makeOpenAIChat } from './answer.mjs';
 import { makeJudge, agreement } from './judge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { buildRegime, gitState } from './regime.mjs';
-import { runBench, summarizeFromResults } from './core.mjs';
-import { renderReceipt, writeReceipt, RECEIPTS_DIR } from './receipt.mjs';
+import { runBench } from './core.mjs';
+import { renderReceipt, writeReceipt } from './receipt.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
 const RESULTS_DIR = path.join(BENCH_DIR, 'results');
@@ -45,7 +44,7 @@ function utcStamp(d) {
   return d.toISOString().replace(/\.\d+Z$/, 'Z');
 }
 
-async function waitForEmbeddings(platform, { beforeStats, expectedRows, timeoutMs = 8 * 60 * 1000, pollMs = 15000 }) {
+async function waitForEmbeddings(platform, { beforeStats, timeoutMs = 8 * 60 * 1000, pollMs = 15000 }) {
   const t0 = Date.now();
   let last = beforeStats;
   while (Date.now() - t0 < timeoutMs) {
@@ -138,7 +137,10 @@ async function main() {
   const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
   const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
 
-  const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: 256 });
+  // 1024: thinking models (qwen3.8 on llama.cpp) spend max_tokens on
+  // reasoning_content before the answer; 256 left nothing for the answer.
+  const ANSWER_MAX_TOKENS = 1024;
+  const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: ANSWER_MAX_TOKENS });
   const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
   const judgeFn = makeJudge({ chat: judgeChat });
 
@@ -156,7 +158,7 @@ async function main() {
       count: split.count,
       citation: split.spec.citation,
     },
-    answerer: { model: answerModel, url_host: new URL(answerUrl).host, temperature: 0, max_tokens: 256 },
+    answerer: { model: answerModel, url_host: new URL(answerUrl).host, temperature: 0, max_tokens: ANSWER_MAX_TOKENS },
     judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
     retrieval: {
       budget,
@@ -208,7 +210,7 @@ async function main() {
         // wait with the write size instead of failing into keyword-fallback
         const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
         console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
-        const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, expectedRows: expected, timeoutMs });
+        const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs });
         console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
         writeInfoByArm[arm].embed_wait = wait;
       }

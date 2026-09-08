@@ -29,13 +29,13 @@ describe('runBench with a fake arm + fake judge (hermetic end-to-end)', () => {
     const writes = [];
     const armRows = [];
     const judgedRows = [];
-    const fakeFactory = (name) => (ctx) => ({
+    const fakeFactory = (name) => (_ctx) => ({
       name,
       async write(sessionTurns, { questionId }) {
         writes.push({ name, questionId, sessions: sessionTurns.length });
         return { docs: sessionTurns.length, rows: sessionTurns.length };
       },
-      async answer(question) {
+      async answer(_question) {
         return {
           text: name === 'none' ? 'I do not know.' : 'Lisbon.',
           meta: name === 'fake' ? { hits: 1, retrieval_mode: 'hybrid' } : {},
@@ -157,7 +157,7 @@ describe('summarizeFromResults — receipt rebuildable from the run output alone
     const fakeFactory = (name) => () => ({
       name,
       async write() {},
-      async answer(question) {
+      async answer(_question) {
         return { text: name === 'fake' ? 'Lisbon.' : 'I do not know.', meta: name === 'fake' ? { retrieval_mode: 'hybrid' } : {} };
       },
     });
