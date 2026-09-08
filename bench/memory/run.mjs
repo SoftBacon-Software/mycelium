@@ -204,8 +204,11 @@ async function main() {
       writeInfoByArm[arm] = writeInfo;
       if (arm === 'mycelium' && platform) {
         const expected = writeInfo.rows;
-        console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage...`);
-        const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, expectedRows: expected });
+        // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
+        // wait with the write size instead of failing into keyword-fallback
+        const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
+        console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
+        const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, expectedRows: expected, timeoutMs });
         console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
         writeInfoByArm[arm].embed_wait = wait;
       }
