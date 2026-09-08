@@ -48,7 +48,11 @@ while :; do
   fi
   elapsed=$(( $(date +%s) - start ))
   if [ "$elapsed" -ge "$DEADLINE_S" ]; then
-    echo "mdns-wait: no Add record for $SERVICE in $attempt attempts over ${elapsed}s (deadline ${DEADLINE_S}s) — this is not settling, the advertiser is absent" >&2
+    # Attempts and the per-attempt window, never a computed elapsed figure:
+    # integer-epoch arithmetic truncates, so "${elapsed}s" could claim 2s for a
+    # 1.1s wait (measured 2026-09-05). Every number below is one the shell
+    # actually set.
+    echo "mdns-wait: no Add record for $SERVICE in $attempt attempts of ${BROWSE_T}s (deadline ${DEADLINE_S}s) — this is not settling, the advertiser is absent" >&2
     exit 1
   fi
 done

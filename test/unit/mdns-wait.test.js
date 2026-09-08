@@ -86,12 +86,20 @@ test('a dead advertiser still fails — after the bounded deadline, not before',
   // The stub prints the header (with the service name in it) every attempt and
   // never an Add record. The wait must spend the whole deadline trying, then
   // give up: tolerant of settling, not blind to absence.
-  const started = Date.now()
-  expect(() => run('dead')).toThrow()
-  const elapsed = Date.now() - started
-  expect(elapsed).toBeGreaterThanOrEqual(1900)   // waited out the 2s deadline
-  expect(elapsed).toBeLessThan(8000)             // and stayed bounded
-})
+  //
+  // Asserted by attempt COUNT (the stub's count file), never wall time. The
+  // script's deadline is integer-epoch arithmetic, so a single BROWSE_T window
+  // can span two epoch-seconds and read as one elapsed second: at DEADLINE=2 a
+  // single-attempt exit measured as "waited it out" 4/40 looped runs
+  // (2026-08-26 survey, re-measured 2026-09-05). DEADLINE=3 bounds what that
+  // truncation can steal to ONE window, so an honest wait makes >= 2 attempts,
+  // while a wait that quits after the first browse — the regression this
+  // guards — counts 1 and fails. "Still bounded" is this test's own timeout,
+  // by the discipline test 1 already states: a wall-clock assertion flakes on
+  // machine speed, which says nothing about the script.
+  expect(() => run('dead', { MDNS_DEADLINE_S: '3' })).toThrow()
+  expect(Number(readFileSync(join(dir, 'count'), 'utf8').trim())).toBeGreaterThanOrEqual(2)
+}, 15000)
 
 test('an advertiser that appears on a later attempt — the post-restart settling window — passes', () => {
   run('settling', { MDNS_DEADLINE_S: '10' })
