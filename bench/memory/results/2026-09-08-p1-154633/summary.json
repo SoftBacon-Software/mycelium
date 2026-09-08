@@ -1,0 +1,127 @@
+{
+  "run_id": "2026-09-08-p1-154633",
+  "n": 3,
+  "regime": {
+    "date_utc": "2026-09-08T15:46:34Z",
+    "git_sha": "1bd2dee4e1c54f08ccca8b3f1956380d7aaf4baa",
+    "git_dirty": true,
+    "harness": "p1-skeleton.1",
+    "dataset": {
+      "name": "bench-memory hermetic fixture",
+      "file": "fixture-split.json",
+      "sha256": "431b6339e32986414ac92859307e0e05b60ffd14f4a10260e96db19ea432dd3d",
+      "licence": "MIT (this repo)",
+      "url": null,
+      "items_available": 3,
+      "citation": "internal test fixture"
+    },
+    "answerer": {
+      "model": "qwen3.8:27b",
+      "url_host": "desktop-1uiqnip:11434",
+      "temperature": 0,
+      "max_tokens": 256
+    },
+    "judge": {
+      "model": "Laguna-XS-2.1-mlx-oq4e-agentic-ours",
+      "url_host": "localhost:8780"
+    },
+    "retrieval": {
+      "budget": 5,
+      "chunking": "one memory row per haystack session (server-side chunk-aware split for oversized rows)",
+      "source_type": "bench_longmemeval",
+      "namespace": "bench-p1-2026-09-08-p1-154633",
+      "server_mode": "hybrid (server-side; per-query observed mode recorded in rows)"
+    },
+    "platform": {
+      "url_host": "jetson01.local:3002",
+      "transport": "curl",
+      "version": "0.1.0",
+      "embedding_provider": "ollama",
+      "embedding_model": "nomic-embed-text",
+      "chunk_size": null
+    },
+    "n": 3,
+    "selection_rule": "sort by question_id ascending, take first n (deterministic, stable across runs)",
+    "notes": [
+      "two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+",
+      "judge is a local model; validated against a hand-scored set — see receipt judge-validation section"
+    ]
+  },
+  "arms": {
+    "none": {
+      "n": 3,
+      "write": {
+        "docs": 0,
+        "rows": 0,
+        "skipped": false
+      },
+      "elapsed_ms": 4598,
+      "score": {
+        "n": 3,
+        "counts": {
+          "exact": 0,
+          "partial": 0,
+          "wrong": 3
+        },
+        "unparsed": 0,
+        "p1_score": 0
+      }
+    },
+    "mycelium": {
+      "n": 3,
+      "write": {
+        "docs": 7,
+        "rows": 7,
+        "skipped": false,
+        "embed_wait": {
+          "waited_ms": 90316,
+          "coverage_after": 100,
+          "settled": true
+        }
+      },
+      "elapsed_ms": 95193,
+      "score": {
+        "n": 3,
+        "counts": {
+          "exact": 3,
+          "partial": 0,
+          "wrong": 0
+        },
+        "unparsed": 0,
+        "p1_score": 1
+      },
+      "retrieval_modes": {
+        "hybrid": 3
+      }
+    }
+  },
+  "write_info": {
+    "none": {
+      "docs": 0,
+      "rows": 0,
+      "skipped": false
+    },
+    "mycelium": {
+      "docs": 7,
+      "rows": 7,
+      "skipped": false,
+      "embed_wait": {
+        "waited_ms": 90316,
+        "coverage_after": 100,
+        "settled": true
+      }
+    }
+  },
+  "cleanup": {
+    "namespace": "bench-p1-2026-09-08-p1-154633",
+    "source_type": "bench_longmemeval",
+    "rows_found": 7,
+    "deleted": 7,
+    "failed_deletes": [],
+    "rows_remaining_after": 0,
+    "kept": false
+  },
+  "commands": [
+    "node bench/memory/run.mjs --split fixture --arms none,mycelium --n 3 --receipt"
+  ]
+}

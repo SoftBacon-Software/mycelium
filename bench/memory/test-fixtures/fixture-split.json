@@ -1,0 +1,66 @@
+[
+  {
+    "question_id": "q-002",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "answer": "Business Administration",
+    "question_date": "2023/05/30 (Tue) 23:40",
+    "haystack_dates": ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 09:15"],
+    "haystack_session_ids": ["fix_s1", "fix_s2"],
+    "answer_session_ids": ["fix_s1"],
+    "haystack_sessions": [
+      [
+        { "role": "user", "content": "I finally graduated — my degree is in Business Administration." },
+        { "role": "assistant", "content": "Congratulations! Business Administration is a versatile degree." }
+      ],
+      [
+        { "role": "user", "content": "The fox, the chicken and the grain puzzle is still my favourite." },
+        { "role": "assistant", "content": "A classic river-crossing puzzle." }
+      ]
+    ]
+  },
+  {
+    "question_id": "q-001",
+    "question_type": "multi-session",
+    "question": "Which city did I say I was moving to?",
+    "answer": "Lisbon",
+    "question_date": "2023/06/02 (Fri) 10:00",
+    "haystack_dates": ["2023/05/22 (Mon) 11:00", "2023/05/23 (Tue) 12:00", "2023/05/24 (Wed) 13:00"],
+    "haystack_session_ids": ["fix_s3", "fix_s4", "fix_s5"],
+    "answer_session_ids": ["fix_s4"],
+    "haystack_sessions": [
+      [
+        { "role": "user", "content": "Thinking about moving cities next year." },
+        { "role": "assistant", "content": "Big decision — anywhere on your list?" }
+      ],
+      [
+        { "role": "user", "content": "I have decided: I am moving to Lisbon in the spring." },
+        { "role": "assistant", "content": "Lisbon is a great choice — good luck with the move." }
+      ],
+      [
+        { "role": "user", "content": "Do cats dream?" },
+        { "role": "assistant", "content": "Yes, cats dream during REM sleep." }
+      ]
+    ]
+  },
+  {
+    "question_id": "q-003",
+    "question_type": "knowledge-update",
+    "question": "What is my manager's name?",
+    "answer": "Dana",
+    "question_date": "2023/06/05 (Mon) 08:30",
+    "haystack_dates": ["2023/05/25 (Thu) 10:00", "2023/06/01 (Thu) 10:00"],
+    "haystack_session_ids": ["fix_s6", "fix_s7"],
+    "answer_session_ids": ["fix_s7"],
+    "haystack_sessions": [
+      [
+        { "role": "user", "content": "My manager Alex assigned me the migration project." },
+        { "role": "assistant", "content": "Good luck with the migration project under Alex." }
+      ],
+      [
+        { "role": "user", "content": "Update: my new manager is Dana now, Alex moved teams." },
+        { "role": "assistant", "content": "Noted — Dana is your manager." }
+      ]
+    ]
+  }
+]

@@ -43,3 +43,8 @@ public/avatars/*
 # on the box as a safety net.
 /.git.broken-pointer.bak
 .claude/worktrees/
+
+# Memory benchmark (bench/memory) — the corpus stays out of git; the pinned
+# URL + sha256 in split.mjs is the provenance. Results and receipts ARE
+# committed (they are the evidence).
+bench/memory/data/
