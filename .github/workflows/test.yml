@@ -80,3 +80,19 @@ jobs:
 
       - name: Run Docker runtime smoke
         run: bash scripts/docker-smoke.sh
+
+  # Compose-path smoke — fires the README's actual "(recommended)" quick start
+  # (env with secrets + `docker compose up -d`), which the `docker run`-based
+  # docker-smoke job above does not exercise: compose interpolation of the
+  # ${JWT_SECRET:?...} required-var form (including its cold-start fail-loud
+  # behavior), the compose healthcheck via `--wait`, the /data named volume,
+  # and the stranger's first real API calls (project → agent → boot round trip).
+  # See scripts/compose-smoke.sh.
+  compose-smoke:
+    name: compose smoke (recommended path: up --wait + /health + agent round-trip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Docker Compose runtime smoke
+        run: bash scripts/compose-smoke.sh
