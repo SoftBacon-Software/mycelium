@@ -1,0 +1,127 @@
+{
+  "run_id": "2026-09-08-p1-185920",
+  "n": 50,
+  "regime": {
+    "date_utc": "2026-09-08T18:59:21Z",
+    "git_sha": "74c3f8f856ffbb9b727297ed7a908e4d15744d9e",
+    "git_dirty": true,
+    "harness": "p1-skeleton.1",
+    "dataset": {
+      "name": "LongMemEval-S (cleaned)",
+      "file": "longmemeval_s_cleaned.json",
+      "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "licence": "MIT",
+      "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+      "items_available": 500,
+      "citation": "Wu et al., \"LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory\", ICLR 2025"
+    },
+    "answerer": {
+      "model": "qwen3.8:27b",
+      "url_host": "desktop-1uiqnip:11434",
+      "temperature": 0,
+      "max_tokens": 4096
+    },
+    "judge": {
+      "model": "Laguna-XS-2.1-mlx-oq4e-agentic-ours",
+      "url_host": "localhost:8780"
+    },
+    "retrieval": {
+      "budget": 5,
+      "chunking": "one memory row per haystack session (server-side chunk-aware split for oversized rows)",
+      "source_type": "bench_longmemeval",
+      "namespace": "bench-p1-2026-09-08-p1-185920",
+      "server_mode": "hybrid (server-side; per-query observed mode recorded in rows)"
+    },
+    "platform": {
+      "url_host": "jetson01.local:3002",
+      "transport": "fetch",
+      "version": "0.1.0",
+      "embedding_provider": "ollama",
+      "embedding_model": "nomic-embed-text",
+      "chunk_size": null
+    },
+    "n": 50,
+    "selection_rule": "sort by question_id ascending, take first n (deterministic, stable across runs)",
+    "notes": [
+      "two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+",
+      "judge is a local model; validated against a hand-scored set — see receipt judge-validation section"
+    ]
+  },
+  "arms": {
+    "none": {
+      "n": 50,
+      "write": {
+        "docs": 0,
+        "rows": 0,
+        "skipped": false
+      },
+      "elapsed_ms": 84146,
+      "score": {
+        "n": 50,
+        "counts": {
+          "exact": 0,
+          "partial": 11,
+          "wrong": 39
+        },
+        "unparsed": 0,
+        "p1_score": 0.11
+      }
+    },
+    "mycelium": {
+      "n": 50,
+      "write": {
+        "docs": 2355,
+        "rows": 7767,
+        "skipped": false,
+        "embed_wait": {
+          "waited_ms": 909124,
+          "coverage_after": 100,
+          "settled": true
+        }
+      },
+      "elapsed_ms": 1501672,
+      "score": {
+        "n": 50,
+        "counts": {
+          "exact": 21,
+          "partial": 16,
+          "wrong": 13
+        },
+        "unparsed": 0,
+        "p1_score": 0.58
+      },
+      "retrieval_modes": {
+        "hybrid": 50
+      }
+    }
+  },
+  "write_info": {
+    "none": {
+      "docs": 0,
+      "rows": 0,
+      "skipped": false
+    },
+    "mycelium": {
+      "docs": 2355,
+      "rows": 7767,
+      "skipped": false,
+      "embed_wait": {
+        "waited_ms": 909124,
+        "coverage_after": 100,
+        "settled": true
+      }
+    }
+  },
+  "cleanup": {
+    "namespace": "bench-p1-2026-09-08-p1-185920",
+    "source_type": "bench_longmemeval",
+    "batches": 24,
+    "deleted": 2355,
+    "failed_deletes": [],
+    "rows_remaining_after": 0,
+    "kept": false
+  },
+  "commands": [
+    "node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --receipt"
+  ]
+}
