@@ -205,3 +205,146 @@ describe('docs inventory accuracy', () => {
     }
   });
 });
+
+// --- route-module map -------------------------------------------------------
+//
+// The checks above pin COUNTS, and a module can vanish from every doc without
+// redding anything. This section derives the mounted route modules from
+// server/routes/*.js at test time and requires each one to be acknowledged in
+// README's "What's actually here" section — the section that promises
+// "implemented and exercised by the running system, not a roadmap" — or to be a
+// deliberately-labelled internal surface. Add a route module without
+// acknowledging it anywhere and this goes red.
+//
+// Ack scope is that section ONLY (its Maturity subsection included), and a
+// FEATURE ack must be the feature's NAME — the bold lead of a registry bullet —
+// not a word in some bullet's body. Prose can't carry an acknowledgment: the
+// verb in "runs in production daily" doesn't document runs.js, and an
+// enumeration in another bullet ("tasks, plans, ... and events all carry a
+// project_id") survives deleting the event bullet, which would leave the gate
+// green while the event feature is undocumented. Mentions elsewhere in README —
+// the schema-table enumeration under Architecture, the retired-studio note —
+// don't count either.
+
+const ROUTES_DIR = join(ROOT, 'server', 'routes');
+const MOUNTED_MODULES = readdirSync(ROUTES_DIR)
+  .filter((f) => f.endsWith('.js'))
+  .sort();
+
+const featureSection = (() => {
+  const text = read('README.md');
+  const start = text.indexOf("## What's actually here");
+  if (start === -1) {
+    throw new Error('README.md: the "What\'s actually here" feature registry is missing');
+  }
+  const end = text.indexOf('\n## ', start + 1);
+  return end === -1 ? text.slice(start) : text.slice(start, end);
+})();
+
+// The feature names: the bold lead of every registry bullet ("- **Agent network** — ...").
+const FEATURE_LEADS = [
+  ...featureSection.matchAll(/^\s*[-*]\s+\*\*(.+?)\*\*/gm),
+].map((m) => m[1].replace(/\.\s*$/, ''));
+
+// Derivation can't guess prose aliases, so name them here — one entry per module
+// whose file name isn't the phrase a feature lead uses. Keep it short and
+// justified: each entry is an acknowledgment the gate would otherwise force into
+// the README.
+const MODULE_ALIASES = {
+  // One feature, two modules: the god-file decomposition split the agent-network
+  // surface between agents.js (register/heartbeat/status) and mycelium.js (the
+  // router itself — /boot/:agentId, /work/:agentId). The same lead credits both.
+  agents: ['agent network'],
+  mycelium: ['agent network'],
+  // The lead says "Organizations"; the file says orgs.
+  orgs: ['organizations', 'orgs'],
+  // The lead says "Messaging & requests".
+  messages: ['messaging', 'messages'],
+  // The lead says "Event log & live stream".
+  events: ['event log', 'events'],
+  // The lead says "Approval gates".
+  approvals: ['approval gates', 'approvals'],
+  // The lead says "Plugin system" (singular).
+  plugins: ['plugin', 'plugins'],
+  // The lead says "GPU drone queue" (singular).
+  drones: ['drone', 'drones'],
+  // "runs" also matches the verb "runs in production daily"; require the feature
+  // name so the run-history bullet can't be dropped while prose carries the ack.
+  runs: ['run history'],
+  // The registry documents this module as the "Bug tracker" (singular).
+  bugs: ['bug tracker', 'bugs'],
+};
+
+// House-internal surfaces: mounted, but plumbing rather than product. Keep this
+// list SHORT and justified — a lazy "internal" dump defeats the gate. Each entry
+// must still be LABELLED in README (the "Internal surfaces" subsection), so the
+// list is the machine-checkable mirror of that note, never a way to hide a module
+// from the docs; the second test below enforces the pairing.
+const INTERNAL_MODULES = [
+  'files', // agent temp uploads, auto-delete after a day
+  'team_settings', // operator settings sections + profile sync
+  'file_server', // browse/search/download through a connected file drone
+  'operators', // human operator records + availability
+  'studio', // operator login / user administration (JWT)
+];
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Word-boundary match that also refuses to match inside a hyphenated compound
+// ("studio-react", "admin-claude") — those name other things, not the module.
+const matches = (text, alias) =>
+  new RegExp(`(?<![\\w-])${escapeRegExp(alias)}(?![\\w-])`, 'i').test(text);
+const mentionsLead = (alias) => FEATURE_LEADS.some((lead) => matches(lead, alias));
+const mentionsSection = (alias) => matches(featureSection, alias);
+
+const baseOf = (file) => file.replace(/\.js$/, '');
+const aliasesFor = (file) => MODULE_ALIASES[baseOf(file)] ?? [baseOf(file).replace(/_/g, ' ')];
+const isInternal = (file) => INTERNAL_MODULES.includes(baseOf(file));
+
+describe('route module map', () => {
+  test(`the feature registry has leads to match against`, () => {
+    // Guard on the extractor itself: if the registry's bullet shape changes
+    // (no bold leads parsed), every module below would silently lose its ack.
+    if (FEATURE_LEADS.length < 10) {
+      throw new Error(
+        `README's "What's actually here" section yielded ${FEATURE_LEADS.length} bold bullet ` +
+          'leads — the registry shape changed; fix FEATURE_LEADS extraction.',
+      );
+    }
+  });
+
+  test(`every mounted route module (${MOUNTED_MODULES.length}) is a documented feature or a labelled internal surface`, () => {
+    const missing = MOUNTED_MODULES.filter(
+      (file) => !aliasesFor(file).some(mentionsLead) && !isInternal(file),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `README's "What's actually here" section does not acknowledge ${missing.length} mounted ` +
+          'route module(s): ' +
+          missing.map((f) => `${f} (looks for: ${aliasesFor(f).join(' / ')})`).join('; ') +
+          '. Add a feature bullet or an internal-surface label — the section promises ' +
+          '"implemented and exercised by the running system, not a roadmap."',
+      );
+    }
+  });
+
+  test('every internal surface stays labelled in README — the list may not hide a module from the docs', () => {
+    const unlabelled = INTERNAL_MODULES.filter((base) => !aliasesFor(`${base}.js`).some(mentionsSection));
+    if (unlabelled.length > 0) {
+      throw new Error(
+        `INTERNAL_MODULES names ${unlabelled.join(', ')}, but README's "What's actually here" ` +
+          'section no longer labels them. Restore the "Internal surfaces" note or drop the ' +
+          'entry — the list and the note must stay in sync.',
+      );
+    }
+  });
+
+  test('INTERNAL_MODULES names only modules that still exist under server/routes/', () => {
+    const real = new Set(MOUNTED_MODULES.map((f) => f.replace(/\.js$/, '')));
+    const stale = INTERNAL_MODULES.filter((base) => !real.has(base));
+    if (stale.length > 0) {
+      throw new Error(
+        `INTERNAL_MODULES names module(s) with no matching server/routes file: ${stale.join(', ')} — stale list.`,
+      );
+    }
+  });
+});

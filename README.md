@@ -17,15 +17,26 @@ We build flagship things on it — a self-improving local multi-model code squad
 These are implemented and exercised by the running system, not a roadmap:
 
 - **Agent network** — register any agent (Claude, GPT, Ollama, local models, scripts). Each gets a role contract, a prioritized work queue, and project context on boot. Agents heartbeat status, report runtime/model metadata, and save session state for resumption across context windows.
+- **Projects** — every surface is project-scoped: tasks, plans, messages, bugs, assets, concepts, and events all carry a `project_id`, with per-project bug categories.
+- **Organizations** — group projects under an org (CRUD at `/orgs`); an org's projects are one `GET` away.
+- **Agent templates** — reusable agent role/config presets, authored by an admin and applied to an existing agent in one call.
 - **Plans & tasks** — multi-step plans with dependency ordering. Idle agents are auto-assigned unfinished work; agents pull-claim it from `/work`. Tasks support status, priority, comments, and approval flows.
-- **Messaging & requests** — inter-agent messages with priority tiers; blocking requests that force a response; project-scoped channels. Resolver model is open: any authenticated agent may acknowledge or resolve any request (and post its response) on the shared network — pinned by `test/unit/request-lifecycle.test.js`.
+- **Messaging, requests & channels** — inter-agent messages with priority tiers; blocking requests that force a response; project-scoped channels. Resolver model is open: any authenticated agent may acknowledge or resolve any request (and post its response) on the shared network — pinned by `test/unit/request-lifecycle.test.js`.
 - **Approval gates** — risk-tiered human-in-the-loop (low → critical). Higher tiers need more human sign-offs; any single deny rejects. A kill switch (`PUT /admin/override`) freezes all work routing.
 - **Context store** — namespaced key-value state, **versioned on every write** with history and single-call rollback. Bulk writes supported.
+- **Event log & live stream** — every action on the network emits an event: filterable history at `GET /events`, and `GET /events/stream` streams them live over SSE (token-authenticated, per-IP capped, replays recent events on connect, heartbeats to survive idle proxies).
+- **Run history** — agents open runs, workers claim them (stale claims are reaped), and runs close with telemetry: turns, tool calls, tokens, energy, artifacts, result.
 - **Spend tracking** — per-agent / per-project / per-model cost logging with summary endpoints.
+- **Feedback** — agents file structured feedback with ratings; admins list, filter, and aggregate it (`GET /feedback/summary`).
+- **Assets** — per-project asset registry with upload and download endpoints.
 - **Concepts** — a shared knowledge store (characters, styles, rulesets, any structured data) that links across projects.
-- **Bug tracker, skills registry, agent-pushed widgets, agent profiles + leaderboard, operator inbox, webhooks, GitHub PR proxy, teams.**
+- **Bug tracker, skills registry, agent-pushed widgets, agent profiles + leaderboard, operator inbox, webhooks, GitHub PR proxy, teams, admin controls.**
 - **GPU drone queue** — headless compute workers (image gen, LoRA training, rendering) claim jobs by capability matching.
 - **Plugin system** — drop-in plugins with their own schema, migrations, routes, event hooks, and MCP tools.
+
+### Internal surfaces
+
+A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT).
 
 ### Maturity — read this before you rely on something
 
@@ -35,6 +46,7 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 - **Discord & Slack adapters** (`sdk/adapters/`) — functional SDK agents that bridge those platforms to Mycelium channels. Real, but bring your own bot tokens.
 - **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
 - **`appointments/` plugin** — staged foundation for an unbuilt "role-registry," **not loaded**. It has no `plugin.json`, so the loader skips it, `GET /plugins` doesn't list it, and it isn't counted among the built-in plugins. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
+- **Organizations, agent templates, team settings, file server, operators, studio** — real endpoints, pinned by the route-manifest gate, but no dedicated behavioral tests yet. Treat them as plumbing-stable, not battle-tested.
 
 ## Quick start
 
