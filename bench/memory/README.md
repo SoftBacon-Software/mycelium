@@ -130,6 +130,21 @@ fake platform server; no network, no keychain, no dataset).
 - **Thinking models spend `max_tokens` on reasoning.** qwen3.8 on the 3090's
   llama.cpp returns its reasoning in a separate `reasoning_content` field that
   still consumes the completion budget — at 256 tokens with a large memory
-  context the answer came back as `content: ""`. The answerer default is 1024
-  and the chat adapter throws loudly (`empty answer (finish_reason=…,
+  context the answer came back as `content: ""`, and at 1024 one hard question
+  still burned the whole budget on reasoning (4,450 chars, `finish_reason=length`)
+  and tripped the loud guard MID-RUN (2026-09-08 13:57, killing that attempt —
+  the guard worked; the budget was wrong). The answerer default is now 4096,
+  overridable with `--answer-max-tokens` (stamped into the regime), and the
+  chat adapter throws loudly (`empty answer (finish_reason=…,
   reasoning_content_chars=…)`) instead of letting a blank grade as an answer.
+- **Bulk writes embed in a delayed burst — the scaled embed-wait is
+  load-bearing.** Measured 2026-09-08 against the live platform (2,355 docs /
+  7,767 rows in ~2 min): global embedding coverage read ~40% and FROZE for
+  ~25 min after the write, then went 0→100% within ~20 min; the run's wait
+  (cap = max(8 min, rows × 500 ms) ≈ 65 min) settled at 710 s. Probes during
+  the frozen window and the settled value disagree on the timeline — the
+  drain arrives late, not never. An 8-min fixed cap (pre-e0a1b46) would have
+  fallen through to keyword-only retrieval and quietly degraded the arm.
+  Single-shot steady-state embed throughput measured ~0.6 session-sized
+  (15 KB) texts/s on the Jetson's ollama — plan ingestion budgets with that
+  number, not with hope.

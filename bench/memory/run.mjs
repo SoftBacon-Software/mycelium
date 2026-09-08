@@ -17,6 +17,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
+import { purgeRunRows } from './cleanup.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
 const RESULTS_DIR = path.join(BENCH_DIR, 'results');
@@ -137,9 +138,12 @@ async function main() {
   const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
   const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
 
-  // 1024: thinking models (qwen3.8 on llama.cpp) spend max_tokens on
-  // reasoning_content before the answer; 256 left nothing for the answer.
-  const ANSWER_MAX_TOKENS = 1024;
+  // 4096: thinking models (qwen3.8 on llama.cpp) spend max_tokens on
+  // reasoning_content before the answer — 256 left nothing for the answer, and
+  // at 1024 one hard question (4,450 reasoning chars, finish_reason=length)
+  // still came back empty and tripped the loud guard mid-run. 4096 gives ~4×
+  // the worst observed reasoning budget. The value is stamped into the regime.
+  const ANSWER_MAX_TOKENS = parseInt(args['answer-max-tokens'] ?? '4096', 10);
   const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: ANSWER_MAX_TOKENS });
   const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
   const judgeFn = makeJudge({ chat: judgeChat });
@@ -221,31 +225,17 @@ async function main() {
   for (const a of arms) fs.closeSync(rowFiles[a]);
   fs.closeSync(judgedFile);
 
-  // cleanup: remove this run's rows from the platform (unless --keep)
+  // cleanup: remove this run's rows from the platform (unless --keep).
+  // purgeRunRows paginates: /memory/list caps at 100 rows server-side, so a
+  // single list-then-delete sweep would leave everything past row 100 indexed.
   let cleanup = null;
   if (platform) {
     const sourceType = regime.retrieval.source_type;
     if (args.keep) {
       cleanup = { deleted: 0, kept: true, namespace };
     } else {
-      const listed = await platform.listByType(sourceType, { namespace, limit: 10000 });
-      const ids = [...new Set((listed.results ?? []).map((r) => r.source_id))];
-      let deleted = 0;
-      const failed = [];
-      for (const id of ids) {
-        try { await platform.deleteIndex(sourceType, id); deleted++; } catch (e) { failed.push({ id, error: e.message.slice(0, 120) }); }
-      }
-      const after = await platform.listByType(sourceType, { namespace, limit: 10000 });
-      cleanup = {
-        namespace,
-        source_type: sourceType,
-        rows_found: ids.length,
-        deleted,
-        failed_deletes: failed,
-        rows_remaining_after: (after.results ?? []).length,
-        kept: false,
-      };
-      console.error(`[run] cleanup: ${deleted}/${ids.length} deleted, ${cleanup.rows_remaining_after} remaining`);
+      cleanup = await purgeRunRows(platform, { sourceType, namespace });
+      console.error(`[run] cleanup: ${cleanup.deleted} deleted in ${cleanup.batches} batches, ${cleanup.failed_deletes.length} failed, ${cleanup.rows_remaining_after} remaining`);
     }
   }
 
