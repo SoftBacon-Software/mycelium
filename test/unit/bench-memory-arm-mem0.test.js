@@ -1,4 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -376,5 +378,76 @@ describe('sidecar python resolution + regime block', () => {
 
   it('mem0Scope matches the mycelium namespace granularity', () => {
     expect(mem0Scope('2026-09-08-p1-x')).toBe('bench-p1-2026-09-08-p1-x');
+  });
+});
+
+
+// ---- the sidecar manager's transport retry (2026-09-09 09:54 CDT smoke death) ----
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 4242;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (sig) => { child.exitCode = 0; child.signalCode = sig ?? null; child.emit('exit', 0, sig ?? null); return true; };
+  return child;
+}
+
+function scriptedFetch(addResponses) {
+  const calls = [];
+  const fetchImpl = async (url, opts = {}) => {
+    calls.push({ url: String(url), method: opts.method ?? 'GET' });
+    if (String(url).endsWith('/health')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => JSON.stringify({ ok: true }) };
+    }
+    const next = addResponses.shift();
+    if (next instanceof Error) throw next;
+    return { ok: true, status: 200, text: async () => JSON.stringify(next ?? { ok: true }) };
+  };
+  return { fetchImpl, calls };
+}
+
+async function startedManager(fetchImpl, logs) {
+  const child = fakeChild();
+  const mgr = createMem0SidecarManager({
+    command: ['fake-python', 'fake-script'],
+    spawnFn: () => { setTimeout(() => child.stdout.write('MEM0_SIDECAR_READY 5555\n'), 5); return child; },
+    fetchImpl,
+    log: (l) => logs.push(l),
+    connectFn: (_opts, _onConnect) => { const s = new EventEmitter(); s.destroy = () => {}; setTimeout(() => s.emit('error', new Error('ECONNREFUSED')), 1); return s; },
+  });
+  await mgr.start();
+  return mgr;
+}
+
+describe('mem0 sidecar manager — one health-checked retry on a transport failure', () => {
+  it('retries ONCE when the socket fails before any response and the sidecar is healthy', async () => {
+    const socketDeath = new TypeError('fetch failed');
+    socketDeath.cause = { code: 'UND_ERR_SOCKET' };
+    const { fetchImpl, calls } = scriptedFetch([socketDeath, { ok: true, added: 1 }]);
+    const logs = [];
+    const mgr = await startedManager(fetchImpl, logs);
+    const out = await mgr.request('/add', { user_id: 'u', messages: [] });
+    expect(out.ok).toBe(true);
+    expect(calls.filter((c) => c.url.endsWith('/add')).length).toBe(2);
+    expect(logs.some((l) => /retrying once/.test(l) && /UND_ERR_SOCKET/.test(l))).toBe(true);
+  });
+
+  it('gives up LOUDLY after the one retry, naming the cause', async () => {
+    const mk = () => { const e = new TypeError('fetch failed'); e.cause = { code: 'UND_ERR_SOCKET' }; return e; };
+    const { fetchImpl, calls } = scriptedFetch([mk(), mk()]);
+    const mgr = await startedManager(fetchImpl, []);
+    await expect(mgr.request('/add', {})).rejects.toThrow(/unreachable.*UND_ERR_SOCKET.*never with an empty answer/s);
+    expect(calls.filter((c) => c.url.endsWith('/add')).length).toBe(2);
+  });
+
+  it('never retries a TIMEOUT (the sidecar may still be committing facts)', async () => {
+    const timeout = new Error('The operation was aborted due to timeout');
+    timeout.name = 'TimeoutError';
+    const { fetchImpl, calls } = scriptedFetch([timeout, { ok: true }]);
+    const mgr = await startedManager(fetchImpl, []);
+    await expect(mgr.request('/add', {})).rejects.toThrow(/unreachable/);
+    expect(calls.filter((c) => c.url.endsWith('/add')).length).toBe(1);
   });
 });

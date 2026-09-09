@@ -209,19 +209,51 @@ export function createMem0SidecarManager({
     }
   }
 
-  async function request(pathname, body) {
+  // True iff the sidecar answers /health right now (5 s). Used only to decide
+  // whether a transport failure on a request is worth ONE retry.
+  async function sidecarHealthy() {
+    if (!baseUrl) return false;
+    try {
+      const res = await fetchImpl(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return false;
+      const health = await res.json();
+      return Boolean(health?.ok);
+    } catch {
+      return false;
+    }
+  }
+
+  async function request(pathname, body, attempt = 0) {
     if (!baseUrl) throw new Error('mem0 sidecar request before start() — start the sidecar first');
     let res;
     try {
       res = await fetchImpl(`${baseUrl}${pathname}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Connection: close — the sidecar is an HTTP/1.0 stdlib server that closes
+        // after every response; never let the client pool a socket it will reuse
+        // into "fetch failed" thirty seconds later.
+        headers: { 'Content-Type': 'application/json', Connection: 'close' },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(requestTimeoutMs),
       });
     } catch (e) {
+      // 2026-09-09 09:54 CDT: the smoke died at add 16/47 of question 2 with a bare
+      // "fetch failed" — no traceback on the sidecar, no signal, the 3090 healthy.
+      // A transport-level failure with NO response is retried ONCE, and only if
+      // the sidecar still answers /health (a dead sidecar stays a loud failure).
+      // /add is not strictly idempotent, but Mem0 dedups facts on add; a rare
+      // duplicate extraction is cheaper than losing a 16-hour run to one socket.
+      const cause = e?.cause?.code || e?.cause?.message || '';
+      // Never retry a TIMEOUT: the sidecar may still be committing facts for
+      // that request (the "no retry" note on requestTimeoutMs stands). Only a
+      // connection that failed before any response is retried.
+      const isTimeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+      if (attempt === 0 && !isTimeout && await sidecarHealthy()) {
+        log(`sidecar ${pathname} transport failure (${e.message}${cause ? `: ${cause}` : ''}) — sidecar healthy, retrying once`);
+        return request(pathname, body, 1);
+      }
       throw new Error(
-        `mem0 sidecar unreachable at ${baseUrl}${pathname} (${e.message}) — the arm fails loudly, never with an empty answer`,
+        `mem0 sidecar unreachable at ${baseUrl}${pathname} (${e.message}${cause ? `: ${cause}` : ''}) — the arm fails loudly, never with an empty answer`,
         { cause: e }
       );
     }
