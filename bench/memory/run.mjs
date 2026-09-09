@@ -24,6 +24,7 @@ import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingest
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
+import { composeGrid } from './grid.mjs';
 import { purgeNamespaces } from './cleanup.mjs';
 import { waitForEmbeddings } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
@@ -154,6 +155,37 @@ async function main() {
     });
     const file = writeReceipt(runId, md);
     console.log(JSON.stringify({ receipt: file, judgeAgreement }, null, 2));
+    return;
+  }
+
+  // ---------------- grid-from-results: compose the 2×2 from SEPARATE runs -----
+  // The {Mycelium, Mem0} × {raw, extract} grid rarely lands in ONE run — the
+  // 3090 window serves two 32k slots, so the mem0 pair and the mycelium pair
+  // run side by side. This composes the grid receipt from two or more FINISHED
+  // run dirs (task 183): grid.mjs refuses loudly unless the runs are
+  // comparable (same dataset/judge/answerer/budget/n/question ids), and on a
+  // match writes ONE receipt whose 2×2 is renderIngestionGrid over the union
+  // of the runs' arms. Without --receipt this is a dry-run: the check runs,
+  // nothing is written.
+  if (args['grid-from-results']) {
+    const dirs = String(args['grid-from-results'])
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt) });
+    console.log(
+      JSON.stringify(
+        {
+          runs: out.runIds,
+          grid_rendered: out.gridRendered,
+          ...(args.receipt
+            ? { receipt: path.relative(REPO_ROOT, out.file) }
+            : { wrote: false, why: 'dry run — pass --receipt to write' }),
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 
