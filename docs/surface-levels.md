@@ -71,6 +71,7 @@ Coordination. Add it when more than one agent works the same board:
 | Webhooks | outbound webhook subscriptions + deliveries |
 | `workflows` plugin | fire a DAG of agent invocations for a dormant runner to claim |
 | `workflow-automations` plugin | event-driven workflow triggers |
+| `appointments` plugin | role-keyed model tenancy — the squad dispatcher resolves each role's model/engine/host here; an empty table means every caller falls back to its static map |
 | Runner (`runner/`) | the autonomous runner that consumes workflows |
 | Plugins | the mount seam itself: registry, per-plugin schema/routes/MCP tools/workers |
 | Teams + team settings | team grouping (the reference deployment runs one `squad` team) |
@@ -112,9 +113,10 @@ part of any deployment's needs.
   `"enabled": false` in its `plugin.json`, so those paths return 404 until
   you enable it — by design. It stays in the tree as the A2A existence proof
   and a worked example of the plugin mount seam.
-- **`appointments/` — staged foundation, not loaded.** No `plugin.json`, so
-  the loader skips it entirely; it is the staging area for an unbuilt
-  role-registry, and its `node:test` runs in CI as a guard on its data layer.
+
+(`appointments` used to be listed here too — a staged, not-loaded foundation.
+It was mounted on 2026-09-09 once the squad dispatcher's live dependency on it
+surfaced; it is an L2 row now.)
 
 ## What a deployment needs vs what only the lab runs
 

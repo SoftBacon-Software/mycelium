@@ -1,0 +1,10 @@
+{
+  "name": "appointments",
+  "version": "1.0.0",
+  "displayName": "Appointments",
+  "description": "Role-keyed model tenancy — maps each role (coder, verifier, planner, head, ...) to the model_id/engine/host that serves it, with per-role flag_overrides and capability hints. The squad dispatcher resolves per-role brains here; an empty table means every caller falls back to its own static map.",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/appointments",
+  "schema": "schema.sql"
+}

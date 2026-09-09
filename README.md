@@ -45,7 +45,7 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 - **Voice adapter** (`sdk/adapters/voice.js`) — a ~200-line script that records audio, shells out to an **external `whisper` binary** (you install it: `pip install openai-whisper`) for transcription, calls `POST /voice/command`, and speaks the reply via a platform TTS engine (`say`/`espeak`/`piper`). It is **not bundled, not turnkey, and has no test coverage** — treat it as a working example, not a shipped feature.
 - **Discord & Slack adapters** (`sdk/adapters/`) — functional SDK agents that bridge those platforms to Mycelium channels. Real, but bring your own bot tokens.
 - **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
-- **`appointments/` plugin** — staged foundation for an unbuilt "role-registry," **not loaded**. It has no `plugin.json`, so the loader skips it, `GET /plugins` doesn't list it, and it isn't counted among the built-in plugins. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
+- **`appointments/` plugin** — role-keyed model tenancy: maps each role (coder, verifier, planner, head, …) to the model/engine/host that serves it. Mounted as of 2026-09-09 — before that it was a staged, not-loaded foundation (no `plugin.json`, so the loader skipped it) while the squad dispatcher failed soft to its static map on every cycle. The squad's `role_keying` layer resolves per-role brains here; an empty table means every caller falls back to its own static map. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
 - **Organizations, agent templates, team settings, file server, operators, studio** — real endpoints, pinned by the route-manifest gate, but no dedicated behavioral tests yet. Treat them as plumbing-stable, not battle-tested.
 
 ## Surface levels
@@ -56,7 +56,7 @@ Mycelium has levels — how much of it you need depends on what you are running.
 - **L1 — persona** — persistence *with identity*: semantic + auto memory, persona/profile records, concepts, savepoint diff, recall on-ramps.
 - **L2 — substrate** — many agents on one network: messages/channels, tasks/plans/runs, approvals, events, drones, workflows, the plugin seam, the runner.
 - **L3 — lab** — research apparatus only the operating lab runs today: spend accounting, feedback, the marketing/social plugin, the public demo face.
-- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**) and the staged, not-loaded `appointments` foundation.
+- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**).
 
 A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 and the demo surfaces are mounted but ignorable — nothing outside the lab needs them.
 
@@ -243,11 +243,11 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-103 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+104 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-7 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+8 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
@@ -258,6 +258,7 @@ npm test            # vitest run — unit + smoke under test/
 | `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
 | `workflow-automations` | event-driven workflow triggers |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
+| `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
 
 Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 

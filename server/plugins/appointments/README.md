@@ -1,59 +1,55 @@
-# appointments — dormant foundation (NOT loaded)
+# appointments — role-keyed model tenancy (mounted)
 
-> **Status: dormant.** This directory is staged foundation code, **not a shipped plugin.**
-> The server does not load it and `GET /plugins` does not list it. It is kept here
-> intentionally and is protected by CI; this note explains why, so the directory is not
-> mistaken for a feature.
-
-## Why it isn't loaded
-
-The plugin loader (`server/plugins.js`) auto-discovers a plugin only when its directory
-contains a `plugin.json` manifest. This directory has **no `plugin.json`**, so the loader's
-`if (!fs.existsSync(manifestPath)) continue;` skips it. Concretely:
-
-- Its routes (`routes.js`: `GET /`, `PUT /:role`, `DELETE /:role`, guarded by
-  `checkAgentOrAdmin`) are **never mounted** — no `appointments` API exists on a running server.
-- Its table is **never created** — the loader runs a plugin's `schema.sql` only for
-  discovered plugins, and no other code references the `appointments` table.
-- `GET /plugins` **does not list it**, and it is not counted among the "14 built-in plugins"
-  in the top-level `README.md` (those are the 15 manifest-carrying dirs minus `_template`).
-
-Adding a `plugin.json` would mount real routes in the public API. That is a product decision
-(ship the role-registry), not a documentation fix — so it has not been done here.
+> **Status: mounted.** Since 2026-09-09 this directory ships a `plugin.json`, so the
+> loader discovers it, runs its `schema.sql`, mounts its router at `/api/mycelium/appointments`,
+> and `GET /plugins` lists it among the built-in plugins. Before that it spent months as
+> staged foundation code with **no manifest** — the loader skipped it silently and its
+> routes 404'd, while the one caller that dials it failed soft to a static map on every
+> cycle. See "Why it was mounted" below.
 
 ## What it is
 
-A storage layer for the unbuilt **role-registry** initiative: a map from a *role* name
-(e.g. `coder`) to the model that serves it — `{ model_id, engine, host, flag_overrides, capability }`.
+A map from a *role* name (e.g. `coder`) to the model that serves it —
+`{ model_id, engine, host, flag_overrides, capability }`. This is the tenancy seam
+between "model-keyed" setups (our named crew) and "role-keyed" ones (bring-your-own
+model): callers resolve a role to whatever model is appointed to it, and an **empty
+table is a defined state** — every caller falls back to its own static map.
 
 - `db.js` — prepared-statement CRUD (`upsert` / `get` / `list` / `delete`) over the
   `appointments` table, with `ON CONFLICT` upsert and JSON `flag_overrides` / `capability`
   defaults. Self-contained and reusable.
-- `routes.js` — a complete, mountable Express router. Functional, but unreachable until a
-  manifest exists.
-- `schema.sql` — the `appointments` table definition.
-- `test.js` — 5 self-contained tests over an in-memory SQLite DB.
+- `routes.js` — the Express router: `GET /` (list all), `PUT /:role` (upsert;
+  `model_id`, `engine`, `host` required), `DELETE /:role`. All guarded by
+  `checkAgentOrAdmin`.
+- `schema.sql` — the `appointments` table definition (run by the loader at mount).
+- `test.js` — self-contained tests over an in-memory SQLite DB (the data-layer
+  regression guard CI has always run).
 
-Provenance: a single commit — `0197af3 feat(appointments): role->appointment storage plugin
-(Task 3, role-registry foundation)`. The role-registry initiative has produced no other
-artifacts, and nothing in the codebase reads or writes this table.
+## The consumer (why this had to be mounted)
+
+`jarvis/squad/role_keying.py` GETs `/api/mycelium/appointments` (3 s timeout,
+`X-Admin-Key`) once per process and caches it by role; `squad_loop.py`'s dispatch loop
+calls `resolve_appointment()` per agent every cycle. It is **fail-soft by design**:
+any error — including the 404 this route returned while unmounted — degrades to `{}`,
+and an empty list produces `{}` through the normal path. Either way every agent
+dispatches off the static `AGENT_MODEL`/`AGENT_URL` maps exactly as before. So while
+unmounted nothing broke — but the seam the harness already depended on did not exist.
+Task 171's caller census found the chain; the director's call (m5Max, 2026-09-09) was
+to mount it rather than retire it.
 
 ## Why CI runs its test anyway
 
 CI runs every `server/plugins/*/test.js` under `node:test` (`.github/workflows/test.yml`,
-step "Run plugin tests"). That glob matches this directory's `test.js`, so the suite runs and
-is green. This is intentional and useful: the test is a **regression guard for the `db.js`
-data layer**, independent of whether the plugin is loaded. It uses an in-memory DB, runs in
-~40 ms, and needs no server — so it protects the committed foundation from rotting silently
-**without** implying the plugin ships.
+step "Run plugin tests"). That glob matches this directory's `test.js`, so the suite
+runs and is green — a **regression guard for the `db.js` data layer**, independent of
+the mount. The mount itself is gated by `test/unit/appointments-mount.test.js`, which
+boots the real server cold and proves the route answers with the empty-table shape
+(`{ "appointments": [] }`) plus a PUT/GET round-trip.
 
-If you would rather CI test only *loaded* plugins, gate the glob on the manifest existing —
-but note that drops regression coverage on this code.
+## Provenance
 
-## To activate (when the role-registry is built)
-
-1. Add a `plugin.json` (start from `server/plugins/_template/plugin.json`; set `name`,
-   mount `routes.js`, point `schema` at `schema.sql`).
-2. Wire a consumer — e.g. a role lookup the dispatcher consults when routing work by
-   capability.
-3. Update the "14 built-in plugins" count in the top-level `README.md` and remove this note.
+- `0197af3` — `feat(appointments): role->appointment storage plugin` (Task 3,
+  role-registry foundation): db.js, routes.js, schema.sql, test.js, and the original
+  dormant-foundation README.
+- 2026-09-09 — `plugin.json` added (task 176, lane P-product); this README rewritten
+  from "dormant foundation" to "mounted". No data-layer code changed.
