@@ -620,7 +620,7 @@ async function main() {
       ...(lettaHandle ? { letta_agent: { external: true, server: lettaHandle.health.server.url_host, deleted: !args.keep } } : {}),
       ...(maxSessions ? { max_sessions_per_question: maxSessions } : {}),
       commands: [
-        `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n} --receipt${args.keep ? ' --keep' : ''}`,
+        `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n}${maxSessions ? ` --max-sessions ${maxSessions}` : ''} --receipt${args.keep ? ' --keep' : ''}`,
         ...(args.handlabels ? [`node bench/memory/run.mjs --from-results bench/memory/results/${runId} --handlabels ${args.handlabels} --receipt`] : []),
       ],
     };
