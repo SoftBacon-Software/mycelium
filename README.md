@@ -189,7 +189,7 @@ server/
   index.js              # Express app + WebSocket
   db.js                 # SQLite (better-sqlite3, WAL mode)
   schema.sql            # full base schema (56 tables; plugins add their own)
-  routes/               # 286 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
+  routes/               # 284 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
   plugins/              # plugin system (7 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)

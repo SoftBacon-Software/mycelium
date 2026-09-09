@@ -8,10 +8,13 @@ import { readFileSync, existsSync } from 'node:fs';
 
 // 311 = 308 (decomposition baseline) + 3 roster-truth additions (2026-08-17):
 // markAgentOffline, deriveAgentPresence, AGENT_PRESENCE_STALE_SECONDS.
-const EXPECTED_EXPORT_COUNT = 311;
+// 309 = 311 − 2 team-chat exports removed (2026-09-09, task 174:
+// createTeamChat, listTeamChat — the /team-chat surface was folded away;
+// chat rows remain `messages` history).
+const EXPECTED_EXPORT_COUNT = 309;
 
 describe('db.js export manifest (decomposition gate)', () => {
-  test('public surface matches snapshot — 311 exports, stable types+arities', async () => {
+  test('public surface matches snapshot — 309 exports, stable types+arities', async () => {
     const manifest = await buildManifest();
 
     if (!existsSync(SNAPSHOT_PATH)) {

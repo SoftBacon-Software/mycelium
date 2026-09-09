@@ -11,7 +11,7 @@ import { isNetworkAutonomous, getAvailableOperators, listOperators, getActiveStu
 import { getProject, listProjects, listOrgs } from './db/projects.js';
 import { getProjectConcepts, listConcepts, getConceptProjects } from './db/concepts.js';
 import { listPendingApprovalsByAgent, listApprovals } from './db/approvals.js';
-import { listPendingRequests, getUnreadMessages, markMessagesRead, listMessages, listTeamChat } from './db/messages.js';
+import { listPendingRequests, getUnreadMessages, markMessagesRead, listMessages } from './db/messages.js';
 import { getContext, getAllContext, listContextKeys, getContextKey, upsertContextKey } from './db/context.js';
 import { getAgent, listAgents, resolveAssignee, updateAgentHeartbeat } from './db/agents.js';
 import { ensureDefaultChannels, getChannelsByUser, getUnreadCounts, isChannelMember, listChannels } from './db/channels.js';
@@ -814,7 +814,6 @@ export function getOverview(userId) {
   var bugs = listBugs({ limit: 50 });
   var bugCounts = countBugs();
   var plans = listPlans({ exclude_status: 'cancelled', limit: 50 });
-  var teamChat = listTeamChat(50);
   var allChannels = listChannels({ limit: 200, status: 'all' });
   var activeChannelCount = allChannels.filter(function (c) { return c.status === 'active'; }).length;
   var archivedChannelCount = allChannels.filter(function (c) { return c.status === 'archived'; }).length;
@@ -831,7 +830,6 @@ export function getOverview(userId) {
     events: events,
     tasks: { open: openTasks, in_progress: inProgressTasks, review: reviewTasks, done: recentDone },
     messages: messages,
-    team_chat: teamChat,
     context: context,
     context_keys: contextKeys,
     projects: projects,

@@ -132,7 +132,6 @@ import {
   createWebhook, listWebhooks, deleteWebhook, dispatchWebhook,
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
-  createTeamChat, listTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs, pauseDrone, resumeDrone, getDroneStatus,
   createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
@@ -1730,31 +1729,6 @@ router.get('/reconciliation', asyncHandler(function (req, res) {
   }
   if (minutes === undefined || isNaN(minutes) || minutes < 1) minutes = 24 * 60;
   res.json(getReconciliationCandidates(minutes));
-}));
-
-// ======== TEAM CHAT (human-only) ========
-
-// GET /team-chat — list human chat messages
-router.get('/team-chat', asyncHandler(function (req, res) {
-  var user = getStudioUser(req);
-  if (!user) {
-    // Also allow admin key
-    var key = req.headers['x-admin-key'];
-    if (!isAdminKey(key)) return res.status(403).json({ error: 'Studio login required' });
-  }
-  var limit = parseLimit(req.query.limit, 50);
-  res.json(listTeamChat(limit));
-}));
-
-// POST /team-chat — send a chat message (studio users only)
-router.post('/team-chat', asyncHandler(function (req, res) {
-  var user = getStudioUser(req);
-  if (!user) return res.status(403).json({ error: 'Studio login required' });
-  var content = (req.body.content || '').trim();
-  if (!content) return res.status(400).json({ error: 'content is required' });
-  var sender = '__user:' + (user.displayName || user.username);
-  var id = createTeamChat(sender, escapeHtml(content));
-  res.json({ ok: true, id: id });
 }));
 
 registerChannelRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, escapeHtml, parseIntParam, parseLimit, validateEnum, emitEvent, getAdminDisplayName, CHANNEL_STATUSES });

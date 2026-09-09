@@ -167,21 +167,6 @@ export function bulkDeleteMessages(filters) {
   return db.prepare(sql).run(...params).changes;
 }
 
-// -- Team Chat (human-only messages) --
-
-export function createTeamChat(fromUser, content) {
-  var result = db.prepare(
-    "INSERT INTO messages (from_agent, content, msg_type) VALUES (?, ?, 'chat') RETURNING id"
-  ).get(fromUser, content);
-  return result.id;
-}
-
-export function listTeamChat(limit) {
-  return db.prepare(
-    "SELECT * FROM messages WHERE msg_type = 'chat' ORDER BY created_at DESC LIMIT ?"
-  ).all(limit || 50);
-}
-
 export function resolveStaleRequests(hoursOld) {
   var hours = hoursOld || 72;
   var stale = db.prepare(
