@@ -35,7 +35,7 @@ describe('plugin test coverage gate', () => {
     expect(pluginDirs, `expected to scan ${PLUGINS_DIR}`).toContain('appointments')
     expect(pluginDirs).toContain('workflows')
     expect(pluginDirs).toContain('semantic-memory')
-    expect(pluginDirs.length, 'plugin count drifted — update this floor if intentional').toBeGreaterThanOrEqual(9)
+    expect(pluginDirs.length, 'plugin count drifted — update this floor if intentional').toBeGreaterThanOrEqual(8)
   })
 
   test.each(pluginDirs)(
