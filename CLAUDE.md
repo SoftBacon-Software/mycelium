@@ -15,9 +15,9 @@ AI-powered teams." See `README.md` for the full picture.
   to make something pass.
 
 Key layout: `server/` (Express + SQLite — `db.js`, and `server/routes/` where the
-285-endpoint API lives decomposed into 33 per-domain modules with `mycelium.js` as
+286-endpoint API lives decomposed into 33 per-domain modules with `mycelium.js` as
 the core), `sdk/` (multi-runtime Agent SDK), `mcp/` (MCP server for Claude Code),
-`runner/` (autonomous agent runner). Tests run with `npm test` (vitest — 102 files
+`runner/` (autonomous agent runner). Tests run with `npm test` (vitest — 103 files
 across `test/unit/` + `test/smoke/` + `test/refactor/`; the test count drifts, so run
 `npm test` for it); CI runs them on Node 20/22 (`.github/workflows/test.yml`).
 

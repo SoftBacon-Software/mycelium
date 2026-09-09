@@ -37,6 +37,8 @@ describe('schema.sql', () => {
       expect(tables).toContain('plans')
       expect(tables).toContain('messages')
       expect(tables).toContain('drone_jobs')
+      // Per-route usage counters (route-usage instrument, 2026-09-09).
+      expect(tables).toContain('route_usage')
 
       // Confirm no legacy dv_-prefixed table sneaks back in.
       const stale = tables.filter((t) => t.startsWith('dv_'))

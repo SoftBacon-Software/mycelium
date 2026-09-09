@@ -546,6 +546,12 @@ router.get('/admin/api-limits', asyncHandler(async function (req, res) {
   }
 }));
 
+// GET /admin/api-usage — proxies the api.anthropic.com ORG usage/cost API.
+// This meters FRONTIER-$ at Anthropic, NOT this instance's own request
+// traffic. It requires process.env.ANTHROPIC_ADMIN_KEY on the server; when
+// unset it 503s here (line below) — that is the documented state on jetson01
+// as of 2026-09-09, not a bug. For per-route traffic ON THIS INSTANCE see
+// GET /admin/route-usage (route_usage table, lib/route-usage.js middleware).
 router.get('/admin/api-usage', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
 
@@ -664,6 +670,45 @@ router.get('/admin/api-usage', asyncHandler(async function (req, res) {
     console.error('[mycelium] API usage error:', err.message);
     res.status(500).json({ error: 'Failed to fetch API usage' });
   }
+}));
+
+// GET /admin/route-usage — per-route traffic measured on THIS instance.
+// Reads the route_usage table (fed by the routeUsageCounter middleware at the
+// /api/mycelium seam). This — not /admin/api-usage above — is the zero-write
+// evidence source for plugin/route removal decisions. Patterns are Express
+// route paths (/tasks/:id); '<unmatched>' aggregates requests that hit no
+// route. Optional ?since=YYYY-MM-DD restricts to days >= since (UTC buckets).
+router.get('/admin/route-usage', asyncHandler(async function (req, res) {
+  if (!checkAdmin(req, res)) return;
+
+  var since = req.query.since;
+  var where = '';
+  var params = [];
+  if (since !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+      return res.status(400).json({ error: 'since must be a YYYY-MM-DD date (UTC day bucket)' });
+    }
+    where = ' WHERE day >= ?';
+    params.push(since);
+  }
+
+  var rows = getDB().prepare(
+    'SELECT method, route_pattern, SUM(count) AS count, COUNT(DISTINCT day) AS active_days,' +
+    ' MIN(first_seen) AS first_seen, MAX(last_seen) AS last_seen' +
+    ' FROM route_usage' + where +
+    ' GROUP BY method, route_pattern ORDER BY count DESC'
+  ).all(...params);
+
+  var total = 0;
+  for (var i = 0; i < rows.length; i++) total += rows[i].count;
+
+  res.json({
+    since: since || null,
+    total_requests: total,
+    route_count: rows.length,
+    routes: rows,
+    generated_at: new Date().toISOString(),
+  });
 }));
 
 router.get('/admin/backups', asyncHandler(function (req, res) {
