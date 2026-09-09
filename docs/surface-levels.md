@@ -6,7 +6,8 @@ need depends on what you are running. This page is the documented shape of
 those levels — which surfaces are core, which exist to serve persona
 persistence, which turn Mycelium into a many-agent substrate, and which are
 lab apparatus or demos. It is derived from a full surface audit of the
-platform (September 2026).
+platform (September 2026) and, since 2026-09-09, **measured against every
+consumer tree** — see [The measured ladder](#the-measured-ladder).
 
 Two honest caveats up front:
 
@@ -19,6 +20,43 @@ Two honest caveats up front:
   Neither is required to run assistants. Nothing here is vaporware — the
   [README](../README.md) promises "implemented and exercised by the running
   system, not a roadmap," and that holds at every level.
+
+## The measured ladder
+
+The audit assigned levels to surfaces. The consumer census (2026-09-09)
+measured which levels each real consumer actually pulls: a whole-tree
+route-literal grep of every consumer of the platform API, each tree pinned at
+the sha the census ran against (route families are static literals — only ids
+interpolate — so family-level mapping is exact):
+
+| Consumer tree (census pin) | Endpoints | L0 | L1 | L2 | L3 |
+|---|---|---|---|---|---|
+| Velum — the home app (`velum` main @ `75bf401`) | 19 | 7 | 0 | 11 | 1 |
+| `mycelium-agent` — the SMB product (`brain-probe-wiring-gate` @ `5370b30`) | 27 | 7 (+2 on the admin boundary) | 0 | 18 | 0 |
+| `apps/mycelium-mcp` — the operator mirror (master @ `8dbdb78`) | 64 | 10 | 9 | 39 (+4 on the L2/L3 line) | 0 |
+| `mycelium-site` — the public site (main @ `f1195e7`) | 3 | 1 | 0 | 2 | 0 |
+| `console.html` — the phone console (main @ `5d40d46`) | 0 | — | — | — | — |
+| `apps/mycelium-light` — Clara's client (main @ `65c1fa9`) | 0 | — | — | — | — |
+
+Route existence was checked against the platform tree at master `34ebaed`
+(the task-170 plugin-removal commit). The console is a client of the local
+agent console, not of the platform, and the light client is
+substrate-disconnected today — those zeros are the datum, not a gap. The
+census itself is a lab run artifact (2026-09-09): method above, per-tree pins
+in the table.
+
+Three structural findings survive contact with the numbers, and they shape
+the rest of this page:
+
+1. **No application consumes L1 today.** Persona lives in the harness, not in
+   the platform's persona surfaces (measured note at
+   [L1](#l1--persona-persistence-with-identity)).
+2. **Every consumer's beyond-L0 pull is the runner half of L2 — never the org
+   half.** That is why L2 is documented below as two halves:
+   [L2-runner](#l2-runner--the-runner-contract) and
+   [L2-org](#l2-org--the-org-half).
+3. **L3 is lab-only, with exactly one app-facing caller** — velum's
+   `GET /spend`, the frontier-$ meter.
 
 ## L0 — Core: one assistant, one operator
 
@@ -53,56 +91,91 @@ on top. Add it when the assistant should have identity, not just state:
 | Savepoint diff | view and diff savepoints — the identity-continuity instrument |
 | Assets | portraits/avatars — the persona's face (demo-leaning; lightly used) |
 
+> **Measured 2026-09-09: no application consumes L1 today.** Not one L1 route
+> is called from any consumer tree — not the home app, not the SMB product,
+> not the public site, not Clara's client, not the phone console. The only
+> measured L1 pulls anywhere are the operator mirror's concept / profile /
+> asset tools (9 of the mcp client's 64) — the operator's own hand, not an
+> app face. Persona continuity for the marquee single-operator consumers is
+> carried entirely at L0 — agent record, savepoints, memory — plus
+> server-side composition at boot: persona lives in the harness, not in the
+> platform's persona surfaces. The layer stays. These surfaces are the
+> intended home for persona-as-platform-records and the mirror does exercise
+> them — but the deployment ladder at the bottom of this page is drawn from
+> what is measured, not what is intended, and no measured consumer walks
+> through L1.
+
 ## L2 — Substrate: many agents on one network
 
-Coordination. Add it when more than one agent works the same board:
+Coordination. Add it when more than one agent works the same board. The
+census split this level along its one measured seam: **every consumer's
+beyond-L0 pull is the runner contract — the org half of L2 has no app
+consumer at all.** Two tables, because they are different deployments:
+
+### L2-runner — the runner contract
+
+Every app consumer's beyond-L0 pull lands in this table and nowhere else:
 
 | Surface | What it is |
 |---|---|
-| Messaging, requests, channels | agent↔agent/operator messages, blocking requests, project-scoped channels |
-| Tasks, plans, runs | the work board: tasks, multi-step plans with dependency ordering, run records with claim + telemetry |
-| Approvals | risk-tiered human-in-the-loop gates + kill switch |
-| Events | the event log every action emits, plus the live SSE stream |
-| Inbox | aggregated operator notifications |
-| Projects | project scoping for everything above |
-| Drones | the GPU/compute job queue + drone registry — hardware as a first-class peer |
-| GitHub PR proxy | list/create/merge PRs with a server-held token |
-| Bugs | squad-found bug tracker |
-| Webhooks | outbound webhook subscriptions + deliveries |
-| `workflows` plugin | fire a DAG of agent invocations for a dormant runner to claim |
-| `workflow-automations` plugin | event-driven workflow triggers |
-| `appointments` plugin | role-keyed model tenancy — the squad dispatcher resolves each role's model/engine/host here; an empty table means every caller falls back to its static map |
+| Tasks, plans, runs | the work board: tasks with claim + deliverables + comments, multi-step plans with dependency ordering, run records with claim + telemetry |
+| `workflows` plugin | fire a DAG of agent invocations for a dormant runner to claim — the one L2 surface all four platform-consuming trees pull |
+| `workflow-automations` plugin | event-driven workflow triggers (mounted; no measured API caller yet) |
+| `appointments` plugin | role-keyed model tenancy — the squad dispatcher resolves each role's model/engine/host here; an empty table means every caller falls back to its static map (read server-side; no direct API caller) |
 | Runner (`runner/`) | the autonomous runner that consumes workflows |
-| Plugins | the mount seam itself: registry, per-plugin schema/routes/MCP tools/workers |
-| Teams + team settings | team grouping (the reference deployment runs one `squad` team) |
-| Orgs | orgs grouping projects — mounted, no rows in the reference deployment yet |
-| Agent templates | reusable role/config presets — mounted; the admin UI applies them |
-| Skills, widgets | registries with live client callers but sparse content so far |
-| Files + file server | agent temp uploads (auto-deleted after a day) and the file-drone browser/FS gateway |
-| `file-drone/`, `printer-drone/` | drone worker packages for the surfaces above (demo-leaning) |
+| Messaging | agent↔agent/operator messages (velum + the product) |
+| Inbox | aggregated operator notifications (the product) |
+| Events | the event log every action emits, plus the live SSE stream (velum) |
+| Projects | project scoping for everything above (velum, the mirror) |
+| Widgets | live dashboard components (measured: exactly one app caller — velum's dashboard tile; the table holds 0 rows in the reference deployment) |
 
-The lightly-used rows near the bottom (orgs, skills, widgets, files, file
-server, feedback) are exactly that: real endpoints and tables, lightly used.
-Write counters are accumulating on the running instance before any of them is
-removed or promoted — the levels describe them honestly rather than
-pretending they are load-bearing.
+### L2-org — the org half
+
+No app consumer pulls any of this. The operator mirror (`apps/mycelium-mcp`)
+is the only measured consumer of the entire half:
+
+| Surface | What it is |
+|---|---|
+| Channels | project-scoped channels for agent + operator conversation |
+| Requests | blocking agent→agent/operator requests |
+| Approvals | risk-tiered human-in-the-loop gates + kill switch |
+| Drones | the GPU/compute job queue + drone registry — hardware as a first-class peer (`file-drone/`, `printer-drone/` are the worker packages for these surfaces) |
+| GitHub PR proxy | list/create/merge PRs with a server-held token (core `github.js` — not the removed github-sync plugin) |
+| Bugs | squad-found bug tracker — the one family on the L2/L3 boundary |
+| Webhooks | outbound webhook subscriptions + deliveries (no measured consumer) |
+| Teams + team settings | team grouping (the reference deployment runs one `squad` team) |
+| Orgs | orgs grouping projects — mounted, no rows in the reference deployment |
+| Agent templates | reusable role/config presets — the admin UI applies them; no measured API consumer |
+| Skills | discoverable, installable agent capabilities (no measured consumer in any tree) |
+| Files + file server | agent temp uploads (auto-deleted after a day) and the file-drone browser/FS gateway (no measured consumer) |
+| Plugins | the mount seam itself: registry, per-plugin schema/routes/MCP tools/workers — the mirror's dynamic plugin-tool proxy is the only measured route pull |
+
+The org half is real endpoints and tables with exactly one measured consumer:
+the operator's mirror. Write counters are accumulating on the running
+instance before any of them is removed or promoted — the levels describe them
+honestly rather than pretending they are load-bearing for an app.
 
 ## L3 — Lab: research apparatus
 
 Only the operating lab runs these today. A customer deployment ignores them
-all:
+all — and the census confirms it: across all six consumer trees, exactly one
+app-facing L3 call exists (velum's `GET /spend`):
 
 | Surface | What it is |
 |---|---|
-| Spend | frontier-$ spend accounting per agent/project/model |
-| Feedback | structured feedback capture with ratings — no rows in the reference deployment yet |
+| Spend | frontier-$ spend accounting per agent/project/model — the level's one app-facing caller: velum's spend view |
+| Feedback | structured feedback capture with ratings — no rows in the reference deployment and no measured consumer |
 | `marketing` plugin | build-in-public drafts, social posting, X delivery, outreach — live in the lab, mounted with real rows |
 | Voice command | `POST /voice/command` — natural-language commands against the network |
-| Public demo face | `GET /stats/public` (anonymized aggregate stats) + `GET /public/activity` (sanitized live activity feed), both no-auth, feeding the static site export |
+| Public demo face | `GET /stats/public` (anonymized aggregate stats) + `GET /public/activity` (sanitized live activity feed), both no-auth — **demo face, no measured consumer** |
 
-The last row is labelled **demo** rather than product: it exists so the
-public site can show a live, honest picture of a running instance. It is not
-part of any deployment's needs.
+That last row is the honest one to read closely. The audit kept these two
+routes on the grounds that they are "the public demo face" — the 2026-09-09
+census could not confirm even that: no tree calls either route. The public
+site bakes its live data from `GET /workflows` + `GET /runs` + `GET /agents`
+instead (L0 + L2-runner). The demo face stays mounted — real, working,
+harmless — but nothing consumes it, and this page says so rather than
+letting the keep-reason stand unmeasured.
 
 ## Demo: existence proofs, kept honest
 
@@ -116,19 +189,30 @@ part of any deployment's needs.
 
 (`appointments` used to be listed here too — a staged, not-loaded foundation.
 It was mounted on 2026-09-09 once the squad dispatcher's live dependency on it
-surfaced; it is an L2 row now.)
+surfaced; it is an L2-runner row now.)
 
 ## What a deployment needs vs what only the lab runs
 
-| You are running... | You need |
-|---|---|
-| One assistant, one operator, persistence | L0 |
-| ...and it should be *someone* — persona, memory that behaves like memory | L0 + L1 |
-| ...and a crew of agents works one board | L0 + L1 + L2 |
-| The operating lab | everything, L3 included |
+The audit's four levels, corrected by the census into the ladder a deployment
+actually walks:
 
-Nothing below L2 is required for the product story: L0 + L1 is the whole
-"persistent assistant with persona and memory" pitch, and L2 is what makes it
-a team substrate. L3 and the demo surfaces ride along in the same process and
-can be ignored — or audited, since everything here runs in the open on
-hardware you own.
+| You are running... | You need | Measured |
+|---|---|---|
+| One assistant, one operator, persistence | L0 | every consumer's floor; the light client consumes none of the platform at all today |
+| A single-operator assistant that *does work* — **the customer-deployment minimum** | **L0 + L2-runner** | the SMB product pulls exactly this: 27 endpoints, zero L1, zero org routes |
+| The operator's home app | L0 + L2-runner + one L3 route | velum: 19 endpoints; the L3 one is `GET /spend` |
+| ...and it should be *someone* — persona records on the platform | + L1 | intended, not yet consumed: no app pulls an L1 route |
+| A crew on one board, organized | + L2-org | mirror-only: no app pulls an org route |
+| The operating lab | everything, L3 included | L3's one app-facing caller is velum's `GET /spend` |
+
+The honest single-operator ladder is **L0 + L2-runner** — that is the
+customer-deployment minimum, and the product tree already lives on it. The
+"persistent assistant with persona and memory" pitch survives intact on it:
+persistence is the L0 memory + savepoint rows, persona is carried by those
+same rows plus the harness that boots from them (where every measured consumer
+actually gets it), and work is L2-runner. What the census removed from the
+story is not capability — it is surfaces: an install that needs 27 routes
+does not need persona-record CRUD, org structure, or a single lab route. L1,
+L2-org, L3 and the demo faces ride along in the same process and can be
+ignored — or audited, since everything here runs in the open on hardware you
+own.
