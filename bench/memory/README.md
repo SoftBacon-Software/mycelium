@@ -3,7 +3,9 @@
 One harness we control, regime-stamped, receipt-gated. Task 163 = the
 SKELETON: two arms (`none`, `mycelium`) on LongMemEval-S. Task 169 landed
 the first competitor arm (`mem0` — Mem0 OSS via a local sidecar); task 180
-the second (`zep` — Zep's OSS graphiti on its embedded kuzu store).
+the second (`zep` — Zep's OSS graphiti on its embedded kuzu store); task 181
+the third (`letta` — the OSS Letta server's archival memory via its official
+client SDK).
 
 Program: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` §P1.
 
@@ -92,6 +94,16 @@ An arm exposes `write(sessionTurns, {questionId})` and `answer(question) → {te
   retrieved facts joined into the SAME RAG prompt the other arms use, same
   answer model. Scope = one graphiti `group_id` per run — the same
   granularity as the mycelium namespace and the mem0 `user_id`.
+- **`letta`** — the OSS Letta server's (formerly MemGPT) archival memory via
+  a local Python sidecar (`arms/letta_sidecar.py`, see below). write: one
+  archival **passage** per haystack session (the session flattened to
+  `role: content` text — Letta's passages API does not chunk, and its agent
+  loop is deliberately NOT run). answer: archival semantic search
+  (`agents.passages.search`, the API twin of the agent's
+  `archival_memory_search` tool) at the retrieval budget, joined into the
+  SAME RAG prompt the other arms use, same answer model. Scope = one Letta
+  agent per run (created lazily, reattached across sidecar restarts via a
+  state file, deleted at teardown unless `--keep`).
 - Rows are deleted from the platform after the run (per-source_id DELETE,
   verified 0 remaining) unless `--keep`. The mem0 arm never touches the
   platform; its store is a per-run local dir, purged after the run unless
@@ -200,6 +212,53 @@ Regime-critical configuration (all stamped via the sidecar's `/health`):
   expect it to cost at least what mem0's extraction costs per session; budget
   the write phase accordingly and use `--max-sessions N` for smokes.
 
+## The letta arm (sidecar setup + storage requirement)
+
+Letta's OSS server is Python; the arms are JavaScript. `arm_letta.mjs` spawns
+`arms/letta_sidecar.py` (stdlib `http.server`, 127.0.0.1 only), learns its
+ephemeral port from a `LETTA_SIDECAR_READY <port>` stderr line, and stops it
+gating on BOTH child exit AND the port actually being freed. The sidecar
+drives the letta server over the official `letta-client` SDK — it never runs
+the agent loop. One-time setup:
+
+```bash
+python3.12 -m venv bench/memory/arms/.letta-venv
+bench/memory/arms/.letta-venv/bin/pip install -r bench/memory/arms/letta-requirements.txt
+```
+
+Pinned there: `letta-client==1.12.1` (the SDK the sidecar imports) and
+`letta==0.16.8` (the OSS server version under test — provenance pin; the
+sidecar stamps the version the server REPORTS and flags a mismatch via
+`letta_version_matches` rather than refusing).
+
+⚠ **THE STORAGE DIFFERENCE — read before pointing this arm anywhere.** OSS
+letta 0.16.8 cannot run without a PostgreSQL+pgvector SERVER: `asyncpg` is a
+hard ORM import, `db.py` has no sqlite branch, and the `[sqlite]` extra ships
+non-functional (evidence: `letta-requirements.txt`). This harness does not
+install a database server — that is a director decision. So unlike the
+mem0/qdrant and zep/kuzu arms there is NO embedded store here: the sidecar
+fronts an ALREADY-RUNNING letta server at `LETTA_SERVER_URL` (env or
+substrate.conf — no default, this harness never hardcodes an address), and
+`/health` PROBES that server: `ok:false` fails the boot gate, because an arm
+whose memory system is unreachable must not start a run. Per-run isolation is
+a fresh letta AGENT (archival-only: `include_base_tools=False`, no core
+memory blocks), persisted by agent id in a state file keyed by runId so a
+restarted sidecar or a resumed run REATTACHES instead of forking the run's
+memory; teardown deletes the agent unless `--keep`. Addresses resolve from
+env / substrate.conf, never literals: the agent's LLM = `BOX_3090_URL` + `/v1`
+(the SAME answerer the other arms use), embedder = `OLLAMA_URL` (or the
+`MYCELIUM_URL` host's `:11434`), model `nomic-embed-text` @ 768 dims —
+measured on the platform host. Env overrides: `LETTA_LLM_BASE_URL`,
+`LETTA_LLM_MODEL`, `LETTA_EMBEDDER_BASE_URL`, `LETTA_EMBEDDER_DIMS`,
+`LETTA_SIDECAR_PYTHON`.
+
+The sidecar's unittest (request/response shapes, fake Letta client, the
+two-stage stop protocol, the reattach behaviour; 127.0.0.1 only):
+
+```bash
+bench/memory/arms/.letta-venv/bin/python -m unittest -v bench/memory/arms/test_letta_sidecar.py
+```
+
 ## Judge + validation
 
 The judge is a LOCAL model (default: the served XS seat at oMLX :8780 — a
@@ -271,7 +330,8 @@ core.mjs       runBench (DI; what tests drive)    regime.mjs   the stamp
 rejudge.mjs    re-judge saved answers (DI; what tests drive)
 split.mjs      registry + sha256 gate + selection receipt.mjs markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
-arms/          arm_none, arm_mycelium, registry
+arms/          arm_none, arm_mycelium, arm_mem0, arm_zep, arm_letta, registry
+               (+ mem0/zep/letta_sidecar.py, requirements + per-arm venvs, gitignored)
 tools/         cleanup-run.mjs — remove a crashed run's rows from the platform
 data/          gitignored corpora      results/     committed run evidence
 receipts/      committed receipts      handlabels/  committed hand-scored sets

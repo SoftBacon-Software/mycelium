@@ -49,6 +49,7 @@ export function buildRegime({
   platform,     // {url_host, version, embedding_provider, embedding_model, chunk_size}
   mem0 = null,  // optional — competitor-arm block from the mem0 sidecar's /health
   zep = null,   // optional — competitor-arm block from the zep sidecar's /health
+  letta = null, // optional — competitor-arm block from the letta sidecar's /health
   write = null, // optional — {max_sessions_per_question} when the write phase was capped
   n,
   notes = [],
@@ -77,6 +78,7 @@ export function buildRegime({
   };
   if (mem0) stamp.mem0 = mem0;
   if (zep) stamp.zep = zep;
+  if (letta) stamp.letta = letta;
   if (write) stamp.write = write;
   return requireCompleteRegime(stamp);
 }

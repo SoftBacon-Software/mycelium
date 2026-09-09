@@ -1,0 +1,42 @@
+# letta-requirements.txt — the Letta competitor arm (memory benchmark P1, task 181).
+#
+# The sidecar (letta_sidecar.py) drives a LETTA SERVER over the official SDK;
+# it never imports the heavy `letta` package itself. Both are pinned:
+#
+#   letta-client 1.12.1 — the SDK the sidecar imports (agents.passages.*,
+#     agents.create/delete, health). Importable standalone; pulls httpx only.
+#   letta 0.16.8 — the OSS server version under test (upstream latest on PyPI,
+#     May 2026). Provenance pin: the sidecar stamps whatever version the server
+#     at LETTA_SERVER_URL reports on /v1/health, and flags a mismatch
+#     (letta_version_matches=false) in the regime rather than refusing — the
+#     director may deliberately point the bench at a different pinned server.
+#
+# ─── STORAGE REQUIREMENT (why this arm has no embedded store) ────────────────
+# letta 0.16.8 cannot run without a PostgreSQL+pgvector SERVER, and this
+# harness does not install a database server (lane rule; director decision).
+# The arm therefore requires LETTA_SERVER_URL and fails loud without one.
+# Evidence, verified 2026-09-09 against the installed package:
+#   1. letta/orm/sqlalchemy_base.py hard-imports asyncpg — `import letta.orm`
+#      crashes without the [postgres] extra, so `pip install letta[sqlite]`
+#      alone cannot even boot the ORM.
+#   2. letta/server/db.py builds its engine from settings.letta_pg_uri with NO
+#      sqlite branch (asyncpg / pg8000 drivers only).
+#   3. With LETTA_PG_URI unset the URI defaults to
+#      postgresql+pg8000://letta:letta@localhost:5432/letta.
+#   4. With LETTA_PG_URI set to a sqlite+aiosqlite URI, database_engine still
+#      reports POSTGRES (the property is "uri present" -> postgres) and
+#      letta/database_utils.py rewrites the driver to asyncpg, producing a
+#      URL SQLAlchemy cannot parse ("Could not parse SQLAlchemy URL").
+#   5. The [sqlite] extra's sqlite-vec support (letta/orm/sqlite_functions.py)
+#      is a connection-event listener that never receives a sqlite engine —
+#      vestigial in this release.
+# (Upstream docs//issues corroborate: PostgreSQL+pgvector is the supported
+# backend; SQLite is not supported for migrations. Community forks exist for
+# sqlite-only use; they are NOT the OSS letta under test here.)
+#
+# Venv setup (gitignored, one-time):
+#   python3.12 -m venv bench/memory/arms/.letta-venv
+#   bench/memory/arms/.letta-venv/bin/pip install -r bench/memory/arms/letta-requirements.txt
+
+letta-client==1.12.1
+letta==0.16.8

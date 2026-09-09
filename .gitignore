@@ -54,3 +54,6 @@ bench/memory/arms/.mem0-venv/
 
 # zep sidecar venv (task 180) — created from zep-requirements.txt, never committed
 bench/memory/arms/.zep-venv/
+
+# letta sidecar venv (task 181) — created from letta-requirements.txt, never committed
+bench/memory/arms/.letta-venv/

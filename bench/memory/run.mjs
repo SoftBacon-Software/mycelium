@@ -17,6 +17,7 @@ import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
+import { startLettaSidecar, purgeLettaScope } from './arms/arm_letta.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
@@ -288,8 +289,51 @@ async function main() {
     };
   }
 
+  // letta competitor arm (task 181): sidecar lifecycle as above, with ONE
+  // letta-specific fact — the store is an EXTERNAL letta server (OSS letta
+  // 0.16.8 requires PostgreSQL+pgvector; installing a DB server is a director
+  // decision, not ours), so /health ok:false fails the BOOT gate, per-run
+  // isolation is a fresh letta AGENT (reattached across restarts via the
+  // sidecar's LETTA_STATE_FILE), and teardown DELETES the agent.
+  let lettaHandle = null;
+  if (arms.includes('letta')) {
+    lettaHandle = await startLettaSidecar({
+      runId,
+      llmBaseUrl: args['answer-url'] ?? null, // an explicit answer endpoint applies to letta's agent LLM too
+      log: (m) => console.error(`[letta] ${m}`),
+    });
+    console.error(
+      `[run] letta sidecar: server v${lettaHandle.health.letta_version} (client v${lettaHandle.health.letta_client_version}), ` +
+        `store ${lettaHandle.health.server.url_host} — version match: ${lettaHandle.health.letta_version_matches}`
+    );
+    // Mid-run sidecar death: the arm only calls this when a request died with
+    // ECONNREFUSED (nothing committed — a replay cannot duplicate passages).
+    // The letta AGENT (the store) survives on the server; the restarted
+    // sidecar reattaches to it via the state file keyed by runId.
+    lettaHandle.restart = async () => {
+      try {
+        await lettaHandle.stop();
+      } catch (e) {
+        console.error(`[run] letta old sidecar stop problem (continuing with restart): ${e.message}`);
+      }
+      const again = await startLettaSidecar({
+        runId,
+        llmBaseUrl: args['answer-url'] ?? null,
+        fresh: false,
+        log: (m) => console.error(`[letta] ${m}`),
+      });
+      lettaHandle.manager = again.manager;
+      lettaHandle.health = again.health;
+      lettaHandle.stateFile = again.stateFile;
+      lettaHandle.stop = () => again.manager.stop();
+      console.error(`[run] letta sidecar RESTARTED: pid ${again.manager.pid}, agent reattached from ${again.stateFile}`);
+      return { request: (p, b) => again.manager.request(p, b), health: again.health };
+    };
+  }
+
   // Models (local; $0)
-  const boxUrl = platformEnv?.box3090Url || mem0Handle?.env.box3090Url || zepHandle?.env.box3090Url || null;
+  const boxUrl =
+    platformEnv?.box3090Url || mem0Handle?.env.box3090Url || zepHandle?.env.box3090Url || lettaHandle?.env.box3090Url || null;
   const answerUrl = args['answer-url'] ?? (boxUrl ? `${boxUrl}/v1` : null);
   const answerModel = args['answer-model'] ?? 'qwen3.8:27b';
   if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
@@ -346,6 +390,14 @@ async function main() {
           sidecar: 'bench/memory/arms/zep_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
         }
       : null,
+    letta: lettaHandle
+      ? {
+          ...lettaHandle.health,
+          retrieval_budget: budget,
+          scope: lettaHandle.scope,
+          sidecar: 'bench/memory/arms/letta_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
+        }
+      : null,
     write: maxSessions ? { max_sessions_per_question: maxSessions } : null,
     n: items.length,
     notes: [
@@ -355,7 +407,10 @@ async function main() {
       arms.includes('zep')
         ? `arms this run: ${arms.join(', ')}; zep = OSS graphiti-core (Zep's graph memory) on its embedded kuzu store (deprecated upstream — stamped in regime.zep), its extraction LLM and embedder matched to the incumbent arms' answerer/embedder, search = the library's default EDGE_HYBRID_SEARCH_RRF (no LLM reranker)`
         : null,
-      !arms.includes('mem0') && !arms.includes('zep')
+      arms.includes('letta')
+        ? `arms this run: ${arms.join(', ')}; letta = OSS letta server (formerly MemGPT) archival memory via the official letta-client SDK, one archival passage per haystack session, its agent LLM and embedder matched to the incumbent arms' answerer/embedder; the server EXTERNAL (PostgreSQL+pgvector is its storage requirement — no embedded store exists in 0.16.8, see letta-requirements.txt)`
+        : null,
+      !arms.includes('mem0') && !arms.includes('zep') && !arms.includes('letta')
         ? 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+'
         : null,
       ...(maxSessions ? [`SMOKE: write phase capped at ${maxSessions} sessions per question (regime.write) — NOT a full-run number`] : []),
@@ -398,14 +453,29 @@ async function main() {
         log: (m) => console.error(`[mem0-arm] ${m}`),
         resumeDir: outDir,
         // one competitor sidecar per run is the P1 shape; if a run ever carries
-        // BOTH, each arm also gets a bound restart on its own ctx object
-        // (`zep.restart`) and the top-level slot routes to mem0 (first match).
-        restartSidecar: mem0Handle ? () => mem0Handle.restart() : zepHandle ? () => zepHandle.restart() : null,
+        // MORE, each arm also gets a bound restart on its own ctx object
+        // (`zep.restart`, `letta.restart`) and the top-level slot routes by
+        // registration order (mem0 first).
+        restartSidecar: mem0Handle
+          ? () => mem0Handle.restart()
+          : zepHandle
+            ? () => zepHandle.restart()
+            : lettaHandle
+              ? () => lettaHandle.restart()
+              : null,
         mem0: mem0Handle
           ? { sidecar: mem0Handle.manager, mem0Version: mem0Handle.health.mem0_version, restart: () => mem0Handle.restart() }
           : null,
         zep: zepHandle
           ? { sidecar: zepHandle.manager, zepVersion: zepHandle.health.graphiti_version, restart: () => zepHandle.restart() }
+          : null,
+        letta: lettaHandle
+          ? {
+              sidecar: lettaHandle.manager,
+              lettaVersion: lettaHandle.health.letta_version,
+              lettaClientVersion: lettaHandle.health.letta_client_version,
+              restart: () => lettaHandle.restart(),
+            }
           : null,
       },
       judgeFn,
@@ -449,6 +519,9 @@ async function main() {
       cleanup,
       ...(mem0Handle ? { mem0_store: { path: mem0Handle.storePath, local_only: true, purged: !args.keep } } : {}),
       ...(zepHandle ? { zep_store: { path: zepHandle.storePath, local_only: true, purged: !args.keep } } : {}),
+      // letta keeps no local store — the run's agent on the EXTERNAL letta
+      // server is the store; teardown deletes it (recorded as kept under --keep)
+      ...(lettaHandle ? { letta_agent: { external: true, server: lettaHandle.health.server.url_host, deleted: !args.keep } } : {}),
       ...(maxSessions ? { max_sessions_per_question: maxSessions } : {}),
       commands: [
         `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n} --receipt${args.keep ? ' --keep' : ''}`,
@@ -509,6 +582,27 @@ async function main() {
         }
       } catch (e) {
         console.error(`[run] zep sidecar teardown problem: ${e.message}`);
+      }
+    }
+    if (lettaHandle) {
+      // purge BEFORE stopping the sidecar: the agent lives on the remote letta
+      // server and is reachable only through the sidecar. A purge failure is
+      // logged loudly (an orphaned bench agent remains on the server) but must
+      // not stop the sidecar teardown.
+      try {
+        if (!args.keep) {
+          await purgeLettaScope(lettaHandle);
+          console.error(`[run] letta agent deleted (scope ${lettaHandle.scope})`);
+        } else {
+          console.error(`[run] letta agent KEPT (--keep): scope ${lettaHandle.scope} on ${lettaHandle.health.server.url_host}`);
+        }
+      } catch (e) {
+        console.error(`[run] letta agent purge problem (an orphaned agent may remain on the server): ${e.message}`);
+      }
+      try {
+        await lettaHandle.stop();
+      } catch (e) {
+        console.error(`[run] letta sidecar teardown problem: ${e.message}`);
       }
     }
   }
