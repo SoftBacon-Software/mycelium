@@ -190,7 +190,7 @@ server/
   db.js                 # SQLite (better-sqlite3, WAL mode)
   schema.sql            # full base schema (55 tables; plugins add their own)
   routes/               # 285 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
-  plugins/              # plugin system (13 plugins + _template)
+  plugins/              # plugin system (7 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
@@ -235,21 +235,15 @@ npm test            # vitest run — unit + smoke under test/
 
 ## Plugins
 
-13 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+7 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
 | `marketing` | build-in-public drafts, social posting, X delivery, outreach (`/bip`, `/social`, `/x`, `/outreach`) |
-| `cost-tracker` | spend tracking + budget alerts |
-| `daily-digest` | scheduled summary notifications |
-| `error-monitor` | error tracking + alerting |
-| `github-sync` | GitHub PR/issue sync |
 | `guardrails` | safety checks + policy enforcement |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
 | `a2a-gateway` | Google A2A protocol for external-agent interop |
-| `steam-assets` | Steam game-asset management |
-| `video-pipeline` | video processing workflows |
 | `workflow-automations` | event-driven workflow triggers |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 

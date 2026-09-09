@@ -1627,7 +1627,8 @@ export function registerTools(server) {
   );
 
   // ===== PLUGIN TOOLS (auto-discovered, see registerPluginTools) =====
-  // Outreach, video-pipeline, and steam-assets tools are registered dynamically on boot.
+  // Plugin MCP tools are registered dynamically on boot from the instance's
+  // /plugins/mcp-tools — whatever the server loads is what appears here.
 
   // ===== SAVEPOINTS =====
 
