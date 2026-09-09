@@ -506,7 +506,10 @@ async function main() {
       regime,
       armFactories: arms.map((name) => ({
         name,
-        factory: (ctx) => ARM_FACTORIES[name](ctx),
+        // per-arm view: the shared ctx gets the arm's OWN log label (task 182
+        // runs several arms in one process — a hardcoded prefix mislabels
+        // which arm's write/extract lines these are)
+        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`) }),
       })),
       armContext: {
         answerChat,
@@ -522,7 +525,6 @@ async function main() {
         // 2026-09-08 rows all show meta.hits=10. Carrying both names keeps the
         // stamped budget and the exercised budget the same thing.
         retrievalBudget: budget,
-        log: (m) => console.error(`[mem0-arm] ${m}`),
         resumeDir: outDir,
         // one competitor sidecar per run is the P1 shape; if a run ever carries
         // MORE, each arm also gets a bound restart on its own ctx object
