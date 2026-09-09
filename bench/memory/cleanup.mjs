@@ -37,3 +37,30 @@ export async function purgeRunRows(platform, { sourceType, namespace, batchLimit
     kept: false,
   };
 }
+
+/**
+ * Purge every namespace a run indexed (the extract control arm writes to a
+ * suffixed namespace of its own). Returns the receipt's `cleanup` shape: the
+ * single purge for one namespace, an aggregate with per_namespace for more.
+ * Shared by the success path and the failure path of run.mjs — a run that
+ * dies mid-way must not leave thousands of bench rows for the embedder to
+ * chew on (run B, 2026-09-09: 7,767 orphan rows after a 30 s timeout).
+ */
+export async function purgeNamespaces(platform, { sourceType, namespaces, log = () => {}, purge = purgeRunRows } = {}) {
+  const per = [];
+  for (const ns of namespaces) {
+    const p = await purge(platform, { sourceType, namespace: ns });
+    log(`cleanup ${ns}: ${p.deleted} deleted in ${p.batches} batches, ${p.failed_deletes.length} failed, ${p.rows_remaining_after} remaining`);
+    per.push(p);
+  }
+  if (per.length === 1) return per[0];
+  return {
+    namespaces: per.map((p) => p.namespace),
+    deleted: per.reduce((a, p) => a + p.deleted, 0),
+    batches: per.reduce((a, p) => a + p.batches, 0),
+    failed_deletes: per.flatMap((p) => p.failed_deletes),
+    rows_remaining_after: per.reduce((a, p) => a + p.rows_remaining_after, 0),
+    kept: false,
+    per_namespace: per,
+  };
+}

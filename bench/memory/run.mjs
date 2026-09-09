@@ -24,14 +24,14 @@ import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingest
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
-import { purgeRunRows } from './cleanup.mjs';
+import { purgeNamespaces } from './cleanup.mjs';
+import { waitForEmbeddings } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
 const RESULTS_DIR = path.join(BENCH_DIR, 'results');
 const HARNESS_VERSION = 'p1-skeleton.1';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -51,25 +51,6 @@ function readJsonl(file) {
 
 function utcStamp(d) {
   return d.toISOString().replace(/\.\d+Z$/, 'Z');
-}
-
-async function waitForEmbeddings(platform, { beforeStats, timeoutMs = 8 * 60 * 1000, pollMs = 15000 }) {
-  const t0 = Date.now();
-  let last = beforeStats;
-  while (Date.now() - t0 < timeoutMs) {
-    await sleep(pollMs);
-    const s = await platform.stats();
-    last = s;
-    if (s.embedding_coverage >= 99.9) {
-      return { waited_ms: Date.now() - t0, coverage_after: s.embedding_coverage, settled: true };
-    }
-  }
-  return {
-    waited_ms: Date.now() - t0,
-    coverage_after: last.embedding_coverage,
-    settled: false,
-    note: 'embedding coverage did not return to ~100% before the wait timeout — searches may have run keyword-fallback; per-query modes are recorded in the rows',
-  };
 }
 
 async function main() {
@@ -510,6 +491,11 @@ async function main() {
     ].filter(Boolean),
   });
 
+  // every namespace this run indexes — the failure path purges them too
+  const runNamespaces = platform
+    ? [regime.retrieval.namespace, ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(regime.retrieval.namespace)] : [])]
+    : [];
+  let platformCleanupDone = !platform || Boolean(args.keep);
   try {
     const namespace = regime.retrieval.namespace;
     const outDir = path.join(RESULTS_DIR, runId);
@@ -585,7 +571,7 @@ async function main() {
           // wait with the write size instead of failing into keyword-fallback
           const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
           console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
-          const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs });
+          const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs, log: (m) => console.error(`[run] ${m}`) });
           console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
           writeInfoByArm[arm].embed_wait = wait;
         }
@@ -608,25 +594,8 @@ async function main() {
         // every namespace the run indexed: the extract control arm writes to a
         // suffixed namespace of its own — leaving it behind would leak rows
         // into the next run's substring-scoped lists
-        const namespaces = [namespace, ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(namespace)] : [])];
-        const per = [];
-        for (const ns of namespaces) {
-          const purge = await purgeRunRows(platform, { sourceType, namespace: ns });
-          console.error(`[run] cleanup ${ns}: ${purge.deleted} deleted in ${purge.batches} batches, ${purge.failed_deletes.length} failed, ${purge.rows_remaining_after} remaining`);
-          per.push(purge);
-        }
-        cleanup =
-          per.length === 1
-            ? per[0]
-            : {
-                namespaces: per.map((p) => p.namespace),
-                deleted: per.reduce((a, p) => a + p.deleted, 0),
-                batches: per.reduce((a, p) => a + p.batches, 0),
-                failed_deletes: per.flatMap((p) => p.failed_deletes),
-                rows_remaining_after: per.reduce((a, p) => a + p.rows_remaining_after, 0),
-                kept: false,
-                per_namespace: per,
-              };
+        cleanup = await purgeNamespaces(platform, { sourceType, namespaces: runNamespaces, log: (m) => console.error(`[run] ${m}`) });
+        platformCleanupDone = true;
       }
     }
 
@@ -674,6 +643,18 @@ async function main() {
     console.log(JSON.stringify({ run_id: runId, out_dir: path.relative(REPO_ROOT, outDir), arms: summary.arms }, null, 2));
   } finally {
     if (slotLock) slotLock.release();
+    // a run that died before its own cleanup still purges what it wrote —
+    // thousands of orphan bench rows would otherwise sit in the embedder's
+    // queue and in every later substring-scoped list
+    if (!platformCleanupDone && platform) {
+      try {
+        const c = await purgeNamespaces(platform, { sourceType: regime.retrieval.source_type, namespaces: runNamespaces, log: (m) => console.error(`[run] cleanup after failure — ${m}`) });
+        platformCleanupDone = true;
+        console.error(`[run] cleanup after failure: ${c.deleted} rows deleted, ${c.rows_remaining_after} remaining`);
+      } catch (e) {
+        console.error(`[run] cleanup after failure FAILED (orphan rows remain in ${runNamespaces.join(', ')}): ${e.message}`);
+      }
+    }
     // the sidecars must not outlive the run, whatever the run did — and exit of
     // their pids is not enough, the ports have to be free before we call it stopped
     if (mem0Handle) {

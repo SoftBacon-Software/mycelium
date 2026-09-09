@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { purgeRunRows } from '../../bench/memory/cleanup.mjs';
+import { purgeRunRows, purgeNamespaces } from '../../bench/memory/cleanup.mjs';
 
 // Fake platform whose /memory/list mirrors the server's hard cap: it never
 // returns more than `cap` rows per call, newest first, and deleteIndex removes
@@ -61,5 +61,28 @@ describe('purgeRunRows (paginating bench cleanup)', () => {
     expect(out.deleted).toBe(0);
     expect(out.batches).toBe(0);
     expect(out.rows_remaining_after).toBe(0);
+  });
+});
+
+describe('purgeNamespaces — every namespace a run indexed, one receipt shape', () => {
+  const fakePurge = async (_platform, { namespace }) => ({
+    namespace,
+    deleted: namespace.endsWith('-extract') ? 5 : 2,
+    batches: 1,
+    failed_deletes: namespace.endsWith('-extract') ? ['x1'] : [],
+    rows_remaining_after: 0,
+  });
+
+  it('one namespace returns that purge itself', async () => {
+    const logs = [];
+    const r = await purgeNamespaces({}, { sourceType: 'bench_x', namespaces: ['bench-p1-a'], log: (m) => logs.push(m), purge: fakePurge });
+    expect(r).toMatchObject({ namespace: 'bench-p1-a', deleted: 2 });
+    expect(logs).toEqual(['cleanup bench-p1-a: 2 deleted in 1 batches, 0 failed, 0 remaining']);
+  });
+
+  it('several namespaces aggregate with per_namespace detail', async () => {
+    const r = await purgeNamespaces({}, { sourceType: 'bench_x', namespaces: ['bench-p1-a', 'bench-p1-a-extract'], purge: fakePurge });
+    expect(r).toMatchObject({ namespaces: ['bench-p1-a', 'bench-p1-a-extract'], deleted: 7, batches: 2, failed_deletes: ['x1'], rows_remaining_after: 0, kept: false });
+    expect(r.per_namespace).toHaveLength(2);
   });
 });
