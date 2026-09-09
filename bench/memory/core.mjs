@@ -17,9 +17,15 @@ export async function runBench({
   onRow,            // (row) => void — incremental persistence hook
   onJudged,         // (row) => void
   requestDelayMs = 0, // pacing between model calls
+  maxSessions = null, // int|null — cap the haystack sessions written per question (the smoke
+                      // lever: a full question is ~30 sessions ≈ hours of competitor-arm
+                      // extraction; a smoke takes the first few). Stamped into the regime.
 }) {
   if (!regime) throw new Error('runBench requires a regime stamp — rows are written without one is a bug by construction');
   if (!Array.isArray(items) || items.length === 0) throw new Error('runBench: no items selected');
+  if (maxSessions !== null && (!Number.isInteger(maxSessions) || maxSessions <= 0)) {
+    throw new Error(`runBench: maxSessions must be a positive int or null (got ${maxSessions})`);
+  }
 
   const armsOut = {};
   const allRows = [];
@@ -31,10 +37,14 @@ export async function runBench({
 
     // -- write phase ---------------------------------------------------------
     const writeInfo = { docs: 0, rows: 0, skipped: true };
+    if (maxSessions !== null) writeInfo.sessions_capped_at = maxSessions;
     if (typeof arm.write === 'function') {
       writeInfo.skipped = false;
       for (const item of items) {
-        const w = await arm.write(item.haystack_sessions, { questionId: item.question_id });
+        // the cap bounds the WRITE phase only: the answer phase reads the
+        // question + gold, never the haystack
+        const sessions = maxSessions ? item.haystack_sessions.slice(0, maxSessions) : item.haystack_sessions;
+        const w = await arm.write(sessions, { questionId: item.question_id });
         if (w) {
           writeInfo.docs += w.docs ?? 0;
           writeInfo.rows += w.rows ?? 0;

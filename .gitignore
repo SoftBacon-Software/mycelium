@@ -51,3 +51,6 @@ bench/memory/data/
 
 # mem0 sidecar venv (task 169) — created from mem0-requirements.txt, never committed
 bench/memory/arms/.mem0-venv/
+
+# zep sidecar venv (task 180) — created from zep-requirements.txt, never committed
+bench/memory/arms/.zep-venv/

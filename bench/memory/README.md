@@ -2,7 +2,8 @@
 
 One harness we control, regime-stamped, receipt-gated. Task 163 = the
 SKELETON: two arms (`none`, `mycelium`) on LongMemEval-S. Task 169 landed
-the first competitor arm (`mem0` — Mem0 OSS via a local sidecar).
+the first competitor arm (`mem0` — Mem0 OSS via a local sidecar); task 180
+the second (`zep` — Zep's OSS graphiti on its embedded kuzu store).
 
 Program: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` §P1.
 
@@ -84,6 +85,13 @@ An arm exposes `write(sessionTurns, {questionId})` and `answer(question) → {te
   search at the retrieval budget, memories joined into the SAME RAG prompt
   arm_mycelium uses, same answer model. Scope = one `user_id` per run — the
   same granularity as the mycelium namespace.
+- **`zep`** — Zep's OSS graph memory (`graphiti-core`) via a local Python
+  sidecar (`arms/zep_sidecar.py`, see below). write: one Graphiti
+  `add_episode()` per haystack session (entity/edge extraction via the LLM,
+  not bypassed). answer: `graphiti.search()` at the retrieval budget, the
+  retrieved facts joined into the SAME RAG prompt the other arms use, same
+  answer model. Scope = one graphiti `group_id` per run — the same
+  granularity as the mycelium namespace and the mem0 `user_id`.
 - Rows are deleted from the platform after the run (per-source_id DELETE,
   verified 0 remaining) unless `--keep`. The mem0 arm never touches the
   platform; its store is a per-run local dir, purged after the run unless
@@ -143,6 +151,54 @@ Quirks measured on the live rig (2026-09-08, sidecar probe):
 - BM25/rerank (`mem0ai[extras]`, `mem0ai[nlp]`) are NOT installed — the arm
   runs mem0's default OSS retrieval (pure vector over the local qdrant
   store), which is what the receipt's regime block stamps.
+
+## The zep arm (sidecar setup)
+
+Zep's OSS engine is Graphiti (Python; the arms are JavaScript). `arm_zep.mjs`
+spawns `arms/zep_sidecar.py` (stdlib `http.server`, 127.0.0.1 only), learns
+its ephemeral port from a `ZEP_SIDECAR_READY <port>` stderr line, and stops it
+gating on BOTH child exit AND the port actually being freed. One-time setup:
+
+```bash
+python3.12 -m venv bench/memory/arms/.zep-venv
+bench/memory/arms/.zep-venv/bin/pip install -r bench/memory/arms/zep-requirements.txt
+```
+
+Pinned there: `graphiti-core[kuzu]==0.30.2` — the `kuzu` extra is Graphiti's
+ONLY embedded graph store (file-backed, dockerless; no Neo4j/FalkorDB server
+is installed). ⚠ graphiti-core marks the kuzu backend **deprecated** (upstream
+kuzu unmaintained); it is stamped into the regime (`regime.zep.graph_store`)
+as part of what "Zep OSS, embedded, $0" means on this rig. Addresses resolve
+from env / substrate.conf, never literals: LLM = `BOX_3090_URL` + `/v1` (the
+SAME answerer the other arms use — Graphiti's entity/edge extraction runs on
+it too, via `OpenAIGenericClient`'s json_schema structured output); embedder =
+`OLLAMA_URL` (or the `MYCELIUM_URL` host's `:11434`) **+ `/v1`** — ollama's
+OpenAI-compatible embeddings endpoint, since graphiti-core ships no ollama
+embedder class. Env overrides: `ZEP_LLM_BASE_URL`, `ZEP_EMBEDDER_BASE_URL`,
+`ZEP_EMBEDDER_DIMS`, `ZEP_SIDECAR_PYTHON`.
+
+The sidecar's unittest (request/response shapes, fake Graphiti client,
+127.0.0.1-only):
+
+```bash
+bench/memory/arms/.zep-venv/bin/python -m unittest -v bench/memory/arms/test_zep_sidecar.py
+```
+
+Regime-critical configuration (all stamped via the sidecar's `/health`):
+
+- **Search = `graphiti.search()`'s default config, EDGE_HYBRID_SEARCH_RRF**
+  (bm25 + cosine fused by RRF) — NO LLM reranker. Graphiti's default
+  cross-encoder (`OpenAIRerankerClient`) makes one boolean LLM call per fact
+  per query and hardcodes OpenAI-tokenizer logit_bias (cl100k ids for
+  "True"/"False" — wrong for a qwen tokenizer) with max_tokens=1, which a
+  thinking model burns on its reasoning open. RRF is a first-class Graphiti
+  recipe; the constructor-required cross-encoder is a counted no-op.
+- **Telemetry force-disabled** — `GRAPHITI_TELEMETRY_ENABLED=false` before the
+  import (PostHog ships as a hard dependency). A $0 clean-room arm makes no
+  external calls.
+- **One `add()` = one full extraction pass** (entities + edges + resolution) —
+  expect it to cost at least what mem0's extraction costs per session; budget
+  the write phase accordingly and use `--max-sessions N` for smokes.
 
 ## Judge + validation
 

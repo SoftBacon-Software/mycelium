@@ -16,6 +16,7 @@ import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
 import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
+import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
@@ -175,6 +176,14 @@ async function main() {
   const arms = resolveArms(String(args.arms ?? 'none,mycelium').split(',').map((s) => s.trim()).filter(Boolean));
   const n = parseInt(args.n ?? '50', 10);
   const budget = parseInt(args.budget ?? '5', 10);
+  // --max-sessions N: cap the haystack sessions WRITTEN per question (the smoke
+  // lever — a full question is ~30 sessions of competitor-arm LLM extraction;
+  // a smoke takes the first few). Must be stamped into the regime: a capped
+  // write is a different regime, and quoting it as a full run is a lie.
+  const maxSessions = args['max-sessions'] != null ? parseInt(args['max-sessions'], 10) : null;
+  if (maxSessions !== null && (!Number.isInteger(maxSessions) || maxSessions <= 0)) {
+    throw new Error(`--max-sessions must be a positive int (got ${args['max-sessions']})`);
+  }
 
   const split = await loadSplit(splitName);
   const items = selectItems(split.items, n);
@@ -242,8 +251,45 @@ async function main() {
     };
   }
 
+  // zep competitor arm (task 180): same lifecycle as the mem0 sidecar above —
+  // started BEFORE the regime is built (the stamp carries its /health facts),
+  // restarted mid-run only on ECONNREFUSED, stopped + its kuzu store purged in
+  // the finally below — success or failure.
+  let zepHandle = null;
+  if (arms.includes('zep')) {
+    zepHandle = await startZepSidecar({
+      runId,
+      llmBaseUrl: args['answer-url'] ?? null, // an explicit answer endpoint applies to zep's extraction LLM too
+      log: (m) => console.error(`[zep] ${m}`),
+    });
+    console.error(`[run] zep sidecar: graphiti v${zepHandle.health.graphiti_version}, kuzu v${zepHandle.health.kuzu_version}, store ${zepHandle.storePath}`);
+    // Mid-run sidecar death: the arm only calls this when a request died with
+    // ECONNREFUSED (nothing committed — a replay cannot duplicate episodes).
+    // Same runId → same store dir, NOT wiped; the handle is swapped so the
+    // finally-block stops the NEW sidecar.
+    zepHandle.restart = async () => {
+      try {
+        await zepHandle.stop();
+      } catch (e) {
+        console.error(`[run] zep old sidecar stop problem (continuing with restart): ${e.message}`);
+      }
+      const again = await startZepSidecar({
+        runId,
+        llmBaseUrl: args['answer-url'] ?? null,
+        fresh: false,
+        log: (m) => console.error(`[zep] ${m}`),
+      });
+      zepHandle.manager = again.manager;
+      zepHandle.health = again.health;
+      zepHandle.storePath = again.storePath;
+      zepHandle.stop = () => again.manager.stop();
+      console.error(`[run] zep sidecar RESTARTED: pid ${again.manager.pid}, store preserved (${again.storePath})`);
+      return { request: (p, b) => again.manager.request(p, b), health: again.health };
+    };
+  }
+
   // Models (local; $0)
-  const boxUrl = platformEnv?.box3090Url || mem0Handle?.env.box3090Url || null;
+  const boxUrl = platformEnv?.box3090Url || mem0Handle?.env.box3090Url || zepHandle?.env.box3090Url || null;
   const answerUrl = args['answer-url'] ?? (boxUrl ? `${boxUrl}/v1` : null);
   const answerModel = args['answer-model'] ?? 'qwen3.8:27b';
   if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
@@ -292,13 +338,29 @@ async function main() {
           sidecar: 'bench/memory/arms/mem0_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
         }
       : null,
+    zep: zepHandle
+      ? {
+          ...zepHandle.health,
+          retrieval_budget: budget,
+          scope: zepHandle.scope,
+          sidecar: 'bench/memory/arms/zep_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
+        }
+      : null,
+    write: maxSessions ? { max_sessions_per_question: maxSessions } : null,
     n: items.length,
     notes: [
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
-        : 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+',
+        : null,
+      arms.includes('zep')
+        ? `arms this run: ${arms.join(', ')}; zep = OSS graphiti-core (Zep's graph memory) on its embedded kuzu store (deprecated upstream — stamped in regime.zep), its extraction LLM and embedder matched to the incumbent arms' answerer/embedder, search = the library's default EDGE_HYBRID_SEARCH_RRF (no LLM reranker)`
+        : null,
+      !arms.includes('mem0') && !arms.includes('zep')
+        ? 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+'
+        : null,
+      ...(maxSessions ? [`SMOKE: write phase capped at ${maxSessions} sessions per question (regime.write) — NOT a full-run number`] : []),
       'judge is a local model; validated against a hand-scored set — see receipt judge-validation section',
-    ],
+    ].filter(Boolean),
   });
 
   try {
@@ -335,10 +397,19 @@ async function main() {
         retrievalBudget: budget,
         log: (m) => console.error(`[mem0-arm] ${m}`),
         resumeDir: outDir,
-        restartSidecar: mem0Handle ? () => mem0Handle.restart() : null,
-        mem0: mem0Handle ? { sidecar: mem0Handle.manager, mem0Version: mem0Handle.health.mem0_version } : null,
+        // one competitor sidecar per run is the P1 shape; if a run ever carries
+        // BOTH, each arm also gets a bound restart on its own ctx object
+        // (`zep.restart`) and the top-level slot routes to mem0 (first match).
+        restartSidecar: mem0Handle ? () => mem0Handle.restart() : zepHandle ? () => zepHandle.restart() : null,
+        mem0: mem0Handle
+          ? { sidecar: mem0Handle.manager, mem0Version: mem0Handle.health.mem0_version, restart: () => mem0Handle.restart() }
+          : null,
+        zep: zepHandle
+          ? { sidecar: zepHandle.manager, zepVersion: zepHandle.health.graphiti_version, restart: () => zepHandle.restart() }
+          : null,
       },
       judgeFn,
+      maxSessions,
       afterWrite: async ({ arm, writeInfo }) => {
         writeInfoByArm[arm] = writeInfo;
         if (arm === 'mycelium' && platform) {
@@ -377,6 +448,8 @@ async function main() {
       write_info: writeInfoByArm,
       cleanup,
       ...(mem0Handle ? { mem0_store: { path: mem0Handle.storePath, local_only: true, purged: !args.keep } } : {}),
+      ...(zepHandle ? { zep_store: { path: zepHandle.storePath, local_only: true, purged: !args.keep } } : {}),
+      ...(maxSessions ? { max_sessions_per_question: maxSessions } : {}),
       commands: [
         `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n} --receipt${args.keep ? ' --keep' : ''}`,
         ...(args.handlabels ? [`node bench/memory/run.mjs --from-results bench/memory/results/${runId} --handlabels ${args.handlabels} --receipt`] : []),
@@ -410,8 +483,8 @@ async function main() {
 
     console.log(JSON.stringify({ run_id: runId, out_dir: path.relative(REPO_ROOT, outDir), arms: summary.arms }, null, 2));
   } finally {
-    // the sidecar must not outlive the run, whatever the run did — and exit of
-    // its pid is not enough, the port has to be free before we call it stopped
+    // the sidecars must not outlive the run, whatever the run did — and exit of
+    // their pids is not enough, the ports have to be free before we call it stopped
     if (mem0Handle) {
       try {
         await mem0Handle.stop();
@@ -423,6 +496,19 @@ async function main() {
         }
       } catch (e) {
         console.error(`[run] mem0 sidecar teardown problem: ${e.message}`);
+      }
+    }
+    if (zepHandle) {
+      try {
+        await zepHandle.stop();
+        if (!args.keep) {
+          removeZepStore(zepHandle.storePath);
+          console.error(`[run] zep store purged: ${zepHandle.storePath}`);
+        } else {
+          console.error(`[run] zep store KEPT (--keep): ${zepHandle.storePath}`);
+        }
+      } catch (e) {
+        console.error(`[run] zep sidecar teardown problem: ${e.message}`);
       }
     }
   }

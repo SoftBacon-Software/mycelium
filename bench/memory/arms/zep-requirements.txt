@@ -1,0 +1,22 @@
+# Pinned for the bench/memory zep arm's sidecar venv (bench/memory/arms/.zep-venv).
+#
+#   python3.12 -m venv bench/memory/arms/.zep-venv
+#   bench/memory/arms/.zep-venv/bin/pip install -r bench/memory/arms/zep-requirements.txt
+#
+# Zep's OSS memory engine = graphiti-core. The arm runs it against the `kuzu`
+# extra: graphiti's ONLY embedded graph store (file-backed, dockerless — the
+# alternatives are Neo4j/FalkorDB servers, which this harness does not install).
+# ⚠ graphiti-core 0.30.2 marks the kuzu backend deprecated (upstream kuzu
+# unmaintained) — stamped into the regime; the pinned pair below is the honest
+# "Zep OSS, embedded, $0" configuration of record for this benchmark.
+# The LLM (extraction) and embedder are Graphiti clients pointed at the SAME
+# endpoints the other arms use (qwen3.8:27b on the 3090 via /v1; the platform
+# host's ollama nomic-embed-text via its OpenAI-compatible /v1/embeddings) —
+# `openai` ships as a graphiti-core dependency; nothing else is needed.
+# The sidecar force-disables Graphiti's PostHog telemetry
+# (GRAPHITI_TELEMETRY_ENABLED=false before import).
+graphiti-core[kuzu]==0.30.2
+# graphiti-core 0.30.2 imports `httpx` at module scope but does NOT declare it,
+# and its `openai>=3` pin now ships `httpx2` instead — measured 2026-09-09
+# (ModuleNotFoundError on the first `from graphiti_core import Graphiti`).
+httpx>=0.27
