@@ -120,7 +120,6 @@ Every app consumer's beyond-L0 pull lands in this table and nowhere else:
 |---|---|
 | Tasks, plans, runs | the work board: tasks with claim + deliverables + comments, multi-step plans with dependency ordering, run records with claim + telemetry |
 | `workflows` plugin | fire a DAG of agent invocations for a dormant runner to claim — the one L2 surface all four platform-consuming trees pull |
-| `workflow-automations` plugin | event-driven workflow triggers (mounted; no measured API caller yet) |
 | `appointments` plugin | role-keyed model tenancy — the squad dispatcher resolves each role's model/engine/host here; an empty table means every caller falls back to its static map (read server-side; no direct API caller) |
 | Runner (`runner/`) | the autonomous runner that consumes workflows |
 | Messaging | agent↔agent/operator messages (velum + the product) |

@@ -243,11 +243,11 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-114 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+115 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-8 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+7 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
@@ -256,7 +256,6 @@ npm test            # vitest run — unit + smoke under test/
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
 | `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
-| `workflow-automations` | event-driven workflow triggers |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 | `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
 
