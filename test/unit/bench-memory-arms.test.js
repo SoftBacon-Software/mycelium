@@ -3,7 +3,7 @@ import http from 'node:http';
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium, BENCH_SOURCE_TYPE } from '../../bench/memory/arms/arm_mycelium.mjs';
 import { makeOpenAIChat, isTransientChatError } from '../../bench/memory/answer.mjs';
-import { resolvePlatformEnv, parseSubstrateConf, createPlatform } from '../../bench/memory/platform.mjs';
+import { resolvePlatformEnv, parseSubstrateConf, createPlatform, isNetworkLayerError } from '../../bench/memory/platform.mjs';
 
 const SESSIONS = [
   [
@@ -357,5 +357,39 @@ describe('makeOpenAIChat — transient failures are retried, deterministic ones 
     expect(isTransientChatError(new Error('chat m: no content in response'))).toBe(false);
     const s = new Error('chat m -> 500: boom'); s.transientStatus = 500;
     expect(isTransientChatError(s)).toBe(true);
+  });
+});
+
+
+describe('platform client — an undici socket failure is a network-layer error: switch to curl, never a dead run', () => {
+  const undiciFail = () => { const e = new TypeError('fetch failed'); e.cause = { code: 'UND_ERR_SOCKET', message: 'other side closed' }; throw e; };
+
+  it('isNetworkLayerError reads the cause code, not just the message', () => {
+    try { undiciFail(); } catch (e) { expect(isNetworkLayerError(e)).toBe(true); }
+    const reset = new Error('x'); reset.cause = { code: 'ECONNRESET' };
+    expect(isNetworkLayerError(reset)).toBe(true);
+    expect(isNetworkLayerError(new Error('POST /memory/search -> 400: bad'))).toBe(false);
+    expect(isNetworkLayerError(new Error('chat m: no content in response'))).toBe(false);
+  });
+
+  it('engine auto: the first undici failure flips to curl (sticky) and the call still succeeds', async () => {
+    let fetchCalls = 0;
+    const curlCalls = [];
+    const platform = createPlatform({
+      baseUrl: 'http://jetson.test:3002',
+      headers: { 'X-Admin-Key': 'k' },
+      fetchImpl: async () => { fetchCalls++; undiciFail(); },
+      curlRun: async (cmd, args) => { curlCalls.push({ cmd, args }); return { stdout: JSON.stringify({ results: [], count: 0 }) + '\n200' }; },
+    });
+    expect(platform.engine).toBe('fetch');
+    const r = await platform.search({ query: 'q', namespace: 'ns', sourceTypes: ['bench_x'], limit: 5 });
+    expect(r).toEqual({ results: [], count: 0 });
+    expect(platform.engine).toBe('curl');
+    expect(fetchCalls).toBe(1);
+    expect(curlCalls).toHaveLength(1);
+    expect(curlCalls[0].cmd).toBe('curl');
+    await platform.stats();
+    expect(fetchCalls).toBe(1); // sticky: fetch is not paid again
+    expect(curlCalls).toHaveLength(2);
   });
 });

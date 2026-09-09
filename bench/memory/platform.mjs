@@ -83,7 +83,17 @@ function curlRequest({ method, url, headers, body, timeoutMs = 30000, run = exec
   });
 }
 
-const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|fetch failed|network|abort/i;
+const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR|fetch failed|network|abort|socket hang up/i;
+
+// undici's failed fetch is a TypeError('fetch failed') whose CAUSE carries the
+// socket code (UND_ERR_SOCKET, UND_ERR_CONNECT_TIMEOUT, ECONNRESET, …). Testing
+// `cause.code || message` alone let 'UND_ERR_SOCKET' fall through as
+// non-transient: run B3 (2026-09-09) died at question 43/50 on a bare
+// "fetch failed" that neither switched to curl nor retried. Test every field.
+export function isNetworkLayerError(e) {
+  const text = [e?.cause?.code, e?.cause?.message, e?.code, e?.name, e?.message].filter(Boolean).join(' ');
+  return NETWORK_LAYER.test(text);
+}
 
 function status_429_5xx(e) {
   const m = String(e?.message || '').match(/-> (\d{3})/);
@@ -109,7 +119,7 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
         });
         return { status: res.status, text: await res.text() };
       } catch (e) {
-        if (engine !== 'auto' || !NETWORK_LAYER.test(String(e.cause?.code || e.message))) throw e;
+        if (engine !== 'auto' || !isNetworkLayerError(e)) throw e;
         usingCurl = true; // sticky: stop paying the dead fetch on every call
       }
     }
@@ -134,7 +144,7 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
         if (status >= 400) throw new Error(`${method} ${urlPath} -> ${status}: ${text.slice(0, 200)}`);
         return json;
       } catch (e) {
-        const transient = status_429_5xx(e) || NETWORK_LAYER.test(String(e.cause?.code || e.message));
+        const transient = status_429_5xx(e) || isNetworkLayerError(e);
         lastErr = e;
         if (!transient || attempt >= maxRetries) throw lastErr;
         await sleep(1000 * 2 ** attempt);
@@ -181,7 +191,7 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
           const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
           return JSON.parse(await res.text());
         } catch (e) {
-          if (engine !== 'auto' || !NETWORK_LAYER.test(String(e.cause?.code || e.message))) throw e;
+          if (engine !== 'auto' || !isNetworkLayerError(e)) throw e;
           usingCurl = true;
         }
       }
