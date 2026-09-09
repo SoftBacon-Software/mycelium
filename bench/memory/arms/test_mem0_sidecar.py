@@ -80,7 +80,12 @@ def post(url, payload):
 class SidecarHTTPTest(unittest.TestCase):
     def setUp(self):
         self.fake = FakeMemory()
-        state = mem0_sidecar.SidecarState(env=dict(TEST_ENV), memory_factory=lambda cfg: self.fake)
+        self.bound = []
+        state = mem0_sidecar.SidecarState(
+            env=dict(TEST_ENV),
+            memory_factory=lambda cfg: self.fake,
+            client_binder=lambda t, r: self.bound.append((t, r)),
+        )
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), mem0_sidecar.make_handler(state))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -97,7 +102,9 @@ class SidecarHTTPTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertIsInstance(body["pid"], int)
-        self.assertEqual(body["llm"], {"model": "qwen3.8:27b", "base_url_host": "llm-host.local:11434"})
+        self.assertEqual(body["llm"]["model"], "qwen3.8:27b")
+        self.assertEqual(body["llm"]["base_url_host"], "llm-host.local:11434")
+        self.assertEqual((body["llm"]["timeout_s"], body["llm"]["max_retries"]), (1500.0, 0))  # the client bounds are stamped
         self.assertEqual(
             body["embedder"],
             {"model": "nomic-embed-text", "base_url_host": "embed-host.local:11434", "dims": 768},
@@ -204,6 +211,18 @@ class ConfigFromEnvTest(unittest.TestCase):
         self.assertEqual(facts["llm"]["base_url_host"], "llm-host.local:11434")
         self.assertEqual(facts["search_threshold"], 0.1)
 
+    def test_client_bounds_default_to_one_honest_wait_and_are_stamped(self):
+        _config, facts = mem0_sidecar.config_from_env(dict(TEST_ENV))
+        self.assertEqual(facts["llm"]["timeout_s"], 1500.0)
+        self.assertEqual(facts["llm"]["max_retries"], 0)
+        env = dict(TEST_ENV, MEM0_LLM_TIMEOUT_S="300", MEM0_LLM_MAX_RETRIES="1")
+        _config, facts = mem0_sidecar.config_from_env(env)
+        self.assertEqual(facts["llm"]["timeout_s"], 300.0)
+        self.assertEqual(facts["llm"]["max_retries"], 1)
+        for bad in ({"MEM0_LLM_TIMEOUT_S": "0"}, {"MEM0_LLM_MAX_RETRIES": "-1"}, {"MEM0_LLM_TIMEOUT_S": "soon"}):
+            with self.assertRaises(ValueError):
+                mem0_sidecar.config_from_env(dict(TEST_ENV, **bad))
+
     def test_missing_env_lists_everything_missing(self):
         with self.assertRaises(ValueError) as ctx:
             mem0_sidecar.config_from_env({"MEM0_LLM_MODEL": "x"})
@@ -248,6 +267,52 @@ def _stderr_line(proc, prefix, deadline_s=30):
         if text.startswith(prefix):
             return text
     raise AssertionError(f"sidecar stderr never produced a line starting with {prefix!r}")
+
+
+class ClientBoundsTest(unittest.TestCase):
+    """The binder makes every OpenAI client mem0 builds carry our bounds."""
+
+    def test_state_binds_the_client_before_the_first_build_with_the_stamped_bounds(self):
+        bound = []
+        built = []
+
+        def factory(cfg):
+            built.append(len(bound))  # how many bindings had happened when the client was built
+            return FakeMemory()
+
+        state = mem0_sidecar.SidecarState(
+            env=dict(TEST_ENV, MEM0_LLM_TIMEOUT_S="120", MEM0_LLM_MAX_RETRIES="0"),
+            memory_factory=factory,
+            client_binder=lambda t, r: bound.append((t, r)),
+        )
+        first = state.memory  # the property builds the client on first touch
+        second = state.memory
+        self.assertIs(first, second)
+        self.assertEqual(bound, [(120.0, 0)])
+        self.assertEqual(built, [1])
+
+    def test_bound_client_carries_timeout_and_no_retries_and_is_idempotent(self):
+        import mem0.llms.openai as mem0_openai
+
+        real_before = getattr(mem0_openai, "_bench_real_OpenAI", None) or mem0_openai.OpenAI
+        try:
+            cls = mem0_sidecar.bound_mem0_openai_client(1500, 0)
+            self.assertIs(mem0_openai.OpenAI, cls)
+            client = mem0_openai.OpenAI(api_key="unused", base_url="http://127.0.0.1:9/v1")
+            self.assertEqual(client.timeout, 1500)
+            self.assertEqual(client.max_retries, 0)
+            # explicit kwargs still win
+            explicit = mem0_openai.OpenAI(api_key="unused", base_url="http://127.0.0.1:9/v1", timeout=7, max_retries=1)
+            self.assertEqual(explicit.timeout, 7)
+            self.assertEqual(explicit.max_retries, 1)
+            # re-binding replaces the wrapper instead of wrapping the wrapper
+            cls2 = mem0_sidecar.bound_mem0_openai_client(300, 0)
+            self.assertIs(cls2.__mro__[1], real_before)
+            self.assertEqual(mem0_openai.OpenAI(api_key="unused", base_url="http://127.0.0.1:9/v1").timeout, 300)
+        finally:
+            mem0_openai.OpenAI = real_before
+            if hasattr(mem0_openai, "_bench_real_OpenAI"):
+                del mem0_openai._bench_real_OpenAI
 
 
 class TwoStageStopProtocolTest(unittest.TestCase):
@@ -306,7 +371,7 @@ class TwoStageStopProtocolTest(unittest.TestCase):
             "        return {'results': []}\n"
             "    def delete_all(self, user_id=None):\n"
             "        return True\n"
-            "mem0_sidecar.main(memory_factory=lambda cfg: BlockingMemory())\n"
+            "mem0_sidecar.main(memory_factory=lambda cfg: BlockingMemory(), client_binder=lambda t, r: None)\n"
         )
         proc = self._spawn([sys.executable, "-c", driver], store)
         try:
@@ -345,7 +410,7 @@ class IngestionInferTest(unittest.TestCase):
         env = dict(TEST_ENV)
         env.update(extra or {})
         fake = FakeMemory()
-        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake)
+        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake, client_binder=lambda t, r: None)
         return state, fake
 
     def _serve(self, state):
@@ -401,7 +466,7 @@ class NoThinkProxyTest(unittest.TestCase):
         env = dict(TEST_ENV)
         env.update(extra or {})
         fake = FakeMemory()
-        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake)
+        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake, client_binder=lambda t, r: None)
         self.addCleanup(state.close_proxy)
         return state, fake
 

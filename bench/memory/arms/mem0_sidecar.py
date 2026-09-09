@@ -29,6 +29,10 @@ env/substrate.conf; this file never hardcodes an address:
                              off = Memory.add(..., infer=False) stores each non-system
                              message verbatim, no extraction LLM. Arms pass `infer`
                              per request; this is the fallback + the /health stamp.
+    MEM0_LLM_TIMEOUT_S       default 1500 — read timeout of the OpenAI client mem0 builds
+    MEM0_LLM_MAX_RETRIES     default 0 — mem0's client retried 2× at 600 s = the arm's
+                             1800 s bound (three smokes died there 2026-09-09); a retry
+                             only re-queues behind other generations on the box
     MEM0_NO_THINK            1 (default via the spawner since task 182) — mem0 builds
                              its own extraction prompts and its OpenAI client cannot
                              pass extra body fields, so the sidecar starts a tiny
@@ -76,6 +80,13 @@ DEFAULTS = {
     "MEM0_SEARCH_THRESHOLD": "0.1",  # mem0 OSS search default; stamped in the regime
     "MEM0_INFER": "on",  # default ingestion mode; the arms pass infer explicitly
     "MEM0_NO_THINK": "0",  # spawner defaults this to 1 since task 182
+    # mem0 builds its OpenAI client with the library defaults: read timeout 600 s
+    # and max_retries 2 → 3 × 600 s = 1800 s, exactly the arm's request bound.
+    # Three Mem0 smokes died there on 2026-09-09: one extraction call queued
+    # behind another client's long generation, re-queued at the back on every
+    # retry, killed by the arm. One honest wait, no re-queueing:
+    "MEM0_LLM_TIMEOUT_S": "1500",
+    "MEM0_LLM_MAX_RETRIES": "0",
 }
 
 
@@ -103,6 +114,13 @@ def config_from_env(env):
         raise ValueError(f"MEM0_INFER must be on|off (got {merged['MEM0_INFER']!r})")
     infer_default = infer_raw == "on"
     no_think = str(merged["MEM0_NO_THINK"]).strip().lower() in ("1", "true", "on", "yes")
+    llm_timeout_s = float(merged["MEM0_LLM_TIMEOUT_S"])
+    llm_max_retries = int(merged["MEM0_LLM_MAX_RETRIES"])
+    if llm_timeout_s <= 0 or llm_max_retries < 0:
+        raise ValueError(
+            f"MEM0_LLM_TIMEOUT_S must be > 0 and MEM0_LLM_MAX_RETRIES >= 0 "
+            f"(got {merged['MEM0_LLM_TIMEOUT_S']!r}, {merged['MEM0_LLM_MAX_RETRIES']!r})"
+        )
     config = {
         "llm": {
             "provider": "openai",  # OpenAI-COMPATIBLE endpoint (llama.cpp /v1), via mem0's openai provider
@@ -134,7 +152,13 @@ def config_from_env(env):
     }
     facts = {
         "mem0_version": mem0_version(),
-        "llm": {"model": merged["MEM0_LLM_MODEL"], "base_url_host": urlparse(merged["MEM0_LLM_BASE_URL"]).netloc},
+        "llm": {
+            "model": merged["MEM0_LLM_MODEL"],
+            "base_url_host": urlparse(merged["MEM0_LLM_BASE_URL"]).netloc,
+            "timeout_s": llm_timeout_s,
+            "max_retries": llm_max_retries,
+            "client_bounds_why": "one honest wait per extraction call; a retry re-queues behind other generations",
+        },
         "embedder": {
             "model": merged["MEM0_EMBEDDER_MODEL"],
             "base_url_host": urlparse(merged["MEM0_EMBEDDER_BASE_URL"]).netloc,
@@ -258,6 +282,32 @@ def start_no_think_proxy(target_base_url, host="127.0.0.1", port=0):
     return server, thread, base_url
 
 
+def bound_mem0_openai_client(timeout_s, max_retries):
+    """Make every OpenAI client mem0 builds carry our bounds.
+
+    mem0's OpenAILLM does `OpenAI(api_key=..., base_url=...)` (mem0ai 2.0.20
+    mem0/llms/openai.py:53) — no timeout, no retry knob in its config — so the
+    library defaults apply (read 600 s, 2 retries). We wrap the class the
+    module resolves at call time; idempotent (re-binding replaces the wrapper,
+    never wraps the wrapper). Returns the bound class.
+    """
+    ensure_telemetry_off()
+    import mem0.llms.openai as mem0_openai
+
+    real = getattr(mem0_openai, "_bench_real_OpenAI", None) or mem0_openai.OpenAI
+
+    class BoundedOpenAI(real):
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("timeout", timeout_s)
+            kwargs.setdefault("max_retries", max_retries)
+            super().__init__(*args, **kwargs)
+
+    BoundedOpenAI.__name__ = real.__name__
+    mem0_openai._bench_real_OpenAI = real
+    mem0_openai.OpenAI = BoundedOpenAI
+    return BoundedOpenAI
+
+
 def default_memory_factory(config):
     """The real Mem0 client. Heavy import deferred to first use."""
     ensure_telemetry_off()
@@ -269,13 +319,21 @@ def default_memory_factory(config):
 class SidecarState:
     """Env + the lazily-created Mem0 client. One per process."""
 
-    def __init__(self, env=None, memory_factory=default_memory_factory, proxy_starter=start_no_think_proxy):
+    def __init__(
+        self,
+        env=None,
+        memory_factory=default_memory_factory,
+        proxy_starter=start_no_think_proxy,
+        client_binder=bound_mem0_openai_client,
+    ):
         self.env = env if env is not None else os.environ
         self._factory = memory_factory
+        self._binder = client_binder  # runs ONCE, before the first client build
         self._memory = None
         self._lock = threading.Lock()
         self.config, self.facts = config_from_env(self.env)
         self.infer_default = self.facts["ingestion_infer"]
+        self.client_bounds = {"timeout_s": self.facts["llm"]["timeout_s"], "max_retries": self.facts["llm"]["max_retries"]}
         self._proxy_server = None
         if self.facts["extraction_thinking"] == "off":
             # mem0 cannot carry chat_template_kwargs itself — stand up the
@@ -301,6 +359,7 @@ class SidecarState:
     def memory(self):
         with self._lock:
             if self._memory is None:
+                self._binder(self.client_bounds["timeout_s"], self.client_bounds["max_retries"])
                 self._memory = self._factory(self.config)
             return self._memory
 
@@ -467,7 +526,7 @@ def serve(state, port=0, host="127.0.0.1", inflight=None):
 STOP_GRACE_S = 1800
 
 
-def main(memory_factory=default_memory_factory):
+def main(memory_factory=default_memory_factory, client_binder=bound_mem0_openai_client):
     """Run the sidecar until terminated. `memory_factory` is the hermetic-test
     seam (same one make_handler takes): tests drive the REAL signal protocol
     with a fake Mem0 client whose add() blocks, proving the drain behaviour."""
@@ -476,7 +535,7 @@ def main(memory_factory=default_memory_factory):
     import threading
     import time
 
-    state = SidecarState(memory_factory=memory_factory)
+    state = SidecarState(memory_factory=memory_factory, client_binder=client_binder)
     inflight = Inflight()
     server = serve(state, port=int(os.environ.get("MEM0_SIDECAR_PORT") or 0), inflight=inflight)
 

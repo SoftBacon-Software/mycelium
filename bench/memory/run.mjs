@@ -25,6 +25,7 @@ import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
 import { purgeRunRows } from './cleanup.mjs';
+import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
 const RESULTS_DIR = path.join(BENCH_DIR, 'results');
@@ -38,7 +39,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === 'receipt' || key === 'keep' || key === 'rejudge') { out[key] = true; continue; }
+    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock') { out[key] = true; continue; }
     out[key] = argv[++i];
   }
   return out;
@@ -351,6 +352,23 @@ async function main() {
   const answerUrl = args['answer-url'] ?? (boxUrl ? `${boxUrl}/v1` : null);
   const answerModel = args['answer-model'] ?? 'qwen3.8:27b';
   if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
+
+  // The 3090 slot lock (2026-09-09): one run = one served slot at a time; a
+  // run refuses to start when every slot is held by a live run (a call queued
+  // behind another client's generation is how three Mem0 smokes died). The
+  // slot count is what the box serves NOW (/props total_slots; 1 when the box
+  // does not say). Released in the finally; a dead holder is swept by the next
+  // caller. --no-slot-lock is the deliberate escape hatch, stamped below.
+  let slotLock = null;
+  let slotLockFacts = { enabled: false, why: '--no-slot-lock passed' };
+  if (!args['no-slot-lock']) {
+    const propsBase = boxUrl ?? answerUrl.replace(/\/v1\/?$/, '');
+    const served = await probeTotalSlots(propsBase);
+    const totalSlots = served ?? 1;
+    slotLock = acquireSlotLock({ totalSlots, label: `${runId} ${arms.join(',')}` });
+    slotLockFacts = { enabled: true, dir: DEFAULT_LOCK_DIR, total_slots: totalSlots, served_slots: served, holders_before: slotLock.holders_before };
+    console.error(`[run] 3090 slot lock: held ${slotLock.holders_before + 1}/${totalSlots} (${slotLock.file})`);
+  }
   const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
   const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
   // mycelium-extract's extractor = the SAME answerer model, temperature 0,
@@ -486,6 +504,9 @@ async function main() {
         : null,
       ...(maxSessions ? [`SMOKE: write phase capped at ${maxSessions} sessions per question (regime.write) — NOT a full-run number`] : []),
       'judge is a local model; validated against a hand-scored set — see receipt judge-validation section',
+      slotLockFacts.enabled
+        ? `3090 slot lock held: ${slotLockFacts.holders_before + 1}/${slotLockFacts.total_slots} served slots (served_slots ${slotLockFacts.served_slots ?? 'unknown → 1'}); a run never shares a slot with another client`
+        : '3090 slot lock DISABLED (--no-slot-lock): another client may have shared the answerer/extractor slot during this run',
     ].filter(Boolean),
   });
 
@@ -652,6 +673,7 @@ async function main() {
 
     console.log(JSON.stringify({ run_id: runId, out_dir: path.relative(REPO_ROOT, outDir), arms: summary.arms }, null, 2));
   } finally {
+    if (slotLock) slotLock.release();
     // the sidecars must not outlive the run, whatever the run did — and exit of
     // their pids is not enough, the ports have to be free before we call it stopped
     if (mem0Handle) {
