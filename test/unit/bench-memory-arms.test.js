@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium, BENCH_SOURCE_TYPE } from '../../bench/memory/arms/arm_mycelium.mjs';
-import { makeOpenAIChat } from '../../bench/memory/answer.mjs';
+import { makeOpenAIChat, isTransientChatError } from '../../bench/memory/answer.mjs';
 import { resolvePlatformEnv, parseSubstrateConf, createPlatform } from '../../bench/memory/platform.mjs';
 
 const SESSIONS = [
@@ -264,6 +264,7 @@ describe('OpenAI-compatible chat adapter', () => {
       url: 'http://fake:1/v1',
       model: 'm',
       fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'boom' }),
+      retries: 0, // a 5xx is transient and retried by default; this test asserts the loud error itself
     });
     await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(/-> 500/);
   });
@@ -303,5 +304,58 @@ describe('OpenAI-compatible chat adapter', () => {
     expect(r.text).toBe('21 months.');
     expect(r.reasoningLen).toBe(11);
     expect(r.finishReason).toBe('stop');
+  });
+});
+
+describe('makeOpenAIChat — transient failures are retried, deterministic ones are not', () => {
+  const ok = (content) => ({ ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
+  const bad = (status, body = 'x') => ({ ok: false, status, text: async () => body });
+  const noSleep = async () => {};
+
+  it('a 503 then a 200 returns the answer after one logged retry', async () => {
+    const seq = [bad(503, 'loading'), ok('Paris')];
+    const logs = [];
+    const chat = makeOpenAIChat({ url: 'http://x/v1', model: 'm', fetchImpl: async () => seq.shift(), sleep: noSleep, log: (l) => logs.push(l) });
+    const r = await chat({ system: 's', user: 'u' });
+    expect(r.text).toBe('Paris');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/attempt 1\/4.*503/);
+  });
+
+  it('a transport failure (fetch failed) is retried; the backoff grows 4x', async () => {
+    const seq = [() => { throw new TypeError('fetch failed'); }, () => { const e = new Error('x'); e.cause = { code: 'ECONNRESET' }; throw e; }, () => ok('42')];
+    const waits = [];
+    const chat = makeOpenAIChat({ url: 'http://x/v1', model: 'm', fetchImpl: async () => seq.shift()(), sleep: async (ms) => { waits.push(ms); }, retryBaseMs: 10 });
+    expect((await chat({ system: 's', user: 'u' })).text).toBe('42');
+    expect(waits).toEqual([10, 40]);
+  });
+
+  it('a 400 is thrown at once — the same request would fail again', async () => {
+    let calls = 0;
+    const chat = makeOpenAIChat({ url: 'http://x/v1', model: 'm', fetchImpl: async () => { calls++; return bad(400, 'bad request'); }, sleep: noSleep });
+    await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(/-> 400/);
+    expect(calls).toBe(1);
+  });
+
+  it('the empty-answer guard is deterministic: no retry', async () => {
+    let calls = 0;
+    const chat = makeOpenAIChat({ url: 'http://x/v1', model: 'm', fetchImpl: async () => { calls++; return ok('<think>only thinking</think>'); }, sleep: noSleep });
+    await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(/empty answer/);
+    expect(calls).toBe(1);
+  });
+
+  it('gives up after retries+1 attempts with the last error', async () => {
+    let calls = 0;
+    const chat = makeOpenAIChat({ url: 'http://x/v1', model: 'm', retries: 2, fetchImpl: async () => { calls++; return bad(502, 'bad gateway'); }, sleep: noSleep });
+    await expect(chat({ system: 's', user: 'u' })).rejects.toThrow(/-> 502/);
+    expect(calls).toBe(3);
+  });
+
+  it('isTransientChatError classifies timeouts, resets and 5xx as transient', () => {
+    const abort = new Error('This operation was aborted'); abort.name = 'AbortError';
+    expect(isTransientChatError(abort)).toBe(true);
+    expect(isTransientChatError(new Error('chat m: no content in response'))).toBe(false);
+    const s = new Error('chat m -> 500: boom'); s.transientStatus = 500;
+    expect(isTransientChatError(s)).toBe(true);
   });
 });

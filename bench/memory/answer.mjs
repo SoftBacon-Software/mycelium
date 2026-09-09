@@ -16,6 +16,24 @@ export function stripThink(text) {
   return { text: out.trim(), hadThink };
 }
 
+const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A transient failure is retried; a deterministic one is not. Transient =
+// the transport (fetch failed, connection reset, our own timeout) and the
+// server saying "not now" (429, 5xx). Deterministic = a 4xx contract error
+// and the empty-answer guard below (the same request would fail again).
+// A 14-hour detached run must not die on one blip at the answerer or the
+// judge — that is what --from-results --rejudge cannot repair.
+export const CHAT_TRANSIENT = /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|abort|timeout/i;
+
+export function isTransientChatError(e) {
+  if (e?.transientStatus) return true;
+  // every field the runtime may carry the cause in — name alone is 'TypeError'
+  // for a failed fetch, the message says 'fetch failed'
+  const text = [e?.cause?.code, e?.cause?.message, e?.name, e?.message].filter(Boolean).join(' ');
+  return CHAT_TRANSIENT.test(text);
+}
+
 export function makeOpenAIChat({
   url,
   model,
@@ -29,7 +47,28 @@ export function makeOpenAIChat({
   // The answerer chat never sets this: the answer phase must stay identical
   // across arms.
   extraBody = null,
+  // transient-failure policy: attempts = 1 + retries; backoff grows 4× per retry
+  retries = 3,
+  retryBaseMs = 5000,
+  sleep = defaultSleep,
+  log = () => {},
 }) {
+  const once = makeOpenAIChatOnce({ url, model, apiKey, temperature, maxTokens, timeoutMs, fetchImpl, extraBody });
+  return async function chat(req) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await once(req);
+      } catch (e) {
+        if (attempt >= retries || !isTransientChatError(e)) throw e;
+        const wait = retryBaseMs * 4 ** attempt;
+        log(`chat ${model}: transient failure (attempt ${attempt + 1}/${retries + 1}): ${String(e.message).slice(0, 160)} — retrying in ${wait / 1000}s`);
+        await sleep(wait);
+      }
+    }
+  };
+}
+
+function makeOpenAIChatOnce({ url, model, apiKey, temperature, maxTokens, timeoutMs, fetchImpl, extraBody }) {
   const endpoint = `${url.replace(/\/+$/, '')}/chat/completions`;
   return async function chat({ system, user }) {
     const ctrl = new AbortController();
@@ -53,7 +92,11 @@ export function makeOpenAIChat({
         }),
       });
       const text = await res.text();
-      if (!res.ok) throw new Error(`chat ${model} -> ${res.status}: ${text.slice(0, 200)}`);
+      if (!res.ok) {
+        const err = new Error(`chat ${model} -> ${res.status}: ${text.slice(0, 200)}`);
+        if (res.status === 429 || res.status >= 500) err.transientStatus = res.status;
+        throw err;
+      }
       let json;
       try { json = JSON.parse(text); } catch { throw new Error(`chat ${model}: non-JSON body: ${text.slice(0, 200)}`); }
       const message = json?.choices?.[0]?.message;
