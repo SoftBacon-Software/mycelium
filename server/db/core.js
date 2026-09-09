@@ -101,6 +101,12 @@ export var migrations = [
     ["projects", "repo_path", "TEXT NOT NULL DEFAULT ''"],
     // Bounded self-heal: how many auto-retries a plan step has spent (retry policy).
     ["plan_steps", "attempt_count", "INTEGER NOT NULL DEFAULT 0"],
+    // Route-usage mount-prefix split (P-product 184): rows written before the
+    // fix carry mount-relative patterns (GET /stats) that merge plugin
+    // surfaces into one row. The 0 backfill lets the removal audits exclude
+    // the pre-fix window instead of mixing shapes; every row the current
+    // binary writes stamps 1 (lib/route-usage.js upsert).
+    ["route_usage", "prefix_resolved", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
 // Apply every migration above to `db` as idempotent ALTER TABLE ADD COLUMN

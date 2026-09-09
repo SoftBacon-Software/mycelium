@@ -27,6 +27,8 @@ const A = 'route-usage-agent-a'
 let tmpDataDir
 let db
 let app
+let routes // the real core router — describe (7) mounts plugin-like sub-routers on it
+let routeUsageMountStamp
 
 beforeAll(async () => {
   tmpDataDir = mkdtempSync(join(tmpdir(), 'myc-route-usage-'))
@@ -37,11 +39,12 @@ beforeAll(async () => {
   db = await import('../../server/db.js')
   db.initDB()
 
-  const { routeUsageCounter } = await import('../../server/lib/route-usage.js')
-  const routes = (await import('../../server/routes/mycelium.js')).default
+  const counterModule = await import('../../server/lib/route-usage.js')
+  routeUsageMountStamp = counterModule.routeUsageMountStamp
+  routes = (await import('../../server/routes/mycelium.js')).default
   app = express()
   app.use(express.json())
-  app.use('/api/mycelium', routeUsageCounter) // production mount order: counter FIRST
+  app.use('/api/mycelium', counterModule.routeUsageCounter) // production mount order: counter FIRST
   app.use('/api/mycelium', routes)
 
   const hashOf = (k) => crypto.createHash('sha256').update(k).digest('hex')
@@ -150,5 +153,112 @@ describe('(6) the counter counts the admin read itself (it sits behind the same 
     const row = rowFor(res.body, 'GET', '/admin/route-usage')
     expect(row).toBeDefined()
     expect(row.count).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// ==== mount attribution (P-product 184) ====
+// A route pattern alone is relative to the router that DECLARES it, so two
+// plugin surfaces serving the same relative pattern used to collapse into one
+// row (measured live on master: GET /memory/stats + GET /auto-memory/stats →
+// one GET /stats row, count 2). The mount must reach the counter another way:
+// Express restores req.baseUrl on unwind, so plugins.js stamps it at mount
+// time (routeUsageMountStamp) exactly where it does router.use(prefix, ...).
+// These describes mirror that production mount shape onto the real core
+// router: routes.use(prefix, stamp, pluginLikeRouter) — the same nesting, a
+// plain sub-router standing in for guardPluginRouter (not the behavior under
+// test).
+
+describe('(7) mount attribution: same relative pattern under two mounts → two rows', () => {
+  const statsRouter = () => {
+    const r = express.Router()
+    r.get('/stats', (req, res) => res.json({ ok: true }))
+    return r
+  }
+  const workflowsRouter = () => {
+    const r = express.Router()
+    r.get('/', (req, res) => res.json({ polled: true })) // the workflows-poll shape
+    return r
+  }
+
+  test('GET /stats on /memory and on /auto-memory land as TWO mount-qualified rows', async () => {
+    routes.use('/memory', routeUsageMountStamp('/memory'), statsRouter())
+    routes.use('/auto-memory', routeUsageMountStamp('/auto-memory'), statsRouter())
+
+    await request(app).get('/api/mycelium/memory/stats').expect(200)
+    await request(app).get('/api/mycelium/auto-memory/stats').expect(200)
+
+    const res = await usage()
+    // THE regression: not one merged GET /stats row, but one row per surface.
+    expect(rowFor(res.body, 'GET', '/memory/stats')).toMatchObject({ count: 1 })
+    expect(rowFor(res.body, 'GET', '/auto-memory/stats')).toMatchObject({ count: 1 })
+    expect(rowFor(res.body, 'GET', '/stats')).toBeUndefined()
+  })
+
+  test("a '/' route under a mount records the mount-qualified '/workflows/'", async () => {
+    routes.use('/workflows', routeUsageMountStamp('/workflows'), workflowsRouter())
+
+    await request(app).get('/api/mycelium/workflows/').expect(200)
+
+    const res = await usage()
+    // Plain concatenation is the contract: mount + '/' → '/workflows/'.
+    expect(rowFor(res.body, 'GET', '/workflows/')).toMatchObject({ count: 1 })
+  })
+
+  test('404 under a stamped mount still records the ONE global <unmatched> row', async () => {
+    routes.use('/guardrails', routeUsageMountStamp('/guardrails'), express.Router())
+
+    await request(app).get('/api/mycelium/guardrails/definitely-not-here-184').expect(404)
+    await request(app).get('/api/mycelium/definitely-not-here-either-184').expect(404)
+
+    const res = await usage()
+    // The sentinel is per-method and mount-free — cardinality-bounded by design.
+    const rows = res.body.routes.filter((r) => r.route_pattern === '<unmatched>')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].count).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('(8) prefix_resolved cohort marker: 1 on new rows, 0 on legacy rows', () => {
+  test('a hand-seeded legacy row serves back 0; every row this binary writes is 1', async () => {
+    // Legacy row written the way the PRE-fix binary wrote it: no marker column
+    // in the INSERT, so the migrations-bridge DEFAULT (0) backfills.
+    db.getDB().prepare(
+      "INSERT INTO route_usage (method, route_pattern, day, count) VALUES ('GET', '/legacy/stats', '2026-09-01', 7)"
+    ).run()
+
+    await request(app).get('/api/mycelium/memory/stats').expect(200)
+
+    const res = await usage()
+    const legacy = rowFor(res.body, 'GET', '/legacy/stats')
+    expect(legacy).toMatchObject({ count: 7, prefix_resolved: 0 })
+    // Same surface, post-fix row: the marker distinguishes the two eras.
+    expect(rowFor(res.body, 'GET', '/memory/stats').prefix_resolved).toBe(1)
+    // And the endpoint tells the reader where the trustworthy window starts.
+    expect(res.body.prefix_resolved_since).toBeTruthy()
+  })
+})
+
+describe('(9) ?prefix= filter scopes to one mounted surface', () => {
+  test('prefix=/memory returns only that mount; the /memoryfoo boundary is excluded', async () => {
+    db.getDB().prepare(
+      "INSERT INTO route_usage (method, route_pattern, day, count) VALUES ('GET', '/memoryfoo/hit', '2026-09-01', 3)"
+    ).run()
+
+    const res = await usage('?prefix=/memory')
+    expect(res.body.prefix).toBe('/memory')
+    expect(rowFor(res.body, 'GET', '/memory/stats')).toBeDefined()
+    // Byte-exact boundary: /memoryfoo does NOT start with /memory + '/'.
+    expect(rowFor(res.body, 'GET', '/memoryfoo/hit')).toBeUndefined()
+    expect(rowFor(res.body, 'GET', '/auto-memory/stats')).toBeUndefined()
+    expect(rowFor(res.body, 'GET', '/tasks')).toBeUndefined()
+    // Every served row is under the mount; the marker rides along per row.
+    for (const r of res.body.routes) {
+      expect(r.route_pattern === '/memory' || r.route_pattern.startsWith('/memory/')).toBe(true)
+    }
+  })
+
+  test('empty prefix → 400; slash-less prefix → 400', async () => {
+    expect((await usage('?prefix=')).status).toBe(400)
+    expect((await usage('?prefix=memory')).status).toBe(400)
   })
 })

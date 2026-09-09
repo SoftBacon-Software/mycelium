@@ -11,6 +11,26 @@
 // the single sentinel pattern '<unmatched>' per method, so even 404-hammering
 // shows up as usage evidence while staying cardinality-bounded.
 //
+// Mount attribution (P-product 184): a route pattern alone is only relative
+// to the router that declares it, so semantic-memory's GET /stats and
+// auto-memory's GET /stats used to collapse into ONE row — the removal
+// audits could not tell which surface was dead. The stored pattern is
+// therefore the FULL seam-relative path (GET /memory/stats, GET
+// /auto-memory/stats, GET /workflows/), built by prefixing the mount a
+// plugin's router was mounted under. That mount cannot be read from
+// req.baseUrl at finish time — Express 4 restores req.baseUrl to its
+// pre-dispatch value as the middleware stack unwinds (express/lib/router/
+// index.js: `restore(out, req, 'baseUrl', ...)` + the `req.baseUrl =
+// parentUrl` reset in next()) — so plugins.js stamps the mount onto the
+// request at mount time via routeUsageMountStamp(prefix), where the prefix
+// (manifest.routePrefix || '/' + name) is already in hand. Core routes
+// carry no stamp: their req.route.path is already seam-relative.
+//
+// prefix_resolved marks the row cohort: 1 = written after this fix (pattern
+// is mount-qualified or verifiably seam-relative), 0 = a legacy row from
+// before the deploy, whose shape mixed mounts. The removal audits filter on
+// it to read the post-fix window without mixing shapes.
+//
 // Everything is counted by default — including 4xx/5xx — because a client
 // hammering a failing route is still traffic evidence. Prune later if the
 // table proves noisy.
@@ -20,13 +40,39 @@ export var UNMATCHED_PATTERN = '<unmatched>';
 
 // Daily-bucket upsert: one row per (method, route_pattern, UTC day).
 // first_seen survives the upsert (INSERT-only default); last_seen advances.
-var _upsertSql = 'INSERT INTO route_usage (method, route_pattern, day, count)' +
-  " VALUES (?, ?, strftime('%Y-%m-%d', 'now'), 1)" +
+// prefix_resolved = 1 on insert — every row THIS binary writes is post-fix;
+// only rows written by the pre-fix binary (legacy rows backfilled by the
+// db/core.js migrations bridge) carry 0. A same-day conflict re-enters the
+// UPDATE branch, which leaves the marker untouched.
+var _upsertSql = 'INSERT INTO route_usage (method, route_pattern, day, count, prefix_resolved)' +
+  " VALUES (?, ?, strftime('%Y-%m-%d', 'now'), 1, 1)" +
   ' ON CONFLICT(method, route_pattern, day)' +
   " DO UPDATE SET count = count + 1, last_seen = datetime('now')";
 
 export function recordRouteUsage(method, routePattern) {
   getDB().prepare(_upsertSql).run(method, routePattern);
+}
+
+// Stamp the mount a plugin router is mounted under onto the request, so the
+// finish-time counter can build the full seam-relative pattern. Installed by
+// plugins.js directly before guardPluginRouter(pluginRouter, ...) at the
+// router.use(prefix, ...) mount. A routePrefix of '/' (root-mounted plugins,
+// e.g. marketing) means "no additional mount" — the plugin's route paths are
+// already seam-relative. The stamp is a private req field on purpose: at
+// finish time Express has already restored req.baseUrl, and mutating
+// req.baseUrl itself would leak into downstream Express machinery. The stamp
+// survives a fallthrough (mount holds until the request ends), which is safe
+// because surface mounts are disjoint prefixes — a request that falls
+// through a plugin router matches no later route and records the global
+// sentinel, which deliberately ignores the stamp to stay cardinality-bounded.
+export function routeUsageMountStamp(mountPrefix) {
+  var mount = (mountPrefix === '/' || mountPrefix === undefined || mountPrefix === null)
+    ? ''
+    : String(mountPrefix);
+  return function stampRouteMount(req, res, next) {
+    req._mycRouteMount = mount;
+    next();
+  };
 }
 
 // Throttled failure log — an instrument must never take request handling down
@@ -47,7 +93,20 @@ function logCountError(e) {
 export function routeUsageCounter(req, res, next) {
   res.on('finish', function () {
     try {
-      var pattern = (req.route && req.route.path) ? String(req.route.path) : UNMATCHED_PATTERN;
+      var pattern;
+      if (req.route && req.route.path) {
+        // Full seam-relative pattern: mount (stamped by routeUsageMountStamp
+        // for plugin routers, '' for core routes) + the router-relative path.
+        // Plain concatenation is intentional — it is what yields GET
+        // /workflows/ for a '/' route under the /workflows mount.
+        pattern = (req._mycRouteMount || '') + String(req.route.path);
+      } else {
+        // 404 fallthrough: the one global sentinel per method. The mount is
+        // deliberately NOT applied — a raw-URL-free, cardinality-bounded
+        // unmatched bucket is the contract, and per-mount sentinels would
+        // multiply it by surface count for zero audit value.
+        pattern = UNMATCHED_PATTERN;
+      }
       recordRouteUsage(req.method, pattern);
     } catch (e) {
       logCountError(e);

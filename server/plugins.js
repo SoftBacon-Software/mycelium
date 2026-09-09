@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 import http from 'http';
 import { ensurePluginRecord, getPluginRecord, listPluginRecords, getPluginMigrationVersion, recordPluginMigration, getDB } from './db.js';
+import { routeUsageMountStamp } from './lib/route-usage.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Overridable via MYCELIUM_PLUGINS_DIR so the crash-isolation integration gate
@@ -337,7 +338,11 @@ export async function loadPlugins(core, router) {
             router.post(toolRoute, wrapAsyncErrors(createWorkerToolProxy(manifest.name, workerPort, tool.name)));
           }
 
-          // Proxy catch-all for any other worker routes
+          // Proxy catch-all for any other worker routes. (Route-usage note:
+          // the tool routes above are registered on the CORE router with
+          // prefix baked into the path, so their patterns are already
+          // mount-qualified; this catch-all matches no Express route, so
+          // those requests record the global '<unmatched>' sentinel.)
           var { createProxyMiddleware } = await import('http-proxy-middleware').catch(function () { return {}; });
           if (createProxyMiddleware) {
             router.use(prefix, createProxyMiddleware({ target: 'http://127.0.0.1:' + workerPort, changeOrigin: true }));
@@ -372,7 +377,13 @@ export async function loadPlugins(core, router) {
         // guardPluginRouter wraps every handler on the plugin's router so a
         // rejecting async route 500s via the app error handler instead of
         // reaching index.js's unhandledRejection -> process.exit(1) backstop.
-        router.use(prefix, guardPluginRouter(pluginRouter, manifest.name));
+        // routeUsageMountStamp(prefix) goes in front of it so the route-usage
+        // counter can record the FULL seam-relative pattern (GET /memory/stats
+        // vs GET /auto-memory/stats): req.route.path inside a plugin router is
+        // mount-relative, and req.baseUrl is unavailable at the counter's
+        // finish-time read (Express restores it on unwind), so the mount is
+        // captured here where the prefix is in hand. See lib/route-usage.js.
+        router.use(prefix, routeUsageMountStamp(prefix), guardPluginRouter(pluginRouter, manifest.name));
       }
 
       // Collect MCP tools with plugin metadata

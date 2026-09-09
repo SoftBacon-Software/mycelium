@@ -675,35 +675,63 @@ router.get('/admin/api-usage', asyncHandler(async function (req, res) {
 // GET /admin/route-usage — per-route traffic measured on THIS instance.
 // Reads the route_usage table (fed by the routeUsageCounter middleware at the
 // /api/mycelium seam). This — not /admin/api-usage above — is the zero-write
-// evidence source for plugin/route removal decisions. Patterns are Express
-// route paths (/tasks/:id); '<unmatched>' aggregates requests that hit no
-// route. Optional ?since=YYYY-MM-DD restricts to days >= since (UTC buckets).
+// evidence source for plugin/route removal decisions. Patterns are FULL
+// seam-relative paths (mount-qualified for plugin routes: /memory/stats,
+// /workflows/); '<unmatched>' aggregates requests that hit no route.
+// Optional ?since=YYYY-MM-DD restricts to days >= since (UTC buckets).
+// Optional ?prefix=/memory scopes to one mounted surface: the mount itself or
+// anything under mount + '/' (byte-exact — /memory never matches /memoryfoo).
+// Legacy rows (prefix_resolved = 0) predate the mount fix, so their patterns
+// merged plugin surfaces; prefix_resolved_since reports where the post-fix
+// window starts (MIN first_seen over ALL resolved rows, unfiltered — it is a
+// property of the instrument, not of this view's ?since=/?prefix= args).
+// Grouped rows report MAX(prefix_resolved): a core pattern keeps its exact
+// text across the upgrade, so one group can span both cohorts across days —
+// MAX says whether the pattern has been seen post-fix, while the day-bucketed
+// rows in the table keep their true per-row marker.
 router.get('/admin/route-usage', asyncHandler(async function (req, res) {
   if (!checkAdmin(req, res)) return;
 
   var since = req.query.since;
-  var where = '';
+  var where = [];
   var params = [];
   if (since !== undefined) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) {
       return res.status(400).json({ error: 'since must be a YYYY-MM-DD date (UTC day bucket)' });
     }
-    where = ' WHERE day >= ?';
+    where.push('day >= ?');
     params.push(since);
   }
 
+  var prefix = req.query.prefix;
+  if (prefix !== undefined) {
+    if (typeof prefix !== 'string' || prefix === '' || prefix.charAt(0) !== '/') {
+      return res.status(400).json({ error: 'prefix must be a mount path starting with "/" (e.g. /memory)' });
+    }
+    where.push('(route_pattern = ? OR substr(route_pattern, 1, ?) = ?)');
+    params.push(prefix, prefix.length + 1, prefix + '/');
+  }
+  var whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
+
   var rows = getDB().prepare(
-    'SELECT method, route_pattern, SUM(count) AS count, COUNT(DISTINCT day) AS active_days,' +
+    'SELECT method, route_pattern, MAX(prefix_resolved) AS prefix_resolved,' +
+    ' SUM(count) AS count, COUNT(DISTINCT day) AS active_days,' +
     ' MIN(first_seen) AS first_seen, MAX(last_seen) AS last_seen' +
-    ' FROM route_usage' + where +
+    ' FROM route_usage' + whereSql +
     ' GROUP BY method, route_pattern ORDER BY count DESC'
   ).all(...params);
+
+  var prefixResolvedSince = getDB().prepare(
+    'SELECT MIN(first_seen) AS ts FROM route_usage WHERE prefix_resolved = 1'
+  ).get().ts;
 
   var total = 0;
   for (var i = 0; i < rows.length; i++) total += rows[i].count;
 
   res.json({
     since: since || null,
+    prefix: prefix || null,
+    prefix_resolved_since: prefixResolvedSince || null,
     total_requests: total,
     route_count: rows.length,
     routes: rows,
