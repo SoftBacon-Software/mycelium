@@ -16,7 +16,20 @@ export function stripThink(text) {
   return { text: out.trim(), hadThink };
 }
 
-export function makeOpenAIChat({ url, model, apiKey = null, temperature = 0, maxTokens = 256, timeoutMs = 300000, fetchImpl = fetch }) {
+export function makeOpenAIChat({
+  url,
+  model,
+  apiKey = null,
+  temperature = 0,
+  maxTokens = 256,
+  timeoutMs = 300000,
+  fetchImpl = fetch,
+  // extra top-level body fields, merged verbatim (e.g. the extract arm's
+  // {chat_template_kwargs: {enable_thinking: false}} — llama.cpp honours it).
+  // The answerer chat never sets this: the answer phase must stay identical
+  // across arms.
+  extraBody = null,
+}) {
   const endpoint = `${url.replace(/\/+$/, '')}/chat/completions`;
   return async function chat({ system, user }) {
     const ctrl = new AbortController();
@@ -36,6 +49,7 @@ export function makeOpenAIChat({ url, model, apiKey = null, temperature = 0, max
           ],
           temperature,
           max_tokens: maxTokens,
+          ...(extraBody ?? {}),
         }),
       });
       const text = await res.text();

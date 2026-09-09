@@ -48,6 +48,14 @@ export async function runBench({
         if (w) {
           writeInfo.docs += w.docs ?? 0;
           writeInfo.rows += w.rows ?? 0;
+          // task 182 ingestion controls report extraction facts; the fields
+          // appear only when the arm reports them, so every existing arm's
+          // writeInfo shape is unchanged.
+          if (typeof w.facts === 'number') {
+            writeInfo.facts = (writeInfo.facts ?? 0) + w.facts;
+            writeInfo.facts_counts = [...(writeInfo.facts_counts ?? []), ...(w.facts_per_session ?? [])];
+          }
+          if (typeof w.extract_ms === 'number') writeInfo.extract_ms = (writeInfo.extract_ms ?? 0) + w.extract_ms;
         }
       }
     }

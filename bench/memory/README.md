@@ -20,6 +20,7 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #   --keep                  do NOT delete the run's rows from the platform
 #   --answer-url URL        OpenAI-compatible answer endpoint (default: BOX_3090_URL from substrate.conf + /v1)
 #   --answer-model ID       (default qwen3.8:27b)
+#   --arms LIST             subset of none,mycelium,mycelium-extract,mem0,mem0-raw,zep,letta (default none,mycelium)
 #   --judge-url URL         (default http://localhost:8780/v1 — the served XS seat)
 #   --judge-model ID        (default Laguna-XS-2.1-mlx-oq4e-agentic-ours)
 #   --handlabels FILE       judge-agreement vs a hand-scored set (see below)
@@ -104,6 +105,18 @@ An arm exposes `write(sessionTurns, {questionId})` and `answer(question) → {te
   SAME RAG prompt the other arms use, same answer model. Scope = one Letta
   agent per run (created lazily, reattached across sidecar restarts via a
   state file, deleted at teardown unless `--keep`).
+- **`mem0-raw`** (task 182) — the Mem0 RAW-ingestion control. Identical to
+  `mem0` except `Memory.add(..., infer=False)` (mem0ai 2.0.20,
+  `mem0/memory/main.py:770`; the raw path `_add_to_vector_store` at
+  `:880` stores each non-system message verbatim — no LLM in the write
+  path). Scope is suffixed `-raw` so the two mem0 arms never share a store
+  or a resume checkpoint.
+- **`mycelium-extract`** (task 182) — the Mycelium EXTRACTION control.
+  Identical to `mycelium` in retrieval + answer (same hybrid search, same
+  budget, same RAG prompt — asserted byte-identical in tests), but write
+  first distills each session into a fact list with the answerer model
+  (temperature 0, thinking OFF) and indexes ONE ROW PER FACT into a
+  `-extract`-suffixed namespace. See the next section.
 - Rows are deleted from the platform after the run (per-source_id DELETE,
   verified 0 remaining) unless `--keep`. The mem0 arm never touches the
   platform; its store is a per-run local dir, purged after the run unless
@@ -118,6 +131,82 @@ run), but its stamped budget was not the exercised budget; treat the banked
 0.380 as a **top-10** number. `run.mjs` now carries `retrievalBudget`, and both
 arms refuse a factory call without a positive-int budget, so this class of
 drift fails loudly before any rows are written.
+
+## Ingestion controls — the {Mycelium, Mem0} × {raw, extract} 2×2 (task 182)
+
+The as-shipped grid compares systems AS SHIPPED: arm mycelium writes one raw
+row per session, arm mem0 runs LLM fact extraction. That confounds two
+decisions — **what a system writes** (ingestion policy) and **how well it
+finds it later** (retrieval). A mycelium-vs-mem0 gap could be extraction
+helping, or retrieval being better, or both. Task 182 adds the two off-diagonal
+arms so each factor can be read separately:
+
+| system \ ingestion | raw (no extraction) | extract (LLM extraction) |
+|---|---|---|
+| **Mycelium** | `mycelium` (as shipped) | `mycelium-extract` |
+| **Mem0** | `mem0-raw` | `mem0` (as shipped) |
+
+Reading it: `mycelium` vs `mycelium-extract` is the effect of extraction ON
+Mycelium's retrieval; `mem0-raw` vs `mem0` is the same effect on Mem0's;
+`mycelium-extract` vs `mem0` is extraction-vs-extraction (a fair retrieval
+race); `mycelium` vs `mem0-raw` is raw-vs-raw. The receipt renders this table
+(from the run's own scores, rendered not typed) whenever all four arms are
+present in one run.
+
+**Arm design.**
+
+- `mem0-raw`: identical to `mem0` except every `add()` passes
+  `infer=False` (`mem0/memory/main.py:770`), which stores each non-system
+  message verbatim (`:880`) — Mem0's own raw mode, not a bypass of it. Same
+  embedder, budget, RAG prompt, answerer as `mem0`. Isolation: scope suffixed
+  `-raw`, and its resume checkpoint file is separate, so a restart never
+  lets one arm skip sessions the other committed.
+- `mycelium-extract`: retrieval + answer are the SAME code path as
+  `mycelium` (the test asserts the answer prompt is byte-identical given the
+  same retrieval). Write extracts first: the answerer model
+  (`qwen3.8:27b`, temperature 0, `--extract-max-tokens` default 4096) reads
+  the session transcript and returns `{"facts": [...]}`; each fact is POSTed
+  to `/memory/index` as its own row. The extraction prompt
+  (`arms/arm_mycelium_extract.mjs EXTRACTION_SYSTEM`) mirrors the STRUCTURE
+  of mem0's `FACT_RETRIEVAL_PROMPT` (mem0ai 2.0.20,
+  `mem0/configs/prompts.py:15`: role statement → what counts as a fact →
+  few-shot pairs → JSON contract + rules) with wording paraphrased, not
+  copied — so both extraction arms ask the model for the same KIND of
+  output without shipping vendor text.
+
+**Row shape: one row per fact (stamped `facts_row_shape: one_row_per_fact`).**
+Arm mem0 stores one memory per extracted fact, so per-fact rows are what an
+extraction step produces upstream of retrieval; indexing the whole fact list
+as ONE row would change the size of each retrieved context chunk and
+re-confound the comparison this arm exists to remove (bigger rows ≈ more
+context, not better memory). The receipt stamps facts-per-session stats
+(count, mean, min, max) next to the grid so the extraction rate is visible.
+
+**Extraction thinking is OFF in both extraction arms (stamped).** The 3090
+serves ONE llama.cpp slot; thinking-on extraction burned ~300 reasoning
+tokens per add. `mycelium-extract` calls the answerer endpoint with
+`chat_template_kwargs {"enable_thinking": false}`. For mem0, the sidecar
+(`arms/mem0_sidecar.py`) starts an in-process forwarding proxy
+(stdlib `http.server`, 127.0.0.1, ephemeral port) when
+`MEM0_NO_THINK=1` (the default — set `MEM0_NO_THINK=0` to escape-hatch back
+to thinking-on) and injects that same kwarg into every `/v1/chat/completions`
+body before forwarding to `MEM0_LLM_BASE_URL`; Mem0's LLM client is pointed
+at the proxy, and the proxy's presence is stamped into the sidecar `/health`.
+A run refuses to start if its arms would mix extraction-thinking modes
+unstamped (`assertNoExtractionThinkingMix`) — raw arms are exempt (no LLM in
+their write path).
+
+**Commands.** Capped smoke (controls only, 1 question, 5 sessions):
+
+```bash
+node bench/memory/run.mjs --split longmemeval --arms mem0-raw,mycelium-extract --n 1 --max-sessions 5
+```
+
+Full n=50 grid with all four arms (single run, single judge):
+
+```bash
+node bench/memory/run.mjs --split longmemeval --arms mycelium,mycelium-extract,mem0,mem0-raw --n 50
+```
 
 ## The mem0 arm (sidecar setup)
 
@@ -330,7 +419,8 @@ core.mjs       runBench (DI; what tests drive)    regime.mjs   the stamp
 rejudge.mjs    re-judge saved answers (DI; what tests drive)
 split.mjs      registry + sha256 gate + selection receipt.mjs markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
-arms/          arm_none, arm_mycelium, arm_mem0, arm_zep, arm_letta, registry
+arms/          arm_none, arm_mycelium, arm_mycelium_extract, arm_mem0,
+               arm_mem0_raw, arm_zep, arm_letta, registry
                (+ mem0/zep/letta_sidecar.py, requirements + per-arm venvs, gitignored)
 tools/         cleanup-run.mjs — remove a crashed run's rows from the platform
 data/          gitignored corpora      results/     committed run evidence

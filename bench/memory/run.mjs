@@ -16,8 +16,11 @@ import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
 import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
+import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
+import { myceliumExtractNamespace } from './arms/arm_mycelium_extract.mjs';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
 import { startLettaSidecar, purgeLettaScope } from './arms/arm_letta.mjs';
+import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingestion.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
@@ -185,6 +188,10 @@ async function main() {
   if (maxSessions !== null && (!Number.isInteger(maxSessions) || maxSessions <= 0)) {
     throw new Error(`--max-sessions must be a positive int (got ${args['max-sessions']})`);
   }
+  // task 182 ingestion controls: `mycelium-extract` needs the platform like
+  // `mycelium` does; `mem0-raw` shares the mem0 sidecar (in its own -raw scope).
+  const wantsPlatform = arms.includes('mycelium') || arms.includes('mycelium-extract');
+  const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
   const items = selectItems(split.items, n);
@@ -192,13 +199,13 @@ async function main() {
 
   const runId = `${utcStamp(new Date()).slice(0, 10)}-p1-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
 
-  // Platform (required when the mycelium arm is in play; address never hardcoded)
+  // Platform (required when a mycelium-family arm is in play; address never hardcoded)
   let platformEnv = null;
   try { platformEnv = resolvePlatformEnv(); } catch { /* no substrate — only fine if no mycelium arm */ }
   let platform = null;
   let platformFacts = { url_host: null, version: null, embedding_provider: null, embedding_model: null, chunk_size: null };
   let statsBefore = null;
-  if (arms.includes('mycelium')) {
+  if (wantsPlatform) {
     if (!platformEnv) throw new Error('mycelium arm requested but no platform address resolved (MYCELIUM_URL / substrate.conf)');
     const adminKey = await resolveAdminKey({ keychainService: platformEnv.keychainService });
     if (!adminKey) throw new Error('No admin key: set MYCELIUM_ADMIN_KEY or install the keychain service named in substrate.conf');
@@ -216,11 +223,12 @@ async function main() {
     };
   }
 
-  // mem0 competitor arm: its sidecar starts BEFORE the regime is built (the
-  // stamp carries the sidecar's /health facts) and is stopped + its local
-  // store purged in the finally below — success or failure.
+  // mem0 competitor arm (and its task-182 raw control, which shares this
+  // sidecar in a suffixed scope): the sidecar starts BEFORE the regime is
+  // built (the stamp carries the sidecar's /health facts) and is stopped + its
+  // local store purged in the finally below — success or failure.
   let mem0Handle = null;
-  if (arms.includes('mem0')) {
+  if (wantsMem0Sidecar) {
     mem0Handle = await startMem0Sidecar({
       runId,
       llmBaseUrl: args['answer-url'] ?? null, // an explicit answer endpoint applies to mem0's LLM too
@@ -331,6 +339,12 @@ async function main() {
     };
   }
 
+  // task 182, addendum 6: every EXTRACTION arm in one run must share one
+  // stamped extraction-thinking mode. mycelium-extract is hardcoded off; the
+  // mem0 sidecar stamps what it was started with (MEM0_NO_THINK, default on
+  // since this task). Raw arms do no LLM extraction and are exempt.
+  assertNoExtractionThinkingMix(arms, extractionThinkingByArm(arms, { mem0Health: mem0Handle?.health ?? null }));
+
   // Models (local; $0)
   const boxUrl =
     platformEnv?.box3090Url || mem0Handle?.env.box3090Url || zepHandle?.env.box3090Url || lettaHandle?.env.box3090Url || null;
@@ -339,6 +353,20 @@ async function main() {
   if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
   const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
   const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
+  // mycelium-extract's extractor = the SAME answerer model, temperature 0,
+  // THINKING OFF (chat_template_kwargs — honoured by llama.cpp; with thinking
+  // on each extraction burned ~300 reasoning tokens on the one 3090 slot —
+  // measured 16 h/write-phase at n=50 before this). max_tokens matches the
+  // answerer's default: the extractor returns a short JSON fact list.
+  const EXTRACT_MAX_TOKENS = parseInt(args['extract-max-tokens'] ?? '4096', 10);
+  const extractionChat = arms.includes('mycelium-extract')
+    ? makeOpenAIChat({
+        url: answerUrl,
+        model: answerModel,
+        maxTokens: EXTRACT_MAX_TOKENS,
+        extraBody: { chat_template_kwargs: { enable_thinking: false } },
+      })
+    : null;
 
   // 4096: thinking models (qwen3.8 on llama.cpp) spend max_tokens on
   // reasoning_content before the answer — 256 left nothing for the answer, and
@@ -382,6 +410,43 @@ async function main() {
           sidecar: 'bench/memory/arms/mem0_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
         }
       : null,
+    // task 182 ingestion controls — stamped only when the arm is in the run
+    mem0_raw: arms.includes('mem0-raw')
+      ? {
+          ...mem0Handle.health,
+          ingestion: 'raw',
+          infer: false,
+          mem0_add_infer:
+            'Memory.add(messages, infer=False) — mem0ai 2.0.20 mem0/memory/main.py:770 (param default True); ' +
+            'the raw path at :880 stores each NON-SYSTEM message verbatim, one memory per turn, no LLM call',
+          scope: mem0RawScope(runId),
+          retrieval_budget: budget,
+          extraction_thinking: 'n/a (raw ingestion — no LLM in the write path)',
+          sidecar: 'bench/memory/arms/mem0_sidecar.py (same sidecar as the mem0 arm; per-request infer:false)',
+        }
+      : null,
+    mycelium_extract: arms.includes('mycelium-extract')
+      ? {
+          ingestion: 'extract',
+          extraction_model: answerModel,
+          extraction_url_host: new URL(answerUrl).host,
+          extraction_temperature: 0,
+          extraction_max_tokens: EXTRACT_MAX_TOKENS,
+          extraction_thinking: 'off',
+          extraction_request: 'chat_template_kwargs {"enable_thinking": false} (llama.cpp honours it)',
+          extraction_prompt:
+            'bench/memory/arms/arm_mycelium_extract.mjs EXTRACTION_SYSTEM — mirrors the STRUCTURE of mem0ai 2.0.20 ' +
+            'mem0/configs/prompts.py:15 FACT_RETRIEVAL_PROMPT (role → fact categories → few-shot Input/Output pairs → ' +
+            'JSON {"facts": [...]} contract); wording paraphrased, vendor text not copied',
+          facts_row_shape: 'one_row_per_fact',
+          facts_row_shape_why:
+            'arm mem0 (the extract-policy competitor) stores one memory per extracted fact — per-fact rows are what ' +
+            'extraction-ingestion produces upstream of retrieval; one row per session would change retrieved-context ' +
+            'size and re-confound the comparison',
+          namespace: myceliumExtractNamespace(`bench-p1-${runId}`),
+          retrieval_budget: budget,
+        }
+      : null,
     zep: zepHandle
       ? {
           ...zepHandle.health,
@@ -401,6 +466,12 @@ async function main() {
     write: maxSessions ? { max_sessions_per_question: maxSessions } : null,
     n: items.length,
     notes: [
+      arms.includes('mem0-raw')
+        ? `arms this run: ${arms.join(', ')}; mem0-raw = the RAW-ingestion control for the Mem0 column (task 182): Memory.add(infer=False) stores each non-system turn verbatim, no extraction LLM; same sidecar/embedder/answerer/budget as arm mem0, scope suffixed -raw`
+        : null,
+      arms.includes('mycelium-extract')
+        ? `arms this run: ${arms.join(', ')}; mycelium-extract = the EXTRACTION control for the Mycelium column (task 182): the answerer model (${answerModel}, temperature 0, THINKING OFF via chat_template_kwargs) extracts a fact list per session, facts indexed ONE ROW PER FACT, namespace suffixed -extract; retrieval + answer identical to arm mycelium`
+        : null,
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
         : null,
@@ -410,7 +481,7 @@ async function main() {
       arms.includes('letta')
         ? `arms this run: ${arms.join(', ')}; letta = OSS letta server (formerly MemGPT) archival memory via the official letta-client SDK, one archival passage per haystack session, its agent LLM and embedder matched to the incumbent arms' answerer/embedder; the server EXTERNAL (PostgreSQL+pgvector is its storage requirement — no embedded store exists in 0.16.8, see letta-requirements.txt)`
         : null,
-      !arms.includes('mem0') && !arms.includes('zep') && !arms.includes('letta')
+      arms.length === 2 && arms.includes('none') && arms.includes('mycelium')
         ? 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+'
         : null,
       ...(maxSessions ? [`SMOKE: write phase capped at ${maxSessions} sessions per question (regime.write) — NOT a full-run number`] : []),
@@ -439,6 +510,7 @@ async function main() {
       })),
       armContext: {
         answerChat,
+        extractionChat, // mycelium-extract's factory REFUSES to run without it (thinking-off extractor)
         platform,
         runId,
         namespace,
@@ -482,7 +554,9 @@ async function main() {
       maxSessions,
       afterWrite: async ({ arm, writeInfo }) => {
         writeInfoByArm[arm] = writeInfo;
-        if (arm === 'mycelium' && platform) {
+        // both mycelium-family arms index platform rows — the extract arm's
+        // per-fact rows need the embedder too, or its answers run keyword-fallback
+        if ((arm === 'mycelium' || arm === 'mycelium-extract') && platform) {
           const expected = writeInfo.rows;
           // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
           // wait with the write size instead of failing into keyword-fallback
@@ -508,8 +582,28 @@ async function main() {
       if (args.keep) {
         cleanup = { deleted: 0, kept: true, namespace };
       } else {
-        cleanup = await purgeRunRows(platform, { sourceType, namespace });
-        console.error(`[run] cleanup: ${cleanup.deleted} deleted in ${cleanup.batches} batches, ${cleanup.failed_deletes.length} failed, ${cleanup.rows_remaining_after} remaining`);
+        // every namespace the run indexed: the extract control arm writes to a
+        // suffixed namespace of its own — leaving it behind would leak rows
+        // into the next run's substring-scoped lists
+        const namespaces = [namespace, ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(namespace)] : [])];
+        const per = [];
+        for (const ns of namespaces) {
+          const purge = await purgeRunRows(platform, { sourceType, namespace: ns });
+          console.error(`[run] cleanup ${ns}: ${purge.deleted} deleted in ${purge.batches} batches, ${purge.failed_deletes.length} failed, ${purge.rows_remaining_after} remaining`);
+          per.push(purge);
+        }
+        cleanup =
+          per.length === 1
+            ? per[0]
+            : {
+                namespaces: per.map((p) => p.namespace),
+                deleted: per.reduce((a, p) => a + p.deleted, 0),
+                batches: per.reduce((a, p) => a + p.batches, 0),
+                failed_deletes: per.flatMap((p) => p.failed_deletes),
+                rows_remaining_after: per.reduce((a, p) => a + p.rows_remaining_after, 0),
+                kept: false,
+                per_namespace: per,
+              };
       }
     }
 

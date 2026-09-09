@@ -25,6 +25,19 @@ env/substrate.conf; this file never hardcodes an address:
     MEM0_STORE_PATH          per-run dir for the local Qdrant store + history DB
     MEM0_SIDECAR_PORT        0 = ephemeral (default)
     MEM0_MAX_LLM_TOKENS      mem0 extraction budget (default 4096 — thinking models spend it)
+    MEM0_INFER               on|off (default on) — the DEFAULT ingestion mode for /add:
+                             off = Memory.add(..., infer=False) stores each non-system
+                             message verbatim, no extraction LLM. Arms pass `infer`
+                             per request; this is the fallback + the /health stamp.
+    MEM0_NO_THINK            1 (default via the spawner since task 182) — mem0 builds
+                             its own extraction prompts and its OpenAI client cannot
+                             pass extra body fields, so the sidecar starts a tiny
+                             IN-PROCESS forwarding proxy (127.0.0.1, ephemeral port)
+                             that injects "chat_template_kwargs":
+                             {"enable_thinking": false} into every
+                             /v1/chat/completions body and forwards to
+                             MEM0_LLM_BASE_URL; mem0 is pointed at the proxy.
+                             /health reports extraction_thinking=off + proxy facts.
 
 On startup it prints `MEM0_SIDECAR_READY <port>` to stderr (flushed) — that line
 is the spawn handshake; the spawner polls /health afterwards.
@@ -41,6 +54,8 @@ import json
 import os
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -59,6 +74,8 @@ DEFAULTS = {
     "MEM0_SIDECAR_PORT": "0",
     "MEM0_VECTOR_STORE_PROVIDER": "qdrant",  # mem0 OSS default local store
     "MEM0_SEARCH_THRESHOLD": "0.1",  # mem0 OSS search default; stamped in the regime
+    "MEM0_INFER": "on",  # default ingestion mode; the arms pass infer explicitly
+    "MEM0_NO_THINK": "0",  # spawner defaults this to 1 since task 182
 }
 
 
@@ -81,6 +98,11 @@ def config_from_env(env):
 
     dims = int(merged["MEM0_EMBEDDER_DIMS"])
     store_path = merged["MEM0_STORE_PATH"]
+    infer_raw = str(merged["MEM0_INFER"]).strip().lower()
+    if infer_raw not in ("on", "off"):
+        raise ValueError(f"MEM0_INFER must be on|off (got {merged['MEM0_INFER']!r})")
+    infer_default = infer_raw == "on"
+    no_think = str(merged["MEM0_NO_THINK"]).strip().lower() in ("1", "true", "on", "yes")
     config = {
         "llm": {
             "provider": "openai",  # OpenAI-COMPATIBLE endpoint (llama.cpp /v1), via mem0's openai provider
@@ -121,6 +143,8 @@ def config_from_env(env):
         "vector_store": {"provider": merged["MEM0_VECTOR_STORE_PROVIDER"], "path": store_path},
         "search_threshold": float(merged["MEM0_SEARCH_THRESHOLD"]),
         "max_llm_tokens": int(merged["MEM0_MAX_LLM_TOKENS"]),
+        "ingestion_infer": infer_default,
+        "extraction_thinking": "off" if no_think else "on",
     }
     return config, facts
 
@@ -130,6 +154,108 @@ def mem0_version():
     from importlib.metadata import version
 
     return version("mem0ai")
+
+
+# ---------------------------------------------------------------------------
+# The no-think forwarding proxy (task 182, addendum 6).
+#
+# mem0's extraction prompts are built inside the library and its OpenAI client
+# cannot pass extra body fields (chat_template_kwargs) — so with MEM0_NO_THINK
+# the sidecar stands up this tiny proxy, points mem0's llm config at it, and
+# every /v1/chat/completions body gets "chat_template_kwargs":
+# {"enable_thinking": false} injected before forwarding to MEM0_LLM_BASE_URL.
+# llama.cpp honours the flag; extraction stops spending the one 3090 slot on
+# ~300 reasoning tokens per add (measured 2026-09-09 ~10:25).
+# ---------------------------------------------------------------------------
+
+# End-to-end extraction can take minutes on a contended endpoint; matched to
+# the arm's per-request budget rather than any short urllib default.
+PROXY_FORWARD_TIMEOUT_S = 1800
+
+# The only headers worth forwarding to the model endpoint (hop-by-hop headers
+# are never forwarded).
+_PROXY_FORWARD_HEADERS = ("content-type", "authorization", "accept", "api-key")
+
+
+def make_no_think_proxy_handler(target_base_url, timeout_s=PROXY_FORWARD_TIMEOUT_S):
+    """Build a proxy handler forwarding everything to `target_base_url`.
+
+    The request path is re-based: a client whose base_url is
+    `http://127.0.0.1:<port>/v1` asks for `/v1/chat/completions`; a target that
+    already ends in `/v1` must not get a doubled prefix.
+    """
+    target = target_base_url.rstrip("/")
+
+    class NoThinkProxyHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"  # close per request — same shape as the sidecar
+
+        def log_message(self, fmt, *args):  # stderr, one line — the spawner surfaces it
+            import sys
+
+            sys.stderr.write("[mem0-no-think-proxy] %s\n" % (fmt % args))
+            sys.stderr.flush()
+
+        def _reply(self, status, payload, content_type):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type or "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _forward(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length > 0 else None
+            if body:
+                try:
+                    parsed = json.loads(body.decode("utf8"))
+                    if isinstance(parsed, dict):
+                        existing = parsed.get("chat_template_kwargs")
+                        parsed["chat_template_kwargs"] = {
+                            **(existing if isinstance(existing, dict) else {}),
+                            "enable_thinking": False,
+                        }
+                        body = json.dumps(parsed).encode("utf8")
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass  # non-JSON body: forwarded untouched
+
+            path = self.path
+            if target.endswith("/v1") and path.startswith("/v1/"):
+                path = path[len("/v1"):]
+            url = target + path
+
+            headers = {k: v for k, v in self.headers.items() if k.lower() in _PROXY_FORWARD_HEADERS}
+            req = urllib.request.Request(url, data=body, headers=headers, method=self.command)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout_s) as res:
+                    self._reply(res.status, res.read(), res.headers.get("Content-Type"))
+            except urllib.error.HTTPError as e:
+                self._reply(e.code, e.read(), e.headers.get("Content-Type"))
+            except Exception as e:  # loud 502 — never a hang, never a silent drop
+                self._reply(
+                    502,
+                    json.dumps({"ok": False, "error": f"no-think proxy forward failed: {e}"}).encode("utf8"),
+                    "application/json",
+                )
+
+        do_POST = _forward
+        do_GET = _forward
+        do_DELETE = _forward
+        do_PUT = _forward
+
+    return NoThinkProxyHandler
+
+
+def start_no_think_proxy(target_base_url, host="127.0.0.1", port=0):
+    """Bind the proxy on loopback, serve it on a daemon thread.
+
+    Returns (server, thread, base_url) where base_url is what mem0's llm
+    config should point at (`http://127.0.0.1:<port>/v1`).
+    """
+    server = ThreadingHTTPServer((host, port), make_no_think_proxy_handler(target_base_url))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://{host}:{server.server_address[1]}/v1"
+    return server, thread, base_url
 
 
 def default_memory_factory(config):
@@ -143,12 +269,33 @@ def default_memory_factory(config):
 class SidecarState:
     """Env + the lazily-created Mem0 client. One per process."""
 
-    def __init__(self, env=None, memory_factory=default_memory_factory):
+    def __init__(self, env=None, memory_factory=default_memory_factory, proxy_starter=start_no_think_proxy):
         self.env = env if env is not None else os.environ
         self._factory = memory_factory
         self._memory = None
         self._lock = threading.Lock()
         self.config, self.facts = config_from_env(self.env)
+        self.infer_default = self.facts["ingestion_infer"]
+        self._proxy_server = None
+        if self.facts["extraction_thinking"] == "off":
+            # mem0 cannot carry chat_template_kwargs itself — stand up the
+            # in-process proxy and point the llm config at it
+            target = self.env["MEM0_LLM_BASE_URL"]
+            self._proxy_server, self._proxy_thread, proxy_url = proxy_starter(target)
+            self.config["llm"]["config"]["openai_base_url"] = proxy_url
+            self.facts["llm"] = {
+                **self.facts["llm"],
+                "base_url_host": urlparse(proxy_url).netloc,
+                "no_think_proxy_for": urlparse(target).netloc,
+            }
+            self.facts["no_think_proxy"] = {"base_url": proxy_url, "target_base_url": target}
+
+    def close_proxy(self):
+        """Test teardown: stop the forwarding proxy, if one is running."""
+        if self._proxy_server is not None:
+            self._proxy_server.shutdown()
+            self._proxy_server.server_close()
+            self._proxy_server = None
 
     @property
     def memory(self):
@@ -231,7 +378,12 @@ def make_handler(state, inflight=None):
             for m in messages:
                 if not isinstance(m, dict) or not m.get("role") or not isinstance(m.get("content"), str):
                     raise BadRequest("each message needs {role, content}")
-            result = state.memory.add(messages, user_id=user_id, metadata=body.get("metadata"), infer=True)
+            # infer: raw (False) vs LLM-extraction (True) ingestion — the arms
+            # always pass it; MEM0_INFER is the default for callers that don't
+            infer = body.get("infer", state.infer_default)
+            if not isinstance(infer, bool):
+                raise BadRequest("infer (bool) — raw vs extraction ingestion; true|false, not a string")
+            result = state.memory.add(messages, user_id=user_id, metadata=body.get("metadata"), infer=infer)
             results = result.get("results", []) if isinstance(result, dict) else []
             return {"ok": True, "results": results, "count": len(results)}
 

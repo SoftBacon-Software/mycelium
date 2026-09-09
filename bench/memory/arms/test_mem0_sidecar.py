@@ -18,7 +18,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -336,6 +336,175 @@ class TwoStageStopProtocolTest(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=10)
+
+
+class IngestionInferTest(unittest.TestCase):
+    """MEM0_INFER + the per-request `infer` override — the task-182 raw control."""
+
+    def _state(self, extra=None):
+        env = dict(TEST_ENV)
+        env.update(extra or {})
+        fake = FakeMemory()
+        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake)
+        return state, fake
+
+    def _serve(self, state):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), mem0_sidecar.make_handler(state))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def test_default_ingestion_is_extraction_and_health_stamps_it(self):
+        state, fake = self._state()
+        self.assertTrue(state.infer_default)
+        self.assertTrue(self._serve(state))
+        self.assertEqual(state.facts["ingestion_infer"], True)
+        self.assertEqual(state.facts["extraction_thinking"], "on")
+
+    def test_mem0_infer_off_defaults_adds_to_raw_and_health_stamps_it(self):
+        state, fake = self._state({"MEM0_INFER": "off"})
+        base = self._serve(state)
+        self.assertEqual(state.facts["ingestion_infer"], False)
+        status, body = post(f"{base}/add", {"user_id": "u", "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(status, 200)
+        self.assertFalse(fake.adds[0]["infer"])  # raw: no extraction LLM
+
+    def test_request_level_infer_wins_over_the_env_default(self):
+        state, fake = self._state({"MEM0_INFER": "off"})
+        base = self._serve(state)
+        status, _ = post(
+            f"{base}/add",
+            {"user_id": "u", "messages": [{"role": "user", "content": "x"}], "infer": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(fake.adds[0]["infer"])
+
+    def test_non_bool_infer_is_a_loud_400(self):
+        state, fake = self._state()
+        base = self._serve(state)
+        status, body = post(f"{base}/add", {"user_id": "u", "messages": [{"role": "user", "content": "x"}], "infer": "off"})
+        self.assertEqual(status, 400)
+        self.assertIn("infer", body["error"])
+        self.assertEqual(fake.adds, [])
+
+    def test_invalid_mem0_infer_value_is_a_startup_error(self):
+        with self.assertRaises(ValueError):
+            self._state({"MEM0_INFER": "maybe"})
+
+
+class NoThinkProxyTest(unittest.TestCase):
+    """MEM0_NO_THINK=1: the in-process forwarding proxy (task 182, addendum 6)."""
+
+    def _state(self, extra=None):
+        env = dict(TEST_ENV)
+        env.update(extra or {})
+        fake = FakeMemory()
+        state = mem0_sidecar.SidecarState(env=env, memory_factory=lambda cfg: fake)
+        self.addCleanup(state.close_proxy)
+        return state, fake
+
+    def _serve(self, state):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), mem0_sidecar.make_handler(state))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def test_health_reports_thinking_off_and_the_proxy_facts(self):
+        state, _ = self._state({"MEM0_NO_THINK": "1"})
+        base = self._serve(state)
+        status, health = get(f"{base}/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(health["extraction_thinking"], "off")
+        self.assertEqual(health["llm"]["no_think_proxy_for"], "llm-host.local:11434")
+        self.assertEqual(health["llm"]["base_url_host"].startswith("127.0.0.1:"), True)
+        self.assertEqual(health["no_think_proxy"]["base_url"].startswith("http://127.0.0.1:"), True)
+        self.assertEqual(health["no_think_proxy"]["target_base_url"], TEST_ENV["MEM0_LLM_BASE_URL"])
+        # mem0 itself is pointed at the proxy, never at the raw target
+        self.assertTrue(state.config["llm"]["config"]["openai_base_url"].startswith("http://127.0.0.1:"))
+
+    def test_thinking_on_by_default_has_no_proxy(self):
+        state, _ = self._state()
+        self.assertIsNone(state._proxy_server)
+        self.assertNotIn("no_think_proxy", state.facts)
+
+
+class NoThinkProxyForwardTest(unittest.TestCase):
+    """The proxy rewrites the body, forwards the headers, round-trips the reply."""
+
+    def setUp(self):
+        self.seen = []
+
+        target = self
+
+        class FakeTarget(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                target.seen.append(
+                    {
+                        "path": self.path,
+                        "auth": self.headers.get("Authorization"),
+                        "content_type": self.headers.get("Content-Type"),
+                        "body": json.loads(self.rfile.read(length).decode("utf8")) if length else None,
+                    }
+                )
+                body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                pass
+
+        self.target = ThreadingHTTPServer(("127.0.0.1", 0), FakeTarget)
+        threading.Thread(target=self.target.serve_forever, daemon=True).start()
+        target_url = f"http://127.0.0.1:{self.target.server_address[1]}/v1"
+        self.proxy_server, _, self.proxy_url = mem0_sidecar.start_no_think_proxy(target_url)
+        self.addCleanup(self.target.shutdown)
+        self.addCleanup(self.target.server_close)
+        self.addCleanup(self.proxy_server.shutdown)
+        self.addCleanup(self.proxy_server.server_close)
+
+    def _proxy_post(self, path, payload):
+        data = json.dumps(payload).encode("utf8")
+        req = urllib.request.Request(
+            f"{self.proxy_url}{path}",
+            data=data,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer unused"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.status, json.loads(res.read().decode("utf8"))
+
+    def test_injects_enable_thinking_false_and_forwards_headers_and_path(self):
+        status, body = self._proxy_post(
+            "/chat/completions",
+            {"model": "qwen3.8:27b", "messages": [{"role": "user", "content": "hi"}], "temperature": 0},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["choices"][0]["message"]["content"], "ok")  # the reply round-trips
+        self.assertEqual(len(self.seen), 1)
+        seen = self.seen[0]
+        # base_url http://.../v1 + /chat/completions — no doubled /v1
+        self.assertEqual(seen["path"], "/v1/chat/completions")
+        self.assertEqual(seen["auth"], "Bearer unused")  # headers forwarded
+        self.assertEqual(seen["body"]["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(seen["body"]["model"], "qwen3.8:27b")  # everything else untouched
+
+    def test_existing_chat_template_kwargs_merge_with_thinking_off_winning(self):
+        self._proxy_post(
+            "/chat/completions",
+            {"messages": [], "chat_template_kwargs": {"max_new_tokens": 5}},
+        )
+        self.assertEqual(
+            self.seen[0]["body"]["chat_template_kwargs"],
+            {"max_new_tokens": 5, "enable_thinking": False},
+        )
 
 
 if __name__ == "__main__":

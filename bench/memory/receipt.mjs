@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { renderIngestionGrid } from './ingestion.mjs';
+
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
 export function renderReceipt({
@@ -40,6 +42,16 @@ export function renderReceipt({
   for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a]));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
+  // task 182: the ingestion-control 2×2 renders only when ALL FOUR grid arms
+  // are in the run — a smoke carrying just the controls has no grid.
+  const grid = renderIngestionGrid(summary.arms, writeInfo ?? summary.write_info ?? null);
+  if (grid) {
+    L.push('');
+    L.push('## Ingestion controls ({Mycelium, Mem0} × {raw, extract})');
+    L.push('');
+    for (const line of grid) L.push(line);
+    L.push('');
+  }
   if (rejudge && summary.original?.arms) {
     L.push('');
     L.push(`Original run \`${rejudge.ofRunId}\` scores (pre-rejudge, from the run's own summary):`);

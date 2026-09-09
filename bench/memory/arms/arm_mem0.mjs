@@ -374,6 +374,13 @@ export async function startMem0Sidecar({
       MEM0_EMBEDDER_DIMS: String(resolved.embedderDims),
       MEM0_STORE_PATH: storePath,
       MEM0_SIDECAR_PORT: '0',
+      // task 182 addendum 6: extraction THINKING OFF by default — mem0's own
+      // prompts can't carry chat_template_kwargs, so the sidecar starts an
+      // in-process forwarding proxy that injects {"enable_thinking": false}
+      // into every /v1/chat/completions body. /health stamps
+      // extraction_thinking=off and the proxy facts. Escape hatch:
+      // MEM0_NO_THINK=0 restores the as-shipped thinking-on behaviour.
+      MEM0_NO_THINK: env.MEM0_NO_THINK ?? '1',
     },
     log,
     ...managerOpts,
@@ -405,6 +412,11 @@ export function createArmMem0({
   resumeDir = null, // results dir — per-question checkpoint of how many sessions are in the store
   restartSidecar = null, // async () => fresh {request} against the SAME store (sidecar died mid-run)
   maxRestarts = 5,
+  // task 182 control-arm options — the raw-ingestion arm (arm_mem0_raw) pins
+  // these; the extract arm keeps the defaults below.
+  name = 'mem0', // row/receipt identity; also names the resume checkpoint file
+  infer = true, // false = Memory.add(messages, infer=False): raw turns, no extraction LLM
+  scope: scopeOverride = null, // default mem0Scope(runId); the raw arm scopes -raw so two mem0-family arms in one run never share rows
 }) {
   sidecar = sidecar ?? mem0?.sidecar ?? null;
   mem0Version = mem0Version ?? mem0?.mem0Version ?? null;
@@ -417,7 +429,7 @@ export function createArmMem0({
   if (!sidecar || typeof sidecar.request !== 'function') {
     throw new Error('arm_mem0 requires a started sidecar — startMem0Sidecar() / run.mjs provides it');
   }
-  const scope = mem0Scope(runId);
+  const scope = scopeOverride ?? mem0Scope(runId);
 
   // The sidecar is long-lived (a 50-item write phase is ~20 h of adds), so it
   // can die mid-run to something outside this process. A request that died
@@ -450,8 +462,11 @@ export function createArmMem0({
   };
 
   // session-granularity checkpoint: a session is recorded only after its /add
-  // returned 200, so resuming at `sessions_done` never re-adds a committed one
-  const cpFile = (qid) => path.join(resumeDir, `mem0-sessions-${String(qid).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+  // returned 200, so resuming at `sessions_done` never re-adds a committed one.
+  // Named per arm (name='mem0' keeps the historical filename) — two mem0-family
+  // arms in one run share the resume dir and must not read each other's
+  // checkpoints (the raw arm would skip sessions the extract arm committed).
+  const cpFile = (qid) => path.join(resumeDir, `${name}-sessions-${String(qid).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
   const readCp = (qid) => {
     try { return JSON.parse(fs.readFileSync(cpFile(qid), 'utf8')).sessions_done ?? 0; } catch { return 0; }
   };
@@ -461,7 +476,7 @@ export function createArmMem0({
   };
 
   return {
-    name: 'mem0',
+    name,
     scope,
     async write(sessionTurns, { questionId } = {}) {
       if (!Array.isArray(sessionTurns)) throw new Error('arm_mem0.write expects haystack_sessions (array of sessions)');
@@ -475,7 +490,9 @@ export function createArmMem0({
           }
           return { role: t.role, content: t.content };
         });
-        // one POST per session — Mem0's add() runs its own fact extraction.
+        // one POST per session — with infer=true Mem0's add() runs its own fact
+        // extraction; with infer=false (the raw control arm) each non-system
+        // message is stored verbatim and NO LLM is called.
         // Log each one's size + duration: over a multi-hour write phase this is
         // the throughput trace that shows whether an add is stalled or slow.
         const t0 = Date.now();
@@ -483,12 +500,19 @@ export function createArmMem0({
         const r = await call('/add', {
           user_id: scope,
           messages: turns,
+          infer, // explicit: the arm's ingestion policy, never the sidecar default by accident
           // NOT `run_id` — mem0 2.0.20 reserves that key and silently drops it
           // ("identity fields cannot be set through metadata")
-          metadata: { question_id: questionId, session_index: idx, bench: 'longmemeval', bench_run_id: runId },
+          metadata: {
+            question_id: questionId,
+            session_index: idx,
+            bench: 'longmemeval',
+            bench_run_id: runId,
+            ingestion: infer ? 'extract' : 'raw',
+          },
         });
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
-        log(`add ${idx + 1}/${sessionTurns.length} (${kb} KB, ${r.count ?? 0} facts) in ${secs}s — q=${questionId}`);
+        log(`add ${idx + 1}/${sessionTurns.length} (${kb} KB, ${r.count ?? 0} ${infer ? 'facts' : 'raw memories'}) in ${secs}s — q=${questionId}`);
         rows += r.count ?? 0;
         if (resumeDir) writeCp(questionId, idx + 1);
       }
@@ -507,6 +531,7 @@ export function createArmMem0({
         meta: {
           hits: memories.length,
           retrieval_mode: 'mem0-oss-local-vector',
+          ingestion: infer ? 'extract' : 'raw',
           mem0_version: mem0Version,
           had_think: !!r.hadThink,
         },
