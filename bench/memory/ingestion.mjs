@@ -68,6 +68,17 @@ export function factsStatLine(writeInfo) {
   return `${total} facts over ${counts.length} sessions — mean ${mean.toFixed(2)}, min ${Math.min(...counts)}, max ${Math.max(...counts)}`;
 }
 
+// Ingestion LOSS: sessions the arm's extractor dropped because its reply could
+// not be parsed. mem0 skips such a session and only logs it (the sidecar counts
+// the log records); mycelium-extract counts its own. Null when the arm does not
+// report the number (raw arms have no extractor); "0 of N" is a real zero.
+export function dropStatLine(writeInfo) {
+  if (typeof writeInfo?.parse_failures !== 'number') return null;
+  const docs = typeof writeInfo.docs === 'number' ? writeInfo.docs : null;
+  const pct = docs ? ` (${((100 * writeInfo.parse_failures) / docs).toFixed(1)}%)` : '';
+  return `${writeInfo.parse_failures}${docs ? ` of ${docs}` : ''} sessions dropped by the extractor (reply unparseable)${pct}`;
+}
+
 // The 2×2 table, rendered ONLY when all four grid arms are present (a smoke
 // that runs just the controls has no grid to render). Cells carry the p1_score
 // with its raw exact/partial/wrong counts — counts stay the primary record.

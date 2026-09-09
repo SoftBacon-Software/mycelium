@@ -42,6 +42,26 @@ function fakeSidecar({ searchResults = [], addCount = 1 } = {}) {
 }
 
 describe('arm_mem0 — the Mem0 OSS competitor arm', () => {
+  it('write(): a session mem0 dropped (extraction parse failure) is counted from the sidecar flag and logged', async () => {
+    let n = 0;
+    const logs = [];
+    const sidecar = {
+      calls: { add: [] },
+      async request(pathname, body) {
+        if (pathname !== '/add') throw new Error(`no route ${pathname}`);
+        n++;
+        return n === 2
+          ? { ok: true, results: [], count: 0, extraction_parse_failed: true, extraction_parse_failures_total: 1 }
+          : { ok: true, results: [], count: 2, extraction_parse_failed: false, extraction_parse_failures_total: 0 };
+      },
+      async stop() {},
+    };
+    const arm = createArmMem0({ answerChat: async () => ({ text: 'x' }), runId: 'r', retrievalBudget: 5, sidecar, log: (m) => logs.push(m) });
+    const w = await arm.write(SESSIONS, { questionId: 'q-1' });
+    expect(w).toEqual({ docs: 2, rows: 2, parse_failures: 1 });
+    expect(logs.find((l) => /DROPPED by mem0/.test(l))).toMatch(/add 2\/2.*1 total/);
+  });
+
   it('write(): one POST per haystack session, scoped to the run, metadata carrying the question', async () => {
     const sidecar = fakeSidecar({ addCount: 3 });
     const arm = createArmMem0({
@@ -51,7 +71,7 @@ describe('arm_mem0 — the Mem0 OSS competitor arm', () => {
       sidecar,
     });
     const w = await arm.write(SESSIONS, { questionId: 'q-9' });
-    expect(w).toEqual({ docs: 2, rows: 6 }); // docs = sessions, rows = memories extracted
+    expect(w).toEqual({ docs: 2, rows: 6, parse_failures: 0 }); // docs = sessions, rows = memories extracted
     expect(sidecar.calls.add).toHaveLength(2); // ONE POST per session
     expect(sidecar.calls.add[0].user_id).toBe('bench-p1-test-run');
     // NOT run_id — mem0 2.0.20 silently drops that reserved key from metadata

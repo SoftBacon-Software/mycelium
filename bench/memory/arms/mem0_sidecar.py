@@ -55,6 +55,7 @@ fake Mem0 client — no network beyond 127.0.0.1, no model calls.
 """
 
 import json
+import logging
 import os
 import threading
 import time
@@ -316,6 +317,45 @@ def default_memory_factory(config):
     return Memory.from_config(config)
 
 
+class ExtractionFailureCounter(logging.Handler):
+    """Counts mem0's "Error parsing extraction response" log records.
+
+    mem0 (2.0.20 mem0/memory/main.py:983) logs the failure and SKIPS the
+    session — the arm's /add returns ok with zero facts and nothing says a
+    session was lost. The receipt must report ingestion loss per arm the same
+    way on both sides of the 2×2 (the mycelium-extract arm counts its own
+    drops), so the sidecar counts these and exposes the total on /health and
+    on every /add reply.
+    """
+
+    MATCH = "Error parsing extraction response"
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.count = 0
+        self._lock = threading.Lock()
+
+    def emit(self, record):
+        try:
+            msg = record.getMessage()
+        except Exception:  # noqa: BLE001 — a bad record must not break counting
+            return
+        if self.MATCH in msg:
+            with self._lock:
+                self.count += 1
+
+
+def install_extraction_failure_counter(logger_name="mem0"):
+    """Attach ONE counter to mem0's logger tree (idempotent); returns it."""
+    lg = logging.getLogger(logger_name)
+    for h in lg.handlers:
+        if isinstance(h, ExtractionFailureCounter):
+            return h
+    h = ExtractionFailureCounter()
+    lg.addHandler(h)
+    return h
+
+
 class SidecarState:
     """Env + the lazily-created Mem0 client. One per process."""
 
@@ -333,6 +373,7 @@ class SidecarState:
         self._lock = threading.Lock()
         self.config, self.facts = config_from_env(self.env)
         self.infer_default = self.facts["ingestion_infer"]
+        self.parse_failures = install_extraction_failure_counter()
         self.client_bounds = {"timeout_s": self.facts["llm"]["timeout_s"], "max_retries": self.facts["llm"]["max_retries"]}
         self._proxy_server = None
         if self.facts["extraction_thinking"] == "off":
@@ -407,7 +448,8 @@ def make_handler(state, inflight=None):
 
         def do_GET(self):
             if self.path == "/health":
-                self._send(200, {"ok": True, "pid": os.getpid(), **state.facts})
+                self._send(200, {"ok": True, "pid": os.getpid(), **state.facts,
+                                 "extraction_parse_failures": state.parse_failures.count})
                 return
             self._fail(404, f"no such route: {self.path}")
 
@@ -442,9 +484,13 @@ def make_handler(state, inflight=None):
             infer = body.get("infer", state.infer_default)
             if not isinstance(infer, bool):
                 raise BadRequest("infer (bool) — raw vs extraction ingestion; true|false, not a string")
+            before = state.parse_failures.count
             result = state.memory.add(messages, user_id=user_id, metadata=body.get("metadata"), infer=infer)
             results = result.get("results", []) if isinstance(result, dict) else []
-            return {"ok": True, "results": results, "count": len(results)}
+            failed_here = state.parse_failures.count - before
+            return {"ok": True, "results": results, "count": len(results),
+                    "extraction_parse_failed": failed_here > 0,
+                    "extraction_parse_failures_total": state.parse_failures.count}
 
         def _search(self, body):
             user_id = body.get("user_id")

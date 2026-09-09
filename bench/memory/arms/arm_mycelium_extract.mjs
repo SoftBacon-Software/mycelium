@@ -146,18 +146,37 @@ export function createArmMyceliumExtract({
       if (!Array.isArray(sessionTurns)) throw new Error('arm_mycelium_extract.write expects haystack_sessions (array of sessions)');
       const items = [];
       const factsPerSession = [];
+      const parseFailures = [];
       let extractMs = 0;
       for (let idx = 0; idx < sessionTurns.length; idx++) {
         const turns = sessionTurns[idx];
         const t0 = Date.now();
         const reply = await extractionChat({ system: EXTRACTION_SYSTEM, user: buildExtractionUserPrompt(turns) });
-        const facts = parseFactsJson(reply.text);
+        // A malformed extractor reply is a DROPPED SESSION, counted and logged —
+        // not a dead run. Mem0's extractor does the same ("Error parsing
+        // extraction response", the session is skipped); the per-arm drop rate
+        // is an ingestion-loss number the receipt reports, and it must be
+        // measured the same way on both sides of the 2×2. Run B2 (2026-09-09)
+        // died at question 10 of 50 on one truncated reply.
+        let facts;
+        try {
+          facts = parseFactsJson(reply.text);
+        } catch (e) {
+          parseFailures.push({ session_index: idx, finish_reason: reply.finishReason ?? null, reason: String(e.message).slice(0, 160) });
+          facts = [];
+          log(
+            `extract ${idx + 1}/${sessionTurns.length}: PARSE FAILURE — session dropped (finish_reason=${reply.finishReason ?? 'n/a'}, ` +
+              `content_chars=${String(reply.raw ?? reply.text ?? '').length}): ${String(e.message).slice(0, 120)} — q=${questionId}`
+          );
+        }
         extractMs += Date.now() - t0;
         factsPerSession.push(facts.length);
-        log(
-          `extract ${idx + 1}/${sessionTurns.length}: ${facts.length} facts in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
-            `(thinking off) — q=${questionId}`
-        );
+        if (!parseFailures.length || parseFailures[parseFailures.length - 1].session_index !== idx) {
+          log(
+            `extract ${idx + 1}/${sessionTurns.length}: ${facts.length} facts in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
+              `(thinking off) — q=${questionId}`
+          );
+        }
         for (let f = 0; f < facts.length; f++) {
           items.push({
             source_type: sourceType,
@@ -183,6 +202,9 @@ export function createArmMyceliumExtract({
         facts: items.length,
         facts_per_session: factsPerSession,
         extract_ms: extractMs,
+        // sessions whose extractor reply could not be parsed: dropped, counted
+        parse_failures: parseFailures.length,
+        parse_failure_detail: parseFailures,
       };
     },
     async answer(question) {

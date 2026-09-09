@@ -76,6 +76,8 @@ describe('arm_mycelium_extract — the extraction control arm (task 182)', () =>
       rows: 3,
       facts: 3,
       facts_per_session: [2, 1],
+      parse_failures: 0,
+      parse_failure_detail: [],
       extract_ms: expect.any(Number),
     });
     // one indexed item per fact, in the EXTRACT namespace
@@ -107,6 +109,32 @@ describe('arm_mycelium_extract — the extraction control arm (task 182)', () =>
     expect(w.facts).toBe(0);
     expect(w.facts_per_session).toEqual([0]);
     expect(platform.calls.bulk).toHaveLength(0);
+  });
+
+  it('write(): a malformed extractor reply is a DROPPED session — counted, logged, never a dead run', async () => {
+    const replies = [
+      { text: '{"facts": ["a", "b"]}', finishReason: 'stop' },
+      { text: '{"facts": ["truncated', finishReason: 'length', raw: '{"facts": ["truncated' },
+      { text: '{"facts": ["c"]}', finishReason: 'stop' },
+    ];
+    const bulk = [];
+    const logs = [];
+    const arm = createArmMyceliumExtract({
+      platform: { indexBulk: async (items) => { bulk.push(...items); return [{ rows: items.length }]; }, search: async () => ({ results: [] }) },
+      extractionChat: async () => replies.shift(),
+      answerChat: async () => ({ text: 'x' }),
+      runId: 'r1',
+      namespace: 'bench-p1-r1',
+      retrievalBudget: 5,
+      log: (m) => logs.push(m),
+    });
+    const w = await arm.write([[{ role: 'user', content: 's1' }], [{ role: 'user', content: 's2' }], [{ role: 'user', content: 's3' }]], { questionId: 'q1' });
+    expect(w.facts_per_session).toEqual([2, 0, 1]);
+    expect(w.parse_failures).toBe(1);
+    expect(w.parse_failure_detail[0]).toMatchObject({ session_index: 1, finish_reason: 'length' });
+    expect(w.facts).toBe(3);
+    expect(bulk.map((i) => i.source_id)).toEqual(['r1-q1-s0-f0', 'r1-q1-s0-f1', 'r1-q1-s2-f0']);
+    expect(logs.find((l) => /PARSE FAILURE/.test(l))).toMatch(/session dropped.*finish_reason=length/);
   });
 
   it('write(): rejects a non-array payload loudly (same contract as arm_mycelium)', async () => {

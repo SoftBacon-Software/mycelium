@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { renderIngestionGrid, factsStatLine, GRID_ROWS } from './ingestion.mjs';
+import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
@@ -327,6 +327,8 @@ export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
     const perAdd = secondsPerAdd(w);
     const bits = [`- ${arm} (${owner?.runId ?? '?'}): docs ${w.docs ?? 'n/a'}, rows ${w.rows ?? 'n/a'}.`];
     if (facts) bits.push(`Facts per session: ${facts}.`);
+    const dropped = dropStatLine(w);
+    if (dropped) bits.push(`Ingestion loss: ${dropped}.`);
     bits.push(
       perAdd !== null
         ? `Seconds per add (stamped extract_ms ${w.extract_ms} ms / ${w.docs} docs): ${perAdd} s/session.`

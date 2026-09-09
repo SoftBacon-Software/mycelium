@@ -481,6 +481,7 @@ export function createArmMem0({
     async write(sessionTurns, { questionId } = {}) {
       if (!Array.isArray(sessionTurns)) throw new Error('arm_mem0.write expects haystack_sessions (array of sessions)');
       let rows = 0;
+      let parseFailures = 0;
       const done = resumeDir ? readCp(questionId) : 0;
       if (done > 0) log(`resuming q=${questionId}: ${done}/${sessionTurns.length} sessions already in the store`);
       for (let idx = done; idx < sessionTurns.length; idx++) {
@@ -513,10 +514,18 @@ export function createArmMem0({
         });
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
         log(`add ${idx + 1}/${sessionTurns.length} (${kb} KB, ${r.count ?? 0} ${infer ? 'facts' : 'raw memories'}) in ${secs}s — q=${questionId}`);
+        // mem0 skips a session whose extraction reply it cannot parse and says
+        // so only in its log; the sidecar counts those and flags the add. The
+        // per-arm drop count is the ingestion-loss number the receipt reports —
+        // the mycelium-extract arm counts its own drops the same way.
+        if (r.extraction_parse_failed) {
+          parseFailures++;
+          log(`add ${idx + 1}/${sessionTurns.length}: mem0 could not parse its extraction reply — session DROPPED by mem0 (${r.extraction_parse_failures_total ?? '?'} total this sidecar) — q=${questionId}`);
+        }
         rows += r.count ?? 0;
         if (resumeDir) writeCp(questionId, idx + 1);
       }
-      return { docs: sessionTurns.length, rows };
+      return { docs: sessionTurns.length, rows, parse_failures: parseFailures };
     },
     async answer(question) {
       const s = await call('/search', { query: question, user_id: scope, limit: retrievalBudget });

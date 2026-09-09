@@ -5,6 +5,7 @@ import {
   assertNoExtractionThinkingMix,
   extractionThinkingByArm,
   factsStatLine,
+  dropStatLine,
   renderIngestionGrid,
 } from '../../bench/memory/ingestion.mjs';
 import { renderReceipt } from '../../bench/memory/receipt.mjs';
@@ -70,6 +71,14 @@ describe('the ingestion-control grid (task 182)', () => {
     expect(factsStatLine(null)).toBeNull();
     expect(factsStatLine({ facts: 5 })).toBeNull(); // total without a per-session list is not enough
     expect(factsStatLine({ facts_counts: [2, 4] })).toBe('6 facts over 2 sessions — mean 3.00, min 2, max 4');
+  });
+
+  it('dropStatLine: null when the arm reports no count, a real zero otherwise, percent of docs when known', () => {
+    expect(dropStatLine(null)).toBeNull();
+    expect(dropStatLine({ docs: 5 })).toBeNull(); // raw arms have no extractor
+    expect(dropStatLine({ docs: 200, parse_failures: 0 })).toBe('0 of 200 sessions dropped by the extractor (reply unparseable) (0.0%)');
+    expect(dropStatLine({ docs: 160, parse_failures: 1 })).toBe('1 of 160 sessions dropped by the extractor (reply unparseable) (0.6%)');
+    expect(dropStatLine({ parse_failures: 2 })).toBe('2 sessions dropped by the extractor (reply unparseable)');
   });
 
   it('the receipt carries the grid section when the run has all four arms', () => {

@@ -56,6 +56,9 @@ export async function runBench({
             writeInfo.facts_counts = [...(writeInfo.facts_counts ?? []), ...(w.facts_per_session ?? [])];
           }
           if (typeof w.extract_ms === 'number') writeInfo.extract_ms = (writeInfo.extract_ms ?? 0) + w.extract_ms;
+          // sessions the arm's extractor DROPPED (unparseable reply) — ingestion
+          // loss, counted the same way by mem0 (sidecar flag) and mycelium-extract
+          if (typeof w.parse_failures === 'number') writeInfo.parse_failures = (writeInfo.parse_failures ?? 0) + w.parse_failures;
         }
       }
     }

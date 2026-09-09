@@ -133,7 +133,7 @@ function writeMatchingPair({ regimeA = {}, regimeB = {}, cleanupA = null, cleanu
   const dirA = writeFixtureRun('run-a', {
     runId: 'run-a',
     arms: { mem0: armEntry(2, 1, 0, 1), 'mem0-raw': armEntry(2, 1, 1, 0) },
-    writeInfo: { mem0: { docs: 5, rows: 21 }, 'mem0-raw': { docs: 5, rows: 41 } },
+    writeInfo: { mem0: { docs: 5, rows: 21, parse_failures: 1 }, 'mem0-raw': { docs: 5, rows: 41 } },
     questionIds: ['q1', 'q2'],
     regime: regimeA,
     cleanup: cleanupA,
@@ -216,8 +216,10 @@ describe('composeGrid: a comparable pair composes the grid receipt', () => {
     // mycelium-extract stamps extract_ms + docs → s/session is their quotient
     expect(md).toContain('Seconds per add (stamped extract_ms 80000 ms / 4 docs): 20.00 s/session.');
     // mem0 logs per-add timing but does not stamp it — absence stays honest
-    expect(md).toContain('mem0 (run-a): docs 5, rows 21. Seconds per add: not stamped.');
+    expect(md).toContain('mem0 (run-a): docs 5, rows 21. Ingestion loss: 1 of 5 sessions dropped by the extractor (reply unparseable) (20.0%). Seconds per add: not stamped.');
     expect(md).toContain('mem0-raw (run-a): docs 5, rows 41.');
+    // ingestion loss: mem0 stamps the sessions its extractor dropped; the raw arm has no extractor
+    expect(md).not.toContain('mem0-raw (run-a): docs 5, rows 41. Ingestion loss');
   });
 
   it('the comparability table names every checked key with the shared value', () => {

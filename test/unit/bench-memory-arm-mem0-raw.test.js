@@ -49,7 +49,7 @@ describe('arm_mem0_raw — the raw-ingestion control arm (task 182)', () => {
       expect(body.metadata.ingestion).toBe('raw');
     }
     expect(sidecar.calls.add[0].messages[0]).toEqual({ role: 'user', content: 'I am moving to Lisbon in the spring.' });
-    expect(w).toEqual({ docs: 2, rows: 4 });
+    expect(w).toEqual({ docs: 2, rows: 4, parse_failures: 0 });
   });
 
   it('scope: suffixed -raw so two mem0-family arms in one run never see each other', async () => {

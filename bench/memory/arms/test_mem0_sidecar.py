@@ -11,6 +11,7 @@ Run (any python3 works; the module is stdlib-only):
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -267,6 +268,56 @@ def _stderr_line(proc, prefix, deadline_s=30):
         if text.startswith(prefix):
             return text
     raise AssertionError(f"sidecar stderr never produced a line starting with {prefix!r}")
+
+
+class ExtractionParseFailureCountTest(unittest.TestCase):
+    """mem0 skips a session whose extraction reply it cannot parse; the sidecar counts it."""
+
+    def setUp(self):
+        self.fake = FakeMemory()
+        self.state = mem0_sidecar.SidecarState(
+            env=dict(TEST_ENV), memory_factory=lambda cfg: self.fake, client_binder=lambda t, r: None
+        )
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), mem0_sidecar.make_handler(self.state))
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.state.parse_failures.count = 0
+
+    def _post(self, path, body):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+
+    def test_health_and_add_carry_the_count_and_the_per_add_flag(self):
+        with urllib.request.urlopen(self.base + "/health", timeout=10) as r:
+            self.assertEqual(json.load(r)["extraction_parse_failures"], 0)
+        ok = self._post("/add", {"user_id": "u", "messages": [{"role": "user", "content": "hi"}], "infer": True})
+        self.assertFalse(ok["extraction_parse_failed"])
+        self.assertEqual(ok["extraction_parse_failures_total"], 0)
+        # mem0 logs the failure from inside add(); simulate it exactly where it happens
+        lg = logging.getLogger("mem0.memory.main")
+        original_add = self.fake.add
+
+        def failing_add(*a, **kw):
+            lg.error("Error parsing extraction response: Expecting ',' delimiter: line 2 column 264 (char 276)")
+            return original_add(*a, **kw)
+
+        self.fake.add = failing_add
+        bad = self._post("/add", {"user_id": "u", "messages": [{"role": "user", "content": "hi"}], "infer": True})
+        self.assertTrue(bad["extraction_parse_failed"])
+        self.assertEqual(bad["extraction_parse_failures_total"], 1)
+        with urllib.request.urlopen(self.base + "/health", timeout=10) as r:
+            self.assertEqual(json.load(r)["extraction_parse_failures"], 1)
+
+    def test_counter_installs_once(self):
+        a = mem0_sidecar.install_extraction_failure_counter()
+        b = mem0_sidecar.install_extraction_failure_counter()
+        self.assertIs(a, b)
 
 
 class ClientBoundsTest(unittest.TestCase):
