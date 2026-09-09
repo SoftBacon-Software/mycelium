@@ -874,6 +874,26 @@ CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id);
 CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority);
 
+-- Per-route usage counters (2026-09-09): one row per METHOD + route PATTERN +
+-- UTC day, upserted by the counter middleware at the /api/mycelium seam.
+-- route_pattern is the Express route path (/tasks/:id) — never the raw URL —
+-- so :id values cannot explode cardinality. Requests that match NO route
+-- (404 fallthrough) record the single sentinel pattern '<unmatched>'.
+-- Read via GET /admin/route-usage (admin.js); this is the traffic instrument
+-- the plugin-removal audits read zero-write evidence from.
+CREATE TABLE IF NOT EXISTS route_usage (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  method          TEXT NOT NULL,
+  route_pattern   TEXT NOT NULL,
+  day             TEXT NOT NULL,                    -- UTC 'YYYY-MM-DD' bucket
+  count           INTEGER NOT NULL DEFAULT 0,
+  first_seen      TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen       TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(method, route_pattern, day)
+);
+CREATE INDEX IF NOT EXISTS idx_route_usage_pattern ON route_usage(route_pattern, method);
+CREATE INDEX IF NOT EXISTS idx_route_usage_day ON route_usage(day);
+
 -- =============== Plugin-owned tables ===============
 -- These tables are also declared by plugin schema.sql files (applied via
 -- server/plugins.js when a plugin loads), but are mirrored here so a fresh

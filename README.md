@@ -36,7 +36,7 @@ These are implemented and exercised by the running system, not a roadmap:
 
 ### Internal surfaces
 
-A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT).
+A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT). The public demo face — `GET /stats/public` (anonymized aggregate stats) and `GET /public/activity` (sanitized live activity feed), both no-auth — is mounted to feed the static site export; it is demo surface, not product (see [Surface levels](docs/surface-levels.md)).
 
 ### Maturity — read this before you rely on something
 
@@ -45,8 +45,20 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 - **Voice adapter** (`sdk/adapters/voice.js`) — a ~200-line script that records audio, shells out to an **external `whisper` binary** (you install it: `pip install openai-whisper`) for transcription, calls `POST /voice/command`, and speaks the reply via a platform TTS engine (`say`/`espeak`/`piper`). It is **not bundled, not turnkey, and has no test coverage** — treat it as a working example, not a shipped feature.
 - **Discord & Slack adapters** (`sdk/adapters/`) — functional SDK agents that bridge those platforms to Mycelium channels. Real, but bring your own bot tokens.
 - **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
-- **`appointments/` plugin** — staged foundation for an unbuilt "role-registry," **not loaded**. It has no `plugin.json`, so the loader skips it, `GET /plugins` doesn't list it, and it isn't counted among the built-in plugins. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
+- **`appointments/` plugin** — role-keyed model tenancy: maps each role (coder, verifier, planner, head, …) to the model/engine/host that serves it. Mounted as of 2026-09-09 — before that it was a staged, not-loaded foundation (no `plugin.json`, so the loader skipped it) while the squad dispatcher failed soft to its static map on every cycle. The squad's `role_keying` layer resolves per-role brains here; an empty table means every caller falls back to its own static map. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
 - **Organizations, agent templates, team settings, file server, operators, studio** — real endpoints, pinned by the route-manifest gate, but no dedicated behavioral tests yet. Treat them as plumbing-stable, not battle-tested.
+
+## Surface levels
+
+Mycelium has levels — how much of it you need depends on what you are running. The short version (the full table, including what a customer deployment needs vs what only the lab runs, is in [docs/surface-levels.md](docs/surface-levels.md)):
+
+- **L0 — core** — one assistant, one operator: agent record + savepoints, memory write/search, boot handshake, versioned context, operators + auth, health.
+- **L1 — persona** — persistence *with identity*: semantic + auto memory, persona/profile records, concepts, savepoint diff, recall on-ramps.
+- **L2 — substrate** — many agents on one network: messages/channels, tasks/plans/runs, approvals, events, drones, workflows, the plugin seam, the runner.
+- **L3 — lab** — research apparatus only the operating lab runs today: spend accounting, feedback, the marketing/social plugin, the public demo face.
+- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**).
+
+A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 and the demo surfaces are mounted but ignorable — nothing outside the lab needs them.
 
 ## Quick start
 
@@ -188,9 +200,9 @@ Internal/dev-only (no need to set when deploying): `MYCELIUM_WEBHOOK_ALLOW_LOOPB
 server/
   index.js              # Express app + WebSocket
   db.js                 # SQLite (better-sqlite3, WAL mode)
-  schema.sql            # full base schema (55 tables; plugins add their own)
-  routes/               # 285 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
-  plugins/              # plugin system (13 plugins + _template)
+  schema.sql            # full base schema (56 tables; plugins add their own)
+  routes/               # 284 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
+  plugins/              # plugin system (7 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
@@ -204,7 +216,7 @@ public/                 # pre-built static site (served at /)
 docker-compose.yml · Dockerfile
 ```
 
-**Stack:** Express.js, better-sqlite3 (WAL), plain Node. Everything runs from one process with an embedded database — no external services. The base schema has 55 tables (agents, tasks, plans, messages, channels, approvals, drones, concepts, versioned context, bugs, assets, plugins, operators, events, spend, widgets, skills, teams, profiles); plugins create more at boot.
+**Stack:** Express.js, better-sqlite3 (WAL), plain Node. Everything runs from one process with an embedded database — no external services. The base schema has 56 tables (agents, tasks, plans, messages, channels, approvals, drones, concepts, versioned context, bugs, assets, plugins, operators, events, spend, widgets, skills, teams, profiles); plugins create more at boot.
 
 An earlier React dashboard (`studio-react/`) was retired in June 2026; the operator UI is now a native macOS app ([`mycelium-app`](https://github.com/SoftBacon-Software/mycelium-app), separate repo, in development). References to `/studio` in old docs point to the retired one.
 
@@ -231,27 +243,22 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-106 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+108 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-13 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+8 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
 | `marketing` | build-in-public drafts, social posting, X delivery, outreach (`/bip`, `/social`, `/x`, `/outreach`) |
-| `cost-tracker` | spend tracking + budget alerts |
-| `daily-digest` | scheduled summary notifications |
-| `error-monitor` | error tracking + alerting |
-| `github-sync` | GitHub PR/issue sync |
 | `guardrails` | safety checks + policy enforcement |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
-| `a2a-gateway` | Google A2A protocol for external-agent interop |
-| `steam-assets` | Steam game-asset management |
-| `video-pipeline` | video processing workflows |
+| `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
 | `workflow-automations` | event-driven workflow triggers |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
+| `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
 
 Scaffold a new one from `server/plugins/_template/`. See `docs/plugin-guide.md`.
 

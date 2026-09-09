@@ -67,6 +67,12 @@ var agentWriteLimiter = rateLimit(function (req) { return 'agent_write:' + (req.
 var DATA_DIR = process.env.DATA_DIR || nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..', 'data');
 var FILES_DIR = nodePath.join(DATA_DIR, 'files');
 if (!fs.existsSync(FILES_DIR)) fs.mkdirSync(FILES_DIR, { recursive: true });
+// Files-SURFACE (temp, TTL-swept) uploads live in their own subdir so the
+// sweeper can never see asset files, which share FILES_DIR root (task 177:
+// the unscoped sweeper deleted every asset older than 24h — all 13 jetson
+// assets lost). Assets keep writing to FILES_DIR root; only /files is swept.
+var FILES_UPLOADS_DIR = nodePath.join(FILES_DIR, 'uploads');
+if (!fs.existsSync(FILES_UPLOADS_DIR)) fs.mkdirSync(FILES_UPLOADS_DIR, { recursive: true });
 
 // Allowed file extensions for uploads (block executables, scripts, HTML)
 var BLOCKED_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.sh', '.ps1', '.msi', '.dll', '.com', '.scr', '.pif', '.vbs', '.js', '.wsh', '.wsf', '.html', '.htm', '.xhtml', '.svg', '.php', '.jsp', '.asp', '.aspx', '.cgi']);
@@ -75,16 +81,22 @@ function sanitizeExtension(ext) {
   if (BLOCKED_EXTENSIONS.has(lower)) return '.blocked';
   return lower;
 }
+function uploadFilename(req, file, cb) {
+  var ext = sanitizeExtension(nodePath.extname(file.originalname));
+  var base = nodePath.basename(file.originalname, nodePath.extname(file.originalname)).replace(/[^a-zA-Z0-9_-]/g, '_');
+  var name = base + '_' + Date.now() + ext;
+  cb(null, name);
+}
 var storage = multer.diskStorage({
   destination: function (req, file, cb) { cb(null, FILES_DIR); },
-  filename: function (req, file, cb) {
-    var ext = sanitizeExtension(nodePath.extname(file.originalname));
-    var base = nodePath.basename(file.originalname, nodePath.extname(file.originalname)).replace(/[^a-zA-Z0-9_-]/g, '_');
-    var name = base + '_' + Date.now() + ext;
-    cb(null, name);
-  }
+  filename: uploadFilename
 });
 var upload = multer({ storage: storage, limits: { fileSize: 200 * 1024 * 1024 } });
+var uploadsStorage = multer.diskStorage({
+  destination: function (req, file, cb) { cb(null, FILES_UPLOADS_DIR); },
+  filename: uploadFilename
+});
+var uploadFiles = multer({ storage: uploadsStorage, limits: { fileSize: 200 * 1024 * 1024 } });
 
 // Drone artifacts directory — persistent files (LoRA weights, models, etc.) that don't expire
 var ARTIFACTS_DIR = nodePath.join(DATA_DIR, 'drone_artifacts');
@@ -132,7 +144,6 @@ import {
   createWebhook, listWebhooks, deleteWebhook, dispatchWebhook,
   listWebhookDeliveries, pruneWebhookDeliveries,
   getAdminOps, resolveStaleRequests,
-  createTeamChat, listTeamChat,
   createDroneJob, getDroneJob, claimDroneJob, updateDroneJob, listDroneJobs, listDrones, listAssetsByDroneJob, bulkCancelDroneJobs, releaseStaleClaimedJobs, pauseDrone, resumeDrone, getDroneStatus,
   createJobTemplate, getJobTemplate, listJobTemplates, updateJobTemplate, deleteJobTemplate,
   updateDroneDiagnostics, getDroneDiagnostics, renderJobForDrone, checkDroneCompatibility,
@@ -208,7 +219,7 @@ import { registerAgentRoutes } from './agents.js';
 import { registerInboxRoutes } from './inbox.js';
 import { registerProfileRoutes } from './profiles.js';
 import { registerGithubRoutes } from './github.js';
-import { registerFileRoutes } from './files.js';
+import { registerFileRoutes, sweepExpiredFiles } from './files.js';
 import { registerAgentTemplateRoutes } from './agent_templates.js';
 import { registerFileServerRoutes } from './file_server.js';
 import { registerTeamSettingsRoutes } from './team_settings.js';
@@ -1660,19 +1671,11 @@ registerConceptRoutes(router, {
 
 var FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Cleanup expired files every 10 minutes
+// Cleanup expired files-surface uploads every 10 minutes. Scoped to
+// FILES_UPLOADS_DIR (task 177) — never FILES_DIR root, which the assets
+// surface shares; see test/unit/files-ttl-sweeper-scope.test.js.
 setInterval(function () {
-  try {
-    var now = Date.now();
-    var files = fs.readdirSync(FILES_DIR);
-    for (var f of files) {
-      var fp = nodePath.join(FILES_DIR, f);
-      var stat = fs.statSync(fp);
-      if (now - stat.mtimeMs > FILE_TTL_MS) {
-        fs.unlinkSync(fp);
-      }
-    }
-  } catch (e) { /* cleanup is best-effort */ }
+  sweepExpiredFiles({ dir: FILES_UPLOADS_DIR, ttlMs: FILE_TTL_MS });
 }, 10 * 60 * 1000).unref();
 
 // Bug #137: Periodically auto-fail stale claimed drone jobs (every 15 minutes)
@@ -1700,8 +1703,8 @@ setInterval(function () {
 
 // =============== FILES (extracted to files.js) ===============
 registerFileRoutes(router, {
-  requireAuth, upload, asyncHandler, checkAgentOrAdmin, emitEvent,
-  FILES_DIR, FILE_TTL_MS,
+  requireAuth, uploadFiles, asyncHandler, checkAgentOrAdmin, emitEvent,
+  FILES_UPLOADS_DIR, FILE_TTL_MS,
 });
 
 // =============== BUGS (extracted to bugs.js) ===============
@@ -1730,31 +1733,6 @@ router.get('/reconciliation', asyncHandler(function (req, res) {
   }
   if (minutes === undefined || isNaN(minutes) || minutes < 1) minutes = 24 * 60;
   res.json(getReconciliationCandidates(minutes));
-}));
-
-// ======== TEAM CHAT (human-only) ========
-
-// GET /team-chat — list human chat messages
-router.get('/team-chat', asyncHandler(function (req, res) {
-  var user = getStudioUser(req);
-  if (!user) {
-    // Also allow admin key
-    var key = req.headers['x-admin-key'];
-    if (!isAdminKey(key)) return res.status(403).json({ error: 'Studio login required' });
-  }
-  var limit = parseLimit(req.query.limit, 50);
-  res.json(listTeamChat(limit));
-}));
-
-// POST /team-chat — send a chat message (studio users only)
-router.post('/team-chat', asyncHandler(function (req, res) {
-  var user = getStudioUser(req);
-  if (!user) return res.status(403).json({ error: 'Studio login required' });
-  var content = (req.body.content || '').trim();
-  if (!content) return res.status(400).json({ error: 'content is required' });
-  var sender = '__user:' + (user.displayName || user.username);
-  var id = createTeamChat(sender, escapeHtml(content));
-  res.json({ ok: true, id: id });
 }));
 
 registerChannelRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, escapeHtml, parseIntParam, parseLimit, validateEnum, emitEvent, getAdminDisplayName, CHANNEL_STATUSES });

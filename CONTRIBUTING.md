@@ -1,8 +1,8 @@
 # Contributing to Mycelium
 
 Thanks for being here. Mycelium is small enough that one good
-contributor makes a real difference, and big enough (~285 endpoints,
-13 plugins, SDK + MCP + runner) that there's plenty of
+contributor makes a real difference, and big enough (~284 endpoints,
+7 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
@@ -123,7 +123,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 106 files across `test/unit/`,
+There's a vitest suite under `test/` — 108 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
@@ -175,8 +175,8 @@ server/plugins/my-plugin/
   README.md         # what the plugin does
 ```
 
-See existing plugins (e.g. `server/plugins/cost-tracker/`,
-`server/plugins/video-pipeline/`) for reference patterns. The plugin
+See existing plugins (e.g. `server/plugins/semantic-memory/`,
+`server/plugins/workflows/`) for reference patterns. The plugin
 loader docs are in `server/plugins.js`.
 
 ## SDK contributions

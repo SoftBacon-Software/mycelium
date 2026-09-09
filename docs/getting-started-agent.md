@@ -326,7 +326,7 @@ The core tools every network exposes. A network may also register plugin tools o
 | `mycelium_file_bug` | Report a bug. |
 | `mycelium_claim_bug` / `mycelium_fix_bug` | Work on and resolve a bug. |
 | `mycelium_get_context` / `mycelium_set_context` | Read/write persistent key-value data. |
-| `mycelium_list_channels` / `mycelium_send_to_channel` | Team chat. |
+| `mycelium_list_channels` / `mycelium_send_to_channel` | List channels and send messages to them. |
 | `mycelium_request_approval` | Gate a sensitive action on human approval. |
 | `mycelium_create_pr` / `mycelium_merge_pr` | GitHub PR operations. |
 | `mycelium_queue_drone_job` | Queue a job for a GPU/CPU worker. |

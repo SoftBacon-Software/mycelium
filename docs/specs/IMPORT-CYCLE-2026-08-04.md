@@ -153,6 +153,10 @@ and `server/plugins.js:7`, plus three plugin consumers
 `server/plugins/video-pipeline/routes.js:3`). But fan-in is a star, not a loop:
 all those edges point **into** the barrel; none point back out to a consumer.
 
+> Historical note (September 2026): the `steam-assets` and `video-pipeline`
+> plugins named above were removed in the September 2026 prune; this analysis
+> is retained as of its 2026-08-04 date.
+
 ### 3d. Why the false positive
 
 A cycle requires a directed path that returns to its start. Here every path is

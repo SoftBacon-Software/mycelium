@@ -26,6 +26,7 @@ import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
 import { resolveTrustProxy } from './lib/trust-proxy.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
+import { routeUsageCounter } from './lib/route-usage.js';
 
 // isAdminKey (the timing-safe ADMIN_KEY comparator) is imported above from
 // ./routes/mycelium.js — the SOLE definition, already shared with the messages,
@@ -263,6 +264,11 @@ app.post('/a2a', function (req, res) {
 });
 
 // ---- API routes ----
+// Route-usage counter sits BEFORE the routes router on the same mount so it
+// sees every /api/mycelium request; it records the matched route pattern at
+// response-finish (see server/lib/route-usage.js). Read via
+// GET /api/mycelium/admin/route-usage.
+app.use('/api/mycelium', routeUsageCounter);
 app.use('/api/mycelium', myceliumRoutes);
 
 // ---- Voice REST endpoints ----

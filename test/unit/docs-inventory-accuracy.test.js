@@ -182,7 +182,9 @@ describe('docs inventory accuracy', () => {
     // the doc is lying again. Sourced from the 2026-08-06 reconciliation.
     const stale = [
       [/291/, `the endpoint count is ${ROUTE_COUNT}, not 291`],
-      [/56\s+tables/i, `the table count is ${TABLE_COUNT}, not 56 — that number already counted a schema.sql comment line`],
+      // (The historical "not 56 tables" ban was removed 2026-09-09: route_usage made 56 the
+      // REAL table count, so mustContain above now REQUIRES "56 tables" and this ban would
+      // have contradicted it — the gate could never pass at 56. The 57-ban below stays.)
       // 57 is the number the bare-keyword derivation most recently blessed into the docs
       // (two comment lines quoting CREATE TABLE), so it is the one that would creep back
       // through this list's blind spot. Both stale numbers banned; see TABLE_COUNT above.

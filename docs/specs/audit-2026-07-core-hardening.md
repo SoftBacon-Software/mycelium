@@ -23,6 +23,10 @@ C (critical) / H (high) / M (medium).
 | M1 | checkGuardrails wired into 8 uncovered write routes | #150 |
 | C2, H7, M7, H2 | Registry SHA pin, unref'd cleanup timers, health-patrol SSE broadcast, liveness-write debounce | this PR |
 
+> Historical note (September 2026): the residency plugin named in the #142 row
+> above was removed from the platform in the September 2026 prune. This table
+> is retained as a record of what the July drive landed.
+
 ## Deferred by design (documented, not changed)
 
 ### M2 — SSE `data` field is double-stringified (intentional)
