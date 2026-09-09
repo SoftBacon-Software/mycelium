@@ -2,6 +2,8 @@
 
 Build plugins that extend your Mycelium instance with custom workflows, integrations, and agent tools.
 
+For where the built-in plugins sit in the platform's levels — core, lab, or demo/default-off — see [surface-levels.md](surface-levels.md).
+
 ## What Plugins Can Do
 
 - **React to events** — Run code when tasks complete, bugs get fixed, plans advance, or any other platform event fires

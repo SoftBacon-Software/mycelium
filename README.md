@@ -36,7 +36,7 @@ These are implemented and exercised by the running system, not a roadmap:
 
 ### Internal surfaces
 
-A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT).
+A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT). The public demo face — `GET /stats/public` (anonymized aggregate stats) and `GET /public/activity` (sanitized live activity feed), both no-auth — is mounted to feed the static site export; it is demo surface, not product (see [Surface levels](docs/surface-levels.md)).
 
 ### Maturity — read this before you rely on something
 
@@ -47,6 +47,18 @@ The core (agents, work, plans, tasks, messages, approvals, context, spend, drone
 - **Skills registry, widgets** — real endpoints and tables; lightly used. Solid plumbing, sparse content.
 - **`appointments/` plugin** — staged foundation for an unbuilt "role-registry," **not loaded**. It has no `plugin.json`, so the loader skips it, `GET /plugins` doesn't list it, and it isn't counted among the built-in plugins. Its `node:test` still runs in CI as a guard on its `db.js` data layer. See `server/plugins/appointments/README.md`.
 - **Organizations, agent templates, team settings, file server, operators, studio** — real endpoints, pinned by the route-manifest gate, but no dedicated behavioral tests yet. Treat them as plumbing-stable, not battle-tested.
+
+## Surface levels
+
+Mycelium has levels — how much of it you need depends on what you are running. The short version (the full table, including what a customer deployment needs vs what only the lab runs, is in [docs/surface-levels.md](docs/surface-levels.md)):
+
+- **L0 — core** — one assistant, one operator: agent record + savepoints, memory write/search, boot handshake, versioned context, operators + auth, health.
+- **L1 — persona** — persistence *with identity*: semantic + auto memory, persona/profile records, concepts, savepoint diff, recall on-ramps.
+- **L2 — substrate** — many agents on one network: messages/channels, tasks/plans/runs, approvals, events, drones, workflows, the plugin seam, the runner.
+- **L3 — lab** — research apparatus only the operating lab runs today: spend accounting, feedback, the marketing/social plugin, the public demo face.
+- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**) and the staged, not-loaded `appointments` foundation.
+
+A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 and the demo surfaces are mounted but ignorable — nothing outside the lab needs them.
 
 ## Quick start
 
@@ -243,7 +255,7 @@ npm test            # vitest run — unit + smoke under test/
 | `guardrails` | safety checks + policy enforcement |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
-| `a2a-gateway` | Google A2A protocol for external-agent interop |
+| `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
 | `workflow-automations` | event-driven workflow triggers |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 
