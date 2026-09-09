@@ -49,9 +49,11 @@ export function renderReceipt({
     for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a]));
   }
   L.push('');
-  if (summary.arms.mycelium?.retrieval_modes) {
-    L.push(`Retrieval modes observed (mycelium arm, per query): ${JSON.stringify(summary.arms.mycelium.retrieval_modes)}`);
-    L.push('');
+  for (const [name, a] of Object.entries(summary.arms)) {
+    if (a.retrieval_modes) {
+      L.push(`Retrieval modes observed (${name} arm, per query): ${JSON.stringify(a.retrieval_modes)}`);
+      L.push('');
+    }
   }
   if (judgeAgreement) {
     L.push('## Judge validation (vs hand-scored set)');

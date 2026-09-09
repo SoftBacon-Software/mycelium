@@ -1,0 +1,12 @@
+# Pinned for the bench/memory mem0 arm's sidecar venv (bench/memory/arms/.mem0-venv).
+#
+#   python3.12 -m venv bench/memory/arms/.mem0-venv
+#   bench/memory/arms/.mem0-venv/bin/pip install -r bench/memory/arms/mem0-requirements.txt
+#
+# mem0ai 2.0.20 default vector store = qdrant local mode (path-based, no server,
+# qdrant-client ships as a mem0ai dependency) — that default local store is what
+# the fair arm runs. `ollama` is required by mem0's ollama embedder.
+# Resolved transitives at pin time (2026-09-08): openai 3.10.0, qdrant-client 1.19.0.
+# The sidecar force-disables mem0's PostHog telemetry (MEM0_TELEMETRY=False).
+mem0ai==2.0.20
+ollama==0.6.2

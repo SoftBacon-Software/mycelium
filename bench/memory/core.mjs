@@ -68,6 +68,10 @@ export async function runBench({
     }
 
     armsOut[name] = { arm: name, rows, write: writeInfo, elapsed_ms: Date.now() - t0 };
+    // the arm is done — release what it holds (e.g. the mem0 sidecar). Arms
+    // without lifecycle needs don't implement dispose; a dispose failure is a
+    // real failure (a leaked port is a loud problem, not a warning).
+    if (typeof arm.dispose === 'function') await arm.dispose();
   }
 
   // -- judge phase -----------------------------------------------------------

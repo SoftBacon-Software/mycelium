@@ -1,12 +1,15 @@
-// Arm registry — the runner addresses arms by name. Adding a third arm later
-// (Mem0/Zep/Letta, task 165+) means adding a factory here and nowhere else.
+// Arm registry — the runner addresses arms by name. Adding an arm means adding
+// a factory here and nowhere else. `mem0` (task 169) additionally needs its
+// sidecar started before the regime is built — run.mjs handles that.
 
 import { createArmNone } from './arm_none.mjs';
 import { createArmMycelium } from './arm_mycelium.mjs';
+import { createArmMem0 } from './arm_mem0.mjs';
 
 export const ARM_FACTORIES = {
   none: createArmNone,
   mycelium: createArmMycelium,
+  mem0: createArmMem0,
 };
 
 export function resolveArms(names) {

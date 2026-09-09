@@ -15,6 +15,7 @@ import { makeOpenAIChat } from './answer.mjs';
 import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
 import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
+import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
@@ -205,8 +206,45 @@ async function main() {
     };
   }
 
+  // mem0 competitor arm: its sidecar starts BEFORE the regime is built (the
+  // stamp carries the sidecar's /health facts) and is stopped + its local
+  // store purged in the finally below — success or failure.
+  let mem0Handle = null;
+  if (arms.includes('mem0')) {
+    mem0Handle = await startMem0Sidecar({
+      runId,
+      llmBaseUrl: args['answer-url'] ?? null, // an explicit answer endpoint applies to mem0's LLM too
+      log: (m) => console.error(`[mem0] ${m}`),
+    });
+    console.error(`[run] mem0 sidecar: v${mem0Handle.health.mem0_version}, store ${mem0Handle.storePath}`);
+    // Mid-run sidecar death: the arm only calls this when a request died with
+    // ECONNREFUSED (nothing committed — a replay cannot duplicate memories).
+    // Same runId → same store dir, NOT wiped; the handle is swapped so the
+    // finally-block stops the NEW sidecar.
+    mem0Handle.restart = async () => {
+      try {
+        await mem0Handle.stop();
+      } catch (e) {
+        console.error(`[run] mem0 old sidecar stop problem (continuing with restart): ${e.message}`);
+      }
+      const again = await startMem0Sidecar({
+        runId,
+        llmBaseUrl: args['answer-url'] ?? null,
+        fresh: false,
+        log: (m) => console.error(`[mem0] ${m}`),
+      });
+      mem0Handle.manager = again.manager;
+      mem0Handle.health = again.health;
+      mem0Handle.storePath = again.storePath;
+      mem0Handle.stop = () => again.manager.stop();
+      console.error(`[run] mem0 sidecar RESTARTED: pid ${again.manager.pid}, store preserved (${again.storePath})`);
+      return { request: (p, b) => again.manager.request(p, b), health: again.health };
+    };
+  }
+
   // Models (local; $0)
-  const answerUrl = args['answer-url'] ?? (platformEnv?.box3090Url ? `${platformEnv.box3090Url}/v1` : null);
+  const boxUrl = platformEnv?.box3090Url || mem0Handle?.env.box3090Url || null;
+  const answerUrl = args['answer-url'] ?? (boxUrl ? `${boxUrl}/v1` : null);
   const answerModel = args['answer-model'] ?? 'qwen3.8:27b';
   if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
   const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
@@ -246,109 +284,148 @@ async function main() {
       server_mode: 'hybrid (server-side; per-query observed mode recorded in rows)',
     },
     platform: platformFacts,
+    mem0: mem0Handle
+      ? {
+          ...mem0Handle.health,
+          retrieval_budget: budget,
+          scope: mem0Handle.scope,
+          sidecar: 'bench/memory/arms/mem0_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
+        }
+      : null,
     n: items.length,
     notes: [
-      'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+',
+      arms.includes('mem0')
+        ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
+        : 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+',
       'judge is a local model; validated against a hand-scored set — see receipt judge-validation section',
     ],
   });
 
-  const namespace = regime.retrieval.namespace;
-  const outDir = path.join(RESULTS_DIR, runId);
-  fs.mkdirSync(outDir, { recursive: true });
+  try {
+    const namespace = regime.retrieval.namespace;
+    const outDir = path.join(RESULTS_DIR, runId);
+    fs.mkdirSync(outDir, { recursive: true });
 
-  // incremental evidence: rows land on disk as they are produced
-  const rowFiles = {};
-  for (const a of arms) rowFiles[a] = fs.openSync(path.join(outDir, `${a}.rows.jsonl`), 'w');
-  const judgedFile = fs.openSync(path.join(outDir, 'judged.jsonl'), 'w');
+    // incremental evidence: rows land on disk as they are produced
+    const rowFiles = {};
+    for (const a of arms) rowFiles[a] = fs.openSync(path.join(outDir, `${a}.rows.jsonl`), 'w');
+    const judgedFile = fs.openSync(path.join(outDir, 'judged.jsonl'), 'w');
 
-  const writeInfoByArm = {};
-  const result = await runBench({
-    items,
-    runId,
-    regime,
-    armFactories: arms.map((name) => ({
-      name,
-      factory: (ctx) => ARM_FACTORIES[name](ctx),
-    })),
-    armContext: {
-      answerChat,
-      platform,
+    const writeInfoByArm = {};
+    const result = await runBench({
+      items,
       runId,
-      namespace,
-      sourceType: regime.retrieval.source_type,
-      budget,
-    },
-    judgeFn,
-    afterWrite: async ({ arm, writeInfo }) => {
-      writeInfoByArm[arm] = writeInfo;
-      if (arm === 'mycelium' && platform) {
-        const expected = writeInfo.rows;
-        // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
-        // wait with the write size instead of failing into keyword-fallback
-        const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
-        console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
-        const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs });
-        console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
-        writeInfoByArm[arm].embed_wait = wait;
-      }
-    },
-    onRow: (row) => fs.writeSync(rowFiles[row.arm], JSON.stringify(row) + '\n'),
-    onJudged: (row) => fs.writeSync(judgedFile, JSON.stringify(row) + '\n'),
-  });
-  for (const a of arms) fs.closeSync(rowFiles[a]);
-  fs.closeSync(judgedFile);
+      regime,
+      armFactories: arms.map((name) => ({
+        name,
+        factory: (ctx) => ARM_FACTORIES[name](ctx),
+      })),
+      armContext: {
+        answerChat,
+        platform,
+        runId,
+        namespace,
+        sourceType: regime.retrieval.source_type,
+        budget,
+        // arms destructure `retrievalBudget` — before 2026-09-09 only `budget`
+        // was carried here, so the mycelium arm searched with the SERVER's
+        // default limit (10, measured) while the regime stamped 5. The banked
+        // 2026-09-08 rows all show meta.hits=10. Carrying both names keeps the
+        // stamped budget and the exercised budget the same thing.
+        retrievalBudget: budget,
+        log: (m) => console.error(`[mem0-arm] ${m}`),
+        resumeDir: outDir,
+        restartSidecar: mem0Handle ? () => mem0Handle.restart() : null,
+        mem0: mem0Handle ? { sidecar: mem0Handle.manager, mem0Version: mem0Handle.health.mem0_version } : null,
+      },
+      judgeFn,
+      afterWrite: async ({ arm, writeInfo }) => {
+        writeInfoByArm[arm] = writeInfo;
+        if (arm === 'mycelium' && platform) {
+          const expected = writeInfo.rows;
+          // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
+          // wait with the write size instead of failing into keyword-fallback
+          const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
+          console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
+          const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs });
+          console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
+          writeInfoByArm[arm].embed_wait = wait;
+        }
+      },
+      onRow: (row) => fs.writeSync(rowFiles[row.arm], JSON.stringify(row) + '\n'),
+      onJudged: (row) => fs.writeSync(judgedFile, JSON.stringify(row) + '\n'),
+    });
+    for (const a of arms) fs.closeSync(rowFiles[a]);
+    fs.closeSync(judgedFile);
 
-  // cleanup: remove this run's rows from the platform (unless --keep).
-  // purgeRunRows paginates: /memory/list caps at 100 rows server-side, so a
-  // single list-then-delete sweep would leave everything past row 100 indexed.
-  let cleanup = null;
-  if (platform) {
-    const sourceType = regime.retrieval.source_type;
-    if (args.keep) {
-      cleanup = { deleted: 0, kept: true, namespace };
-    } else {
-      cleanup = await purgeRunRows(platform, { sourceType, namespace });
-      console.error(`[run] cleanup: ${cleanup.deleted} deleted in ${cleanup.batches} batches, ${cleanup.failed_deletes.length} failed, ${cleanup.rows_remaining_after} remaining`);
+    // cleanup: remove this run's rows from the platform (unless --keep).
+    // purgeRunRows paginates: /memory/list caps at 100 rows server-side, so a
+    // single list-then-delete sweep would leave everything past row 100 indexed.
+    let cleanup = null;
+    if (platform) {
+      const sourceType = regime.retrieval.source_type;
+      if (args.keep) {
+        cleanup = { deleted: 0, kept: true, namespace };
+      } else {
+        cleanup = await purgeRunRows(platform, { sourceType, namespace });
+        console.error(`[run] cleanup: ${cleanup.deleted} deleted in ${cleanup.batches} batches, ${cleanup.failed_deletes.length} failed, ${cleanup.rows_remaining_after} remaining`);
+      }
+    }
+
+    const summary = {
+      ...result.summary,
+      write_info: writeInfoByArm,
+      cleanup,
+      ...(mem0Handle ? { mem0_store: { path: mem0Handle.storePath, local_only: true, purged: !args.keep } } : {}),
+      commands: [
+        `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n} --receipt${args.keep ? ' --keep' : ''}`,
+        ...(args.handlabels ? [`node bench/memory/run.mjs --from-results bench/memory/results/${runId} --handlabels ${args.handlabels} --receipt`] : []),
+      ],
+    };
+    fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
+
+    // handlabels supplied on a fresh run (unusual) or deferred to --from-results
+    let judgeAgreement = null;
+    let handlabelsMeta = null;
+    if (args.handlabels) {
+      const hl = JSON.parse(fs.readFileSync(args.handlabels, 'utf8'));
+      judgeAgreement = agreement(result.judged ?? [], hl.items);
+      handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
+    }
+
+    if (args.receipt) {
+      const md = renderReceipt({
+        runId,
+        summary,
+        agreement: judgeAgreement,
+        handlabels: handlabelsMeta,
+        cleanup,
+        writeInfo: writeInfoByArm,
+        commands: summary.commands,
+        generatedAt: utcStamp(new Date()),
+      });
+      const file = writeReceipt(runId, md);
+      console.error(`[run] receipt: ${file}`);
+    }
+
+    console.log(JSON.stringify({ run_id: runId, out_dir: path.relative(REPO_ROOT, outDir), arms: summary.arms }, null, 2));
+  } finally {
+    // the sidecar must not outlive the run, whatever the run did — and exit of
+    // its pid is not enough, the port has to be free before we call it stopped
+    if (mem0Handle) {
+      try {
+        await mem0Handle.stop();
+        if (!args.keep) {
+          removeMem0Store(mem0Handle.storePath);
+          console.error(`[run] mem0 store purged: ${mem0Handle.storePath}`);
+        } else {
+          console.error(`[run] mem0 store KEPT (--keep): ${mem0Handle.storePath}`);
+        }
+      } catch (e) {
+        console.error(`[run] mem0 sidecar teardown problem: ${e.message}`);
+      }
     }
   }
-
-  const summary = {
-    ...result.summary,
-    write_info: writeInfoByArm,
-    cleanup,
-    commands: [
-      `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n} --receipt${args.keep ? ' --keep' : ''}`,
-      ...(args.handlabels ? [`node bench/memory/run.mjs --from-results bench/memory/results/${runId} --handlabels ${args.handlabels} --receipt`] : []),
-    ],
-  };
-  fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
-
-  // handlabels supplied on a fresh run (unusual) or deferred to --from-results
-  let judgeAgreement = null;
-  let handlabelsMeta = null;
-  if (args.handlabels) {
-    const hl = JSON.parse(fs.readFileSync(args.handlabels, 'utf8'));
-    judgeAgreement = agreement(result.judged ?? [], hl.items);
-    handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
-  }
-
-  if (args.receipt) {
-    const md = renderReceipt({
-      runId,
-      summary,
-      agreement: judgeAgreement,
-      handlabels: handlabelsMeta,
-      cleanup,
-      writeInfo: writeInfoByArm,
-      commands: summary.commands,
-      generatedAt: utcStamp(new Date()),
-    });
-    const file = writeReceipt(runId, md);
-    console.error(`[run] receipt: ${file}`);
-  }
-
-  console.log(JSON.stringify({ run_id: runId, out_dir: path.relative(REPO_ROOT, outDir), arms: summary.arms }, null, 2));
 }
 
 main().catch((e) => {

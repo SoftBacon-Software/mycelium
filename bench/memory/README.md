@@ -1,8 +1,8 @@
 # bench/memory — the memory benchmark (P1)
 
 One harness we control, regime-stamped, receipt-gated. Task 163 = the
-SKELETON: two arms (`none`, `mycelium`) on LongMemEval-S before any
-competitor arm (Mem0/Zep/Letta are task 165+).
+SKELETON: two arms (`none`, `mycelium`) on LongMemEval-S. Task 169 landed
+the first competitor arm (`mem0` — Mem0 OSS via a local sidecar).
 
 Program: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` §P1.
 
@@ -78,8 +78,71 @@ An arm exposes `write(sessionTurns, {questionId})` and `answer(question) → {te
   vector search — no leakage in or out). answer: hybrid `/memory/search` at
   the retrieval budget, retrieved rows become the answer context. The same
   answer model is used for both arms; only the context differs.
+- **`mem0`** — Mem0 OSS (`mem0ai`) via a local Python sidecar
+  (`arms/mem0_sidecar.py`, see below). write: one `add()` per haystack
+  session (Mem0's own LLM fact extraction, not bypassed). answer: Mem0
+  search at the retrieval budget, memories joined into the SAME RAG prompt
+  arm_mycelium uses, same answer model. Scope = one `user_id` per run — the
+  same granularity as the mycelium namespace.
 - Rows are deleted from the platform after the run (per-source_id DELETE,
-  verified 0 remaining) unless `--keep`.
+  verified 0 remaining) unless `--keep`. The mem0 arm never touches the
+  platform; its store is a per-run local dir, purged after the run unless
+  `--keep`.
+
+**Budget wiring (fixed 2026-09-09).** Arms destructure `retrievalBudget`, but
+`run.mjs` used to pass only `budget` — so the mycelium arm searched with the
+SERVER's default limit (10) while the regime stamped 5. Evidence: every
+mycelium row in run `2026-09-08-p1-185920` shows `meta.hits=10`. The none-vs-
+mycelium comparison inside that run still stands (one answerer, one judge, one
+run), but its stamped budget was not the exercised budget; treat the banked
+0.380 as a **top-10** number. `run.mjs` now carries `retrievalBudget`, and both
+arms refuse a factory call without a positive-int budget, so this class of
+drift fails loudly before any rows are written.
+
+## The mem0 arm (sidecar setup)
+
+Mem0 is Python; the arms are JavaScript. `arm_mem0.mjs` spawns
+`arms/mem0_sidecar.py` (stdlib `http.server`, 127.0.0.1 only), learns its
+ephemeral port from a `MEM0_SIDECAR_READY <port>` stderr line, and stops it
+gating on BOTH child exit AND the port actually being freed. One-time setup:
+
+```bash
+python3.12 -m venv bench/memory/arms/.mem0-venv
+bench/memory/arms/.mem0-venv/bin/pip install -r bench/memory/arms/mem0-requirements.txt
+```
+
+Pinned there: `mem0ai==2.0.20`, `ollama==0.6.2` (mem0 2.0.20's default vector
+store is **qdrant local mode** — path-based, no server, no keys). Addresses
+resolve from env / substrate.conf, never literals: LLM =
+`BOX_3090_URL` + `/v1` (the SAME answerer the other arms use — Mem0's fact
+extraction runs on it too); embedder = `OLLAMA_URL`, else the `MYCELIUM_URL`
+host's `:11434` (the platform host's ollama). Env overrides:
+`MEM0_LLM_BASE_URL`, `MEM0_EMBEDDER_BASE_URL`, `MEM0_EMBEDDER_DIMS`,
+`MEM0_SIDECAR_PYTHON`.
+
+The sidecar's unittest (request/response shapes, fake Mem0 client,
+127.0.0.1-only):
+
+```bash
+bench/memory/arms/.mem0-venv/bin/python -m unittest -v bench/memory/arms/test_mem0_sidecar.py
+```
+
+Quirks measured on the live rig (2026-09-08, sidecar probe):
+
+- **The Jetson's `nomic-embed-text` emits 768-dim vectors, not the 512 mem0
+  assumes.** `MEM0_EMBEDDER_DIMS=768` is the default here; a mismatch surfaces
+  as a qdrant shape error on the first `add()`.
+- **Mem0 phones home (PostHog) unless told not to.** The sidecar sets
+  `MEM0_TELEMETRY=False` before importing mem0 — a $0 clean-room arm makes no
+  external calls.
+- **One `add()` = one extraction LLM call + one embed + N fact embeds.** A
+  real 20 KB / 12-turn session took ~30 s end-to-end against qwen3.8:27b on
+  the 3090. LongMemEval-S items carry ~50 sessions each, so the WRITE phase
+  dominates: ~25 min per item. Budget accordingly (the n=50 run is a
+  detached, multi-hour affair).
+- BM25/rerank (`mem0ai[extras]`, `mem0ai[nlp]`) are NOT installed — the arm
+  runs mem0's default OSS retrieval (pure vector over the local qdrant
+  store), which is what the receipt's regime block stamps.
 
 ## Judge + validation
 

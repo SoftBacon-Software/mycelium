@@ -47,10 +47,11 @@ export function buildRegime({
   judge,        // {model, url_host}
   retrieval,    // {budget, chunking, source_type, namespace, server_mode}
   platform,     // {url_host, version, embedding_provider, embedding_model, chunk_size}
+  mem0 = null,  // optional — competitor-arm block from the mem0 sidecar's /health
   n,
   notes = [],
 }) {
-  return requireCompleteRegime({
+  const stamp = {
     date_utc: dateUtc,
     git_sha: git.git_sha,
     git_dirty: git.git_dirty,
@@ -71,5 +72,7 @@ export function buildRegime({
     n,
     selection_rule: 'sort by question_id ascending, take first n (deterministic, stable across runs)',
     notes,
-  });
+  };
+  if (mem0) stamp.mem0 = mem0;
+  return requireCompleteRegime(stamp);
 }

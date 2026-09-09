@@ -48,3 +48,6 @@ public/avatars/*
 # URL + sha256 in split.mjs is the provenance. Results and receipts ARE
 # committed (they are the evidence).
 bench/memory/data/
+
+# mem0 sidecar venv (task 169) — created from mem0-requirements.txt, never committed
+bench/memory/arms/.mem0-venv/

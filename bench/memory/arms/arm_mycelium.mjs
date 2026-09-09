@@ -17,6 +17,12 @@ export const RAG_SYSTEM =
 export const BENCH_SOURCE_TYPE = 'bench_longmemeval';
 
 export function createArmMycelium({ answerChat, platform, namespace, retrievalBudget, sourceType = BENCH_SOURCE_TYPE, runId }) {
+  // refuse to run on an unstamped budget: undefined fell through to the
+  // server's default limit (10) while the regime stamped 5 — the banked
+  // 2026-09-08 rows all retrieved top-10 under a budget-5 stamp
+  if (!Number.isInteger(retrievalBudget) || retrievalBudget <= 0) {
+    throw new Error(`arm_mycelium: retrievalBudget must be a positive int (got ${retrievalBudget}) — run.mjs's armContext provides it`);
+  }
   return {
     name: 'mycelium',
     sourceType,
