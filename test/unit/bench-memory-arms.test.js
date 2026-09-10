@@ -3,7 +3,7 @@ import http from 'node:http';
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium, BENCH_SOURCE_TYPE } from '../../bench/memory/arms/arm_mycelium.mjs';
 import { makeOpenAIChat, isTransientChatError } from '../../bench/memory/answer.mjs';
-import { resolvePlatformEnv, parseSubstrateConf, createPlatform, isNetworkLayerError } from '../../bench/memory/platform.mjs';
+import { resolvePlatformEnv, parseSubstrateConf, createPlatform, isNetworkLayerError, redactHeaderSecrets } from '../../bench/memory/platform.mjs';
 
 const SESSIONS = [
   [
@@ -413,5 +413,64 @@ describe('platform client — retries wait a capped exponential backoff, the ben
     await expect(platform.stats()).rejects.toThrow(/-> 503/);
     expect(calls).toBe(7);
     expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+  });
+});
+
+describe('platform client — a name that will not resolve is transient, and the curl error never quotes the key', () => {
+  const resolveFail = (n) => {
+    const e = new Error(`Command failed: curl -sS -X POST --max-time 180 -H X-Admin-Key: s3cr3tkey-${n} http://jetson01.local:3002/x\ncurl: (6) Could not resolve host: jetson01.local`);
+    e.cmd = `curl -sS -X POST -H X-Admin-Key: s3cr3tkey-${n} http://jetson01.local:3002/x`;
+    e.stderr = 'curl: (6) Could not resolve host: jetson01.local';
+    return e;
+  };
+
+  it('isNetworkLayerError: curl (6) could-not-resolve and (28) resolving-timed-out are network-layer; a 400 is not', () => {
+    expect(isNetworkLayerError(resolveFail(0))).toBe(true);
+    expect(isNetworkLayerError(new Error('Command failed: curl\ncurl: (28) Resolving timed out after 926871 milliseconds'))).toBe(true);
+    const enotfound = new Error('fetch failed'); enotfound.cause = { code: 'ENOTFOUND' };
+    expect(isNetworkLayerError(enotfound)).toBe(true);
+    expect(isNetworkLayerError(new Error('getaddrinfo EAI_AGAIN jetson01.local'))).toBe(true);
+    expect(isNetworkLayerError(new Error('GET /memory/list -> 400: bad'))).toBe(false);
+  });
+
+  it('engine curl: two resolve failures then a 200 — the call succeeds after two backoff waits, not a dead run', async () => {
+    const waits = [];
+    let calls = 0;
+    const platform = createPlatform({
+      baseUrl: 'http://jetson01.local:3002',
+      headers: { 'X-Admin-Key': 's3cr3tkey-0' },
+      engine: 'curl',
+      maxRetries: 8,
+      sleepFn: async (ms) => { waits.push(ms); },
+      curlRun: async () => { calls++; if (calls <= 2) throw resolveFail(0); return { stdout: JSON.stringify({ ok: true }) + '\n200' }; },
+    });
+    expect(await platform.stats()).toEqual({ ok: true });
+    expect(calls).toBe(3);
+    expect(waits).toEqual([1000, 2000]);
+  });
+
+  it('the surfaced curl error carries the header NAME but never the admin key (message, cmd)', async () => {
+    const platform = createPlatform({
+      baseUrl: 'http://jetson01.local:3002',
+      headers: { 'X-Admin-Key': 's3cr3tkey-9', 'X-Acting-As': 'm5Max' },
+      engine: 'curl',
+      maxRetries: 1,
+      sleepFn: async () => {},
+      curlRun: async () => { throw resolveFail(9); },
+    });
+    let caught;
+    try { await platform.stats(); } catch (e) { caught = e; }
+    expect(caught).toBeTruthy();
+    expect(caught.message).not.toContain('s3cr3tkey-9');
+    expect(caught.cmd).not.toContain('s3cr3tkey-9');
+    expect(caught.message).toContain('X-Admin-Key: <redacted>');
+    expect(caught.message).toContain('Could not resolve host'); // the cause survives the scrub
+    expect(caught.message).toContain('m5Max'); // a non-secret header is left alone
+  });
+
+  it('redactHeaderSecrets scrubs only secret-looking headers with a real value', () => {
+    expect(redactHeaderSecrets('a=abcd1234 b=m5Max c=xy', { 'X-Admin-Key': 'abcd1234', 'X-Acting-As': 'm5Max', 'X-Token': 'xy' }))
+      .toBe('a=<redacted> b=m5Max c=xy');
+    expect(redactHeaderSecrets(undefined, {})).toBe('');
   });
 });
