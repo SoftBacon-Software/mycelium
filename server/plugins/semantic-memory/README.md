@@ -110,11 +110,41 @@ All routes are under `/api/mycelium/memory`.
 | DELETE | `/index/:sourceType/:sourceId` | agent/admin | Remove a doc (all chunks). |
 | DELETE | `/index?source_type=&namespace=` | admin | Bulk purge by exact filter (at least one required — an unfiltered purge is refused). How a finished benchmark run cleans up after itself. Returns `{deleted: N}`. |
 | GET | `/list?source_type=` | agent/admin | Query-free retrieval by type, newest first — for always-on content. |
+| GET | `/lessons?task_class=&repo=&since=&limit=&q=` | agent/admin | Lesson recall (see below). Newest first by the lesson's own date; `q=` switches to semantic recall restricted to lessons. |
+| GET | `/history?repo=&task_class=&limit=` | agent/admin | Prior verdict rows (source_type `verdict`) for a repo/class, newest first — "what happened last time". |
 | GET | `/stats` | agent/admin | Index counts, coverage, per-type/per-namespace breakdowns. |
 | GET / PUT | `/config` | admin | Read (key stripped) / write provider config. |
 | POST | `/reindex` | admin | Embed unembedded content in batches. 400 without a provider. |
 | POST | `/backfill-embeddings?limit=` | agent/admin | Same, bounded (default 200, cap 1000), safe to re-run. |
 | PUT | `/embeddings/:sourceType/:sourceId` | agent/admin | Drone callback: store a vector. Non-admin writes are scoped to embed jobs that drone claimed. |
+
+## Lessons & history — memory rows with provenance (2026-09-10)
+
+A **lesson** is a memory row (`source_type: 'lesson'`) written by the harness —
+a workflow verdict, a lane DONE, a lab_check state change, a director decision —
+indexed through the same `/index` path as everything else, so it embeds and
+searches like everything else. The provenance gate: `POST /index` (and `/index/bulk`)
+**refuse** a lesson or verdict row whose `metadata` lacks `actor`, `learned_at`, or
+`evidence` with a 400 naming the missing field(s). The full metadata contract is
+`symptom`, `fix_or_rule`, `task_class` (free string — the harness scoreboard's
+failure classes are the first vocabulary), `repo`, `actor`, `origin`
+(`{workflow_id|task_id|lane_task|check}`), `outcome`, `evidence` (a path/sha/receipt),
+`learned_at`.
+
+`GET /lessons` returns lessons newest-first **by the lesson's own date**, each row
+with its provenance metadata, filterable by `task_class`, `repo`, and `since`
+(ISO date lower bound; a malformed `since` is a 400, never a silently ignored
+filter). `q=` runs semantic recall restricted to lessons
+(`searchHybrid` with `source_types: ['lesson']`) — relevance-ranked, honest
+`mode`/`degraded` reporting exactly like `/search`.
+
+`GET /history` is the sibling view over `source_type: 'verdict'` (prior verdict
+rows for a repo/class) — same provenance gate, same ordering. The verdict
+writer lands separately; this route defines and accepts the shape.
+
+`tools/migrate-lessons-md.mjs` migrates the squad's legacy `lessons.md` into
+lesson rows (idempotent — `source_id` derives from date+title; it refuses to
+run against a non-loopback URL without `--allow-remote`).
 
 ## MCP tools
 

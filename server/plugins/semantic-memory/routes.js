@@ -169,6 +169,31 @@ export default function (core) {
     res.json(response);
   }));
 
+  // -- Lessons & verdicts: the provenance gate (2026-09-10, F-mycelium/186) ------
+  // BRIEF-lab-alive-memory-program §1, first gate: "A lesson row without
+  // provenance (actor, date, evidence) is refused at the route." A LESSON is a
+  // memory row written by the HARNESS (workflow verdicts, lane DONEs, lab_check
+  // state changes, director decisions) — source_type 'lesson' through the SAME
+  // /memory/index path as every other row, so it embeds and searches like
+  // everything else. Verdict rows (source_type 'verdict', the /memory/history
+  // view; the writer lands in K-kira's task) carry the identical gate: a
+  // verdict without provenance is the same failure. The 400 NAMES the missing
+  // field(s) so the harness writer's first red run says what to fix.
+  function refuseIfUnprovenanced(sourceType, metadata, res, label) {
+    if (!db.LESSON_SOURCE_TYPES[sourceType]) return false;
+    var missing = db.missingProvenanceFields(metadata);
+    if (missing.length === 0) return false;
+    apiError(res, 400, (label ? label + ': ' : '') + "source_type '" + sourceType +
+      "' requires provenance metadata — missing: " + missing.join(', '));
+    return true;
+  }
+
+  // A query param that is present-and-meaningful, else null — an empty `repo=`
+  // is "no filter", not a repo named "".
+  function nonEmptyQuery(v) {
+    return (typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
+  }
+
   // POST /memory/index — index content
   router.post('/index', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
@@ -177,6 +202,7 @@ export default function (core) {
     if (!source_type || !source_id || !content_text) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
+    if (refuseIfUnprovenanced(source_type, metadata, res)) return;
     var chunkCount = 1;
     if (chunk_index) {
       // Explicit chunk_index = caller-managed chunking — store the row as-is
@@ -212,10 +238,12 @@ export default function (core) {
     if (items.length > 100) return apiError(res, 400, 'Max 100 items per bulk request');
 
     // Validate
-    for (var item of items) {
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
       if (!item.source_type || !item.source_id || !item.content_text) {
         return apiError(res, 400, 'Each item needs source_type, source_id, and content_text');
       }
+      if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
     }
 
     // bulkIndex is chunk-aware — oversized items split into chunk rows;
@@ -306,6 +334,123 @@ export default function (core) {
       limit: req.query.limit
     });
     res.json({ results: rows, source_type: sourceType, count: rows.length });
+  });
+
+  // GET /memory/lessons?task_class=&repo=&since=&limit=[&q=] — the §2 read side
+  // (2026-09-10, F-mycelium/186): lessons by class + repo, NEWEST first, with
+  // their dates and provenance, so a brief can carry "last Tuesday this exact
+  // shape failed because…". q= switches to semantic recall restricted to
+  // lessons — the same searchHybrid /search uses, with source_types=['lesson']
+  // (keyword arm when no embedder is configured; the response reports its mode
+  // honestly, same contract as /search — a recall block must never answer from
+  // a silently degraded query). q= relevance-ranks; the plain listing date-ranks.
+  router.get('/lessons', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var filters = {
+      task_class: nonEmptyQuery(req.query.task_class),
+      repo: nonEmptyQuery(req.query.repo),
+      since: nonEmptyQuery(req.query.since)
+    };
+    var limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    if (filters.since && !/^\d{4}-\d{2}-\d{2}/.test(filters.since)) {
+      return apiError(res, 400, "since must be an ISO date (YYYY-MM-DD); got: '" + filters.since + "'");
+    }
+
+    if (!req.query.q) {
+      var rows = db.listLessons(Object.assign({}, filters, { limit: limit }));
+      return res.json({
+        source_type: 'lesson', count: rows.length, results: rows,
+        filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since }
+      });
+    }
+
+    // Semantic arm: overfetch ×5 (cap 100) before the metadata post-filter so a
+    // lesson ranked just below the page can't be silently dropped by its own
+    // filter (the §F2 false-zero hazard /search documents) — then report what
+    // the filter did.
+    var searchLimit = Math.min(limit * 5, 100);
+    var opts = { limit: searchLimit, source_types: ['lesson'] };
+    var embedFailReason = null;
+    var effectiveMode = 'hybrid';
+    var embedPromise = (function () {
+      var config = db.getAllConfig();
+      if (!config.embedding_provider || config.embedding_provider === 'none') {
+        embedFailReason = 'no embedding provider configured (embedding_provider = ' + (config.embedding_provider || 'none') + ')';
+        return Promise.resolve(null);
+      }
+      return generateEmbedding(config, String(req.query.q), { priority: 'high' })
+        .then(function (vec) {
+          if (!vec) embedFailReason = 'embedding provider returned no vector (async-drone, unknown provider, or empty response)';
+          return vec;
+        })
+        .catch(function (e) {
+          embedFailReason = e.message;
+          return null;
+        });
+    })();
+    embedPromise.then(function (queryEmbedding) {
+      if (queryEmbedding) effectiveMode = 'hybrid';
+      else effectiveMode = 'keyword-fallback';
+      var results = db.searchHybrid(String(req.query.q), opts, queryEmbedding);
+      var beforeFilter = results.length;
+      results = results.filter(function (r) {
+        var m = r.metadata || {};
+        if (filters.task_class && m.task_class !== filters.task_class) return false;
+        if (filters.repo && m.repo !== filters.repo) return false;
+        if (filters.since) {
+          var ts = m.learned_at || r.created_at;
+          if (!ts || String(ts) < filters.since) return false;
+        }
+        return true;
+      });
+      results = results.map(function (r) {
+        var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
+        return rest;
+      }).slice(0, limit);
+      var response = {
+        source_type: 'lesson', query: String(req.query.q), mode: effectiveMode,
+        count: results.length, results: results,
+        filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since }
+      };
+      if (effectiveMode !== 'hybrid') {
+        response.degraded = {
+          reason: embedFailReason,
+          fell_back_to: 'keyword',
+          note: 'vector search unavailable; results are lexical (FTS5/LIKE) only'
+        };
+      }
+      if (filters.task_class || filters.repo || filters.since) {
+        response.filter = {
+          results_before_filter: beforeFilter,
+          results_after_filter: results.length
+        };
+      }
+      res.json(response);
+    }).catch(function (e) {
+      apiError(res, 500, 'lesson recall failed: ' + e.message);
+    });
+  });
+
+  // GET /memory/history?repo=&task_class=&limit= — what happened LAST time on
+  // this repo/class: prior verdict rows (source_type 'verdict'), newest first,
+  // with provenance. The verdict WRITER lands in K-kira's task; the shape is
+  // defined + accepted here: a verdict is a memory row with the same §1
+  // metadata contract as a lesson (actor, learned_at, evidence required at the
+  // route; task_class, repo, origin, outcome carrying the meaning).
+  router.get('/history', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var filters = {
+      task_class: nonEmptyQuery(req.query.task_class),
+      repo: nonEmptyQuery(req.query.repo)
+    };
+    var limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    var rows = db.listHistory(Object.assign({}, filters, { limit: limit }));
+    res.json({
+      source_type: 'verdict', count: rows.length, results: rows,
+      filters: { task_class: filters.task_class, repo: filters.repo }
+    });
   });
 
   router.get('/stats', function (req, res) {

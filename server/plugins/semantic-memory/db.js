@@ -423,6 +423,65 @@ export default function createMemoryDB(db) {
       return db.prepare(sql).all(...args);
     },
 
+    // -- Lessons & history (2026-09-10, F-mycelium/186) ---------------------------
+    // A LESSON is a memory row like everything else: source_type 'lesson', one
+    // row per lesson (chunk_index 0), provenance in metadata (actor, learned_at,
+    // evidence — enforced at the route, not here). Recall orders by the lesson's
+    // OWN date ("last Tuesday this exact shape failed because…"), falling back
+    // to created_at for rows that somehow lack learned_at — NOT by insertion
+    // order, which disagrees with reality the moment a batch migrates in.
+    // History is the sibling view over source_type 'verdict' (prior workflow/
+    // lane verdicts for a repo/class). Same provenance gate, same ordering.
+    listProvenanceRows(sourceType, opts) {
+      opts = opts || {};
+      var limit = Math.min(parseInt(opts.limit, 10) || 20, 100);
+      var where = ['source_type = ?', 'chunk_index = 0'];
+      var args = [sourceType];
+      if (opts.task_class) { where.push("json_extract(metadata, '$.task_class') = ?"); args.push(opts.task_class); }
+      if (opts.repo) { where.push("json_extract(metadata, '$.repo') = ?"); args.push(opts.repo); }
+      if (opts.since) {
+        // ISO date/datetime strings compare correctly as text (fixed-width,
+        // zero-padded) — a date-only since= covers the whole named day.
+        where.push("COALESCE(json_extract(metadata, '$.learned_at'), created_at) >= ?");
+        args.push(opts.since);
+      }
+      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at, updated_at '
+              + 'FROM sm_embeddings WHERE ' + where.join(' AND ')
+              + " ORDER BY COALESCE(json_extract(metadata, '$.learned_at'), created_at) DESC, created_at DESC LIMIT ?";
+      args.push(limit);
+      var rows = db.prepare(sql).all(...args);
+      for (var r of rows) {
+        try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
+      }
+      return rows;
+    },
+
+    listLessons(opts) {
+      return this.listProvenanceRows('lesson', opts);
+    },
+
+    listHistory(opts) {
+      return this.listProvenanceRows('verdict', opts);
+    },
+
+    // The provenance gate the route enforces for lesson/verdict rows — lives
+    // beside the query layer so /index and /index/bulk share ONE definition.
+    // actor/learned_at/evidence are the brief's provenance trio (BRIEF-lab-
+    // alive-memory-program: "a lesson row without provenance is refused at
+    // the route"); the rest of the §1 shape (symptom, fix_or_rule, task_class,
+    // repo, origin, outcome) is the documented contract but is not the gate.
+    LESSON_SOURCE_TYPES: { lesson: true, verdict: true },
+    REQUIRED_PROVENANCE: ['actor', 'learned_at', 'evidence'],
+    missingProvenanceFields(metadata) {
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        return this.REQUIRED_PROVENANCE.slice();
+      }
+      return this.REQUIRED_PROVENANCE.filter(function (f) {
+        var v = metadata[f];
+        return typeof v !== 'string' || v.trim().length === 0;
+      });
+    },
+
     // Lightweight health snapshot for the search response — the four numbers a
     // caller needs to judge whether a result set is complete + healthy (total,
     // embedded, coverage %, vector-scan cap), WITHOUT the two GROUP BYs stats()
