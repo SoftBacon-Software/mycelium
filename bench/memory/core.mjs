@@ -44,7 +44,13 @@ export async function runBench({
         // the cap bounds the WRITE phase only: the answer phase reads the
         // question + gold, never the haystack
         const sessions = maxSessions ? item.haystack_sessions.slice(0, maxSessions) : item.haystack_sessions;
-        const w = await arm.write(sessions, { questionId: item.question_id });
+        // the dataset's per-session dates, index-aligned with the sessions —
+        // the timeline arm stamps them (session_date / valid_from / valid_to);
+        // arms that don't want them ignore the field
+        const sessionDates = Array.isArray(item.haystack_dates)
+          ? (maxSessions ? item.haystack_dates.slice(0, maxSessions) : item.haystack_dates)
+          : null;
+        const w = await arm.write(sessions, { questionId: item.question_id, sessionDates });
         if (w) {
           writeInfo.docs += w.docs ?? 0;
           writeInfo.rows += w.rows ?? 0;
@@ -56,9 +62,22 @@ export async function runBench({
             writeInfo.facts_counts = [...(writeInfo.facts_counts ?? []), ...(w.facts_per_session ?? [])];
           }
           if (typeof w.extract_ms === 'number') writeInfo.extract_ms = (writeInfo.extract_ms ?? 0) + w.extract_ms;
+          if (typeof w.reconcile_ms === 'number') writeInfo.reconcile_ms = (writeInfo.reconcile_ms ?? 0) + w.reconcile_ms;
           // sessions the arm's extractor DROPPED (unparseable reply) — ingestion
           // loss, counted the same way by mem0 (sidecar flag) and mycelium-extract
           if (typeof w.parse_failures === 'number') writeInfo.parse_failures = (writeInfo.parse_failures ?? 0) + w.parse_failures;
+          // the timeline arm's reconcile ledger: scalars summed across
+          // questions, the per-question block (with its seconds_per_session)
+          // kept whole — the §3 counts the receipt quotes
+          if (w.timeline && typeof w.timeline === 'object') {
+            writeInfo.timeline = writeInfo.timeline ?? {
+              adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, per_question: [],
+            };
+            for (const k of ['adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures']) {
+              if (typeof w.timeline[k] === 'number') writeInfo.timeline[k] += w.timeline[k];
+            }
+            writeInfo.timeline.per_question.push(w.timeline);
+          }
         }
       }
     }

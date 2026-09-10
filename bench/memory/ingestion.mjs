@@ -14,6 +14,8 @@
 //   mycelium-extract  = Mycelium × extract  (task 182)
 //   mem0              = Mem0     × extract  (as shipped)
 //   mem0-raw          = Mem0     × raw      (task 182)
+//   mycelium-timeline = Mycelium × timeline (brief §3: extract + reconcile into
+//                       a bi-temporal layer over the verbatim episodic layer)
 
 export const GRID_ROWS = [
   { label: 'Mycelium', raw: 'mycelium', extract: 'mycelium-extract' },
@@ -25,6 +27,7 @@ export const INGESTION_POLICY = {
   'mycelium-extract': 'extract',
   'mem0-raw': 'raw',
   mem0: 'extract',
+  'mycelium-timeline': 'timeline',
 };
 
 // Which extraction-thinking mode each arm runs. null = the arm does no LLM
@@ -37,6 +40,7 @@ export function extractionThinkingByArm(arms, { mem0Health = null } = {}) {
   for (const a of arms) {
     if (a === 'mem0') out[a] = mem0Health?.extraction_thinking ?? 'on';
     else if (a === 'mycelium-extract') out[a] = 'off';
+    else if (a === 'mycelium-timeline') out[a] = 'off'; // extraction + decision calls, both thinking off
   }
   return out;
 }
@@ -52,7 +56,7 @@ export function assertNoExtractionThinkingMix(arms, thinkingByArm) {
     const detail = present.map(([a, m]) => `${a}=thinking ${m}`).join(', ');
     throw new Error(
       `unstamped extraction-thinking mix in one run (${detail}) — every extraction arm in a run must share ONE ` +
-        `stamped thinking mode (mycelium-extract is always off; start the mem0 sidecar with MEM0_NO_THINK=1)`
+        `stamped thinking mode (mycelium-extract and mycelium-timeline are always off; start the mem0 sidecar with MEM0_NO_THINK=1)`
     );
   }
   return modes[0] ?? null;

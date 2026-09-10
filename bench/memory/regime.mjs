@@ -50,6 +50,7 @@ export function buildRegime({
   mem0 = null,  // optional — competitor-arm block from the mem0 sidecar's /health
   mem0_raw = null,      // optional — task 182 raw-ingestion control block
   mycelium_extract = null, // optional — task 182 extraction-control block
+  mycelium_timeline = null, // optional — brief §3 timeline arm (episodic + reconciled layers)
   zep = null,   // optional — competitor-arm block from the zep sidecar's /health
   letta = null, // optional — competitor-arm block from the letta sidecar's /health
   write = null, // optional — {max_sessions_per_question} when the write phase was capped
@@ -81,6 +82,7 @@ export function buildRegime({
   if (mem0) stamp.mem0 = mem0;
   if (mem0_raw) stamp.mem0_raw = mem0_raw;
   if (mycelium_extract) stamp.mycelium_extract = mycelium_extract;
+  if (mycelium_timeline) stamp.mycelium_timeline = mycelium_timeline;
   if (zep) stamp.zep = zep;
   if (letta) stamp.letta = letta;
   if (write) stamp.write = write;

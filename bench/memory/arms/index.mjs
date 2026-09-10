@@ -12,6 +12,7 @@ import { createArmMem0Raw } from './arm_mem0_raw.mjs';
 import { createArmZep } from './arm_zep.mjs';
 import { createArmLetta } from './arm_letta.mjs';
 import { createArmMyceliumExtract } from './arm_mycelium_extract.mjs';
+import { createArmMyceliumTimeline } from './arm_mycelium_timeline.mjs';
 
 export const ARM_FACTORIES = {
   none: createArmNone,
@@ -21,6 +22,7 @@ export const ARM_FACTORIES = {
   zep: createArmZep,
   letta: createArmLetta,
   'mycelium-extract': createArmMyceliumExtract,
+  'mycelium-timeline': createArmMyceliumTimeline,
 };
 
 export function resolveArms(names) {

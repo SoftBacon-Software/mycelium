@@ -18,6 +18,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
+import { myceliumTimelineNamespace, RECONCILE_SYSTEM } from './arms/arm_mycelium_timeline.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
@@ -206,7 +207,8 @@ async function main() {
   }
   // task 182 ingestion controls: `mycelium-extract` needs the platform like
   // `mycelium` does; `mem0-raw` shares the mem0 sidecar (in its own -raw scope).
-  const wantsPlatform = arms.includes('mycelium') || arms.includes('mycelium-extract');
+  // The §3 timeline arm is a platform arm too (episodic + reconciled layers).
+  const wantsPlatform = arms.includes('mycelium') || arms.includes('mycelium-extract') || arms.includes('mycelium-timeline');
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
@@ -401,8 +403,20 @@ async function main() {
   // on each extraction burned ~300 reasoning tokens on the one 3090 slot —
   // measured 16 h/write-phase at n=50 before this). max_tokens matches the
   // answerer's default: the extractor returns a short JSON fact list.
+  // mycelium-timeline uses the SAME thinking-off endpoint twice: extraction
+  // (identical to the extract arm) and the ONE reconcile decision call per
+  // candidate — both short replies, both stamped.
   const EXTRACT_MAX_TOKENS = parseInt(args['extract-max-tokens'] ?? '4096', 10);
-  const extractionChat = arms.includes('mycelium-extract')
+  const wantsThinkingOffChat = arms.includes('mycelium-extract') || arms.includes('mycelium-timeline');
+  const extractionChat = wantsThinkingOffChat
+    ? makeOpenAIChat({
+        url: answerUrl,
+        model: answerModel,
+        maxTokens: EXTRACT_MAX_TOKENS,
+        extraBody: { chat_template_kwargs: { enable_thinking: false } },
+      })
+    : null;
+  const reconcileChat = arms.includes('mycelium-timeline')
     ? makeOpenAIChat({
         url: answerUrl,
         model: answerModel,
@@ -490,6 +504,61 @@ async function main() {
           retrieval_budget: budget,
         }
       : null,
+    mycelium_timeline: arms.includes('mycelium-timeline')
+      ? {
+          ingestion: 'timeline',
+          extraction_model: answerModel,
+          extraction_url_host: new URL(answerUrl).host,
+          extraction_temperature: 0,
+          extraction_max_tokens: EXTRACT_MAX_TOKENS,
+          extraction_thinking: 'off',
+          extraction_request: 'chat_template_kwargs {"enable_thinking": false} (llama.cpp honours it)',
+          extraction_prompt:
+            'bench/memory/arms/arm_mycelium_extract.mjs EXTRACTION_SYSTEM — the SAME extractor call as the extract arm',
+          decision_model: answerModel,
+          decision_url_host: new URL(answerUrl).host,
+          decision_temperature: 0,
+          decision_max_tokens: EXTRACT_MAX_TOKENS,
+          decision_thinking: 'off',
+          decision_shape: 'ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact',
+          reconcile_prompt: RECONCILE_SYSTEM,
+          reconcile_policy: {
+            top_k: 3,
+            search_overfetch: 25,
+            scope: 'CURRENT same-question facts only (metadata.question_id match, valid_to null) — the server has no metadata filter, so the search overfetches and the arm filters client-side',
+            auto_add_on_no_match: true,
+            fail_open_on_malformed_decision: 'ADD, counted in decision_failures (never a silent drop)',
+            supersede: 'the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted',
+            in_session_window: 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',
+          },
+          layers: {
+            episodic: {
+              namespace: `bench-p1-${runId}`,
+              row_shape: 'arm_mycelium\'s verbatim session row (same source_id shape, same `role: content` rendering) + metadata.layer=episode + metadata.session_date (dataset haystack_dates, verbatim)',
+            },
+            reconciled: {
+              namespace: myceliumTimelineNamespace(`bench-p1-${runId}`),
+              row_shape:
+                'one row per surviving fact; metadata carries episode (the episodic row\'s source_id), session_date, valid_from, valid_to (null while current), supersedes / superseded_by / superseded_by_text',
+            },
+          },
+          store_not_am_facts_why:
+            'the am_facts bi-temporal routes ARE deployed (checked live 2026-09-10: GET /auto-memory/facts answers) but do not fit the bench row model ' +
+            'without a deploy or shared-state damage: am_facts has no semantic-search route (reconcile + read need /memory/search hybrid at the stamped budget), ' +
+            'no namespace/run scoping (bench rows would land in the lab\'s LIVE fact store beside its ~1.8k real facts), and no bulk cleanup path (the bench ' +
+            'contract is purge-everything-after). So the layer is modeled as memory rows in a suffixed namespace with the bi-temporal fields in metadata — ' +
+            'the lane\'s pre-authorized fallback.',
+          read: {
+            budget,
+            merge: 'both layers searched at the budget; merged CURRENT facts first (server rank order), then episodes, then superseded facts; capped at the budget',
+            hit_rendering:
+              'each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line ' +
+              '"superseded on <valid_to> by: <new fact>"',
+            rag_prompt: 'arm_mycelium RAG_SYSTEM, unchanged',
+          },
+          retrieval_budget: budget,
+        }
+      : null,
     zep: zepHandle
       ? {
           ...zepHandle.health,
@@ -515,6 +584,9 @@ async function main() {
       arms.includes('mycelium-extract')
         ? `arms this run: ${arms.join(', ')}; mycelium-extract = the EXTRACTION control for the Mycelium column (task 182): the answerer model (${answerModel}, temperature 0, THINKING OFF via chat_template_kwargs) extracts a fact list per session, facts indexed ONE ROW PER FACT, namespace suffixed -extract; retrieval + answer identical to arm mycelium`
         : null,
+      arms.includes('mycelium-timeline')
+        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines`
+        : null,
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
         : null,
@@ -537,7 +609,11 @@ async function main() {
 
   // every namespace this run indexes — the failure path purges them too
   const runNamespaces = platform
-    ? [regime.retrieval.namespace, ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(regime.retrieval.namespace)] : [])]
+    ? [
+        regime.retrieval.namespace,
+        ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(regime.retrieval.namespace)] : []),
+        ...(arms.includes('mycelium-timeline') ? [myceliumTimelineNamespace(regime.retrieval.namespace)] : []),
+      ]
     : [];
   let platformCleanupDone = !platform || Boolean(args.keep);
   try {
@@ -549,7 +625,7 @@ async function main() {
     // a prior run's sessions without a model call (same extraction regime only —
     // the store refuses otherwise). Four B-runs died after their extraction on
     // 2026-09-09 and paid the two hours again each time.
-    const factsExtraction = arms.includes('mycelium-extract')
+    const factsExtraction = arms.includes('mycelium-extract') || arms.includes('mycelium-timeline')
       ? {
           model: answerModel,
           url_host: new URL(answerUrl).host,
@@ -561,11 +637,12 @@ async function main() {
     const factsStore = factsExtraction
       ? createFactsStore({ file: path.join(outDir, FACTS_FILE), extraction: factsExtraction, reuseFrom: args['reuse-facts'] ?? null })
       : null;
-    if (factsStore?.reusing) console.error(`[run] mycelium-extract: reusing facts from ${factsStore.stats.reuse_file} (run ${factsStore.stats.reuse_source_run_id ?? '?'})`);
+    if (factsStore?.reusing) console.error(`[run] extraction facts: reusing from ${factsStore.stats.reuse_file} (run ${factsStore.stats.reuse_source_run_id ?? '?'})`);
     if (factsExtraction) {
-      regime.mycelium_extract.facts_file = path.relative(REPO_ROOT, factsStore.file);
-      regime.mycelium_extract.facts_reused_from = factsStore.reusing ? { file: factsStore.stats.reuse_file, run_id: factsStore.stats.reuse_source_run_id } : null;
-      regime.mycelium_extract.facts_extraction_regime = factsExtraction;
+      const stamp = regime.mycelium_extract ?? regime.mycelium_timeline;
+      stamp.facts_file = path.relative(REPO_ROOT, factsStore.file);
+      stamp.facts_reused_from = factsStore.reusing ? { file: factsStore.stats.reuse_file, run_id: factsStore.stats.reuse_source_run_id } : null;
+      stamp.facts_extraction_regime = factsExtraction;
     }
 
     // incremental evidence: rows land on disk as they are produced
@@ -583,11 +660,12 @@ async function main() {
         // per-arm view: the shared ctx gets the arm's OWN log label (task 182
         // runs several arms in one process — a hardcoded prefix mislabels
         // which arm's write/extract lines these are)
-        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' ? { factsStore } : {}) }),
+        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' || name === 'mycelium-timeline' ? { factsStore } : {}) }),
       })),
       armContext: {
         answerChat,
-        extractionChat, // mycelium-extract's factory REFUSES to run without it (thinking-off extractor)
+        extractionChat, // mycelium-extract/mycelium-timeline REFUSE to run without it (thinking-off extractor)
+        reconcileChat, // mycelium-timeline's ONE decision call per candidate (thinking off)
         platform,
         runId,
         namespace,
@@ -632,7 +710,7 @@ async function main() {
         writeInfoByArm[arm] = writeInfo;
         // both mycelium-family arms index platform rows — the extract arm's
         // per-fact rows need the embedder too, or its answers run keyword-fallback
-        if ((arm === 'mycelium' || arm === 'mycelium-extract') && platform) {
+        if ((arm === 'mycelium' || arm === 'mycelium-extract' || arm === 'mycelium-timeline') && platform) {
           const expected = writeInfo.rows;
           // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
           // wait with the write size instead of failing into keyword-fallback
