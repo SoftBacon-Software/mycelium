@@ -418,7 +418,7 @@ describe('platform client — retries wait a capped exponential backoff, the ben
 
 describe('platform client — a name that will not resolve is transient, and the curl error never quotes the key', () => {
   const resolveFail = (n) => {
-    const e = new Error(`Command failed: curl -sS -X POST --max-time 180 -H X-Admin-Key: s3cr3tkey-${n} http://jetson01.local:3002/x\ncurl: (6) Could not resolve host: jetson01.local`);
+    const e = new Error(`Command failed: curl -sS -X POST --max-time 180 -H X-Admin-Key: s3cr3tkey-${n} -H X-Acting-As: m5Max http://jetson01.local:3002/x\ncurl: (6) Could not resolve host: jetson01.local`);
     e.cmd = `curl -sS -X POST -H X-Admin-Key: s3cr3tkey-${n} http://jetson01.local:3002/x`;
     e.stderr = 'curl: (6) Could not resolve host: jetson01.local';
     return e;
