@@ -26,6 +26,19 @@ var __dirname = path.dirname(fileURLToPath(import.meta.url));
 var realFetch = global.fetch;
 var embedCalls = 0;
 var FAKE_VECTOR = [0.1, 0.2, 0.3];
+// The fake models the resource a local embedder actually is: ONE model
+// instance, requests served one at a time (FIFO) — that serialization is
+// what made a single-string /memory/search wait behind a bulk backfill on
+// jetson01 (2026-09-09, bench runs B2/B3/B4). With embedDelayMs = 0 the
+// fake is instant-and-serial, which is what every test below assumes;
+// setEmbedFakeDelay(ms) gives each embed a service time so the priority
+// tests can measure queue wait. embedsPending counts in-flight + queued
+// fake calls so a test can drain the line before finishing.
+var embedDelayMs = 0;
+var embedsPending = 0;
+var embedChain = Promise.resolve();
+function setEmbedFakeDelay(ms) { embedDelayMs = ms; }
+function resetEmbedFake() { embedDelayMs = 0; }
 
 // ---- faithful fakes of the pluginCore helpers ----
 function apiError(res, status, message, extra) {
@@ -135,10 +148,21 @@ before(function () {
   global.fetch = function (url, opts) {
     if (String(url).indexOf('11434') !== -1) {
       embedCalls++;
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: function () { return Promise.resolve({ embeddings: [FAKE_VECTOR] }); }
+      embedsPending++;
+      // Serialize through a promise tail: one embed at a time, like an
+      // ollama serving a single model instance. The delay is the per-call
+      // service time (0 → plain microtask hop, the pre-existing behavior).
+      var job = embedChain.then(function () {
+        if (embedDelayMs <= 0) return;
+        return new Promise(function (done) { setTimeout(done, embedDelayMs); });
+      });
+      embedChain = job.then(function () { embedsPending--; }, function () { embedsPending--; });
+      return job.then(function () {
+        return {
+          ok: true,
+          status: 200,
+          json: function () { return Promise.resolve({ embeddings: [FAKE_VECTOR] }); }
+        };
       });
     }
     return realFetch(url, opts);
@@ -1166,6 +1190,12 @@ test('config: PUT /memory/config round-trips provider/model/url into GET and str
 test('provider fires: index embeds against the CONFIGURED url and model, and the vector round-trips into search', async function () {
   var f = await freshInstance();
   var seen = [];
+  // Save what THIS test replaces and restore exactly that — restoring the
+  // module-level realFetch here instead would wipe the file-level hermetic
+  // patch installed in before(), silently un-faking ollama for every test
+  // that runs after this one (found when the priority tests appended below
+  // all hit a real ECONNREFUSED on localhost:11434 in full-file runs).
+  var prevFetch = global.fetch;
   global.fetch = function (url, opts) {
     seen.push({ url: String(url), body: JSON.parse((opts && opts.body) || '{}') });
     return Promise.resolve({
@@ -1204,7 +1234,7 @@ test('provider fires: index embeds against the CONFIGURED url and model, and the
     assert.equal(s.body.degraded, undefined, 'no degraded block on a configured provider');
     assert.ok(s.body.results.some(function (x) { return x.source_id === 'fires-1'; }), 'the doc surfaces');
   } finally {
-    global.fetch = realFetch;
+    global.fetch = prevFetch;
     f.close();
   }
 });
@@ -1246,4 +1276,123 @@ test('unknown provider: generateEmbedding warns and returns null, index still su
   } finally {
     f.close();
   }
+});
+
+// -- Query-embedding priority over the bulk backfill (2026-09-09) ------------
+//
+// Measured on jetson01 during bench runs B2/B3/B4: right after a bulk index
+// of thousands of rows, POST /memory/search took >30 s for minutes (five
+// consecutive 30 s timeouts killed run B4 at answer 20/50) and even
+// GET /memory/stats timed out. The plugin has no in-process queue — the
+// waiting happens at the embedder endpoint, which serves one request at a
+// time: every /index/bulk call starts its own unawaited sequential embed
+// chain (routes.js POST /index/bulk -> generateEmbeddingBatch, ollama branch
+// is an await-per-text loop), /backfill-embeddings and /reindex run theirs,
+// and a search's single-string query embed joins the SAME tail (routes.js
+// POST /search -> await generateEmbedding) with nothing marking it priority.
+// At a 30 s wait the AbortSignal.timeout in embedOllama fires and the search
+// degrades to keyword — after having burned the 30 s.
+//
+// The tests below model that embedder faithfully (serial, per-call service
+// time) and pin the two properties the fix must hold:
+//   1. a search under bulk load answers in ~2 embed service times, hybrid,
+//      because its query embed jumps the queue;
+//   2. backfill throughput stays at the embedder's serial service rate
+//      (within 20%) — priority must not starve the bulk lane.
+
+test('priority: a search under bulk-index load answers in ~2 embed times — its query embed does not wait behind the backlog', async function () {
+  var SERVICE = 25; // ms of fake embedder service time per call
+  var BULK_CALLS = 40; // concurrent bulk requests -> ~40 calls queued at the embedder
+  var PER_CALL = 100; // the route's own max per request
+  setEmbedFakeDelay(SERVICE);
+  try {
+    var bulkPosts = [];
+    for (var b = 0; b < BULK_CALLS; b++) {
+      var items = [];
+      for (var i = 0; i < PER_CALL; i++) {
+        items.push({
+          source_type: 'priority_probe',
+          source_id: 'bulk-' + b + '-' + i,
+          content_text: 'priority probe bulk row ' + b + ' ' + i
+        });
+      }
+      // One needle row in the first request so the search has a real hit.
+      if (b === 0) items[0].content_text = 'priority probe needle quark strange';
+      bulkPosts.push(call('POST', '/memory/index/bulk', { items: items }));
+    }
+    await Promise.all(bulkPosts); // routes answer immediately; embed chains keep draining
+
+    var t0 = Date.now();
+    var r = await call('POST', '/memory/search', { query: 'priority probe needle', mode: 'hybrid' });
+    var elapsed = Date.now() - t0;
+
+    assert.equal(r.status, 200);
+    assert.equal(r.body.mode, 'hybrid',
+      'a healthy search must answer hybrid, not keyword-fallback (degraded: ' +
+      JSON.stringify(r.body.degraded || null) + ')');
+    assert.ok(r.body.degraded === undefined, 'no degraded block — the query embed must not abort');
+    var hit = r.body.results.filter(function (x) { return x.source_id === 'bulk-0-0'; });
+    assert.ok(hit.length >= 1, 'the needle row still surfaces');
+    // Bound: one in-flight embed + the query's own embed, plus HTTP/scheduler
+    // overhead. The pre-fix tree queues the query behind ~BULK_CALLS pending
+    // embeds (~BULK_CALLS * SERVICE ms) and blows this by an order of magnitude.
+    var bound = 2 * SERVICE + 100;
+    // Log the measured latency — this test IS the benchmark receipt for
+    // query-embed priority (before/after numbers live in the DONE report).
+    console.log('[priority] search under ' + (BULK_CALLS * PER_CALL) + '-row bulk load: ' + elapsed + 'ms (bound ' + bound + 'ms)');
+    assert.ok(elapsed < bound,
+      'search answered in ' + elapsed + 'ms; bound is ' + bound + 'ms — the query embed waited behind the bulk backlog');
+  } finally {
+    resetEmbedFake(); // fast-forward the remaining backlog instead of waiting it out
+    await waitFor(function () { return embedsPending === 0; }, 30000);
+  }
+});
+
+test('priority: the bounded scheduler keeps backfill throughput within 20% of the embedder service rate', async function () {
+  var SERVICE = 5; // ms per embed — the serial rate every path already shared
+  var ROWS = 200;
+  setEmbedFakeDelay(SERVICE);
+  try {
+    // Seed unembedded rows directly (no bulk route) so the timed backfill is
+    // the only embedder client — this measures throughput, not contention.
+    for (var i = 0; i < ROWS; i++) {
+      mem.index('throughput_probe', 'row-' + i, 'throughput probe row ' + i);
+    }
+    var backlog = mem.countUnembedded(); // seeded rows + any NULLs left by earlier tests
+    var t0 = Date.now();
+    var r = await call('POST', '/memory/backfill-embeddings?limit=1000', {});
+    var elapsed = Date.now() - t0;
+    assert.equal(r.status, 200);
+    // embedded can exceed backlog: oversized NULL rows are chunk-split before
+    // embedding (expandOversizedRows), so the route counts post-chunking rows.
+    // The guard is self-consistency + drain, with processed as the work count.
+    assert.ok(r.body.embedded >= backlog,
+      'every seeded row embedded (backlog was ' + backlog + '; response: ' + JSON.stringify(r.body) + ')');
+    assert.equal(r.body.embedded, r.body.processed,
+      'no silent failures (response: ' + JSON.stringify(r.body) + ')');
+    assert.equal(r.body.remaining, 0);
+    // Bound: the serial service rate (+20% — the fix may not slow the bulk
+    // lane) plus an absolute jitter allowance for HTTP/timer overhead.
+    var bound = Math.round(1.2 * r.body.processed * SERVICE) + 150;
+    console.log('[priority] backfill of ' + r.body.processed + ' rows: ' + elapsed + 'ms (' +
+      (elapsed / r.body.processed).toFixed(2) + 'ms/embed at ' + SERVICE + 'ms service; bound ' + bound + 'ms)');
+    assert.ok(elapsed <= bound,
+      'backfill of ' + ROWS + ' rows took ' + elapsed + 'ms; bound is ' + bound + 'ms — the scheduler slowed the bulk lane');
+  } finally {
+    resetEmbedFake();
+    await waitFor(function () { return embedsPending === 0; }, 30000);
+  }
+});
+
+test('db: stats() exposes embed_backlog + embed_queue — the pipeline is visible instead of guessed from timeouts', function () {
+  var before = mem.countUnembedded();
+  mem.index('stats_probe', 'backlog-a', 'backlog probe a');
+  mem.index('stats_probe', 'backlog-b', 'backlog probe b');
+  var s = mem.stats();
+  assert.equal(s.embed_backlog, before + 2, 'embed_backlog counts rows awaiting embedding');
+  assert.equal(s.embed_backlog, mem.countUnembedded(), 'embed_backlog agrees with the DB count');
+  assert.ok(s.embed_queue, 'embed_queue block present');
+  assert.equal(typeof s.embed_queue.in_flight, 'number', 'embed_queue.in_flight is a number');
+  assert.equal(typeof s.embed_queue.queued_high, 'number', 'embed_queue.queued_high is a number');
+  assert.equal(typeof s.embed_queue.queued_low, 'number', 'embed_queue.queued_low is a number');
 });

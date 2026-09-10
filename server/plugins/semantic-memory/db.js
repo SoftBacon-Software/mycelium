@@ -1,6 +1,6 @@
 // Semantic Memory DB helpers
 
-import { cosineSimilarity } from './embeddings.js';
+import { cosineSimilarity, embedQueueDepth } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 
 // -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
@@ -448,6 +448,12 @@ export default function createMemoryDB(db) {
         total_indexed: total,
         with_embeddings: withEmbedding,
         embedding_coverage: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
+        // Rows awaiting embedding (the row-level backlog) + the in-process
+        // scheduler depth (what's in flight / queued per lane). A client
+        // watching a bulk index can see the embed pipeline drain here
+        // instead of diagnosing it from search timeouts. (2026-09-09)
+        embed_backlog: this.countUnembedded(),
+        embed_queue: embedQueueDepth(),
         by_source_type: byType,
         by_namespace: byNamespace,
         vector_scan_capped: withEmbedding > 5000

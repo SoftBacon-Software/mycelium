@@ -1,6 +1,66 @@
 // Embedding provider abstraction for semantic memory
 // Supports: ollama (nomic-embed-text), openai (text-embedding-3-small), drone (async via job queue)
 
+// -- Embed call scheduler (2026-09-09) ----------------------------------------
+// A local embedder is a SERIAL resource: ollama serves one /api/embed request
+// at a time per model instance. Before this scheduler the plugin had no
+// in-process queue at all — every /index/bulk request started its own
+// unawaited sequential embed chain, /backfill-embeddings and /reindex ran
+// theirs, event on-ramps added more, and a search's single-string query
+// embed entered the embedder's FIFO at the tail with nothing marking it
+// priority. Measured on jetson01 (bench runs B2/B3/B4): after a bulk index,
+// POST /memory/search waited >30 s behind the backlog — long enough for
+// embedOllama's AbortSignal.timeout(30000) to abort the query embed and
+// degrade the search to keyword. This scheduler bounds what the plugin has
+// in flight (embedding_max_concurrency, default 1 — what a serial embedder
+// serves anyway, so bulk throughput is unchanged) and gives query embeddings
+// their own lane that drains before the bulk lane: a search now waits behind
+// at most `embedding_max_concurrency` in-flight embeds, never behind the
+// queued backlog. Backfill still drains at one embed per service time — the
+// scheduler merges the concurrent chains into one queue at the same rate.
+var embedLanes = { high: [], low: [] };
+var embedInFlight = 0;
+var embedMaxInFlight = 1; // last config seen; every embed call passes config, so this applies live
+
+function scheduleEmbedCall(priority, config, runFn) {
+  embedMaxInFlight = embedConcurrency(config); // applied live — every call carries config
+  return new Promise(function (resolve, reject) {
+    embedLanes[priority === 'high' ? 'high' : 'low'].push({ run: runFn, resolve: resolve, reject: reject });
+    pumpEmbedQueue();
+  });
+}
+
+function pumpEmbedQueue() {
+  while (embedInFlight < embedMaxInFlight) {
+    var lane = embedLanes.high.length > 0 ? embedLanes.high : embedLanes.low;
+    var job = lane.shift();
+    if (!job) return;
+    embedInFlight++;
+    (function (j) {
+      j.run().then(function (v) { j.resolve(v); }, function (e) { j.reject(e); }).then(function () {
+        embedInFlight--;
+        pumpEmbedQueue();
+      });
+    })(job);
+  }
+}
+
+function embedConcurrency(config) {
+  var n = parseInt(config && config.embedding_max_concurrency, 10);
+  if (isNaN(n) || n < 1) n = 1;
+  return Math.min(n, 16);
+}
+
+// Queue depth snapshot for /memory/stats — the in-process half of the embed
+// pipeline (the row-level half is db.countUnembedded → embed_backlog).
+export function embedQueueDepth() {
+  return {
+    in_flight: embedInFlight,
+    queued_high: embedLanes.high.length,
+    queued_low: embedLanes.low.length
+  };
+}
+
 // Queue a drone job to embed content asynchronously.
 // The drone worker calls local Ollama, then PUTs the vector back via callback endpoint.
 export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model) {
@@ -27,10 +87,15 @@ export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, tex
   return result.id;
 }
 
-// opts (optional): { db, sourceType, sourceId, chunkIndex } — needed for drone provider to queue jobs
+// opts (optional): { db, sourceType, sourceId, chunkIndex, priority } — db/item
+// context for the drone provider to queue jobs; priority 'high' marks work
+// that must not wait behind the bulk backlog (search query vectors — see the
+// scheduler note above). Everything bulk/backfill/event-shaped defaults to
+// the low lane.
 export async function generateEmbedding(config, text, opts) {
   var provider = config.embedding_provider || 'none';
   if (provider === 'none' || !provider) return null;
+  var priority = (opts && opts.priority === 'high') ? 'high' : 'low';
 
   if (provider === 'drone') {
     // Drone provider: queue async job if caller provides context, always return null
@@ -41,19 +106,26 @@ export async function generateEmbedding(config, text, opts) {
   }
 
   if (provider === 'ollama') {
-    return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', text);
+    return scheduleEmbedCall(priority, config, function () {
+      return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', text);
+    });
   } else if (provider === 'openai') {
-    return embedOpenAI(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, text);
+    return scheduleEmbedCall(priority, config, function () {
+      return embedOpenAI(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, text);
+    });
   }
 
   console.warn('[semantic-memory] Unknown embedding provider:', provider);
   return null;
 }
 
-// opts (optional): { db, items: [{ source_type, source_id, chunk_index }] } — needed for drone provider
+// opts (optional): { db, items: [{ source_type, source_id, chunk_index }], priority } —
+// db/items for the drone provider; priority as in generateEmbedding (bulk callers
+// leave it low; only the search's query embed rides high).
 export async function generateEmbeddingBatch(config, texts, opts) {
   var provider = config.embedding_provider || 'none';
   if (provider === 'none' || !provider) return texts.map(function () { return null; });
+  var priority = (opts && opts.priority === 'high') ? 'high' : 'low';
 
   if (provider === 'drone') {
     // Queue individual drone jobs for each text
@@ -71,11 +143,15 @@ export async function generateEmbeddingBatch(config, texts, opts) {
   }
 
   if (provider === 'ollama') {
-    // Ollama doesn't have a batch endpoint, call sequentially
+    // Ollama doesn't have a batch endpoint, call sequentially (each call
+    // scheduled — one lane entry per text, so a query embed between batches
+    // still jumps ahead of the remainder)
     var results = [];
     for (var t of texts) {
       try {
-        results.push(await embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', t));
+        results.push(await scheduleEmbedCall(priority, config, function () {
+          return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', t);
+        }));
       } catch (e) {
         console.error('[semantic-memory] Batch embed failed for item:', e.message);
         results.push(null);
@@ -89,7 +165,10 @@ export async function generateEmbeddingBatch(config, texts, opts) {
     // of throwing an unhandled rejection that crashes the whole platform
     // from a routine admin reindex during one API hiccup.
     try {
-      return await embedOpenAIBatch(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, texts);
+      // One scheduler unit per batch — the batch IS one HTTP call.
+      return await scheduleEmbedCall(priority, config, function () {
+        return embedOpenAIBatch(config.embedding_url || 'https://api.openai.com/v1', config.embedding_model || 'text-embedding-3-small', config.embedding_api_key, texts);
+      });
     } catch (e) {
       console.error('[semantic-memory] OpenAI batch embed failed:', e.message);
       return texts.map(function () { return null; });

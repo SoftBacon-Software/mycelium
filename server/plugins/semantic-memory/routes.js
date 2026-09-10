@@ -80,7 +80,11 @@ export default function (core) {
         var config = db.getAllConfig();
         var providerConfigured = !!(config.embedding_provider && config.embedding_provider !== 'none');
         if (providerConfigured) {
-          queryEmbedding = await generateEmbedding(config, query);
+          // priority 'high': the query embed jumps the bulk embed backlog
+          // (embedLanes in embeddings.js) instead of waiting behind it —
+          // recall-while-ingesting is an L0 property (2026-09-09 jetson01
+          // incident: searches waited >30 s behind a bulk backfill).
+          queryEmbedding = await generateEmbedding(config, query, { priority: 'high' });
           if (!queryEmbedding) {
             // drone provider returns null (the vector arrives async), or an unknown
             // provider fell through — either way the query has no vector to rank with.
@@ -363,7 +367,7 @@ export default function (core) {
   router.put('/config', function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
-    var allowed = ['embedding_provider', 'embedding_model', 'embedding_url', 'embedding_api_key', 'embedding_dimensions', 'chunk_size', 'auto_index'];
+    var allowed = ['embedding_provider', 'embedding_model', 'embedding_url', 'embedding_api_key', 'embedding_dimensions', 'embedding_max_concurrency', 'chunk_size', 'auto_index'];
     for (var key of allowed) {
       if (req.body[key] !== undefined) {
         db.setConfig(key, String(req.body[key]));
