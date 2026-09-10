@@ -223,7 +223,17 @@ async function main() {
     if (!platformEnv) throw new Error('mycelium arm requested but no platform address resolved (MYCELIUM_URL / substrate.conf)');
     const adminKey = await resolveAdminKey({ keychainService: platformEnv.keychainService });
     if (!adminKey) throw new Error('No admin key: set MYCELIUM_ADMIN_KEY or install the keychain service named in substrate.conf');
-    platform = createPlatform({ baseUrl: platformEnv.baseUrl, headers: { 'X-Admin-Key': adminKey, 'X-Acting-As': 'm5Max' } });
+    // 180 s per call, 8 retries (backoff capped at 30 s): run B4 (2026-09-09)
+    // died at answer 20/50 of the extract arm — five 30 s search timeouts in a
+    // row while the Jetson's embedder was still chewing the 13,869 fact rows the
+    // arm had just indexed (the query embedding queues behind the bulk backlog).
+    // A slow store is a wait; the slot lock already keeps the box exclusive.
+    platform = createPlatform({
+      baseUrl: platformEnv.baseUrl,
+      headers: { 'X-Admin-Key': adminKey, 'X-Acting-As': 'm5Max' },
+      timeoutMs: parseInt(args['platform-timeout-ms'] ?? '180000', 10),
+      maxRetries: parseInt(args['platform-retries'] ?? '8', 10),
+    });
     const health = await platform.health();
     const cfg = await platform.config();
     statsBefore = await platform.stats();

@@ -393,3 +393,25 @@ describe('platform client — an undici socket failure is a network-layer error:
     expect(curlCalls).toHaveLength(2);
   });
 });
+
+describe('platform client — retries wait a capped exponential backoff, the bench passes long bounds', () => {
+  it('retryBackoffMs doubles from 1 s and caps at 30 s', async () => {
+    const { retryBackoffMs, RETRY_BACKOFF_CAP_MS } = await import('../../bench/memory/platform.mjs');
+    expect([0, 1, 2, 3, 4, 5, 6].map(retryBackoffMs)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000]);
+    expect(RETRY_BACKOFF_CAP_MS).toBe(30000);
+  });
+
+  it('a 503 storm is retried maxRetries times with the capped backoff, then surfaces the status', async () => {
+    const waits = [];
+    let calls = 0;
+    const platform = createPlatform({
+      baseUrl: 'http://jetson.test:3002',
+      fetchImpl: async () => { calls++; return { status: 503, text: async () => 'busy' }; },
+      maxRetries: 6,
+      sleepFn: async (ms) => { waits.push(ms); },
+    });
+    await expect(platform.stats()).rejects.toThrow(/-> 503/);
+    expect(calls).toBe(7);
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000]);
+  });
+});
