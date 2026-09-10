@@ -102,7 +102,14 @@ function status_429_5xx(e) {
   return s === 429 || s >= 500;
 }
 
-export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRetries = 4, engine = 'auto', timeoutMs = 30000, curlRun = execFileP }) {
+// Backoff between retries: 1, 2, 4, 8 … s, capped — a busy Jetson (its
+// embedder chewing a 14k-row bulk index while the query embedding waits behind
+// it) answers a search in tens of seconds, not never; the bench passes a long
+// per-call timeout and more retries, and the cap keeps the total wait bounded.
+export const RETRY_BACKOFF_CAP_MS = 30000;
+export const retryBackoffMs = (attempt) => Math.min(RETRY_BACKOFF_CAP_MS, 1000 * 2 ** attempt);
+
+export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRetries = 4, engine = 'auto', timeoutMs = 30000, curlRun = execFileP, sleepFn = sleep }) {
   const api = `${baseUrl}/api/mycelium`;
   let usingCurl = engine === 'curl';
 
@@ -134,7 +141,7 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
         if (status === 429 || status >= 500) {
           lastErr = new Error(`${method} ${urlPath} -> ${status}`);
           if (attempt < maxRetries) {
-            await sleep(1000 * 2 ** attempt);
+            await sleepFn(retryBackoffMs(attempt));
             continue;
           }
           throw lastErr;
@@ -147,7 +154,7 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
         const transient = status_429_5xx(e) || isNetworkLayerError(e);
         lastErr = e;
         if (!transient || attempt >= maxRetries) throw lastErr;
-        await sleep(1000 * 2 ** attempt);
+        await sleepFn(retryBackoffMs(attempt));
       }
     }
     throw lastErr;
