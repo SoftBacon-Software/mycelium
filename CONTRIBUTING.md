@@ -123,7 +123,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 117 files across `test/unit/`,
+There's a vitest suite under `test/` — 118 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
