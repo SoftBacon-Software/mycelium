@@ -70,6 +70,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // interfaces OK, sandbox-independent; see receipt notes). When fetch dies at
 // the network layer we fall back to spawning system curl, sticky per client,
 // and the engine actually used is reported for the regime stamp.
+// A failed child_process quotes the whole command line in its message (and
+// `cmd`) — header values included. The admin key must never reach a run log
+// (it did, 2026-09-10, in four results/*.log files): scrub every secret-looking
+// header's value before the error leaves this function.
+const SECRET_HEADER = /key|token|secret|authorization|password/i;
+export function redactHeaderSecrets(text, headers = {}) {
+  let out = String(text ?? '');
+  for (const [k, v] of Object.entries(headers)) {
+    const val = String(v ?? '');
+    if (!SECRET_HEADER.test(k) || val.length < 4) continue;
+    out = out.split(val).join('<redacted>');
+  }
+  return out;
+}
+
 function curlRequest({ method, url, headers, body, timeoutMs = 30000, run = execFileP }) {
   const args = ['-sS', '-X', method, '--max-time', String(Math.ceil(timeoutMs / 1000)), '-w', '\n%{http_code}'];
   for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
@@ -80,10 +95,21 @@ function curlRequest({ method, url, headers, body, timeoutMs = 30000, run = exec
     const status = parseInt(stdout.slice(at + 1), 10);
     const text = stdout.slice(0, at);
     return { status, text };
+  }, (e) => {
+    if (e && typeof e === 'object') {
+      for (const f of ['message', 'cmd', 'stderr']) {
+        if (typeof e[f] === 'string') e[f] = redactHeaderSecrets(e[f], headers);
+      }
+    }
+    throw e;
   });
 }
 
-const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR|fetch failed|network|abort|socket hang up/i;
+// A name that will not resolve is the network layer too: the 2026-09-10 timeline
+// run died at question 7/50 on `curl: (6) Could not resolve host: jetson01.local`
+// (the Mac's mDNS resolver wedged for 16 min while the Jetson answered its IP in
+// 5 ms) and its cleanup then sat 926 s in `Resolving timed out`. Retry those.
+const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR|ENOTFOUND|EAI_AGAIN|getaddrinfo|Could not resolve|Resolving timed out|fetch failed|network|abort|socket hang up/i;
 
 // undici's failed fetch is a TypeError('fetch failed') whose CAUSE carries the
 // socket code (UND_ERR_SOCKET, UND_ERR_CONNECT_TIMEOUT, ECONNRESET, …). Testing
