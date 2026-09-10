@@ -17,7 +17,9 @@ import { rejudgeRun } from './rejudge.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
-import { myceliumExtractNamespace } from './arms/arm_mycelium_extract.mjs';
+import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
+import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
+import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
 import { startLettaSidecar, purgeLettaScope } from './arms/arm_letta.mjs';
 import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingestion.mjs';
@@ -543,6 +545,29 @@ async function main() {
     const outDir = path.join(RESULTS_DIR, runId);
     fs.mkdirSync(outDir, { recursive: true });
 
+    // the extract arm's facts, persisted as extracted; --reuse-facts <dir> re-indexes
+    // a prior run's sessions without a model call (same extraction regime only —
+    // the store refuses otherwise). Four B-runs died after their extraction on
+    // 2026-09-09 and paid the two hours again each time.
+    const factsExtraction = arms.includes('mycelium-extract')
+      ? {
+          model: answerModel,
+          url_host: new URL(answerUrl).host,
+          max_tokens: EXTRACT_MAX_TOKENS,
+          thinking: 'off',
+          prompt_sha256: createHash('sha256').update(EXTRACTION_SYSTEM).digest('hex'),
+        }
+      : null;
+    const factsStore = factsExtraction
+      ? createFactsStore({ file: path.join(outDir, FACTS_FILE), extraction: factsExtraction, reuseFrom: args['reuse-facts'] ?? null })
+      : null;
+    if (factsStore?.reusing) console.error(`[run] mycelium-extract: reusing facts from ${factsStore.stats.reuse_file} (run ${factsStore.stats.reuse_source_run_id ?? '?'})`);
+    if (factsExtraction) {
+      regime.mycelium_extract.facts_file = path.relative(REPO_ROOT, factsStore.file);
+      regime.mycelium_extract.facts_reused_from = factsStore.reusing ? { file: factsStore.stats.reuse_file, run_id: factsStore.stats.reuse_source_run_id } : null;
+      regime.mycelium_extract.facts_extraction_regime = factsExtraction;
+    }
+
     // incremental evidence: rows land on disk as they are produced
     const rowFiles = {};
     for (const a of arms) rowFiles[a] = fs.openSync(path.join(outDir, `${a}.rows.jsonl`), 'w');
@@ -558,7 +583,7 @@ async function main() {
         // per-arm view: the shared ctx gets the arm's OWN log label (task 182
         // runs several arms in one process — a hardcoded prefix mislabels
         // which arm's write/extract lines these are)
-        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`) }),
+        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' ? { factsStore } : {}) }),
       })),
       armContext: {
         answerChat,

@@ -78,6 +78,7 @@ describe('arm_mycelium_extract — the extraction control arm (task 182)', () =>
       facts_per_session: [2, 1],
       parse_failures: 0,
       parse_failure_detail: [],
+      facts_reused: 0,
       extract_ms: expect.any(Number),
     });
     // one indexed item per fact, in the EXTRACT namespace
@@ -135,6 +136,37 @@ describe('arm_mycelium_extract — the extraction control arm (task 182)', () =>
     expect(w.facts).toBe(3);
     expect(bulk.map((i) => i.source_id)).toEqual(['r1-q1-s0-f0', 'r1-q1-s0-f1', 'r1-q1-s2-f0']);
     expect(logs.find((l) => /PARSE FAILURE/.test(l))).toMatch(/session dropped.*finish_reason=length/);
+  });
+
+  it('write(): with a facts store, every extracted session is saved and a stored session is REUSED without a model call', async () => {
+    const saved = [];
+    const store = {
+      stats: { reuse_source_run_id: 'run-prev', reuse_file: '/x/facts.jsonl', saved: 0, reused: 0 },
+      reusing: true,
+      load: (qid, idx) => (idx === 1 ? { facts: ['from before'], parse_failed: false } : null),
+      save: (qid, idx, rec, meta) => { saved.push({ qid, idx, rec, meta }); },
+    };
+    const calls = [];
+    const bulk = [];
+    const logs = [];
+    const arm = createArmMyceliumExtract({
+      platform: { indexBulk: async (items) => { bulk.push(...items); return [{ rows: items.length }]; }, search: async () => ({ results: [] }) },
+      extractionChat: async (req) => { calls.push(req); return { text: '{"facts": ["fresh"]}', finishReason: 'stop' }; },
+      answerChat: async () => ({ text: 'x' }),
+      runId: 'r2',
+      namespace: 'bench-p1-r2',
+      retrievalBudget: 5,
+      factsStore: store,
+      log: (m) => logs.push(m),
+    });
+    const w = await arm.write([[{ role: 'user', content: 's0' }], [{ role: 'user', content: 's1' }], [{ role: 'user', content: 's2' }]], { questionId: 'q1' });
+    expect(calls).toHaveLength(2); // sessions 0 and 2 extracted; session 1 reused
+    expect(w).toMatchObject({ docs: 3, facts: 3, facts_per_session: [1, 1, 1], facts_reused: 1, parse_failures: 0 });
+    expect(saved.map((s) => s.idx)).toEqual([0, 2]);
+    expect(saved[0]).toMatchObject({ qid: 'q1', rec: { facts: ['fresh'], parse_failed: false, finish_reason: 'stop' }, meta: { runId: 'r2' } });
+    const reusedItem = bulk.find((i) => i.source_id === 'r2-q1-s1-f0');
+    expect(reusedItem).toMatchObject({ content_text: 'from before', metadata: { facts_reused_from: 'run-prev' } });
+    expect(logs.find((l) => /REUSED/.test(l))).toMatch(/extract 2\/3: 1 facts REUSED from run-prev/);
   });
 
   it('write(): rejects a non-array payload loudly (same contract as arm_mycelium)', async () => {

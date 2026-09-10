@@ -125,6 +125,11 @@ export function createArmMyceliumExtract({
   sourceType = BENCH_SOURCE_TYPE,
   runId,
   log = () => {},
+  // optional facts store (bench/memory/facts_store.mjs): every session's facts
+  // are saved as extracted; a session the store already holds (from a prior
+  // run under the SAME extraction regime — the store refuses otherwise) is
+  // re-indexed without a model call. Extraction paid once.
+  factsStore = null,
 }) {
   if (typeof extractionChat !== 'function') {
     throw new Error(
@@ -148,9 +153,28 @@ export function createArmMyceliumExtract({
       const factsPerSession = [];
       const parseFailures = [];
       let extractMs = 0;
+      let reused = 0;
       for (let idx = 0; idx < sessionTurns.length; idx++) {
         const turns = sessionTurns[idx];
         const t0 = Date.now();
+        const cached = factsStore ? factsStore.load(questionId, idx) : null;
+        if (cached) {
+          reused++;
+          const facts = Array.isArray(cached.facts) ? cached.facts : [];
+          if (cached.parse_failed) parseFailures.push({ session_index: idx, finish_reason: cached.finish_reason ?? null, reason: 'reused: parse failure in the source run' });
+          factsPerSession.push(facts.length);
+          log(`extract ${idx + 1}/${sessionTurns.length}: ${facts.length} facts REUSED from ${factsStore.stats.reuse_source_run_id ?? 'the facts file'} — q=${questionId}`);
+          for (let f = 0; f < facts.length; f++) {
+            items.push({
+              source_type: sourceType,
+              source_id: `${runId}-${questionId}-s${idx}-f${f}`,
+              content_text: facts[f],
+              namespace: ns,
+              metadata: { question_id: questionId, session_index: idx, fact_index: f, bench: 'longmemeval', run_id: runId, ingestion: 'extract', facts_reused_from: factsStore.stats.reuse_source_run_id ?? null },
+            });
+          }
+          continue;
+        }
         const reply = await extractionChat({ system: EXTRACTION_SYSTEM, user: buildExtractionUserPrompt(turns) });
         // A malformed extractor reply is a DROPPED SESSION, counted and logged —
         // not a dead run. Mem0's extractor does the same ("Error parsing
@@ -171,6 +195,10 @@ export function createArmMyceliumExtract({
         }
         extractMs += Date.now() - t0;
         factsPerSession.push(facts.length);
+        if (factsStore) {
+          const failed = parseFailures.length > 0 && parseFailures[parseFailures.length - 1].session_index === idx;
+          factsStore.save(questionId, idx, { facts, parse_failed: failed, finish_reason: reply.finishReason ?? null, extract_ms: Date.now() - t0 }, { runId });
+        }
         if (!parseFailures.length || parseFailures[parseFailures.length - 1].session_index !== idx) {
           log(
             `extract ${idx + 1}/${sessionTurns.length}: ${facts.length} facts in ${((Date.now() - t0) / 1000).toFixed(1)}s ` +
@@ -205,6 +233,8 @@ export function createArmMyceliumExtract({
         // sessions whose extractor reply could not be parsed: dropped, counted
         parse_failures: parseFailures.length,
         parse_failure_detail: parseFailures,
+        // sessions re-indexed from a prior run's facts file (no model call)
+        facts_reused: reused,
       };
     },
     async answer(question) {
