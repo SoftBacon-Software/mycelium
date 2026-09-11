@@ -3,7 +3,7 @@ import http from 'node:http';
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium, BENCH_SOURCE_TYPE } from '../../bench/memory/arms/arm_mycelium.mjs';
 import { makeOpenAIChat, isTransientChatError } from '../../bench/memory/answer.mjs';
-import { resolvePlatformEnv, parseSubstrateConf, createPlatform, isNetworkLayerError, redactHeaderSecrets } from '../../bench/memory/platform.mjs';
+import { resolvePlatformEnv, parseSubstrateConf, createPlatform, isNetworkLayerError, redactHeaderSecrets, isCurlTransientExit } from '../../bench/memory/platform.mjs';
 
 const SESSIONS = [
   [
@@ -472,5 +472,44 @@ describe('platform client — a name that will not resolve is transient, and the
     expect(redactHeaderSecrets('a=abcd1234 b=m5Max c=xy', { 'X-Admin-Key': 'abcd1234', 'X-Acting-As': 'm5Max', 'X-Token': 'xy' }))
       .toBe('a=<redacted> b=m5Max c=xy');
     expect(redactHeaderSecrets(undefined, {})).toBe('');
+  });
+});
+
+describe('platform client — the curl engine speaks curl: its exit codes and words are network-layer too', () => {
+  const curlErr = (code, tail) => {
+    const e = new Error(`Command failed: curl -sS -X POST --max-time 180 -w \n%{http_code} http://192.168.50.106:3002/api/mycelium/memory/search\ncurl: (${code}) ${tail}`);
+    e.code = code; e.cmd = 'curl -sS -X POST http://192.168.50.106:3002/api/mycelium/memory/search'; e.stderr = `curl: (${code}) ${tail}`;
+    return e;
+  };
+
+  it('run r2: (28) Failed to connect after 7805 ms is transient — by exit code and by words', () => {
+    const e = curlErr(28, 'Failed to connect to 192.168.50.106 port 3002 after 7805 ms: Couldn\'t connect to server');
+    expect(isCurlTransientExit(e)).toBe(true);
+    expect(isNetworkLayerError(e)).toBe(true);
+    // words alone (a wrapper that lost the code)
+    const w = new Error('curl: (7) Failed to connect to host'); expect(isNetworkLayerError(w)).toBe(true);
+    expect(isNetworkLayerError(new Error('curl: (56) Recv failure: Connection reset by peer'))).toBe(true);
+    expect(isNetworkLayerError(new Error('curl: (52) Empty reply from server'))).toBe(true);
+    expect(isNetworkLayerError(new Error('curl: (28) Operation timed out after 180000 milliseconds with 0 bytes received'))).toBe(true);
+  });
+
+  it('a curl exit code outside the transport set, and an HTTP 4xx, are not transient', () => {
+    const e = curlErr(3, 'URL using bad/illegal format'); // a malformed URL is deterministic
+    expect(isCurlTransientExit(e)).toBe(false);
+    expect(isNetworkLayerError(e)).toBe(false);
+    const notCurl = new Error('x'); notCurl.code = 28; // exit code 28 from something that is not curl
+    expect(isCurlTransientExit(notCurl)).toBe(false);
+    expect(isNetworkLayerError(new Error('POST /memory/search -> 400: bad'))).toBe(false);
+  });
+
+  it('engine curl: a connect failure then a 200 succeeds after one backoff', async () => {
+    const waits = []; let calls = 0;
+    const platform = createPlatform({
+      baseUrl: 'http://192.168.50.106:3002', headers: { 'X-Admin-Key': 'k1234' }, engine: 'curl', maxRetries: 8,
+      sleepFn: async (ms) => { waits.push(ms); },
+      curlRun: async () => { calls++; if (calls === 1) throw curlErr(28, 'Failed to connect to 192.168.50.106 port 3002 after 7805 ms: Couldn\'t connect to server'); return { stdout: JSON.stringify({ results: [] }) + '\n200' }; },
+    });
+    expect(await platform.search({ query: 'q', namespace: 'ns', sourceTypes: ['t'], limit: 5 })).toEqual({ results: [] });
+    expect(calls).toBe(2); expect(waits).toEqual([1000]);
   });
 });
