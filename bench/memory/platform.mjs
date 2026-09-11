@@ -109,7 +109,21 @@ function curlRequest({ method, url, headers, body, timeoutMs = 30000, run = exec
 // run died at question 7/50 on `curl: (6) Could not resolve host: jetson01.local`
 // (the Mac's mDNS resolver wedged for 16 min while the Jetson answered its IP in
 // 5 ms) and its cleanup then sat 926 s in `Resolving timed out`. Retry those.
-const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR|ENOTFOUND|EAI_AGAIN|getaddrinfo|Could not resolve|Resolving timed out|fetch failed|network|abort|socket hang up/i;
+const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR|ENOTFOUND|EAI_AGAIN|getaddrinfo|Could not resolve|Resolving timed out|Failed to connect|Couldn't connect|Connection refused|Connection reset|Operation timed out|timed out|Recv failure|Send failure|Empty reply|fetch failed|network|abort|socket hang up/i;
+
+// The curl engine surfaces curl's OWN words and exit code, not node's errno
+// names — run r2 (2026-09-10 21:2x) died on the first `curl: (28) Failed to
+// connect to 192.168.50.106 port 3002 after 7805 ms` (a 7.8 s LAN blip; the
+// Jetson never went down) because nothing above matched it. A child_process
+// error carries the exit code in `code`; these are the transport-side ones.
+//   6 resolve · 7 connect · 16 HTTP/2 · 18 partial · 28 timeout · 35 TLS
+//   connect · 52 empty reply · 55 send · 56 recv
+export const CURL_TRANSIENT_EXIT = new Set([6, 7, 16, 18, 28, 35, 52, 55, 56]);
+export function isCurlTransientExit(e) {
+  const code = e?.code;
+  const fromCurl = /(^|\s)curl(\s|:|$)/.test(`${e?.cmd ?? ''} ${e?.message ?? ''}`);
+  return fromCurl && Number.isInteger(code) && CURL_TRANSIENT_EXIT.has(code);
+}
 
 // undici's failed fetch is a TypeError('fetch failed') whose CAUSE carries the
 // socket code (UND_ERR_SOCKET, UND_ERR_CONNECT_TIMEOUT, ECONNRESET, …). Testing
@@ -117,6 +131,7 @@ const NETWORK_LAYER = /EHOSTUNREACH|ECONNREFUSED|ENETUNREACH|ECONNRESET|ETIMEDOU
 // non-transient: run B3 (2026-09-09) died at question 43/50 on a bare
 // "fetch failed" that neither switched to curl nor retried. Test every field.
 export function isNetworkLayerError(e) {
+  if (isCurlTransientExit(e)) return true;
   const text = [e?.cause?.code, e?.cause?.message, e?.code, e?.name, e?.message].filter(Boolean).join(' ');
   return NETWORK_LAYER.test(text);
 }
