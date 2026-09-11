@@ -1,0 +1,150 @@
+{
+  "run_id": "2026-09-11-p1-123327",
+  "hand_scorer": "m5Max (director, Fable 5.1), 2026-09-11 14:4x CDT",
+  "selection_rule": "PRE-COMMITTED before any sampled row was read: judged.jsonl file order, 0-based indices with i % 5 in {1, 3} (the 167 rule i % 5 == 3 extended by phase 1 to reach 20 items on a one-arm 50-row file, the same extension used for run 2026-09-11-p1-025039). File index is the only selection key.",
+  "selection_indices": [
+    1,
+    3,
+    6,
+    8,
+    11,
+    13,
+    16,
+    18,
+    21,
+    23,
+    26,
+    28,
+    31,
+    33,
+    36,
+    38,
+    41,
+    43,
+    46,
+    48
+  ],
+  "scoring_protocol": "EXACT / PARTIAL / WRONG from the question, the gold and the model answer ONLY, under the judge's own rubric (judge-prompt.2): WRONG leads; PARTIAL requires part of the gold fact on the table; EXACT states the gold fact, equivalent wording fine. Judge labels and judge_raw for the sampled rows were NOT read before scoring (only whole-run label counts had been seen); labels written before the --handlabels command ran, never revised.",
+  "items": [
+    {
+      "question_id": "00ca467f",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "No record of March appointments; gold 2 not stated."
+    },
+    {
+      "question_id": "01493427",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States the gold count 25."
+    },
+    {
+      "question_id": "06878be2",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Generic gear for a Leica/Nikon setup; the gold preference (Sony-compatible accessories) never appears."
+    },
+    {
+      "question_id": "06f04340",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "No info on homegrown ingredients; gold (cherry tomatoes, basil, mint) never appears."
+    },
+    {
+      "question_id": "078150f1",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Refusal; gold $50 not stated."
+    },
+    {
+      "question_id": "0862e8bf",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States the gold fact: Luna."
+    },
+    {
+      "question_id": "08f4fc43",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States 30 days \u2014 the gold answer."
+    },
+    {
+      "question_id": "099778bb",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States 20% \u2014 the gold answer (derived from 20 of 100)."
+    },
+    {
+      "question_id": "09d032c9",
+      "arm": "mycelium-timeline",
+      "label": "partial",
+      "rationale": "Builds on the portable power bank purchase (names it, says it helps) but gives no optimisation of its use \u2014 part of the gold preference."
+    },
+    {
+      "question_id": "0a995998",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "States 1 item; gold is 3."
+    },
+    {
+      "question_id": "0bc8ad93",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Says it does not know; gold (not with a friend) not stated."
+    },
+    {
+      "question_id": "0ddfec37",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States 15 \u2014 the gold."
+    },
+    {
+      "question_id": "0e5e2d1a",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States 38 subjects \u2014 the gold (assistant's own earlier statement recalled)."
+    },
+    {
+      "question_id": "0edc2aef",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Already-booked / Fontainebleau; the gold preference (views, rooftop pool or hot tub) never appears."
+    },
+    {
+      "question_id": "10e09553",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Refusal; gold 7 not stated."
+    },
+    {
+      "question_id": "1192316e",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "States 75 minutes; gold is an hour and a half \u2014 a different number, not rounding."
+    },
+    {
+      "question_id": "15745da0",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States about three months \u2014 the gold."
+    },
+    {
+      "question_id": "157a136e",
+      "arm": "mycelium-timeline",
+      "label": "wrong",
+      "rationale": "Refusal; gold 43 not stated."
+    },
+    {
+      "question_id": "18bc8abd",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States Kansas City Masterpiece \u2014 the gold."
+    },
+    {
+      "question_id": "1903aded",
+      "arm": "mycelium-timeline",
+      "label": "exact",
+      "rationale": "States Transcriptionist \u2014 the gold (assistant's own earlier list recalled)."
+    }
+  ]
+}
