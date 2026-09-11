@@ -14,11 +14,12 @@ import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.
 import { makeOpenAIChat } from './answer.mjs';
 import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
 import { rejudgeRun } from './rejudge.mjs';
+import { reanswerRun } from './reanswer.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, RECONCILE_SYSTEM } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, RECONCILE_SYSTEM, TIMELINE_READ_POLICY } from './arms/arm_mycelium_timeline.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
@@ -129,6 +130,132 @@ async function main() {
       }, null, 2));
     } finally {
       if (fd !== null) fs.closeSync(fd);
+    }
+    return;
+  }
+
+  // ---------------- --reanswer <dir>: re-answer + re-judge a KEPT run ---------
+  // Runs ONLY the answer + judge phases against the run's kept namespaces (the
+  // run's regime names them; /memory/list must still show rows or we refuse).
+  // The ~9 h write side is REUSED — a read-policy change costs an hour of
+  // answering, not a night of writing. Writes <arm>.rows.reanswer-<policy>.jsonl
+  // + judged.reanswer-<policy>.jsonl + summary.reanswer-<policy>.json beside
+  // the originals (never touched) and, with --receipt, a receipt stamped as a
+  // re-answer of that run.
+  if (args.reanswer) {
+    const dir = path.resolve(args.reanswer);
+    const original = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8'));
+    if (!original?.run_id || !original?.regime || !original?.arms) {
+      throw new Error(`--reanswer: ${path.join(dir, 'summary.json')} is not a bench summary (run_id/regime/arms missing)`);
+    }
+    const selected = args.arms
+      ? resolveArms(String(args.arms).split(',').map((s) => s.trim()).filter(Boolean))
+      : Object.keys(original.arms);
+    // the read policy IN EFFECT NOW names the outputs: the same rows re-read
+    // under a different policy are different evidence
+    const readPolicy = selected.includes('mycelium-timeline') ? TIMELINE_READ_POLICY : 'asis';
+
+    const platformEnv = resolvePlatformEnv();
+    const adminKey = await resolveAdminKey({ keychainService: platformEnv.keychainService });
+    if (!adminKey) throw new Error('No admin key: set MYCELIUM_ADMIN_KEY or install the keychain service named in substrate.conf');
+    const platform = createPlatform({
+      baseUrl: platformEnv.baseUrl,
+      headers: { 'X-Admin-Key': adminKey, 'X-Acting-As': 'm5Max' },
+      timeoutMs: parseInt(args['platform-timeout-ms'] ?? '180000', 10),
+      maxRetries: parseInt(args['platform-retries'] ?? '8', 10),
+    });
+
+    const boxUrl = platformEnv.box3090Url || null;
+    const answerUrl = args['answer-url'] ?? (boxUrl ? `${boxUrl}/v1` : null);
+    const answerModel = args['answer-model'] ?? 'qwen3.8:27b';
+    if (!answerUrl) throw new Error('No answer endpoint: pass --answer-url or set BOX_3090_URL (substrate.conf)');
+    const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
+    const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
+    const REANSWER_MAX_TOKENS = parseInt(args['answer-max-tokens'] ?? '4096', 10);
+    const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: REANSWER_MAX_TOKENS });
+    // the timeline factory refuses to exist without the thinking-off chats —
+    // the read path never calls them, but the arm's contract holds end to end
+    const thinkingOffChat = makeOpenAIChat({
+      url: answerUrl,
+      model: answerModel,
+      maxTokens: parseInt(args['extract-max-tokens'] ?? '4096', 10),
+      extraBody: { chat_template_kwargs: { enable_thinking: false } },
+    });
+    const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
+    const judgeFn = makeJudge({ chat: judgeChat });
+
+    // the answer phase dials the 3090 — the same one-run-one-slot discipline
+    // as a fresh run (the box serves ONE 64k slot outside a benchmark window)
+    let slotLock = null;
+    if (!args['no-slot-lock']) {
+      const propsBase = boxUrl ?? answerUrl.replace(/\/v1\/?$/, '');
+      const served = await probeTotalSlots(propsBase);
+      const totalSlots = served ?? 1;
+      slotLock = acquireSlotLock({ totalSlots, label: `reanswer ${original.run_id} ${selected.join(',')}` });
+      console.error(`[reanswer] 3090 slot lock: held ${slotLock.holders_before + 1}/${totalSlots} (${slotLock.file})`);
+    }
+
+    const rowFds = {};
+    let judgedFd = null;
+    try {
+      const result = await reanswerRun({
+        dir,
+        arms: selected,
+        platform,
+        makeArm: (ctx) => ARM_FACTORIES[ctx.arm]({
+          ...ctx,
+          answerChat,
+          extractionChat: thinkingOffChat,
+          reconcileChat: thinkingOffChat,
+          log: (m) => console.error(`[${ctx.arm}] ${m}`),
+        }),
+        judgeFn,
+        judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
+        judgePromptVersion: JUDGE_PROMPT_VERSION,
+        readPolicy,
+        generatedAtUtc: utcStamp(new Date()),
+        onAnswer: (armName, row) => {
+          if (!rowFds[armName]) rowFds[armName] = fs.openSync(path.join(dir, `${armName}.rows.reanswer-${readPolicy}.jsonl`), 'w');
+          fs.writeSync(rowFds[armName], JSON.stringify(row) + '\n');
+        },
+        onJudged: (row) => {
+          if (judgedFd === null) judgedFd = fs.openSync(path.join(dir, `judged.reanswer-${readPolicy}.jsonl`), 'w');
+          fs.writeSync(judgedFd, JSON.stringify(row) + '\n');
+        },
+        log: (m) => console.error(`[reanswer] ${m}`),
+      });
+      const summaryFile = path.join(dir, `summary.reanswer-${readPolicy}.json`);
+      fs.writeFileSync(summaryFile, JSON.stringify(result.summary, null, 2));
+
+      let receiptFile = null;
+      if (args.receipt) {
+        const dirRel = path.relative(REPO_ROOT, dir);
+        const md = renderReceipt({
+          runId: result.summary.run_id,
+          summary: result.summary,
+          commands: [
+            `node bench/memory/run.mjs --reanswer ${dirRel.startsWith('..') ? dir : dirRel}` +
+              `${args.arms ? ` --arms ${args.arms}` : ''}${args.receipt ? ' --receipt' : ''}`,
+          ],
+          reanswer: { ofRunId: result.summary.reanswered_from, readPolicy },
+          generatedAt: utcStamp(new Date()),
+        });
+        receiptFile = writeReceipt(result.summary.run_id, md);
+        console.error(`[run] receipt: ${receiptFile}`);
+      }
+
+      console.log(JSON.stringify({
+        reanswered_from: result.summary.reanswered_from,
+        read_policy: readPolicy,
+        rows_files: Object.fromEntries(Object.entries(result.rowsFilePaths).map(([k, v]) => [k, path.relative(REPO_ROOT, v)])),
+        judged_file: path.relative(REPO_ROOT, result.judgedFilePath),
+        summary_file: path.relative(REPO_ROOT, summaryFile),
+        receipt: receiptFile ? path.relative(REPO_ROOT, receiptFile) : null,
+      }, null, 2));
+    } finally {
+      for (const fd of Object.values(rowFds)) fs.closeSync(fd);
+      if (judgedFd !== null) fs.closeSync(judgedFd);
+      if (slotLock) slotLock.release();
     }
     return;
   }
@@ -550,12 +677,14 @@ async function main() {
             'the lane\'s pre-authorized fallback.',
           read: {
             budget,
-            merge: 'both layers searched at the budget; merged CURRENT facts first (server rank order), then episodes, then superseded facts; capped at the budget',
+            read_policy: TIMELINE_READ_POLICY,
+            merge: 'both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget',
             hit_rendering:
               'each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line ' +
               '"superseded on <valid_to> by: <new fact>"',
             rag_prompt: 'arm_mycelium RAG_SYSTEM, unchanged',
           },
+          read_policy: TIMELINE_READ_POLICY, // also top-level: regime.timeline.read_policy
           retrieval_budget: budget,
         }
       : null,

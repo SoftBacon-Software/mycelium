@@ -31,6 +31,13 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #     --rejudge --handlabels bench/memory/handlabels/<file>.json --receipt
 # (judge-only: no answerer calls, no platform calls; writes judged.rejudge.jsonl
 #  + summary.rejudge.json beside the originals and a `<runId>-rejudge` receipt)
+#
+# re-answer a KEPT run under the CURRENT read policy (task 188) — answer + judge
+# only, against the run's kept namespaces (write side reused):
+#   node bench/memory/run.mjs --reanswer bench/memory/results/<runId> --receipt
+# (refuses if the run's rows were purged; writes <arm>.rows.reanswer-<policy>.jsonl
+#  + judged.reanswer-<policy>.jsonl + summary.reanswer-<policy>.json beside the
+#  originals and a `<runId>-reanswer-<policy>` receipt)
 ```
 
 Cost: $0 — the answerer and the judge are both local models.
@@ -386,6 +393,23 @@ not overwritten) and, with `--receipt`, a `<runId>-rejudge` receipt carrying
 the new scores, the old scores, the judge-agreement number, and a regime block
 recording `judge_prompt_version` + which run was re-judged.
 
+**Re-answering a kept run** (`--reanswer <run dir>`): runs ONLY the answer +
+judge phases against the run's KEPT namespaces — the run's regime names them
+(`/memory/list` is checked first; a run whose rows were purged is refused).
+The write side is reused: the timeline arm's n=50 write is ~9 h of the 3090, so
+a READ-policy change should cost an hour of answering, not a night of writing.
+Writes `<arm>.rows.reanswer-<policy>.jsonl` + `judged.reanswer-<policy>.jsonl` +
+`summary.reanswer-<policy>.json` beside the originals (originals are never
+touched; an existing reanswer output is refused, not overwritten) and, with
+`--receipt`, a receipt stamped as a re-answer of that run, carrying the new
+scores and the original run's scores. The `<policy>` suffix is the read policy
+in effect NOW (`fact-episode-interleave` for the timeline arm) — the same rows
+re-read under a different policy are different evidence:
+
+```bash
+node bench/memory/run.mjs --reanswer bench/memory/results/<runId> --receipt
+```
+
 **Validation:** before any number is quoted, hand-score ≥20 sampled (question,
 gold, answer) triples, write `bench/memory/handlabels/<date>-<n>.json`:
 
@@ -417,6 +441,7 @@ provisional.
 run.mjs        CLI (thin)            judge.mjs    local judge + label parsing + agreement
 core.mjs       runBench (DI; what tests drive)    regime.mjs   the stamp
 rejudge.mjs    re-judge saved answers (DI; what tests drive)
+reanswer.mjs   re-answer a kept run's namespaces (DI; what tests drive)
 split.mjs      registry + sha256 gate + selection receipt.mjs markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
 arms/          arm_none, arm_mycelium, arm_mycelium_extract, arm_mem0,

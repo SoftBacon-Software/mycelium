@@ -17,6 +17,18 @@
 //                the fact that replaced it; the new fact carries valid_from and
 //                the episode pointer. Namespace suffixed -timeline.
 //
+// READ POLICY — `fact-episode-interleave` (stamped regime.timeline.read_policy).
+// The 2026-09-11 r3 run (results/2026-09-11-p1-025039) exposed a read-side
+// defect: merging current facts → episodes → superseded let five fact hits fill
+// budget 5 on every question, so the verbatim episodic layer reached ZERO of 50
+// answers (meta: facts_hits 5, episode_hits 5, context 5). The budget-5 cap is
+// the comparability contract with the other arms — the fix interleaves INSIDE
+// it: f,e,f,e,… strongest current fact first, a dry layer yields to the other,
+// superseded facts are the dated tail reserve. Chosen over fact-carries-episode
+// because carry needs a by-id row fetch the bench platform surface doesn't
+// expose (search + capped list only) and would spend budget on extractor-chosen
+// episodes instead of retriever-ranked ones.
+//
 // WHY MEMORY ROWS AND NOT THE am_facts ROUTES: the bi-temporal am_facts table
 // and its supersede/reverify routes ARE deployed on the live platform (checked
 // 2026-09-10: GET /auto-memory/facts answers), but they do not fit the bench
@@ -47,6 +59,29 @@ export function myceliumTimelineNamespace(namespace) {
 
 export function myceliumTimelineNamespaces(namespace) {
   return [namespace, myceliumTimelineNamespace(namespace)];
+}
+
+// The read policy's name — stamped in every answer row's meta (read_policy)
+// and in run.mjs's regime block (mycelium_timeline.read_policy). A different
+// merge is a different arm: the name is the receipt.
+export const TIMELINE_READ_POLICY = 'fact-episode-interleave';
+
+// Merge the two retrieval layers INSIDE the stamped budget: alternate
+// current-fact / episode, strongest current fact first; when one layer runs
+// dry the other takes the remaining live slots; superseded facts (least
+// trustworthy, but carrying their dated supersede line) fill only what neither
+// live layer can. Pure — answer() renders and counts what this returns.
+export function interleaveLayers({ current, episodes, superseded, budget }) {
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (out.length < budget && (i < current.length || j < episodes.length)) {
+    if (i < current.length) out.push(current[i++]);
+    if (out.length < budget && j < episodes.length) out.push(episodes[j++]);
+  }
+  let k = 0;
+  while (out.length < budget && k < superseded.length) out.push(superseded[k++]);
+  return out;
 }
 
 // The pre-committed RECONCILE prompt (verbatim). Quote it in the receipt: the
@@ -403,12 +438,12 @@ export function createArmMyceliumTimeline({
     },
 
     async answer(question) {
-      // READ — retrieval over BOTH layers at the stamped budget: the reconciled
-      // layer's CURRENT facts first (valid_to null, server rank order), then
-      // the episodes, then superseded facts (which carry their supersede line —
-      // the assistant can cite when something changed). Merged pool capped at
-      // the budget: the same budget the other arms retrieve with, spent across
-      // two layers.
+      // READ — both layers searched at the stamped budget (the comparability
+      // contract: context stays ≤5 rows, same as every other arm), then merged
+      // by TIMELINE_READ_POLICY — fact/episode interleave, superseded facts the
+      // dated tail (they carry their supersede line: the assistant can cite
+      // when something changed). The r3 run proved facts-first starves the
+      // episodic layer entirely; see the header comment.
       const [f, e] = await Promise.all([
         platform.search({ query: question, namespace: factsNs, sourceTypes: [sourceType], limit: retrievalBudget }),
         platform.search({ query: question, namespace, sourceTypes: [sourceType], limit: retrievalBudget }),
@@ -417,7 +452,7 @@ export function createArmMyceliumTimeline({
       const episodeHits = (e.results ?? []).map((r) => ({ ...r, _layer: 'episode' }));
       const current = factHits.filter((r) => r.metadata?.valid_to == null);
       const superseded = factHits.filter((r) => r.metadata?.valid_to != null);
-      const merged = [...current, ...episodeHits, ...superseded].slice(0, retrievalBudget);
+      const merged = interleaveLayers({ current, episodes: episodeHits, superseded, budget: retrievalBudget });
 
       const context = merged
         .map((r) => {
@@ -442,6 +477,10 @@ export function createArmMyceliumTimeline({
           episode_hits: episodeHits.length,
           current_facts: current.length,
           superseded_facts: superseded.length,
+          context_facts: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to == null).length,
+          context_episodes: merged.filter((h) => h._layer === 'episode').length,
+          context_superseded: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
+          read_policy: TIMELINE_READ_POLICY,
           retrieval_mode: f.mode,
           degraded_reason: f.degraded ? f.degraded.reason : e.degraded ? e.degraded.reason : null,
           ingestion: 'timeline',
