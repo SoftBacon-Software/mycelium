@@ -382,7 +382,6 @@ class TwoStageStopProtocolTest(unittest.TestCase):
 
     def test_idle_stop_exits_cleanly_on_the_first_sigterm(self):
         import signal
-        import subprocess
 
         proc = self._spawn([sys.executable, mem0_sidecar.__file__], tempfile.mkdtemp(prefix="mem0-stop-idle-"))
         try:

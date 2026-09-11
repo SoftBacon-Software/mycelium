@@ -579,7 +579,6 @@ def main(memory_factory=default_memory_factory, client_binder=bound_mem0_openai_
     import signal
     import sys
     import threading
-    import time
 
     state = SidecarState(memory_factory=memory_factory, client_binder=client_binder)
     inflight = Inflight()

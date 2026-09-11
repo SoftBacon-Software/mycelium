@@ -245,10 +245,15 @@ function thinkingNotes(regime) {
 
 // 'seconds per add where stamped': the extract arm stamps extract_ms (total LLM
 // extraction ms) + docs (sessions written) — the honest s/add is their quotient.
-// Arms that only log per-add timing (mem0/zep/letta) stay honest by absence.
+// The timeline arm adds reconcile_ms (its per-candidate ADD/SUPERSEDE/KEEP
+// decision calls — the DOMINANT cost, ~10× the extraction): when stamped it is
+// part of the write cost and pretending otherwise printed 1.30 s/session for a
+// 12.26 s/session phase (r3). Arms that only log per-add timing stay honest by
+// absence.
 function secondsPerAdd(writeInfo) {
   if (typeof writeInfo?.extract_ms !== 'number' || !writeInfo?.docs) return null;
-  return (writeInfo.extract_ms / writeInfo.docs / 1000).toFixed(2);
+  const ms = writeInfo.extract_ms + (typeof writeInfo.reconcile_ms === 'number' ? writeInfo.reconcile_ms : 0);
+  return (ms / writeInfo.docs / 1000).toFixed(2);
 }
 
 export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
@@ -331,7 +336,9 @@ export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
     if (dropped) bits.push(`Ingestion loss: ${dropped}.`);
     bits.push(
       perAdd !== null
-        ? `Seconds per add (stamped extract_ms ${w.extract_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
+        ? typeof w.reconcile_ms === 'number'
+          ? `Seconds per add (stamped extract_ms ${w.extract_ms} ms + reconcile_ms ${w.reconcile_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
+          : `Seconds per add (stamped extract_ms ${w.extract_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
         : 'Seconds per add: not stamped.'
     );
     L.push(bits.join(' '));

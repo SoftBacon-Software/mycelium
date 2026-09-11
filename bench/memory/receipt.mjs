@@ -9,6 +9,30 @@ import { renderIngestionGrid } from './ingestion.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
+// The bound's denominator, provenance-stamped (task 188): the extract control's
+// n=50 run — extract_ms 11,370,052 over 2,355 docs = 4.83 s/session. The
+// timeline arm's write cost is quoted as a RATIO of this figure; if the extract
+// arm ever re-runs its n=50 write, re-stamp these three numbers from the new
+// summary.json (never retype the ratio — the line computes it).
+export const EXTRACT_ARM_STAMPED = {
+  run_id: '2026-09-10-p1-001549',
+  extract_ms: 11_370_052,
+  docs: 2355,
+};
+
+// The timeline arm's write cost INCLUDING its reconcile phase (extract_ms alone
+// understates it ~10×: the ADD/SUPERSEDE/KEEP decision calls dominate), as a
+// ratio of the extract arm's stamped figure — the brief's ≤2× bound. Returns
+// null when the run carries no timeline write stats (no line for other arms).
+export function timelineCostLine(writeInfo) {
+  const w = writeInfo?.['mycelium-timeline'];
+  if (!w || typeof w.extract_ms !== 'number' || !w.docs) return null;
+  const sPerSession = (w.extract_ms + (w.reconcile_ms ?? 0)) / w.docs / 1000;
+  const extractSPerSession = EXTRACT_ARM_STAMPED.extract_ms / EXTRACT_ARM_STAMPED.docs / 1000;
+  const ratio = sPerSession / extractSPerSession;
+  return `Write cost (mycelium-timeline): ${sPerSession.toFixed(2)} s/session — cost ×${ratio.toFixed(2)} of extract; bound ≤ 2×`;
+}
+
 export function renderReceipt({
   runId,
   summary,
@@ -18,6 +42,7 @@ export function renderReceipt({
   handlabels = null,
   writeInfo = null,
   rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
+  reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
 }) {
   const scoreRow = ([name, a]) => {
@@ -33,6 +58,13 @@ export function renderReceipt({
     L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`.`);
     L.push('The answers are the original run\'s own (no answerer calls, no platform calls) — only the');
     L.push('judge labels were re-computed. The original run\'s scores are rendered below the new ones.');
+  }
+  if (reanswer) {
+    L.push('');
+    L.push(`Re-answer of run \`${reanswer.ofRunId}\` under read policy \`${reanswer.readPolicy}\`.`);
+    L.push('The write side is the original run\'s own (no write-side calls) — the answers AND the judge');
+    L.push('labels were re-computed against the run\'s kept namespaces. The original run\'s scores are');
+    L.push('rendered below the new ones.');
   }
   L.push('');
   L.push('## Scores');
@@ -52,9 +84,9 @@ export function renderReceipt({
     for (const line of grid) L.push(line);
     L.push('');
   }
-  if (rejudge && summary.original?.arms) {
+  if ((rejudge || reanswer) && summary.original?.arms) {
     L.push('');
-    L.push(`Original run \`${rejudge.ofRunId}\` scores (pre-rejudge, from the run's own summary):`);
+    L.push(`Original run \`${(rejudge ?? reanswer).ofRunId}\` scores (pre-${rejudge ? 'rejudge' : 'reanswer'}, from the run's own summary):`);
     L.push('');
     L.push('| arm | n | exact | partial | wrong | p1_score |');
     L.push('|---|---|---|---|---|---|');
@@ -66,6 +98,13 @@ export function renderReceipt({
       L.push(`Retrieval modes observed (${name} arm, per query): ${JSON.stringify(a.retrieval_modes)}`);
       L.push('');
     }
+  }
+  // task 188: the timeline arm's write cost against the extract control —
+  // computed from the run's own stamps, never hand-typed
+  const costLine = timelineCostLine(writeInfo ?? summary.write_info ?? null);
+  if (costLine) {
+    L.push(costLine);
+    L.push('');
   }
   if (judgeAgreement) {
     L.push('## Judge validation (vs hand-scored set)');
@@ -121,6 +160,13 @@ export function renderReceipt({
     L.push(`- judged (rejudge): \`bench/memory/results/${rejudge.ofRunId}/judged.rejudge.jsonl\``);
     L.push(`- summary (rejudge): \`bench/memory/results/${rejudge.ofRunId}/summary.rejudge.json\``);
     L.push(`- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
+    L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
+  } else if (reanswer) {
+    L.push(`- rows (re-answer of the kept namespaces): \`bench/memory/results/${reanswer.ofRunId}/\` (<arm>.rows.reanswer-${reanswer.readPolicy}.jsonl)`);
+    L.push(`- rows (the original write-side answers, unchanged): \`bench/memory/results/${reanswer.ofRunId}/\` (<arm>.rows.jsonl)`);
+    L.push(`- judged (reanswer): \`bench/memory/results/${reanswer.ofRunId}/judged.reanswer-${reanswer.readPolicy}.jsonl\``);
+    L.push(`- summary (reanswer): \`bench/memory/results/${reanswer.ofRunId}/summary.reanswer-${reanswer.readPolicy}.json\``);
+    L.push(`- original receipt: \`bench/memory/receipts/${reanswer.ofRunId}.md\``);
     L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
   } else {
     L.push(`- rows: \`bench/memory/results/${runId}/\` (<arm>.rows.jsonl + judged.jsonl — the raw evidence for every number above)`);

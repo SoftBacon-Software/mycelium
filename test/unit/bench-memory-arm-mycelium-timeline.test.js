@@ -6,6 +6,8 @@ import {
   myceliumTimelineNamespace,
   myceliumTimelineNamespaces,
   sessionDateFor,
+  interleaveLayers,
+  TIMELINE_READ_POLICY,
   RECONCILE_SYSTEM,
 } from '../../bench/memory/arms/arm_mycelium_timeline.mjs';
 import { RAG_SYSTEM } from '../../bench/memory/arms/arm_mycelium.mjs';
@@ -279,8 +281,13 @@ describe('arm_mycelium_timeline — the §3 timeline arm', () => {
   });
 });
 
-describe('arm_mycelium_timeline — READ over both layers', () => {
-  it('answer(): current facts first, then episodes, then superseded facts — capped at the budget, each hit dated, supersede lines rendered', async () => {
+describe('arm_mycelium_timeline — READ interleaves both layers', () => {
+  // The 2026-09-11 r3 defect, fixed: the old merge (current facts → episodes →
+  // superseded) let 5 fact hits fill budget 5 EVERY time — the verbatim
+  // episodic layer was in zero of 50 answers (meta: facts_hits 5, episode_hits
+  // 5, context 5). The `fact-episode-interleave` policy alternates the layers
+  // INSIDE the stamped budget so both reach the prompt.
+  it('answer(): fact/episode interleave at the budget — both layers in context, superseded facts the dated tail, policy stamped', async () => {
     const searches = [];
     const platform = {
       async search({ query, namespace, limit }) {
@@ -321,12 +328,14 @@ describe('arm_mycelium_timeline — READ over both layers', () => {
       { namespace: 'bench-p1-r1-timeline', limit: 5 },
       { namespace: 'bench-p1-r1', limit: 5 },
     ]);
-    // current facts (rank order) → episodes (rank order) → superseded facts
+    // f, e, f, e, f — strongest current fact still leads; the episodic layer
+    // is IN the context, not starved out by the fact layer
     const hits = seen[0].user.replace(/^Memory context:\n/, '').split('\n\n---\n\n');
     expect(hits).toHaveLength(5);
     expect(hits[0]).toBe('[fact | 2023/05/22 (Mon) 18:00] User manager is Dana');
-    expect(hits[1]).toContain('[fact | 2023/05/02] User has a dog');
-    expect(hits[2]).toBe('[session | 2023/05/01 (Mon) 10:00] user: I moved to Porto once');
+    expect(hits[1]).toBe('[session | 2023/05/01 (Mon) 10:00] user: I moved to Porto once');
+    expect(hits[2]).toBe('[fact | 2023/05/02] User has a dog');
+    expect(hits[3]).toBe('[session | 2023/05/02 (Tue) 10:00] user: hello');
     expect(hits[4]).toContain('[fact | 2023/05/01] User lives in Porto');
     expect(hits[4]).toContain('superseded on 2023/05/10 by: User lives in Lisbon');
 
@@ -338,11 +347,13 @@ describe('arm_mycelium_timeline — READ over both layers', () => {
     expect(r.text).toBe('Lisbon.');
     expect(r.meta).toMatchObject({
       hits: 5, facts_hits: 3, episode_hits: 2, current_facts: 2, superseded_facts: 1,
+      context_facts: 2, context_episodes: 2, context_superseded: 1,
+      read_policy: TIMELINE_READ_POLICY,
       retrieval_mode: 'hybrid', ingestion: 'timeline',
     });
   });
 
-  it('answer(): the budget caps the merged pool (5 hits max even when both layers return full pages)', async () => {
+  it('answer(): the budget caps the context AND both layers share it (3 facts + 2 episodes, never 5+5)', async () => {
     const page = (n, layer, extra = {}) =>
       Array.from({ length: n }, (_, i) => ({
         source_id: `${layer}-${i}`, content_text: `${layer} ${i}`,
@@ -363,8 +374,89 @@ describe('arm_mycelium_timeline — READ over both layers', () => {
       platform, namespace: 'bench-p1-r1', retrievalBudget: 5, runId: 'r1',
     });
     const r = await arm.answer('q');
-    expect(r.meta.hits).toBe(5); // 5 current facts fill the pool first
+    expect(r.meta.hits).toBe(5);
+    expect((seen[0].user.match(/\[session \|/g) ?? []).length).toBe(2);
+    expect((seen[0].user.match(/\[fact \|/g) ?? []).length).toBe(3);
+    expect(r.meta.context_episodes).toBe(2);
+    expect(r.meta.context_facts).toBe(3);
+  });
+
+  it('answer(): a dry layer yields to the other — facts-only and episodes-only questions still answer', async () => {
+    const seen = [];
+    const armFor = (factsPage, episodesPage) =>
+      createArmMyceliumTimeline({
+        answerChat: async (args) => { seen.push(args); return { text: 'x' }; },
+        extractionChat: async () => ({}), reconcileChat: async () => ({}),
+        platform: {
+          async search({ namespace }) {
+            return namespace.endsWith('-timeline') ? { results: factsPage, mode: 'hybrid' } : { results: episodesPage, mode: 'hybrid' };
+          },
+          async indexBulk() { return []; },
+        },
+        namespace: 'bench-p1-r1', retrievalBudget: 5, runId: 'r1',
+      });
+    const hit = (layer, extra = {}) => ({
+      source_id: layer, content_text: layer, metadata: { layer, valid_from: 'd', valid_to: null, ...extra },
+    });
+
+    // facts-only: current facts take every slot the dry episode layer vacates
+    const factsOnly = armFor([hit('fact', { valid_from: 'd1' }), hit('fact2', { valid_from: 'd2' })], []);
+    const rf = await factsOnly.answer('q');
+    expect(rf.meta).toMatchObject({ hits: 2, context_facts: 2, context_episodes: 0 });
     expect(seen[0].user).not.toContain('[session');
+
+    // episodes-only: episodes take every slot the dry fact layer vacates
+    const episodesOnly = armFor([], [hit('e1', { session_date: 'd' }), hit('e2', { session_date: 'd' }), hit('e3', { session_date: 'd' })]);
+    const re = await episodesOnly.answer('q');
+    expect(re.meta).toMatchObject({ hits: 3, context_facts: 0, context_episodes: 3 });
+    expect(seen[1].user).not.toContain('[fact |');
+    expect((seen[1].user.match(/\[session \|/g) ?? []).length).toBe(3);
+
+    // nothing anywhere renders the no-memory envelope
+    const none = armFor([], []);
+    const rn = await none.answer('q');
+    expect(rn.meta).toMatchObject({ hits: 0, context_facts: 0, context_episodes: 0, read_policy: TIMELINE_READ_POLICY });
+    expect(seen[2].user).toContain('Memory context:\n(no memory found)');
+  });
+});
+
+describe('interleaveLayers — the fact-episode-interleave read policy (pure)', () => {
+  const hit = (id, extra = {}) => ({ source_id: id, ...extra });
+
+  it('TIMELINE_READ_POLICY is the name the arm stamps in meta and run.mjs stamps in the regime', () => {
+    expect(TIMELINE_READ_POLICY).toBe('fact-episode-interleave');
+  });
+
+  it('alternates f,e,f,e,… strongest current fact first; a dry layer yields; budget never exceeded', () => {
+    const current = [hit('f1'), hit('f2'), hit('f3')];
+    const episodes = [hit('e1'), hit('e2')];
+    expect(interleaveLayers({ current, episodes, superseded: [], budget: 5 }).map((h) => h.source_id))
+      .toEqual(['f1', 'e1', 'f2', 'e2', 'f3']);
+    expect(interleaveLayers({ current, episodes, superseded: [], budget: 4 }).map((h) => h.source_id))
+      .toEqual(['f1', 'e1', 'f2', 'e2']);
+    expect(interleaveLayers({ current: [hit('f1')], episodes: [hit('e1'), hit('e2'), hit('e3')], superseded: [], budget: 5 }).map((h) => h.source_id))
+      .toEqual(['f1', 'e1', 'e2', 'e3']);
+    expect(interleaveLayers({ current: [], episodes, superseded: [], budget: 5 }).map((h) => h.source_id))
+      .toEqual(['e1', 'e2']);
+  });
+
+  it('superseded facts are the tail reserve — only slots neither live layer can fill; order preserved', () => {
+    const current = [hit('f1')];
+    const episodes = [hit('e1')];
+    const superseded = [hit('s1'), hit('s2')];
+    expect(interleaveLayers({ current, episodes, superseded, budget: 5 }).map((h) => h.source_id))
+      .toEqual(['f1', 'e1', 's1', 's2']);
+    // live rows always crowd superseded out first
+    expect(interleaveLayers({ current: [hit('f1'), hit('f2')], episodes: [hit('e1'), hit('e2')], superseded, budget: 4 }).map((h) => h.source_id))
+      .toEqual(['f1', 'e1', 'f2', 'e2']);
+    expect(interleaveLayers({ current: [], episodes: [], superseded, budget: 5 }).map((h) => h.source_id))
+      .toEqual(['s1', 's2']);
+  });
+
+  it('never exceeds the budget and returns an empty pool for an empty question', () => {
+    const many = Array.from({ length: 12 }, (_, i) => hit(`f${i}`));
+    expect(interleaveLayers({ current: many, episodes: many, superseded: many, budget: 5 })).toHaveLength(5);
+    expect(interleaveLayers({ current: [], episodes: [], superseded: [], budget: 5 })).toEqual([]);
   });
 });
 
@@ -547,6 +639,8 @@ describe('the regime stamps the timeline block', () => {
         reconcile_policy: { top_k: 3, auto_add_on_no_match: true },
         layers: { episodic: { namespace: 'ns' }, reconciled: { namespace: 'ns-timeline' } },
         retrieval_budget: 5,
+        read_policy: TIMELINE_READ_POLICY,
+        read: { budget: 5, read_policy: TIMELINE_READ_POLICY },
       },
     });
     expect(r.mycelium_timeline).toMatchObject({
@@ -554,6 +648,9 @@ describe('the regime stamps the timeline block', () => {
       reconcile_prompt: RECONCILE_SYSTEM, // verbatim — the prompt IS the regime
       reconcile_policy: { top_k: 3, auto_add_on_no_match: true },
     });
+    // the read policy is named IN the regime (regime.timeline.read_policy)
+    expect(r.mycelium_timeline.read_policy).toBe('fact-episode-interleave');
+    expect(r.mycelium_timeline.read.read_policy).toBe('fact-episode-interleave');
     expect(r.mycelium_timeline.layers).toEqual({ episodic: { namespace: 'ns' }, reconciled: { namespace: 'ns-timeline' } });
     expect(buildRegime(base).mycelium_timeline).toBeUndefined();
   });
