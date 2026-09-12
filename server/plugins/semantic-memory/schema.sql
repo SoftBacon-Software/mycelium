@@ -48,3 +48,10 @@ CREATE TABLE IF NOT EXISTS sm_config (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Freshness signature for the decoded-vector cache (vector-cache.js,
+-- F-mycelium/194): the embedded-row count is recomputed per search so an
+-- out-of-band writer (auto-memory deletes rows directly) self-heals on the
+-- next search. The partial index makes that count an index-only scan — it
+-- never touches the table's multi-KB embedding pages.
+CREATE INDEX IF NOT EXISTS idx_sm_embedded ON sm_embeddings(id) WHERE embedding IS NOT NULL;
