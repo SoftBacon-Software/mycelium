@@ -23,7 +23,7 @@ import { buildCalibrationBlock, createNodeProfile, getNodeProfile, seedPlatformP
 // consumers but does NOT bind them in THIS module's lexical scope (same trap the
 // earlier waves hit), so import them explicitly. Acyclic — each db/*.js imports
 // only ./db/core.js + sibling db/*.js, never this barrel (../db.js).
-import { listTasks, listTasksNeedingApproval } from './db/tasks.js';
+import { listTasks, countTasks, listTasksNeedingApproval } from './db/tasks.js';
 import { listPlans } from './db/plans.js';
 import { listAssets } from './db/assets.js';
 import { listDrones, listDroneJobs, seedDefaultJobTemplates } from './db/drones.js';
@@ -799,6 +799,9 @@ export function getOverview(userId) {
   var agents = listAgents();
   var events = listEvents({ limit: 50 });
   var openTasks = listTasks({ status: 'open', limit: 20 });
+  // Task 200: the capped list alone hid the board — 74 open tasks read as 20.
+  // open_total rides beside the cap so a client can say "74 open, showing 20".
+  var openTotal = countTasks({ status: 'open' });
   var inProgressTasks = listTasks({ status: 'in_progress', limit: 20 });
   var reviewTasks = listTasks({ status: 'review', limit: 20 });
   var recentDone = listTasks({ status: 'done', limit: 10 });
@@ -828,7 +831,7 @@ export function getOverview(userId) {
   return {
     agents: agents,
     events: events,
-    tasks: { open: openTasks, in_progress: inProgressTasks, review: reviewTasks, done: recentDone },
+    tasks: { open: openTasks, open_total: openTotal, in_progress: inProgressTasks, review: reviewTasks, done: recentDone },
     messages: messages,
     context: context,
     context_keys: contextKeys,

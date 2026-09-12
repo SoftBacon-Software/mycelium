@@ -58,17 +58,30 @@ export function getPlan(id) {
   return plan;
 }
 
-export function listPlans(filters) {
+// The shared WHERE for list + count — one filter definition, so the list
+// envelope's total (task 200) can never silently diverge from the items.
+function planWhere(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
   if (filters.status) { where.push('status = ?'); params.push(filters.status); }
   if (filters.owner) { where.push('owner = ?'); params.push(filters.owner); }
   if (filters.exclude_status) { where.push('status != ?'); params.push(filters.exclude_status); }
+  return { where: where, params: params };
+}
+
+export function countPlans(filters) {
+  var w = planWhere(filters);
+  return db.prepare('SELECT COUNT(*) AS n FROM plans WHERE ' + w.where.join(' AND ')).get(...w.params).n;
+}
+
+export function listPlans(filters) {
+  var w = planWhere(filters);
+  var params = w.params.slice();
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  var plans = db.prepare('SELECT * FROM plans WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+  var plans = db.prepare('SELECT * FROM plans WHERE ' + w.where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
   if (plans.length > 0) {
     var planIds = plans.map(function (p) { return p.id; });
     var placeholders = planIds.map(function () { return '?'; }).join(',');

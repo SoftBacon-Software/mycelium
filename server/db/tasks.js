@@ -23,7 +23,9 @@ export function getTask(id) {
   return stmt('dvGetTask', 'SELECT * FROM tasks WHERE id = ?').get(id);
 }
 
-export function listTasks(filters) {
+// The shared WHERE for list + count — one filter definition, so the list
+// envelope's total (task 200) can never silently diverge from the items.
+function taskWhere(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -31,10 +33,21 @@ export function listTasks(filters) {
   if (filters.assignee) { where.push('assignee = ?'); params.push(filters.assignee); }
   if (filters.requester) { where.push('requester = ?'); params.push(filters.requester); }
   if (filters.priority) { where.push('priority = ?'); params.push(filters.priority); }
+  return { where: where, params: params };
+}
+
+export function countTasks(filters) {
+  var w = taskWhere(filters);
+  return db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE ' + w.where.join(' AND ')).get(...w.params).n;
+}
+
+export function listTasks(filters) {
+  var w = taskWhere(filters);
+  var params = w.params.slice();
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM tasks WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM tasks WHERE ' + w.where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateTask(id, fields) {

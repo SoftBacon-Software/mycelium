@@ -5,7 +5,7 @@
 // injection); DB functions are imported directly. The route contract is identical
 // to before extraction — enforced by test/refactor/route-manifest.mjs.
 import {
-  createBug, getBug, listBugs, updateBug, deleteBug, countBugs,
+  createBug, getBug, listBugs, countFilteredBugs, updateBug, deleteBug, countBugs,
   dispatchWebhook, incrementProfileCounter,
 } from '../db.js';
 
@@ -14,7 +14,7 @@ export function registerBugRoutes(router, deps) {
     asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
     checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
     parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
-    MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES,
+    MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES, pageEnvelope,
   } = deps;
 
   // POST /bugs — create a bug report (agent or admin)
@@ -52,9 +52,17 @@ export function registerBugRoutes(router, deps) {
     if (req.query.category) filters.category = req.query.category;
     filters.limit = parseLimit(req.query.limit, 50);
     filters.offset = parseInt(req.query.offset) || 0;
+    // Task 200: the envelope rides alongside the fields the existing readers
+    // use — `counts` stays, and `bugs` aliases `items` for the one-release
+    // compat window (the pre-envelope readers read .bugs). ?shape=array is the
+    // bare array, uniform with /tasks and /plans.
     var bugs = listBugs(filters);
     var counts = countBugs();
-    res.json({ bugs: bugs, counts: counts });
+    if (req.query.shape === 'array') return res.json(bugs);
+    res.json(Object.assign(
+      pageEnvelope(bugs, countFilteredBugs(filters), filters.limit, filters.offset),
+      { counts: counts, bugs: bugs }
+    ));
   }));
 
   // GET /bugs/:id — get bug detail

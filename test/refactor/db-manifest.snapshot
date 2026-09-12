@@ -33,8 +33,11 @@ contextKeyStats:function:0
 countAllUnreadInbox:function:0
 countApprovalVotes:function:1
 countBugs:function:0
+countFilteredBugs:function:1
 countPendingApprovals:function:0
 countPendingForAgent:function:1
+countPlans:function:1
+countTasks:function:1
 countUnreadInbox:function:1
 createAgent:function:5
 createAgentTemplate:function:5

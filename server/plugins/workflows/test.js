@@ -41,6 +41,16 @@ function makeCore(db) {
     },
     apiError: apiError,
     parseIntParam: parseIntParam,
+    // Same envelope contract server/routes/mycelium.js exports (task 200).
+    pageEnvelope: function (items, total, limit, offset) {
+      return {
+        items: items,
+        total: total,
+        limit: limit,
+        offset: offset,
+        next_offset: (offset + items.length) < total ? offset + limit : null
+      };
+    },
     validateEnum: function () { return true; },
     emitEvent: function (type, agent, projectId, summary, data) {
       emitted.push({ type: type, agent: agent, summary: summary, data: data });
@@ -298,12 +308,15 @@ test('auth: denied caller gets 401, nothing created', async function () {
   assert.equal(after_count, before_count);
 });
 
-// Runner poll ordering: oldest pending first with ?order=asc.
+// Runner poll ordering: oldest pending first with ?order=asc. Reads the
+// envelope's items (task 200) — the runner's poll consumer updates with the
+// server; an UN-updated runner keeps reading a list via ?shape=array during
+// the compat window (pinned by the 'list (200)' test above).
 test('list: runner poll returns oldest pending first', async function () {
   var a = (await call('POST', '/workflows', Object.assign({}, FANOUT, { name: 'older' }))).body.workflow;
   var b = (await call('POST', '/workflows', Object.assign({}, FANOUT, { name: 'newer' }))).body.workflow;
-  var list = (await call('GET', '/workflows?status=pending&order=asc')).body;
-  var ids = list.map(function (w) { return w.id; });
+  var page = (await call('GET', '/workflows?status=pending&order=asc')).body;
+  var ids = page.items.map(function (w) { return w.id; });
   assert.ok(ids.indexOf(a.id) < ids.indexOf(b.id), 'older before newer');
 });
 
@@ -445,4 +458,141 @@ test('create: repair with params fires 200 and lands in spec.params', async func
   assert.equal(other.status, 200);
   var otherFull = (await call('GET', '/workflows/' + other.body.workflow.id)).body;
   assert.deepEqual(otherFull.spec.params, { max_iter: 8 });
+});
+
+// ======== Task 200: honest list paging + stale-claim release ========
+// The clockwork audit (2026-09-12 §4/§5): a runner that dies mid-claim held its
+// workflow 'claimed' forever (the receipt's await-timeouts), and GET /workflows
+// paged with no signal. Two new disciplines, both pinned here:
+//   - the list returns an HONEST envelope by default; ?shape=array keeps the
+//     bare array for one release so external old clients keep reading;
+//   - releaseStaleClaims(ttl) releases a claim whose RUNNER heartbeat has gone
+//     silent past the TTL (positive evidence of death — a claimant with no
+//     agents row is unknown, not dead, and is left alone), and never releases a
+//     RUNNING workflow: live work earns one 'stalled' event per claim episode
+//     and the head decides.
+
+var wfdb = createWorkflowsDB(db);
+
+async function fireSolo(name, projectId) {
+  var r = await call('POST', '/workflows', {
+    name: name,
+    project_id: projectId,
+    spec: { invocations: [{ id: 'w0', agent: 'lucy', brief: 'x', deps: [] }] }
+  });
+  assert.equal(r.status, 200);
+  return r.body.workflow;
+}
+
+var agentsTableReady = false;
+function seedRunnerHeartbeat(id, stale) {
+  if (!agentsTableReady) {
+    // Minimal mirror of the core agents table's sweep-relevant columns —
+    // production runs the JOIN against the real one (same database file).
+    db.exec('CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, last_heartbeat TEXT)');
+    agentsTableReady = true;
+  }
+  db.prepare("INSERT OR REPLACE INTO agents (id, last_heartbeat) VALUES (?, datetime('now', " +
+             (stale ? "'-2 hours'" : "'+0 minutes'") + '))').run(id);
+}
+
+test('list (200): envelope by default; ?shape=array legacy; offset pages', async function () {
+  for (var i = 0; i < 3; i++) await fireSolo('paging ' + i, 'pag-200');
+  var page1 = await call('GET', '/workflows?project_id=pag-200&order=asc&limit=2');
+  assert.equal(page1.status, 200);
+  assert.equal(Array.isArray(page1.body), false, 'default shape is the envelope, not a bare array');
+  assert.equal(page1.body.items.length, 2);
+  assert.equal(page1.body.total, 3);
+  assert.equal(page1.body.limit, 2);
+  assert.equal(page1.body.offset, 0);
+  assert.equal(page1.body.next_offset, 2);
+
+  var page2 = await call('GET', '/workflows?project_id=pag-200&order=asc&limit=2&offset=2');
+  assert.equal(page2.body.items.length, 1);
+  assert.equal(page2.body.next_offset, null);
+
+  var legacy = await call('GET', '/workflows?project_id=pag-200&order=asc&limit=2&shape=array');
+  assert.equal(legacy.status, 200);
+  assert.equal(Array.isArray(legacy.body), true, 'shape=array keeps the bare array');
+  assert.equal(legacy.body.length, 2);
+});
+
+test('claim (200): claimed_at is stamped at claim time', async function () {
+  var wf = await fireSolo('claimed-at stamp');
+  var r = await call('POST', '/workflows/' + wf.id + '/claim', { runner_id: 'runner-stamp' });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.workflow.claimed_at, 'claimed_at set by the atomic claim');
+});
+
+test('migration (200): claimed_at added to a pre-200 schema, idempotent on re-open', async function () {
+  var db3 = new Database(':memory:');
+  db3.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  db3.exec('ALTER TABLE workflows DROP COLUMN claimed_at'); // simulate the old DB
+  var dbApi3 = createWorkflowsDB(db3);
+  assert.ok(dbApi3, 'createWorkflowsDB succeeds on the old schema');
+  var cols = db3.prepare('PRAGMA table_info(workflows)').all();
+  assert.ok(cols.some(function (c) { return c.name === 'claimed_at'; }), 'claimed_at migrated back');
+  var dbApi4 = createWorkflowsDB(db3); // idempotent — no blanket ALTER
+  assert.ok(dbApi4, 'createWorkflowsDB idempotent when the column exists');
+});
+
+test('sweep (200): claim whose runner heartbeat is past TTL releases to pending + claim_released event', async function () {
+  seedRunnerHeartbeat('runner-dead', true);
+  var wf = await fireSolo('stale claim');
+  var claimed = await call('POST', '/workflows/' + wf.id + '/claim', { runner_id: 'runner-dead' });
+  assert.equal(claimed.status, 200);
+
+  var sweep = wfdb.releaseStaleClaims(30);
+  assert.deepEqual(sweep.released.map(function (w) { return w.id; }), [wf.id]);
+  assert.deepEqual(sweep.stalled, []);
+
+  var full = (await call('GET', '/workflows/' + wf.id)).body;
+  assert.equal(full.status, 'pending', 'released back to pending — a healthy runner can claim it');
+  assert.equal(full.claimed_by, null);
+  assert.equal(full.claimed_at, null);
+  var rel = full.events.filter(function (e) { return e.kind === 'claim_released'; });
+  assert.equal(rel.length, 1);
+  assert.equal(rel[0].payload.reason, 'runner_stale');
+  assert.equal(rel[0].payload.claimed_by, 'runner-dead');
+});
+
+test('sweep (200): a fresh runner heartbeat is never released', async function () {
+  seedRunnerHeartbeat('runner-fresh', false);
+  var wf = await fireSolo('fresh claim');
+  await call('POST', '/workflows/' + wf.id + '/claim', { runner_id: 'runner-fresh' });
+
+  var sweep = wfdb.releaseStaleClaims(30);
+  assert.equal(sweep.released.filter(function (w) { return w.id === wf.id; }).length, 0);
+  var full = (await call('GET', '/workflows/' + wf.id)).body;
+  assert.equal(full.status, 'claimed');
+});
+
+test('sweep (200): a heartbeatless claimant is never released (unknown is not dead)', async function () {
+  var wf = await fireSolo('ghost claim');
+  await call('POST', '/workflows/' + wf.id + '/claim', { runner_id: 'runner-ghost' });
+
+  var sweep = wfdb.releaseStaleClaims(30);
+  assert.equal(sweep.released.filter(function (w) { return w.id === wf.id; }).length, 0);
+  var full = (await call('GET', '/workflows/' + wf.id)).body;
+  assert.equal(full.status, 'claimed');
+});
+
+test('sweep (200): a RUNNING workflow is never released — one stalled event, no duplicates', async function () {
+  seedRunnerHeartbeat('runner-stall', true);
+  var wf = await fireSolo('running when runner died');
+  await call('POST', '/workflows/' + wf.id + '/claim', { runner_id: 'runner-stall' });
+  await call('PUT', '/workflows/' + wf.id, { status: 'running' });
+
+  var sweep1 = wfdb.releaseStaleClaims(30);
+  assert.deepEqual(sweep1.released, [], 'running work is never released by the sweep');
+  assert.deepEqual(sweep1.stalled.map(function (w) { return w.id; }), [wf.id]);
+
+  var full = (await call('GET', '/workflows/' + wf.id)).body;
+  assert.equal(full.status, 'running', 'the head decides — the sweep only flags');
+  assert.equal(full.events.filter(function (e) { return e.kind === 'stalled'; }).length, 1);
+
+  var sweep2 = wfdb.releaseStaleClaims(30);
+  assert.deepEqual(sweep2.stalled, [], 'stalled fires once per claim episode, not every 15 min');
+  var full2 = (await call('GET', '/workflows/' + wf.id)).body;
+  assert.equal(full2.events.filter(function (e) { return e.kind === 'stalled'; }).length, 1);
 });
