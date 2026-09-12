@@ -39,7 +39,22 @@ export default function createAutoMemoryDB(db) {
     try {
       var stmt = db.prepare("DELETE FROM sm_embeddings WHERE source_type = 'memory' AND source_id = ?");
       var removed = 0;
-      for (var id of ids) removed += stmt.run(String(id)).changes;
+      var removedIds = [];
+      for (var id of ids) {
+        var changes = stmt.run(String(id)).changes;
+        if (changes > 0) { removed += changes; removedIds.push(String(id)); }
+      }
+      // F-mycelium/196: keep semantic-memory's decoded-vector cache exact in
+      // the same tick. Before this, every delete here moved the freshness
+      // signature and the NEXT search paid a corpus-wide rebuild on the
+      // event loop. Looked up off the shared db instance (both plugins
+      // receive core.db), so this file stays loadable when semantic-memory
+      // is not deployed — the property is simply absent and the signature
+      // reconcile remains the net, exactly as before. Like every cache
+      // hook it is optimistic: a rolled-back delete is caught by the
+      // post-write signature check on the next search.
+      var vc = db.__myceliumVectorCache;
+      if (vc && removedIds.length) vc.onRemoveMany('memory', removedIds);
       return removed;
     } catch (e) {
       return 0;

@@ -55,3 +55,13 @@ CREATE TABLE IF NOT EXISTS sm_config (
 -- next search. The partial index makes that count an index-only scan — it
 -- never touches the table's multi-KB embedding pages.
 CREATE INDEX IF NOT EXISTS idx_sm_embedded ON sm_embeddings(id) WHERE embedding IS NOT NULL;
+
+-- The cache's own read path (vector-cache.js ID_SCAN, F-mycelium/196): every
+-- rebuild and every post-drift reconcile selects the embedded ids ordered by
+-- updated_at DESC. Without this index that scan is a table scan plus a TEMP
+-- B-TREE sort over the multi-KB embedding rows — ~62 ms per read at 25k rows,
+-- the bulk of a reconcile tick. Covering (updated_at, id) with the same
+-- partial predicate makes it an index-only backward scan (~2 ms at 25k,
+-- measured), which is what keeps the post-prune heal under the 50 ms
+-- loop-blocking budget.
+CREATE INDEX IF NOT EXISTS idx_sm_embedded_recent ON sm_embeddings(updated_at, id) WHERE embedding IS NOT NULL;

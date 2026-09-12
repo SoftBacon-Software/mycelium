@@ -45,18 +45,27 @@ var BENCH_HIDDEN_SQL =
 // Exported for the cache default and the tests.
 export var VECTOR_SCAN_CAP = 5000;
 
-export default function createMemoryDB(db) {
+export default function createMemoryDB(db, opts) {
   // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
   // row's vector is JSON.parse'd ONCE, not on every query. Write paths below
-  // keep it exact through hooks; the 2-aggregate freshness signature in
-  // vector-cache.js self-heals writers that bypass this module (auto-memory
-  // deletes rows directly). Memory bound: 25k rows x 768 dims x 4 B = 77 MB.
-  var vectorCache = createVectorCache(db, {
+  // keep it exact through hooks; the freshness signature in vector-cache.js
+  // self-heals writers nothing hooks — incrementally since 196, so a drift
+  // no longer re-decodes the corpus on the event loop. auto-memory's
+  // unindexFacts lands through the same-tick side-channel below.
+  // Memory bound: 25k rows x 768 dims x 4 B = 77 MB.
+  var vectorCache = createVectorCache(db, Object.assign({
     benchOptIn: benchOptIn,
     benchTypePrefix: BENCH_TYPE_PREFIX,
     benchNsPrefix: BENCH_NS_PREFIX,
     scanCap: VECTOR_SCAN_CAP
-  });
+  }, (opts && opts.vectorCache) || {}));
+  // The per-db side-channel auto-memory's unindexFacts uses (196): both
+  // plugins receive the SAME core.db instance, and a property on it needs no
+  // cross-plugin import — auto-memory must stay loadable on deployments
+  // without this plugin (the loader can boot a temp plugins dir carrying one
+  // plugin alone). Fail-soft: if the property cannot be set, the signature
+  // reconcile still self-heals (pinned by the negative-control test).
+  try { db.__myceliumVectorCache = vectorCache; } catch (e) { /* frozen host */ }
 
   return {
 
@@ -316,9 +325,19 @@ export default function createMemoryDB(db) {
     // and blocked the event loop hard enough to wedge the platform
     // (F-mycelium/194). The original algorithm lives on verbatim as
     // searchVectorJsonPath — the oracle the tests hold the cache to, and the
-    // fallback if the cache ever throws (never worse than before the cache).
-    searchVector(queryEmbedding, opts) {
+    // fallback if the cache ever throws or its breaker is open (never worse
+    // than before the cache). Async since 196: a search arriving mid-build
+    // waits on the ONE in-flight build instead of running a second one or
+    // blocking the loop on the corpus decode.
+    async searchVector(queryEmbedding, opts) {
       opts = opts || {};
+      await vectorCache.ensureFresh();
+      if (!vectorCache.available()) {
+        // Breaker open — skip the cache entirely (no build attempt inside a
+        // window; the window's ONE log line already fired at the failure).
+        vectorCache.fallbackServed();
+        return this.searchVectorJsonPath(queryEmbedding, opts);
+      }
       try {
         var scored = vectorCache.scored(queryEmbedding, opts);
         return this.finishScored(scored, Math.min(opts.limit || 10, 100));
@@ -416,7 +435,8 @@ export default function createMemoryDB(db) {
       return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
     },
 
-    searchHybrid(query, opts, queryEmbedding) {
+    // Async since 196: the vector arm may wait on an in-flight cache build.
+    async searchHybrid(query, opts, queryEmbedding) {
       opts = opts || {};
       var limit = opts.limit || 10;
 
@@ -429,7 +449,7 @@ export default function createMemoryDB(db) {
       }
 
       // Vector search
-      var vectorResults = this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
+      var vectorResults = await this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
 
       // Reciprocal Rank Fusion (RRF)
       var K = 60; // standard RRF constant
@@ -568,7 +588,11 @@ export default function createMemoryDB(db) {
         embed_queue: embedQueueDepth(),
         by_source_type: byType,
         by_namespace: byNamespace,
-        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP
+        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP,
+        // The decoded-vector cache's own state (194) + its breaker/fallback
+        // windows (196): what /stats shows when search latency or the log's
+        // "JSON fallback for Ns" line needs explaining. (§F1 honesty)
+        vector_cache: vectorCache.info()
       };
     }
   };

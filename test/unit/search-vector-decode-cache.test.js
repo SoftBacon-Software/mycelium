@@ -129,14 +129,14 @@ describe('searchVector cached results are identical to the JSON path', () => {
   beforeAll(async () => { ctx = await makeCtx(); });
   afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
 
-  it('same ranking and scores to 1e-6 across queries x filters (incl. zero-vector and dim-mismatch)', () => {
+  it('same ranking and scores to 1e-6 across queries x filters (incl. zero-vector and dim-mismatch)', async () => {
     let cases = 0;
     for (const qname of Object.keys(ctx.queries)) {
       for (const filter of FILTER_CASES) {
         cases++;
         const ctxLine = JSON.stringify({ qname, filter });
         const viaJson = ctx.mem.searchVectorJsonPath(ctx.queries[qname], { ...filter });
-        const viaCache = ctx.mem.searchVector(ctx.queries[qname], { ...filter });
+        const viaCache = await ctx.mem.searchVector(ctx.queries[qname], { ...filter });
         expect(viaCache.length, ctxLine).toBe(viaJson.length);
         // Ranking identical: same rows, same order.
         expect(viaCache.map((r) => r.source_type + ':' + r.source_id + ':' + r.chunk_index), ctxLine)
@@ -151,17 +151,17 @@ describe('searchVector cached results are identical to the JSON path', () => {
     expect(cases).toBeGreaterThanOrEqual(40);
   });
 
-  it('identical row SHAPE: the cache path returns the same full rows the JSON path did', () => {
+  it('identical row SHAPE: the cache path returns the same full rows the JSON path did', async () => {
     const a = ctx.mem.searchVectorJsonPath(ctx.queries.self, { limit: 2 });
-    const b = ctx.mem.searchVector(ctx.queries.self, { limit: 2 });
+    const b = await ctx.mem.searchVector(ctx.queries.self, { limit: 2 });
     expect(Object.keys(b[0]).sort()).toEqual(Object.keys(a[0]).sort());
     expect(b[0].content_text).toBe(a[0].content_text);
     expect(b[0].metadata).toEqual(a[0].metadata);
     expect(b[0].embedding_model).toBe(a[0].embedding_model);
   });
 
-  it('hybrid stays consistent too (RRF over the cached vector arm vs the JSON arm)', () => {
-    const hybrid = ctx.mem.searchHybrid('content for note-0', { limit: 5 }, ctx.queries.self);
+  it('hybrid stays consistent too (RRF over the cached vector arm vs the JSON arm)', async () => {
+    const hybrid = await ctx.mem.searchHybrid('content for note-0', { limit: 5 }, ctx.queries.self);
     expect(hybrid.length).toBeGreaterThanOrEqual(1);
     // The cached arm must contribute the same vector scores to the fusion as
     // the JSON arm would: recompute the fusion manually over the JSON path.
@@ -191,28 +191,28 @@ describe('cache invalidation on every write path', () => {
     const q = unitVec(mulberry32(99), DIM);
     ctx.mem.index('note', 'fresh', 'freshly embedded', {});
     ctx.mem.updateEmbedding('note', 'fresh', 0, q, 'test-model');
-    let rows = ctx.mem.searchVector(q, { limit: 3 });
+    let rows = await ctx.mem.searchVector(q, { limit: 3 });
     expect(rows[0].source_id).toBe('fresh');
     expect(rows[0].score).toBeCloseTo(1, 6);
     // Rotate the vector: the cached entry must follow the row, not the decode.
     const q2 = unitVec(mulberry32(100), DIM);
     ctx.mem.updateEmbedding('note', 'fresh', 0, q2, 'test-model');
-    rows = ctx.mem.searchVector(q2, { limit: 3 });
+    rows = await ctx.mem.searchVector(q2, { limit: 3 });
     expect(rows[0].source_id).toBe('fresh');
-    expect(ctx.mem.searchVector(q, { limit: 50 }).some((r) => r.source_id === 'fresh' && r.score > 0.99)).toBe(false);
+    expect((await ctx.mem.searchVector(q, { limit: 50 })).some((r) => r.source_id === 'fresh' && r.score > 0.99)).toBe(false);
     ctx.db.close();
   });
 
   it('index() re-upsert WITHOUT an embedding drops the row from vector results (embedding went NULL)', async () => {
     const ctx = await makeCtx();
     const q = SEED[0].vec;
-    expect(ctx.mem.searchVector(q, { limit: 50 }).some((r) => r.source_id === 'note-0')).toBe(true);
+    expect((await ctx.mem.searchVector(q, { limit: 50 })).some((r) => r.source_id === 'note-0')).toBe(true);
     ctx.mem.index('note', 'note-0', 'content rewritten, no embedding yet', {});
-    const rows = ctx.mem.searchVector(q, { limit: 50 });
+    const rows = await ctx.mem.searchVector(q, { limit: 50 });
     expect(rows.some((r) => r.source_id === 'note-0')).toBe(false);
     // ...and it comes back once the embed lands (the scheduler's callback path).
     ctx.mem.updateEmbedding('note', 'note-0', 0, q, 'test-model');
-    expect(ctx.mem.searchVector(q, { limit: 50 }).some((r) => r.source_id === 'note-0')).toBe(true);
+    expect((await ctx.mem.searchVector(q, { limit: 50 })).some((r) => r.source_id === 'note-0')).toBe(true);
     ctx.db.close();
   });
 
@@ -220,7 +220,7 @@ describe('cache invalidation on every write path', () => {
     const ctx = await makeCtx();
     ctx.mem.remove('doc', 'big-doc');
     for (const q of [ctx.queries.self, ctx.queries.random]) {
-      expect(ctx.mem.searchVector(q, { limit: 50 }).some((r) => r.source_id === 'big-doc')).toBe(false);
+      expect((await ctx.mem.searchVector(q, { limit: 50 })).some((r) => r.source_id === 'big-doc')).toBe(false);
     }
     ctx.db.close();
   });
@@ -236,12 +236,12 @@ describe('cache invalidation on every write path', () => {
     const chunksBefore = ctx.mem.getDocChunks('doc', 'shrinking');
     expect(chunksBefore.length).toBe(3);
     chunksBefore.forEach((c, i) => ctx.mem.updateEmbedding('doc', 'shrinking', c.chunk_index, unitVec(mulberry32(200 + i), DIM), 'test-model'));
-    expect(ctx.mem.searchVector(ctx.queries.random, { limit: 100 }).some((r) => r.source_id === 'shrinking')).toBe(true);
+    expect((await ctx.mem.searchVector(ctx.queries.random, { limit: 100 })).some((r) => r.source_id === 'shrinking')).toBe(true);
 
     ctx.mem.indexDoc('doc', 'shrinking', 'short now', {});       // second pass: 1 chunk
     expect(ctx.mem.getDocChunks('doc', 'shrinking').length).toBe(1);
     ctx.mem.updateEmbedding('doc', 'shrinking', 0, q, 'test-model');
-    const rows = ctx.mem.searchVector(q, { limit: 100 });
+    const rows = await ctx.mem.searchVector(q, { limit: 100 });
     const shr = rows.filter((r) => r.source_id === 'shrinking');
     expect(shr.length).toBe(1);
     expect(shr[0].chunk_index).toBe(0);
@@ -251,12 +251,12 @@ describe('cache invalidation on every write path', () => {
   it('purge(): by source_type and by namespace, the cache empties with the table', async () => {
     const ctx = await makeCtx();
     expect(ctx.mem.purge({ source_type: 'bench_longmemeval' })).toBe(2);
-    expect(ctx.mem.searchVector(ctx.queries.random, { limit: 100, source_types: ['bench_longmemeval'] }).length).toBe(0);
+    expect((await ctx.mem.searchVector(ctx.queries.random, { limit: 100, source_types: ['bench_longmemeval'] })).length).toBe(0);
     expect(ctx.mem.purge({ namespace: 'bench-p194-ns' })).toBe(2);
-    const benchQuery = ctx.mem.searchVector(ctx.queries.random, { limit: 100, namespace: 'bench-p194-ns' });
+    const benchQuery = await ctx.mem.searchVector(ctx.queries.random, { limit: 100, namespace: 'bench-p194-ns' });
     expect(benchQuery.length).toBe(0);
     // Real rows untouched.
-    expect(ctx.mem.searchVector(ctx.queries.random, { limit: 100 }).length).toBeGreaterThan(10);
+    expect((await ctx.mem.searchVector(ctx.queries.random, { limit: 100 })).length).toBeGreaterThan(10);
     ctx.db.close();
   });
 
@@ -269,19 +269,25 @@ describe('cache invalidation on every write path', () => {
     ]);
     ctx.mem.updateEmbedding('note', 'bulk-a', 0, q, 'test-model');
     ctx.mem.updateEmbedding('note', 'bulk-b', 0, unitVec(mulberry32(124), DIM), 'test-model');
-    const rows = ctx.mem.searchVector(q, { limit: 5 });
+    const rows = await ctx.mem.searchVector(q, { limit: 5 });
     expect(rows[0].source_id).toBe('bulk-a');
     ctx.db.close();
   });
 
-  it('OUT-OF-BAND raw SQL delete (auto-memory unindexFacts shape) self-heals on the next search', async () => {
+  it('OUT-OF-BAND raw SQL delete (maintenance-script shape) self-heals by INCREMENTAL reconcile on the next search', async () => {
+    // 196 contract: a drift no longer re-decodes the corpus (the 194 shape
+    // paid a full rebuild here — ~390 ms of blocked loop at 25k rows). The
+    // id-set diff drops what SQL lost; reconciles ticks, rebuilds stays put.
     const ctx = await makeCtx();
-    expect(ctx.mem.searchVector(ctx.queries.random, { limit: 50 }).some((r) => r.source_id === 'lesson-0')).toBe(true);
-    const buildsBefore = ctx.mem.vectorCacheInfo().rebuilds; // after priming: the build counted
-    // No hook runs here — the exact shape of plugins/auto-memory/db.js unindexFacts.
+    expect((await ctx.mem.searchVector(ctx.queries.random, { limit: 50 })).some((r) => r.source_id === 'lesson-0')).toBe(true);
+    const before = ctx.mem.vectorCacheInfo();
+    // No hook runs here — the exact shape of a writer the db.js hooks cannot see.
     ctx.db.prepare("DELETE FROM sm_embeddings WHERE source_type = 'lesson' AND source_id = 'lesson-0'").run();
-    expect(ctx.mem.searchVector(ctx.queries.random, { limit: 50 }).some((r) => r.source_id === 'lesson-0')).toBe(false);
-    expect(ctx.mem.vectorCacheInfo().rebuilds).toBe(buildsBefore + 1); // the signature caught it
+    expect((await ctx.mem.searchVector(ctx.queries.random, { limit: 50 })).some((r) => r.source_id === 'lesson-0')).toBe(false);
+    const after = ctx.mem.vectorCacheInfo();
+    expect(after.reconciles).toBe(before.reconciles + 1); // the signature caught it, incrementally
+    expect(after.rebuilds).toBe(before.rebuilds);         // no corpus re-decode
+    expect(after.rows).toBe(ctx.db.prepare('SELECT COUNT(*) AS c FROM sm_embeddings WHERE embedding IS NOT NULL').get().c);
     ctx.db.close();
   });
 });
@@ -291,20 +297,20 @@ describe('filters apply BEFORE the cosine (bench rows are never scored for plain
   beforeAll(async () => { ctx = await makeCtx(); });
   afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
 
-  it('a plain query scans only the visible rows — no bench row enters the candidate set', () => {
-    ctx.mem.searchVector(ctx.queries.random, { limit: 10 }); // prime the cache
+  it('a plain query scans only the visible rows — no bench row enters the candidate set', async () => {
+    await ctx.mem.searchVector(ctx.queries.random, { limit: 10 }); // prime the cache
     const info = ctx.mem.vectorCacheInfo();
     // 20 of the 24 SEED rows are visible to a plain query: minus the 2
     // bench-typed rows and the 2 notes sitting in a bench namespace; the
     // multi-chunk doc counts both its chunks.
     expect(info.last_scan_candidates).toBe(SEED.length - 4);
     // Opt-in scans them again.
-    ctx.mem.searchVector(ctx.queries.random, { limit: 10, source_types: ['bench_longmemeval'] });
+    await ctx.mem.searchVector(ctx.queries.random, { limit: 10, source_types: ['bench_longmemeval'] });
     expect(ctx.mem.vectorCacheInfo().last_scan_candidates).toBe(2);
-    ctx.mem.searchVector(ctx.queries.random, { limit: 10, namespace: 'bench-p194-ns' });
+    await ctx.mem.searchVector(ctx.queries.random, { limit: 10, namespace: 'bench-p194-ns' });
     expect(ctx.mem.vectorCacheInfo().last_scan_candidates).toBe(2);
     // ...and the results are the bench rows only.
-    const benchRows = ctx.mem.searchVector(ctx.queries.random, { limit: 10, namespace: 'bench-p194-ns' });
+    const benchRows = await ctx.mem.searchVector(ctx.queries.random, { limit: 10, namespace: 'bench-p194-ns' });
     for (const r of benchRows) expect(r.namespace).toBe('bench-p194-ns');
   });
 
@@ -327,6 +333,9 @@ describe('the recency cap selects the newest candidates AFTER filters', () => {
     expect(VECTOR_SCAN_CAP).toBe(5000);
     const ctx = await makeCtx();
     const cache = createVectorCache(ctx.db, { benchOptIn, BENCH_TYPE_PREFIX, BENCH_NS_PREFIX, scanCap: 5 });
+    // scored() requires an awaited freshness step since 196 (the build may
+    // yield across ticks); direct callers await ensureFresh() first.
+    await cache.ensureFresh();
     // scored() returns SCORE-sorted output; the cap decides which rows are
     // CANDIDATES (the newest N among the filtered set). Assert the sets.
     const idOf = (s) => ctx.db.prepare('SELECT source_id FROM sm_embeddings WHERE id = ?').get(s.id).source_id;
@@ -341,12 +350,14 @@ describe('the recency cap selects the newest candidates AFTER filters', () => {
     // NEWEST 'note' rows are zero-row (seed index 20) and proja-note-1
     // (index 13), never any of the nine older notes.
     const cache3 = createVectorCache(ctx.db, { benchOptIn, BENCH_TYPE_PREFIX, BENCH_NS_PREFIX, scanCap: 2 });
+    await cache3.ensureFresh();
     const notes = cache3.scored(ctx.queries.random, { source_types: ['note'] });
     expect(notes.length).toBe(2);
     expect(notes.map(idOf).sort()).toEqual(['proja-note-1', 'zero-row']);
 
     // Bench namespace opt-in under a tiny cap: the newest bench-ns row wins.
     const cache2 = createVectorCache(ctx.db, { benchOptIn, BENCH_TYPE_PREFIX, BENCH_NS_PREFIX, scanCap: 1 });
+    await cache2.ensureFresh();
     const benchNs = cache2.scored(ctx.queries.random, { namespace: 'bench-p194-ns' });
     expect(benchNs.length).toBe(1);
     expect(idOf(benchNs[0])).toBe('bmns-1');

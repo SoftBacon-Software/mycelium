@@ -792,7 +792,7 @@ test('db: updateEmbedding(null) keeps row as SQL NULL, not the string "null"', f
 // P1 fix 1: searchVector collapses chunked docs to their best chunk BEFORE
 // slicing to the page limit (mirrors searchKeyword). Pre-fix a single
 // multi-chunk doc could occupy every slot on the result page.
-test('db: searchVector collapses multi-chunk docs to one result per document', function () {
+test('db: searchVector collapses multi-chunk docs to one result per document', async function () {
   mem.setConfig('chunk_size', '600');
   var big = makeBigText('vcollapse', 10);
   var chunks = mem.indexDoc('test', 'vec-multi', big);
@@ -803,7 +803,7 @@ test('db: searchVector collapses multi-chunk docs to one result per document', f
   for (var i = 0; i < chunks.length; i++) {
     mem.updateEmbedding('test', 'vec-multi', i, V, 'test-model');
   }
-  var results = mem.searchVector(V, { limit: 3 });
+  var results = await mem.searchVector(V, { limit: 3 });
   var hits = results.filter(function (r) { return r.source_id === 'vec-multi'; });
   assert.equal(hits.length, 1, 'multi-chunk doc collapsed to a single vector result');
   var ids = results.map(function (r) { return r.source_type + ':' + r.source_id; });
