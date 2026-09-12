@@ -56,9 +56,9 @@ Mycelium has levels — how much of it you need depends on what you are running.
 - **L1 — persona** — persistence *with identity*: semantic + auto memory, persona/profile records, concepts, savepoint diff, recall on-ramps.
 - **L2 — substrate** — many agents on one network: messages/channels, tasks/plans/runs, approvals, events, drones, workflows, the plugin seam, the runner.
 - **L3 — lab** — research apparatus only the operating lab runs today: spend accounting, feedback, the marketing/social plugin, the public demo face.
-- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**).
+- **demo** — real code kept as existence proofs, not product. (The `a2a-gateway` demo plugin was removed 2026-09-12 — task 186 — its A2A existence proof lives in git history.)
 
-A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 and the demo surfaces are mounted but ignorable — nothing outside the lab needs them.
+A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 is mounted but ignorable — nothing outside the lab needs it. (The old demo level rode on the a2a-gateway plugin, removed 2026-09-12 — task 186.)
 
 ## Quick start
 
@@ -189,6 +189,9 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `ANTHROPIC_ADMIN_KEY` | no | — | Anthropic admin key for admin endpoints (org usage/billing) |
 | `MYCELIUM_NO_MDNS` | no | unset | set to `1` to disable mDNS/Bonjour LAN advertising (`_mycelium._tcp`) — for cloud/NAT deploys where LAN multicast is meaningless |
 | `MYCELIUM_MDNS_NAME` | no | short hostname | name advertised over mDNS so LAN clients can discover this instance |
+| `BACKUP_INTERVAL_HOURS` | no | `24` | hours between in-place SQLite backups (env overrides `instance_config` `backup_interval_hours`) |
+| `MAX_BACKUPS` | no | `3` | how many SQLite backups to keep before pruning the oldest (env overrides `instance_config` `max_backups`) |
+| `AUTO_MEMORY_LLM_KEEP_ALIVE` | no | `10m` | ollama `keep_alive` for the auto-memory extraction LLM so a small model isn't held resident forever; `0` evicts it right after each request |
 
 Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
 
@@ -202,7 +205,7 @@ server/
   db.js                 # SQLite (better-sqlite3, WAL mode)
   schema.sql            # full base schema (56 tables; plugins add their own)
   routes/               # 284 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
-  plugins/              # plugin system (7 plugins + _template)
+  plugins/              # plugin system (5 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
@@ -243,19 +246,17 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-120 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+128 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-7 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+5 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
-| `marketing` | build-in-public drafts, social posting, X delivery, outreach (`/bip`, `/social`, `/x`, `/outreach`) |
-| `guardrails` | safety checks + policy enforcement |
+| `marketing` | build-in-public drafts, social posting, X delivery, outreach (mounted at `/marketing` — `/marketing/bip`, `/marketing/social`, `/marketing/x`, `/marketing/outreach`; the old top-level paths 301 for one release) |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
-| `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 | `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
 

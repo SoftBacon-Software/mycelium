@@ -13,7 +13,7 @@ No plugin-level config fields. Account credentials are stored per-account via th
 
 ## API Endpoints
 
-All routes are prefixed with `/api/mycelium/social`.
+All routes are prefixed with `/api/mycelium/marketing/social` (the old `/api/mycelium/social` paths 301 here for one release — task 186).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

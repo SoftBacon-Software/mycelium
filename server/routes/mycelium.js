@@ -17,15 +17,19 @@ import { sendEmail, isEmailEnabled, templatePasswordReset, templateOperatorAlert
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
-function rateLimit(keyFn, maxAttempts, windowMs) {
-  // Prune expired entries every 5 minutes
-  setInterval(function () {
-    var now = Date.now();
-    for (var k in _rateLimitStore) {
-      if (_rateLimitStore[k].resetAt < now) delete _rateLimitStore[k];
-    }
-  }, 5 * 60 * 1000).unref();
+// Task 186 §3 (AUDIT-lab-clockwork-2026-09-12): the prune timer lived INSIDE
+// the rateLimit() factory, and the factory is called FIVE times at module
+// scope (login/admin-write/agent-write below + two more in studio.js:136-137)
+// — five identical 5-minute timers sweeping one store. One module-level
+// timer now; the factory schedules nothing.
+setInterval(function () {
+  var now = Date.now();
+  for (var k in _rateLimitStore) {
+    if (_rateLimitStore[k].resetAt < now) delete _rateLimitStore[k];
+  }
+}, 5 * 60 * 1000).unref();
 
+function rateLimit(keyFn, maxAttempts, windowMs) {
   return function (req, res, next) {
     var key = keyFn(req);
     var now = Date.now();
@@ -1894,6 +1898,7 @@ export async function initPlugins(app) {
 }
 
 export { isAdminKey };
+export { rateLimit }; // test/unit/rate-limit-prune-hoist.test.js (task 186 §3)
 export { hasLegacyBcryptAgents, clearAgentKeyCache };
 
 // ── GitHub Proxy Routes (extracted to github.js) ────────────────

@@ -25,7 +25,7 @@ Campaign `templates` field (JSON) supports template keys like `creator_t1`, `cre
 
 ## API Endpoints
 
-All routes are prefixed with `/api/mycelium/outreach`.
+All routes are prefixed with `/api/mycelium/marketing/outreach` (the old `/api/mycelium/outreach` paths 301 here for one release — task 186).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

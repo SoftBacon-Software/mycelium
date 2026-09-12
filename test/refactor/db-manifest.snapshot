@@ -100,6 +100,7 @@ dispatchWebhook:function:3
 doneRunnerSpawn:function:3
 ensureAgentProfile:function:1
 ensureDefaultChannels:function:0
+ensurePluginOrphanColumns:function:0
 ensurePluginRecord:function:1
 getActiveStudioUsers:function:1
 getAdminOps:function:0
@@ -250,6 +251,7 @@ pauseDrone:function:1
 pruneSavepoints:function:2
 pruneWebhookDeliveries:function:1
 purgeExpiredContextKeys:function:0
+reconcilePluginOrphans:function:1
 recordPluginMigration:function:3
 releaseStaleClaimedJobs:function:1
 releaseStaleClaimedRuns:function:1

@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 import http from 'http';
-import { ensurePluginRecord, getPluginRecord, listPluginRecords, getPluginMigrationVersion, recordPluginMigration, getDB } from './db.js';
+import { ensurePluginRecord, getPluginRecord, listPluginRecords, getPluginMigrationVersion, recordPluginMigration, reconcilePluginOrphans, getDB } from './db.js';
 import { routeUsageMountStamp } from './lib/route-usage.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -253,6 +253,7 @@ export async function loadPlugins(core, router) {
   }
 
   var entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
+  var dirNames = []; // manifest names that have a directory — the reconcile's ground truth
   for (var entry of entries) {
     if (!entry.isDirectory()) continue;
     var pluginDir = path.join(PLUGINS_DIR, entry.name);
@@ -261,6 +262,7 @@ export async function loadPlugins(core, router) {
 
     try {
       var manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      dirNames.push(manifest.name);
 
       // Count MCP tools from mcp-tools.json if present
       var mcpToolsPath = path.join(pluginDir, 'mcp-tools.json');
@@ -397,6 +399,19 @@ export async function loadPlugins(core, router) {
     } catch (e) {
       console.error('[plugins] Failed to load ' + entry.name + ':', e.message);
     }
+  }
+
+  // Task 186 §5: registry reconcile — rows whose plugin directory is gone are
+  // marked orphaned (rows never deleted; a restored dir clears the flag on
+  // the next boot). Logged only when something changed, so the boot log line
+  // is signal, not noise.
+  try {
+    var reconcile = reconcilePluginOrphans(dirNames);
+    if (reconcile.marked > 0 || reconcile.restored > 0) {
+      console.log('[plugins] Registry reconcile: ' + reconcile.marked + ' orphaned (no directory), ' + reconcile.restored + ' restored');
+    }
+  } catch (e) {
+    console.error('[plugins] Registry reconcile failed:', e.message);
   }
 
   console.log('[plugins] ' + loadedPlugins.length + ' plugin(s) loaded');

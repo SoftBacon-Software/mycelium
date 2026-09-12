@@ -1,4 +1,4 @@
-# jetson01 ollama keep-alive (finite, not forever)
+# <host> ollama keep-alive (finite, not forever)
 
 **Why.** The substrate host's ollama unit ran `OLLAMA_KEEP_ALIVE=-1`, so any
 model it loaded stayed resident until the unit restarted. On 2026-09-11 that
