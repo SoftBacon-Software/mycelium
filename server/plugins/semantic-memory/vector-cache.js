@@ -111,7 +111,8 @@ export function createVectorCache(db, opts) {
   var lastScanMs = 0;
 
   // Breaker state (see header, point 3).
-  var buildFailures = 0;
+  var buildFailures = 0;            // lifetime, for stats
+  var consecutiveBuildFailures = 0; // per incident — sizes the window; reset by a healed build
   var fallbackUntil = 0;      // epoch ms while a fallback window is open
   var fallbackQueries = 0;    // searches that went JSON because of the breaker
   var lastBuildError = null;
@@ -245,6 +246,14 @@ export function createVectorCache(db, opts) {
         order = [];
       }
       var idRows = db.prepare(ID_SCAN).all();
+      // The baseline is captured HERE, at the same synchronous instant as the
+      // id scan — never after the yielding decode. A write that lands during a
+      // yield is not in this scan, and its hook no-ops while `built` is false;
+      // a baseline read after the decode would already include it and mask
+      // the gap for good (the row would stay invisible until an unrelated
+      // write moved the signature). Captured now, it shows as drift on the
+      // next search and the reconcile picks the row up.
+      var aggrAtScan = aggregates();
       var sqlIds = new Set();
       var missing = [];
       for (var r of idRows) {
@@ -270,11 +279,11 @@ export function createVectorCache(db, opts) {
       // `order` must hold (the scan cap's early break depends on it).
       if (decoded.length > 0) order.sort(byRecencyDesc);
 
-      var aggr = aggregates();
-      maxId = aggr.maxId;
-      baseline = aggr;
+      maxId = aggrAtScan.maxId;
+      baseline = aggrAtScan;
       baselineStale = false;
       built = true;
+      consecutiveBuildFailures = 0; // a healed build closes the incident; the next failure starts at the base window
       if (kind === 'rebuild') builds++; else reconciles++;
       lastBuildMs = Date.now() - t0;
     } catch (err) {
@@ -305,8 +314,9 @@ export function createVectorCache(db, opts) {
 
   function recordBuildFailure(err) {
     buildFailures++;
+    consecutiveBuildFailures++;
     lastBuildError = err && err.message ? err.message : String(err);
-    var windowMs = Math.min(backoffBaseMs * Math.pow(2, buildFailures - 1), backoffMaxMs);
+    var windowMs = Math.min(backoffBaseMs * Math.pow(2, consecutiveBuildFailures - 1), backoffMaxMs);
     fallbackUntil = Date.now() + windowMs;
     // ONE distinct line per window — a search inside an open window logs
     // nothing (it never attempts a build), so the log rate is the failure

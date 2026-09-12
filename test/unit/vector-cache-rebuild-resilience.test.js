@@ -395,3 +395,54 @@ describe('the freshness contract is loud, and the stats route carries the state'
     ctx.db.close();
   });
 });
+
+
+describe('review of 196: the two gaps', () => {
+  it('a write landing MID-BUILD (between decode yields) is visible after the next search', async () => {
+    // decodeBatchRows: 2 over 12 rows -> ~6 event-loop turns per build. The
+    // hooks no-op while built is false, so the raw row is not decoded by this
+    // build; the baseline captured at the id scan makes it show as drift.
+    const ctx = await makeMem({ decodeBatchRows: 2 });
+    const v = unitVec(mulberry32(4242), DIM);
+    const building = ctx.mem.searchVector(ctx.queries[0], { limit: 50 });
+    await new Promise((r) => setImmediate(r)); // now inside the build's yields
+    expect(ctx.mem.vectorCacheInfo().built).toBe(false);
+    ctx.db.prepare(
+      "INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model) " +
+      "VALUES ('note', 'oob-mid', 'landed mid-build', NULL, 0, '{}', ?, 'raw')"
+    ).run(JSON.stringify(v));
+    await building;
+    const rows = await ctx.mem.searchVector(v, { limit: 50 });
+    expect(rows.map(keyOf)).toContain('note:oob-mid:0');
+    expect(ctx.mem.vectorCacheInfo().reconciles).toBeGreaterThanOrEqual(1);
+    ctx.db.close();
+  });
+
+  it('the backoff restarts at the base window after a healed build (per incident, not lifetime)', async () => {
+    const ctx0 = await makeMem({ buildBackoffBaseMs: 30, buildBackoffMaxMs: 1000 });
+    const { proxy, state } = failThenHeal(ctx0.db, 1);
+    const { default: createMemoryDB } = await import(join(SM_DIR, 'db.js'));
+    const mem = createMemoryDB(proxy, { vectorCache: { buildBackoffBaseMs: 30, buildBackoffMaxMs: 1000 } });
+    const errors = captureErrors();
+    await mem.searchVector(ctx0.queries[0], { limit: 50 }); // incident 1: fails, 30 ms window
+    await sleep(45);
+    await mem.searchVector(ctx0.queries[1], { limit: 50 }); // heals
+    expect(mem.vectorCacheInfo().built).toBe(true);
+    // A NEW incident: force a reconcile (out-of-band insert) and make its scan throw.
+    state.failTimes = state.markerCalls + 1;
+    ctx0.db.prepare(
+      "INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model) " +
+      "VALUES ('note', 'oob-2', 'drift', NULL, 0, '{}', ?, 'raw')"
+    ).run(JSON.stringify(unitVec(mulberry32(99), DIM)));
+    const t0 = Date.now();
+    await mem.searchVector(ctx0.queries[2], { limit: 50 });
+    const info = mem.vectorCacheInfo();
+    expect(info.built).toBe(false);
+    expect(info.build_failures).toBe(2);
+    const windowMs = info.fallback_until_ms - t0;
+    expect(windowMs).toBeLessThanOrEqual(40); // base 30 ms, not 60 ms (doubled from a lifetime count)
+    expect(windowMs).toBeGreaterThan(0);
+    errors.spy.mockRestore();
+    ctx0.db.close();
+  });
+});
