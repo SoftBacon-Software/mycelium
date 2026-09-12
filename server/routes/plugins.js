@@ -37,10 +37,37 @@ export { REGISTRY_COMMIT, REGISTRY_URL };
 var registryCache = { data: null, fetched: 0 };
 var REGISTRY_TTL = 3600000; // 1 hour
 
+// ---- Marketing legacy-path 301s (task 186 §6, ONE RELEASE then delete) ----
+// marketing was the ONE plugin mounted at "/" (routePrefix "/"), which made it
+// invisible to the route-usage counters the audit reads. It now mounts at
+// /marketing; the four old top-level prefixes 301 so bookmarks and in-flight
+// callers survive one release. Remove this block in the next release.
+var MARKETING_LEGACY_PREFIXES = ['/bip', '/outreach', '/social', '/x'];
+export { MARKETING_LEGACY_PREFIXES };
+
+export function marketingLegacyRedirect(req, res, next) {
+  for (var legacy of MARKETING_LEGACY_PREFIXES) {
+    if (req.path === legacy || req.path.startsWith(legacy + '/')) {
+      // originalUrl = <mount><routerPath><query>; the legacy prefix's FIRST
+      // occurrence in it is the mount-relative one (the mount prefix —
+      // /api/mycelium — cannot contain it).
+      var q = req.originalUrl.indexOf('?');
+      var pathPart = q === -1 ? req.originalUrl : req.originalUrl.slice(0, q);
+      var query = q === -1 ? '' : req.originalUrl.slice(q);
+      return res.redirect(301, pathPart.replace(legacy, '/marketing' + legacy) + query);
+    }
+  }
+  next();
+}
+
 export function registerPluginRoutes(router, deps) {
   const {
     asyncHandler, checkAdmin, checkAgentOrAdmin, emitEvent, getAdminDisplayName,
   } = deps;
+
+  // Registered FIRST in this module so the legacy prefixes redirect before
+  // anything else can shadow them (no core route claims them today).
+  router.use(marketingLegacyRedirect);
 
   router.get('/plugins', asyncHandler(function (req, res) {
     if (!checkAdmin(req, res)) return;

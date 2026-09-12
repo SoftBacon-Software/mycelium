@@ -11,10 +11,13 @@ import { readFileSync, existsSync } from 'node:fs';
 // 309 = 311 − 2 team-chat exports removed (2026-09-09, task 174:
 // createTeamChat, listTeamChat — the /team-chat surface was folded away;
 // chat rows remain `messages` history).
-const EXPECTED_EXPORT_COUNT = 309;
+// 311 = 309 + 2 plugin-registry orphan-reconcile exports (2026-09-12, task 186:
+// ensurePluginOrphanColumns, reconcilePluginOrphans — boot-time reconcile of
+// registry rows whose plugin directory is gone).
+const EXPECTED_EXPORT_COUNT = 311;
 
 describe('db.js export manifest (decomposition gate)', () => {
-  test('public surface matches snapshot — 309 exports, stable types+arities', async () => {
+  test('public surface matches snapshot — 311 exports, stable types+arities', async () => {
     const manifest = await buildManifest();
 
     if (!existsSync(SNAPSHOT_PATH)) {

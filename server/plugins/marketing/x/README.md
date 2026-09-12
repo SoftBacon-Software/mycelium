@@ -17,7 +17,7 @@ Create tweet drafts, organize them into threads, and publish to X using OAuth 1.
 
 ## API Endpoints
 
-All routes are under `/api/mycelium/x`.
+All routes are under `/api/mycelium/marketing/x` (the old `/api/mycelium/x` paths 301 here for one release — task 186).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

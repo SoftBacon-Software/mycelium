@@ -14,7 +14,7 @@ No config schema fields. The plugin reads `instance_url` from `instance_config` 
 
 ## API Endpoints
 
-All routes are prefixed with `/bip`.
+All routes are prefixed with `/marketing/bip` (the old `/bip` paths 301 here for one release — task 186).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

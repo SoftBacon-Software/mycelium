@@ -6,6 +6,53 @@ import { applyDecay } from './decay.js';
 
 var _consolidationTimer = null;
 
+// Task 186 §4 (AUDIT-lab-clockwork-2026-09-12): the decay/prune half of the
+// consolidation tick ran UNGATED — every interval it walked and mutated the
+// facts table while the LIVE config has consolidation_enabled=false and
+// llm_provider=none (extraction off too). `decay_enabled` now gates it,
+// DEFAULTING TO the consolidation flag: consolidation on ⇒ decay on
+// (back-compat for installs that never touched either key), the live shape
+// (consolidation off) stops paying for a pass it never asked for, and an
+// explicit decay_enabled=true/false overrides either way.
+export function isDecayEnabled(config) {
+  config = config || {};
+  var explicit = config.decay_enabled;
+  if (explicit !== undefined && explicit !== null && explicit !== '') {
+    return explicit !== 'false';
+  }
+  return config.consolidation_enabled !== 'false';
+}
+
+// One tick of the reflector, split out of the timer so it is unit-testable.
+export function consolidationTick(db, config, core) {
+  config = config || {};
+
+  // Decay/prune pass — gated, see isDecayEnabled above (task 186 §4).
+  if (isDecayEnabled(config)) {
+    try {
+      var decayed = applyDecay(db);
+      var pruned = db.pruneLowConfidence(0.15);
+      if (decayed > 0 || pruned > 0) {
+        console.log('[auto-memory] Decay pass: ' + decayed + ' facts decayed, ' + pruned + ' pruned below threshold');
+      }
+    } catch (e) {
+      console.error('[auto-memory] Decay pass failed:', e.message);
+    }
+  }
+
+  if (config.consolidation_enabled === 'false') return;
+  if (config.llm_provider === 'none' || !config.llm_provider) return;
+
+  // Import runConsolidation dynamically to avoid circular deps
+  import('./routes.js').then(function (mod) {
+    mod.runConsolidation(db, config, core).then(function (result) {
+      console.log('[auto-memory] Consolidation complete:', JSON.stringify(result));
+    }).catch(function (e) {
+      console.error('[auto-memory] Consolidation failed:', e.message);
+    });
+  });
+}
+
 export function registerHooks(core) {
   var db = createAutoMemoryDB(core.db);
 
@@ -89,30 +136,7 @@ export function registerHooks(core) {
 
     if (_consolidationTimer) clearInterval(_consolidationTimer);
     _consolidationTimer = setInterval(function () {
-      var config = getConfig();
-
-      // Always run decay pass (doesn't require LLM)
-      try {
-        var decayed = applyDecay(db);
-        var pruned = db.pruneLowConfidence(0.15);
-        if (decayed > 0 || pruned > 0) {
-          console.log('[auto-memory] Decay pass: ' + decayed + ' facts decayed, ' + pruned + ' pruned below threshold');
-        }
-      } catch (e) {
-        console.error('[auto-memory] Decay pass failed:', e.message);
-      }
-
-      if (config.consolidation_enabled === 'false') return;
-      if (config.llm_provider === 'none' || !config.llm_provider) return;
-
-      // Import runConsolidation dynamically to avoid circular deps
-      import('./routes.js').then(function (mod) {
-        mod.runConsolidation(db, config, core).then(function (result) {
-          console.log('[auto-memory] Consolidation complete:', JSON.stringify(result));
-        }).catch(function (e) {
-          console.error('[auto-memory] Consolidation failed:', e.message);
-        });
-      });
+      consolidationTick(db, getConfig(), core);
     }, intervalMs);
     _consolidationTimer.unref();
   }

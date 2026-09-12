@@ -250,20 +250,11 @@ app.get('/setup-admin.ps1', function (req, res) {
   res.type('text/plain').sendFile(path.join(publicRoot, 'setup-admin.ps1'));
 });
 
-// ---- A2A Agent Card (public, no auth) ----
-app.get('/.well-known/agent.json', function (req, res) {
-  // Proxy to the a2a-gateway plugin's agent card endpoint
-  req.url = '/api/mycelium/a2a/agent-card';
-  app.handle(req, res);
-});
-
-// ---- A2A JSON-RPC endpoint (public with API key auth) ----
-app.post('/a2a', function (req, res) {
-  req.url = '/api/mycelium/a2a/rpc';
-  app.handle(req, res);
-});
-
 // ---- API routes ----
+// (Task 186: the two A2A root rewrites — /.well-known/agent.json and
+// POST /a2a into the a2a-gateway plugin's mount — were removed with the
+// plugin; their target has 404'd in practice since the plugin shipped
+// disabled. The A2A surface is gone, not dormant.)
 // Route-usage counter sits BEFORE the routes router on the same mount so it
 // sees every /api/mycelium request; it records the matched route pattern at
 // response-finish (see server/lib/route-usage.js). Read via
@@ -358,9 +349,26 @@ process.on('SIGTERM', function () { gracefulShutdown('SIGTERM'); });
 process.on('SIGINT', function () { gracefulShutdown('SIGINT'); });
 
 // ---- SQLite backup system ----
+import { resolveBackupSettings } from './lib/backup-config.js';
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 var BACKUP_DIR = path.join(DATA_DIR, 'backups');
-var MAX_BACKUPS = 10;
+// Task 186 §1 (AUDIT-lab-clockwork-2026-09-12): interval + retention were
+// hardcoded 6h × 10 — 4.8 GB on an 8 GB board beside the Mac's 13 GB off-box
+// set. D6: defaults drop to 24h × 3; env (deploy layer) or instance_config
+// (admin layer) override. The boot log names which layer won per key —
+// no silent precedence.
+var BACKUP_SETTINGS = resolveBackupSettings({
+  env: process.env,
+  getConfig: function (key) {
+    try {
+      var row = getDB().prepare('SELECT value FROM instance_config WHERE key = ?').get(key);
+      return row ? row.value : null;
+    } catch (e) { return null; /* pre-migration boot — defaults apply */ }
+  },
+});
+var MAX_BACKUPS = BACKUP_SETTINGS.maxBackups;
+console.log('[backup] SQLite backup config: every ' + BACKUP_SETTINGS.intervalHours + 'h, keep ' + BACKUP_SETTINGS.maxBackups
+  + ' (interval: ' + BACKUP_SETTINGS.sources.intervalHours + ', retention: ' + BACKUP_SETTINGS.sources.maxBackups + ')');
 
 async function runBackup() {
   try {
@@ -396,8 +404,8 @@ async function runBackup() {
 
 // Backup on startup
 runBackup();
-// Backup every 6 hours
-setInterval(runBackup, 6 * 60 * 60 * 1000);
+// Backup on the resolved interval (D6 default: 24h)
+setInterval(runBackup, BACKUP_SETTINGS.intervalHours * 60 * 60 * 1000);
 
 // Daily maintenance: stale requests + webhook log pruning (runs every 24h)
 setInterval(function () {
@@ -432,6 +440,7 @@ var wss = new WebSocketServer({ noServer: true });
 var peerCounter = 0;
 
 wss.on('connection', function (ws, req) {
+  voiceHeartbeat.ensure(); // Task 186 §2: first client wakes the ping timer
   // Authenticate via ?token= query param (JWT)
   var url = new URL(req.url, 'http://localhost');
   var token = url.searchParams.get('token');
@@ -498,18 +507,21 @@ wss.on('connection', function (ws, req) {
   });
 });
 
-setInterval(function () {
-  wss.clients.forEach(function (ws) {
-    if (!ws.isAlive) {
-      var me = voicePeers.get(ws);
-      voicePeers.delete(ws);
-      if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
-      return ws.terminate();
-    }
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 10000);
+// Task 186 §2 (AUDIT-lab-clockwork-2026-09-12): this timer used to run
+// unconditionally from boot, un-unref'd — a live 10s timer for a surface with
+// zero voice clients. It now starts lazily (wss 'connection' above) and never
+// holds the process open. Dead-peer cleanup (peer_left broadcast) rides the
+// onDead seam so the tick logic stays shared with the file-drone heartbeat.
+import { createHeartbeat } from './lib/ws-heartbeat.js';
+var voiceHeartbeat = createHeartbeat({
+  clients: function () { return wss.clients; },
+  intervalMs: 10000,
+  onDead: function (ws) {
+    var me = voicePeers.get(ws);
+    voicePeers.delete(ws);
+    if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
+  },
+});
 
 function getPeersInChannel(channel) {
   var peers = [];
@@ -546,6 +558,7 @@ var fileDroneWss = new WebSocketServer({ noServer: true });
 var _fileDroneReqCounter = 0;
 
 fileDroneWss.on('connection', function (ws, req) {
+  fileDroneHeartbeat.ensure(); // Task 186 §2: first drone wakes the heartbeat
   var url = new URL(req.url, 'http://localhost');
   var agentKey = url.searchParams.get('key');
   var droneId = url.searchParams.get('drone_id');
@@ -619,14 +632,12 @@ fileDroneWss.on('connection', function (ws, req) {
   });
 });
 
-// Heartbeat for file drones
-setInterval(function () {
-  fileDroneWss.clients.forEach(function (ws) {
-    if (!ws.isAlive) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 15000);
+// Heartbeat for file drones — Task 186 §2: lazy + unref'd (see voice above);
+// zero drones connected = zero timers.
+var fileDroneHeartbeat = createHeartbeat({
+  clients: function () { return fileDroneWss.clients; },
+  intervalMs: 15000,
+});
 
 // ---- Manual WebSocket upgrade routing (required for multiple WSS on one HTTP server) ----
 server.on('upgrade', function (request, socket, head) {

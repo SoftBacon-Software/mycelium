@@ -259,7 +259,7 @@ export default function (core) {
         media_url: post.media_url,
         scheduled_at: post.scheduled_at || '',
         credentials: creds,
-        callback_url: '/api/mycelium/social/posts/' + post.id
+        callback_url: '/api/mycelium/marketing/social/posts/' + post.id
       },
       ['cpu'],
       who,
