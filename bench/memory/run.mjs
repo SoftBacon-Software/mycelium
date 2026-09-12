@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
 import { startLettaSidecar, purgeLettaScope } from './arms/arm_letta.mjs';
 import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingestion.mjs';
+import { loadDatasetTypes } from './per_type.mjs';
 import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
@@ -107,6 +108,7 @@ async function main() {
           summary: result.summary,
           agreement: judgeAgreement,
           handlabels: handlabelsMeta,
+          judged: result.judged,
           commands: [
             `node bench/memory/run.mjs --from-results ${dirRel.startsWith('..') ? dir : dirRel} --rejudge` +
               `${args.handlabels ? ` --handlabels ${args.handlabels}` : ''} --receipt`,
@@ -233,6 +235,7 @@ async function main() {
         const md = renderReceipt({
           runId: result.summary.run_id,
           summary: result.summary,
+          judged: result.judged,
           commands: [
             `node bench/memory/run.mjs --reanswer ${dirRel.startsWith('..') ? dir : dirRel}` +
               `${args.arms ? ` --arms ${args.arms}` : ''}${args.receipt ? ' --receipt' : ''}`,
@@ -280,6 +283,7 @@ async function main() {
       handlabels: handlabelsMeta,
       cleanup: summary.cleanup ?? null,
       writeInfo: summary.write_info ?? null,
+      judged,
       commands: summary.commands ?? [],
       generatedAt: utcStamp(new Date()),
     });
@@ -302,7 +306,10 @@ async function main() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt) });
+    // --dataset <file>: only needed when a judged row lacks question_type — the
+    // join is quoted in the receipt (never a silent guess)
+    const datasetTypes = args.dataset ? await loadDatasetTypes(path.resolve(args.dataset)) : null;
+    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), datasetTypes });
     console.log(
       JSON.stringify(
         {
@@ -907,6 +914,7 @@ async function main() {
         handlabels: handlabelsMeta,
         cleanup,
         writeInfo: writeInfoByArm,
+        judged: result.judged,
         commands: summary.commands,
         generatedAt: utcStamp(new Date()),
       });

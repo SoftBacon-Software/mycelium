@@ -20,6 +20,7 @@ export async function runBench({
   maxSessions = null, // int|null — cap the haystack sessions written per question (the smoke
                       // lever: a full question is ~30 sessions ≈ hours of competitor-arm
                       // extraction; a smoke takes the first few). Stamped into the regime.
+  nowFn = Date.now,   // injectable clock (tests); the write_ms stamp must be deterministic
 }) {
   if (!regime) throw new Error('runBench requires a regime stamp — rows are written without one is a bug by construction');
   if (!Array.isArray(items) || items.length === 0) throw new Error('runBench: no items selected');
@@ -40,6 +41,12 @@ export async function runBench({
     if (maxSessions !== null) writeInfo.sessions_capped_at = maxSessions;
     if (typeof arm.write === 'function') {
       writeInfo.skipped = false;
+      // task 199: the ingestion path stamps its own wall-clock cost on EVERY
+      // arm — the receipt renders seconds-per-session from it and the timeline
+      // arm's ≤2×-of-extract cost bound is judged from these stamps. Arms that
+      // skip the write phase (the `none` arm) carry no stamp: no ingestion, no
+      // number.
+      const tWrite = nowFn();
       for (const item of items) {
         // the cap bounds the WRITE phase only: the answer phase reads the
         // question + gold, never the haystack
@@ -80,6 +87,7 @@ export async function runBench({
           }
         }
       }
+      writeInfo.write_ms = nowFn() - tWrite;
     }
     if (afterWrite) await afterWrite({ arm: name, writeInfo });
 
