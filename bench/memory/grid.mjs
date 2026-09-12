@@ -17,6 +17,7 @@ import path from 'node:path';
 
 import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
+import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
 export class GridRefusal extends Error {
@@ -256,7 +257,7 @@ function secondsPerAdd(writeInfo) {
   return (ms / writeInfo.docs / 1000).toFixed(2);
 }
 
-export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
+export function renderGridReceipt({ runs, generatedAt, commands = [], datasetTypes = null }) {
   const runIds = runs.map((r) => r.runId);
   const L = [];
   L.push(`# Receipt — memory benchmark P1 grid (${runIds.join(' + ')})`);
@@ -344,6 +345,44 @@ export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
     L.push(bits.join(' '));
   }
 
+  // task 199: per-question-type scores — the one-number score row cannot say
+  // whether an arm won the CELLS it was built for (brief §3). From each arm's
+  // own judged rows; a run whose per-question rows are absent renders that
+  // absence (never a number from nothing).
+  const talliesByArm = {};
+  const regimeByArm = {};
+  L.push('');
+  L.push('## Per-question-type scores');
+  L.push('');
+  for (const arm of unionArms(runs)) {
+    const owner = runs.find((r) => r.summary.arms?.[arm]);
+    if (!Array.isArray(owner.judged)) {
+      L.push(`per-question rows absent for ${owner.runId}`);
+      L.push('');
+      continue;
+    }
+    talliesByArm[arm] = tallyByType(owner.judged.filter((r) => r.arm === arm), {
+      typesByQuestionId: datasetTypes?.typesByQuestionId ?? null,
+      joinRule: datasetTypes?.joinRule ?? null,
+    });
+    regimeByArm[arm] = owner.summary.regime ?? {};
+    for (const line of renderPerTypeTable(arm, talliesByArm[arm])) L.push(line);
+    L.push('');
+  }
+
+  // the timeline arm judged by its pre-committed cells — its own bar, not the
+  // one number (renderWinCondition states the bars + the verdict rule)
+  if (armsUnion[WIN_CONDITION.arm]) {
+    for (const line of renderWinCondition({
+      talliesByArm,
+      writeInfoByArm: writeUnion,
+      regimeByArm,
+    })) {
+      L.push(line);
+    }
+    L.push('');
+  }
+
   // comparability: the keys that were checked and their shared value
   L.push('');
   L.push('## Comparability (checked, all equal)');
@@ -426,6 +465,7 @@ export function composeGrid({
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
+  datasetTypes = null, // {typesByQuestionId, joinRule} — for rows lacking question_type (--dataset)
 }) {
   if (!Array.isArray(dirs) || dirs.length < 2) {
     throw new GridInputError(`--grid-from-results needs at least two run dirs (got ${dirs?.length ?? 0})`);
@@ -438,7 +478,7 @@ export function composeGrid({
   const { armsUnion } = buildUnion(runs);
   const gridRendered = GRID_ROWS.flatMap((r) => [r.raw, r.extract]).every((n) => armsUnion[n]);
   if (!write) return { file: null, runIds, gridRendered, receipt: null };
-  const md = renderGridReceipt({ runs, generatedAt, commands });
+  const md = renderGridReceipt({ runs, generatedAt, commands, datasetTypes });
   mkdirFn(receiptsDir, { recursive: true });
   const file = path.join(receiptsDir, `${runIds.join('+')}-grid.md`);
   writeFn(file, md);

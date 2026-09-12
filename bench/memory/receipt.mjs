@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid } from './ingestion.mjs';
+import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -41,6 +42,7 @@ export function renderReceipt({
   cleanup = null,
   handlabels = null,
   writeInfo = null,
+  judged = null, // the run's per-question judged rows (bench/memory/results/<run>/judged.jsonl)
   rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
@@ -104,6 +106,34 @@ export function renderReceipt({
   const costLine = timelineCostLine(writeInfo ?? summary.write_info ?? null);
   if (costLine) {
     L.push(costLine);
+    L.push('');
+  }
+  // task 199: per-question-type scores + (when the timeline arm is in the run)
+  // its pre-committed win-condition block. The table needs the run's judged
+  // rows; their absence renders as its absence, never a number from nothing.
+  if (Array.isArray(judged)) {
+    const perType = {};
+    L.push('## Per-question-type scores');
+    L.push('');
+    for (const name of Object.keys(summary.arms)) {
+      perType[name] = tallyByType(judged.filter((r) => r.arm === name));
+      for (const line of renderPerTypeTable(name, perType[name])) L.push(line);
+      L.push('');
+    }
+    if (summary.arms[WIN_CONDITION.arm]) {
+      for (const line of renderWinCondition({
+        talliesByArm: perType,
+        writeInfoByArm: writeInfo ?? summary.write_info ?? {},
+        regimeByArm: { [WIN_CONDITION.arm]: summary.regime ?? {} },
+        absentLabel: 'not in this run',
+        notStampedPhrase: 'not stamped in this run',
+      })) {
+        L.push(line);
+      }
+      L.push('');
+    }
+  } else if (summary.arms[WIN_CONDITION.arm]) {
+    L.push(`per-question rows absent for ${runId} — the per-question-type table and the win-condition block need the run's judged rows (bench/memory/results/${runId}/judged.jsonl)`);
     L.push('');
   }
   if (judgeAgreement) {
