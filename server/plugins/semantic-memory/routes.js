@@ -99,7 +99,7 @@ export default function (core) {
       }
 
       if (queryEmbedding) {
-        results = db.searchHybrid(query, opts, queryEmbedding);
+        results = await db.searchHybrid(query, opts, queryEmbedding); // 196: may wait on an in-flight cache build
         effectiveMode = 'hybrid';
       } else {
         // Silent-degradation guard (house rule: no silent failures). Previously this
@@ -107,7 +107,7 @@ export default function (core) {
         // that vector search never ran, and would answer confidently from a thinner
         // recall. Now effectiveMode reports the truth and `degraded` explains it. The
         // RESULT SET is unchanged; only the honesty changes. (§F1, §F3)
-        results = db.searchHybrid(query, opts, null);
+        results = await db.searchHybrid(query, opts, null);
         effectiveMode = 'keyword-fallback';
       }
     }
@@ -389,10 +389,10 @@ export default function (core) {
           return null;
         });
     })();
-    embedPromise.then(function (queryEmbedding) {
+    embedPromise.then(async function (queryEmbedding) {
       if (queryEmbedding) effectiveMode = 'hybrid';
       else effectiveMode = 'keyword-fallback';
-      var results = db.searchHybrid(String(req.query.q), opts, queryEmbedding);
+      var results = await db.searchHybrid(String(req.query.q), opts, queryEmbedding); // 196: may wait on an in-flight cache build
       var beforeFilter = results.length;
       results = results.filter(function (r) {
         var m = r.metadata || {};
