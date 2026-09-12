@@ -277,6 +277,7 @@ describe('the circuit breaker: a failing build costs no more than pre-194', () =
     // Window expires -> attempt 2 -> throws again -> window 2 (60 ms), line 2.
     await sleep(45);
     const r3 = await mem.searchVector(ctx0.queries[2], { limit: 50 });
+    expect(Array.isArray(r3)).toBe(true); // the fallback path still answers inside the open window
     info = mem.vectorCacheInfo();
     expect(state.markerCalls).toBe(2);
     expect(info.build_failures).toBe(2);
