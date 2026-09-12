@@ -5,7 +5,7 @@
 // injection); DB functions are imported directly. The route contract is identical
 // to before extraction — enforced by test/refactor/route-manifest.mjs.
 import {
-  listPlans, createPlan, getPlan, updatePlan, deletePlan,
+  listPlans, countPlans, createPlan, getPlan, updatePlan, deletePlan,
   createPlanStep, updatePlanStep, deletePlanStep,
   addPlanStepComment, getPlanStepComments, reorderPlanSteps,
   autoRetryOrEscalatePlanStep, getSleepMode, appendSleepLog,
@@ -18,6 +18,7 @@ export function registerPlanRoutes(router, deps) {
     parseLimit, parseIntParam, validateStringLength, validateEnum,
     checkApprovalGate, checkProjectScope, warnSuspectTransition,
     emitEvent, MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
+    pageEnvelope,
   } = deps;
 
   // ======== PLANS ========
@@ -32,7 +33,11 @@ export function registerPlanRoutes(router, deps) {
       limit: parseLimit(req.query.limit, 50),
       offset: parseInt(req.query.offset) || 0
     };
-    res.json(listPlans(filters));
+    // Task 200: honest envelope by default; ?shape=array keeps the bare array
+    // for one release (external old clients).
+    var rows = listPlans(filters);
+    if (req.query.shape === 'array') return res.json(rows);
+    res.json(pageEnvelope(rows, countPlans(filters), filters.limit, filters.offset));
   }));
 
   router.post('/plans', asyncHandler(function (req, res) {

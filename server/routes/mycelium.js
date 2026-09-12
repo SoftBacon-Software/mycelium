@@ -198,6 +198,9 @@ import { registerChannelRoutes } from './channels.js';
 import { registerFeedbackRoutes } from './feedback.js';
 import { registerBugRoutes } from './bugs.js';
 import { registerDroneRoutes } from './drones.js';
+// Task 200: the 15-min sweep reuses the workflows plugin's DB helpers for the
+// stale-claim release (dependency-free module — takes the db handle, no cycle).
+import createWorkflowsDB from '../plugins/workflows/db.js';
 import { registerApprovalRoutes } from './approvals.js';
 import { registerTaskRoutes } from './tasks.js';
 import { registerContextRoutes } from './context.js';
@@ -356,6 +359,23 @@ var MAX_PAGE_LIMIT = 500;
 function parseLimit(val, def) {
   var n = parseInt(val, 10);
   return Math.min(isNaN(n) || n < 1 ? (def || 50) : n, MAX_PAGE_LIMIT);
+}
+
+// The honest page envelope (task 200: GET /tasks paged at 50 with no signal —
+// 74 open tasks, the board showed 50 and nothing said so). Every list route
+// that pages returns { items, total, limit, offset, next_offset } by default;
+// the pre-envelope bare array survives ONE release behind ?shape=array so
+// external old clients keep reading during the window. total is the count of
+// rows matching the FILTERS, never just the page. Exposed to core routes via
+// deps and to plugins via pluginCore (same function, one definition).
+function pageEnvelope(items, total, limit, offset) {
+  return {
+    items: items,
+    total: total,
+    limit: limit,
+    offset: offset,
+    next_offset: (offset + items.length) < total ? offset + limit : null
+  };
 }
 
 // ======================== CANONICAL STATUS ENUMS ========================
@@ -1431,7 +1451,7 @@ registerTaskRoutes(router, {
   agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
   emitEvent, validateStringLength, checkProjectScope, warnSuspectTransition,
   dispatchWorkToIdleAgents, MAX_TITLE, MAX_DESCRIPTION,
-  TASK_STATUSES, TASK_PRIORITIES,
+  TASK_STATUSES, TASK_PRIORITIES, pageEnvelope,
 });
 
 // ======== AGENTS (extracted to agents.js) ========
@@ -1596,6 +1616,7 @@ registerPlanRoutes(router, {
   parseLimit, parseIntParam, validateStringLength, validateEnum,
   checkApprovalGate, checkProjectScope, warnSuspectTransition,
   emitEvent, MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
+  pageEnvelope,
 });
 
 // ======== STUDIO AUTH — extracted to ./studio.js ========
@@ -1680,11 +1701,30 @@ setInterval(function () {
 
 // Bug #137: Periodically auto-fail stale claimed drone jobs (every 15 minutes)
 // Bug #134/#132: Also flag drones offline if no heartbeat in 30 minutes
+// Task 200: workflows ride the same sweep — a claim whose RUNNER heartbeat is
+// older than WORKFLOW_CLAIM_TTL_MIN (default 30) is released back to pending
+// (event claim_released {reason:'runner_stale'}); a RUNNING workflow is never
+// released by this rule — it earns a 'stalled' event for the head to decide.
+var workflowDbForSweep = null;
 setInterval(function () {
   try {
     var stale = releaseStaleClaimedJobs();
     if (stale.length > 0) {
       emitEvent('drone_stale_cleanup', '__system__', 'drone', 'Auto-failed ' + stale.length + ' stale claimed drone job(s): ' + stale.map(function (j) { return '#' + j.id; }).join(', '), { job_ids: stale.map(function (j) { return j.id; }) });
+    }
+    // Task 200: the workflows-plugin stale-claim release (lazy — the plugin's
+    // tables only exist once its schema has run; a miss lands in the catch).
+    if (!workflowDbForSweep) workflowDbForSweep = createWorkflowsDB(getDB());
+    var wfSweep = workflowDbForSweep.releaseStaleClaims(parseInt(process.env.WORKFLOW_CLAIM_TTL_MIN, 10) || 30);
+    if (wfSweep.released.length > 0) {
+      emitEvent('workflow_claim_released', '__system__', '',
+        'Released ' + wfSweep.released.length + ' stale workflow claim(s) (runner heartbeat past TTL): ' + wfSweep.released.map(function (w) { return '#' + w.id; }).join(', '),
+        { workflow_ids: wfSweep.released.map(function (w) { return w.id; }), reason: 'runner_stale' });
+    }
+    if (wfSweep.stalled.length > 0) {
+      emitEvent('workflow_stalled', '__system__', '',
+        'Workflow(s) running with a stale runner heartbeat — head decides: ' + wfSweep.stalled.map(function (w) { return '#' + w.id; }).join(', '),
+        { workflow_ids: wfSweep.stalled.map(function (w) { return w.id; }), reason: 'runner_stale' });
     }
     // Flag drones offline if no heartbeat in 30 minutes
     var drones = listDrones();
@@ -1712,7 +1752,7 @@ registerBugRoutes(router, {
   asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
   checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
   parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
-  MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES,
+  MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES, pageEnvelope,
 });
 
 // ======== RECONCILIATION (A7 — state-desync visibility) ========
@@ -1885,6 +1925,9 @@ export async function initPlugins(app) {
     // guardPluginRouter also covers this seam at mount time; this is the
     // explicit/defense-in-depth path for plugin route handlers.
     asyncHandler,
+    // Honest page envelope (task 200) — plugins share the exact function the
+    // core list routes use, one definition.
+    pageEnvelope,
     // Event hook registration — plugins call core.onEvent(type, fn)
     onEvent: registerEventHook,
     // Inbox routing helpers for plugins
@@ -1894,6 +1937,7 @@ export async function initPlugins(app) {
 }
 
 export { isAdminKey };
+export { pageEnvelope };
 export { hasLegacyBcryptAgents, clearAgentKeyCache };
 
 // ── GitHub Proxy Routes (extracted to github.js) ────────────────

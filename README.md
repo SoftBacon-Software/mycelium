@@ -179,6 +179,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
+| `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
 | `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
 | `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
@@ -243,7 +244,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-120 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+123 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 

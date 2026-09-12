@@ -21,7 +21,10 @@ export function getBug(id) {
   return db.prepare("SELECT * FROM bugs WHERE id = ?").get(id);
 }
 
-export function listBugs(filters) {
+// The shared WHERE for list + count — one filter definition, so the list
+// envelope's total (task 200) can never silently diverge from the items.
+// Distinct from countBugs(), which is the unfiltered board counter.
+function bugFilterWhere(filters) {
   var where = ['1=1'];
   var params = [];
   if (filters.project_id) { where.push('project_id = ?'); params.push(filters.project_id); }
@@ -30,10 +33,21 @@ export function listBugs(filters) {
   if (filters.reporter) { where.push('reporter = ?'); params.push(filters.reporter); }
   if (filters.severity) { where.push('severity = ?'); params.push(filters.severity); }
   if (filters.category) { where.push('category = ?'); params.push(filters.category); }
+  return { where: where, params: params };
+}
+
+export function countFilteredBugs(filters) {
+  var w = bugFilterWhere(filters);
+  return db.prepare('SELECT COUNT(*) AS n FROM bugs WHERE ' + w.where.join(' AND ')).get(...w.params).n;
+}
+
+export function listBugs(filters) {
+  var w = bugFilterWhere(filters);
+  var params = w.params.slice();
   var limit = Math.min(filters.limit || 50, 500);
   var offset = filters.offset || 0;
   params.push(limit, offset);
-  return db.prepare('SELECT * FROM bugs WHERE ' + where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
+  return db.prepare('SELECT * FROM bugs WHERE ' + w.where.join(' AND ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').all(...params);
 }
 
 export function updateBug(id, updates) {
