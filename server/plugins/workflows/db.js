@@ -21,7 +21,8 @@ export var EVENT_KINDS = [
   'created', 'claimed', 'claim_released', 'stalled', 'risk_assessed', 'wave_started',
   'invocation_started', 'invocation_finished', 'invocation_failed',
   'awaiting_approval', 'resumed', 'cancelling',
-  'completed', 'failed', 'cancelled'
+  'completed', 'failed', 'cancelled',
+  'landed'  // a squad landing merged the run's work into its trunk (jarvis squad/landing.py posts it)
 ];
 
 var INVOCATION_STATUSES = ['pending', 'running', 'completed', 'failed', 'skipped'];
