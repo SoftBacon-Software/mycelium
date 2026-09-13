@@ -19,12 +19,14 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
 import { resolveTrustProxy } from './lib/trust-proxy.js';
+import { createTurnCredentialIssuer } from './lib/turn-secret.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 import { routeUsageCounter } from './lib/route-usage.js';
 
@@ -57,13 +59,46 @@ var PORT = process.env.PORT || 3002;
 var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 var APP_VERSION = pkgJson.version || '0.0.0';
 
+// ---- Runtime instance identity: which commit is this? ----
+// APP_VERSION is read once from package.json, so between releases EVERY
+// instance on earth reports the same frozen string, and no instance could
+// answer the "commit hash" half of the bug-report ask (CONTRIBUTING "Reporting
+// bugs"). Resolution order, asked once here at boot and cached:
+//   1. MYCELIUM_GIT_SHA env var — the deployment seam. Containers/PaaS deploys
+//      have no .git to ask (the Dockerfile copies none and .dockerignore
+//      excludes it), so image builds pass the sha in via ARG/ENV.
+//   2. `git rev-parse --short HEAD` with cwd = repo root (works from a
+//      worktree too). A source checkout gets truth this way.
+//   3. 'unknown' on ANY failure — no git binary, not a repo, spawn error.
+//      Fail-soft on purpose: boot must not gain a new way to die.
+var COMMIT_SHA = (function () {
+  var fromEnv = process.env.MYCELIUM_GIT_SHA;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim();
+  try {
+    var out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      encoding: 'utf8'
+    });
+    var sha = String(out).trim();
+    return sha || 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+})();
+
 // ---- Startup validation ----
 if (!process.env.ADMIN_KEY || !process.env.JWT_SECRET) {
   console.error('FATAL: ADMIN_KEY and JWT_SECRET must be set');
   process.exit(1);
 }
-if (!process.env.TURN_SECRET) {
-  console.warn('[mycelium] TURN_SECRET not set — using default OpenRelay secret. Set TURN_SECRET env var for production.');
+// Resolved ONCE here — every TURN credential this boot issues is keyed by the
+// same secret. Never re-resolve per request (per-boot stability is the
+// contract; see lib/turn-secret.js).
+var turnCredentials = createTurnCredentialIssuer(process.env);
+if (turnCredentials.generated) {
+  console.warn('[mycelium] TURN_SECRET not set — generated a per-boot random TURN credential secret. Credentials from this boot will NOT authenticate against external TURN relays until TURN_SECRET is set to the relay\'s shared secret.');
 }
 
 // Initialize database
@@ -240,7 +275,8 @@ app.get('/health', function (req, res) {
     db_ok: dbOk,
     agents_online: agentsOnline,
     memory_usage_mb: Math.round(mem.rss / 1024 / 1024),
-    version: APP_VERSION
+    version: APP_VERSION,
+    commit_sha: COMMIT_SHA
   });
 });
 
@@ -279,12 +315,9 @@ app.get('/api/voice/peers', function (req, res) {
 
 app.get('/api/voice/turn-credentials', function (req, res) {
   if (!checkVoiceAuth(req, res)) return;
-  var secret = process.env.TURN_SECRET || 'openrelayprojectsecret';
-  var expiry = Math.floor(Date.now() / 1000) + 24 * 3600;
-  var username = expiry + ':studiouser';
-  var hmac = crypto.createHmac('sha1', secret);
-  hmac.update(username);
-  var credential = hmac.digest('base64');
+  var creds = turnCredentials.issue(Date.now());
+  var username = creds.username;
+  var credential = creds.credential;
   res.json({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },

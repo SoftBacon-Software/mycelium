@@ -68,7 +68,7 @@ A customer deployment starts at L0 and adds L1 when it wants persistence with pe
 curl -fsSL https://mycelium.fyi/install.sh | bash
 ```
 
-Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 18+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
+Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 20+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
 
 ### Docker Compose (recommended)
 
@@ -79,9 +79,11 @@ cp .env.example .env   # set JWT_SECRET and ADMIN_KEY
 docker compose up -d
 ```
 
-Verify with `curl http://localhost:3002/health`, then register agents (below). Add a GPU drone worker with `docker compose --profile gpu up -d`.
+Verify with `curl http://localhost:3002/health`, then register agents (below). Drone workers are host processes, not containers — the server image ships no Python: `pip install requests && python tools/drone-worker.py --server http://localhost:3002 --key YOUR_AGENT_KEY --agent-id my-drone` polls `/drones/*` for jobs your machine can actually run (`cpu` by default; add `--capabilities gpu,cpu` only if the host really has one).
 
 ### Manual
+
+Requires Node 20 or later — `engines` in package.json enforces the same floor (CI tests Node 20 and 22).
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
@@ -181,7 +183,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 | `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
-| `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
+| `TURN_SECRET` | no | per-boot random secret | WebRTC TURN secret for voice chat. Unset generates a fresh random secret every boot: credentials are well-formed but external relays reject them (fail honest, not fail open) — set it to the relay's shared secret to make TURN work |
 | `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
 | `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
 | `RESEND_KEY` | no | — | Resend API key for transactional email; unset disables email |
@@ -193,6 +195,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `BACKUP_INTERVAL_HOURS` | no | `24` | hours between in-place SQLite backups (env overrides `instance_config` `backup_interval_hours`) |
 | `MAX_BACKUPS` | no | `3` | how many SQLite backups to keep before pruning the oldest (env overrides `instance_config` `max_backups`) |
 | `AUTO_MEMORY_LLM_KEEP_ALIVE` | no | `10m` | ollama `keep_alive` for the auto-memory extraction LLM so a small model isn't held resident forever; `0` evicts it right after each request |
+| `MYCELIUM_GIT_SHA` | no | resolved from git at boot | commit hash served as `commit_sha` at `/health` (bug reports ask for version + commit). Container images carry no `.git`, so pass it at build time: `--build-arg GIT_SHA="$(git rev-parse --short HEAD)"`. Neither source → `unknown` |
 
 Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
 
@@ -247,7 +250,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-130 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+134 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
@@ -300,6 +303,10 @@ None of these packages are on npm. They are packages of this repo — get them w
 | `release.sh` | Maintainer release — merge `master` → `stable`, tag, push (Railway auto-deploys tracked instances): `./scripts/release.sh [tag] [--dry-run]` |
 | `deploy-jetson.sh` | Maintainer deploy — ship a tagged release to the canonical jetson01 instance over git: `scripts/deploy-jetson.sh <annotated-tag> [--dry-run]` |
 | `docker-smoke.sh` | Runtime smoke for the recommended Docker install path — builds the image, boots the container, polls `/health` to healthy, then tears down: `./scripts/docker-smoke.sh` |
+
+## Contributing
+
+Bug reports, fixes, and new plugins are welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the quick start, code style, and the gates a PR must pass. Small, obviously-correct fixes can go straight to a PR; for anything else, open an issue first to discuss the approach.
 
 ## License
 

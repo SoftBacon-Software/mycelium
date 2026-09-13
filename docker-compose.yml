@@ -36,23 +36,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # Optional: Drone worker for GPU/CPU compute tasks
-  # Activate with: docker compose --profile gpu up -d
-  drone:
-    build: .
-    container_name: mycelium-drone
-    profiles:
-      - gpu
-    environment:
-      - MYCELIUM_API_URL=http://mycelium:3002/api/mycelium
-      - MYCELIUM_DRONE_ID=${DRONE_ID:-local-drone}
-      - MYCELIUM_API_KEY=${DRONE_API_KEY:-}
-    command: ["python", "tools/drone-worker.py"]
-    depends_on:
-      mycelium:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   mycelium-data:
     driver: local
