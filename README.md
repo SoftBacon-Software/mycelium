@@ -183,7 +183,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 | `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
-| `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
+| `TURN_SECRET` | no | per-boot random secret | WebRTC TURN secret for voice chat. Unset generates a fresh random secret every boot: credentials are well-formed but external relays reject them (fail honest, not fail open) — set it to the relay's shared secret to make TURN work |
 | `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
 | `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
 | `RESEND_KEY` | no | — | Resend API key for transactional email; unset disables email |
