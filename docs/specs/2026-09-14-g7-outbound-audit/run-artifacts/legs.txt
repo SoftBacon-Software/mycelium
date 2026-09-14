@@ -1,0 +1,24 @@
+=== LEG 1: health
+{"status":"ok","uptime_seconds":0,"db_ok":true,"agents_online":0,"memory_usage_mb":85,"version":"0.1.0","commit_sha":"7d9674b"}
+=== LEG 2: list agents (admin)
+[]
+=== LEG 3: project + two agents (admin)
+{"id":"g7proj","name":"G7 audit project","description":"","org_id":"","repo_url":"","repo_path":"","type":"software","status":"active","created_at":"2026-09-14 03:52:18","bug_categories":"[]","team_id
+{"id":"g7-probe-a","api_key":"dvk_***SCRUBBED***","mcp_config":{"mcpServers":{"mycelium":{"command":"npx","args":["-y","mycelium-mcp@latest"],"env":{"MYCELIUM_API_KEY":"dvk_***SCRUBBED***
+{"id":"g7-probe-b","api_key":"dvk_***SCRUBBED***","mcp_config":{"mcpServers":{"mycelium":{"command":"npx","args":["-y","mycelium-mcp@latest"],"env":{"MYCELIUM_API_KEY":"dvk_***SCRUBBED***
+agent keys captured: A=yes B=yes
+=== LEG 4: memory round trip (context key write + read, as agent A)
+{"ok":true,"namespace":"g7_ns","key":"audit_key"}
+{"id":1,"namespace":"g7_ns","key":"audit_key","data":"g7 outbound audit was here","category":"durable","project_id":"g7proj","expires_at":null,"updated_at":"2026-09-14 03:52:18","updated_by":"g7-probe
+=== LEG 5: semantic search with NO embedder configured (as agent A)
+{"results":[],"mode":"keyword-fallback","query":"g7 outbound audit","count":0,"requested_mode":"hybrid","degraded":{"reason":"no embedding provider configured (embedding_provider = none)","fell_back_to":"keyword","note":"vector search unavailable; results are lexical (FTS5/LIKE) only"},"index":{"tot
+=== LEG 6: agent conversation A -> B, B -> A (each authenticated as itself)
+{"id":1}
+[{"id":1,"from_agent":"g7-probe-a","to_agent":"g7-probe-b","thread_id":null,"project_id":null,"content":"g7 conversation leg: hello B","metadata":"{}","msg_type":"message","status":"sent","channel_id":3,"priority":"normal","created_at":"2026-09-14 03:52:18","resolved_at":null,"resolved_by":null}]
+{"id":2}
+[{"id":2,"from_agent":"g7-probe-b","to_agent":"g7-probe-a","thread_id":null,"project_id":null,"content":"g7 conversation leg: hello A","metadata":"{}","msg_type":"message","status":"sent","channel_id":3,"priority":"normal","created_at":"2026-09-14 03:52:18","resolved_at":null,"resolved_by":null}]
+=== LEG 7: task surface (create as B, list as A)
+{"id":1,"title":"g7 audit task"}
+{"items":[{"id":1,"title":"g7 audit task","description":"","project_id":"","requester":"g7-probe-b","assignee":null,"status":"open","priority":"normal","tags":"[]","created_at":"2026-09-14 03:52:18","updated_at":"2026-09-14 03:52:18","blocked_by":"[]","blocks":"[]","needs_approval":0,"approved_by":n
+=== LEG 8: registrar process proof (dns-sd socket set)
+74746 /usr/bin/dns-sd -R Gilberts-MacBook-Pro _mycelium._tcp 3457

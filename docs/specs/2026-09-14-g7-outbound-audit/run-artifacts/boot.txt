@@ -1,0 +1,28 @@
+[boot] Node v26.8.1 PORT=3457
+[mycelium] TURN_SECRET not set — generated a per-boot random TURN credential secret. Credentials from this boot will NOT authenticate against external TURN relays until TURN_SECRET is set to the relay's shared secret.
+[boot] initializing DB...
+Seeded instance_config with defaults (set admin_agent_id via dashboard or API)
+Seeded platform node profiles: default-agent, default-drone, default-admin
+Seeded 3d_print job template
+Mycelium DB initialized at /tmp/g7-outbound-204.ieqLTD/mycelium.db
+[boot] DB ready
+[boot] email: RESEND_KEY not set — email disabled
+[boot] loading plugins...
+[plugins] Skipping disabled plugin: _template
+[plugins] Loaded appointments v1.0.0 (0 MCP tools)
+[plugins] auto-memory: event hooks registered
+[mycelium] Smart boot dependencies loaded
+[plugins] Loaded auto-memory v1.0.0 (3 MCP tools)
+[plugins] Loaded marketing v1.0.0 (25 MCP tools)
+[plugins] semantic-memory: event hooks registered
+[plugins] Loaded semantic-memory v1.0.0 (3 MCP tools)
+[plugins] Loaded workflows v1.0.0 (4 MCP tools)
+[plugins] 5 plugin(s) loaded
+[boot] plugins loaded
+[mdns] advertising _mycelium._tcp as "Gilberts-MacBook-Pro" on port 3457 (via dns-sd)
+[backup] SQLite backup config: every 24h, keep 3 (interval: default, retention: default)
+Mycelium running on port 3457
+[backup] Created: /tmp/g7-outbound-204.ieqLTD/backups/mycelium_20260913_225214.db
+[guardrails] NO BLOCKING HOOK INSTALLED - every enforcement='block' rule is a no-op for this process. If the guardrails plugin is loaded, this is a WIRING BUG, not config.
+[shutdown] SIGTERM received, stopping workers...
+[shutdown] DB closed
