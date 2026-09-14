@@ -62,13 +62,13 @@ clear on GitHub when the director merges + pushes; this branch is where they cle
 ### Gate output (verbatim, final run after all bumps)
 
 ```
-npm test → EXIT=0
+npm test → EXIT=0   (run at final HEAD ac023e6 — committed tree = tested tree)
  Test Files  135 passed (135)
       Tests  1216 passed | 1 skipped (1217)
 ℹ tests 72
 ℹ pass 72
 ℹ fail 0
-ℹ duration_ms 6423.910917
+ℹ duration_ms 5040.731292
 npm run lint → EXIT=0 — "✖ 336 problems (0 errors, 336 warnings)" (cap 338)
 ```
 
@@ -157,8 +157,9 @@ from node, no telemetry, no update checks, no phone-home of any kind.
 
 ## Provenance
 
-- Branch `m5max/204-dependabot-and-outbound` @ `7d9674b` on `0a5f4a3` — 6 files
-  (2 manifests + 2 lockfiles + admin-claude pair), lint clean, suite green.
+- Branch `m5max/204-dependabot-and-outbound` @ `ac023e6` (final) on `0a5f4a3` —
+  7d9674b deps (2 manifests + 2 lockfiles + admin-claude pair), b6c8a3b audit
+  report, ac023e6 raw evidence; lint clean, suite green at the final sha.
 - Audit run twice (v1 found the dns-sd/inbox gaps; v2 is the record), artifacts in
   `run-artifacts/` (boot log, lsof samples, legs transcript, nettop cross-check;
   test-instance `dvk_` keys scrubbed — the instance and its SQLite died with the run).
