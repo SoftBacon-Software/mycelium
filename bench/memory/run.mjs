@@ -708,6 +708,11 @@ async function main() {
               threshold_env: FASTPATH_THRESHOLD_ENV,
               rule: 'top qualifying current-fact score < threshold ⇒ ADD with NO decision LLM call (counted fastpath_adds); the prompt is unchanged',
             },
+            // task 213: the fastpath must not decide on a keyword-only score —
+            // rows just written are embedded asynchronously, and an unembedded
+            // top hit's score is not semantic evidence in either direction
+            fastpath_guard: 'skip_unembedded_top_hit',
+            fastpath_guard_rule: 'the best current hit stamped embedded:false by the server pays the decision call (counted fastpath_skips_unembedded, ledger source fastpath_skipped_unembedded) regardless of its score; a hit with NO embedded stamp (legacy platform / the golden fixture) keeps the pre-213 path',
             fail_open_on_malformed_decision: 'ADD, counted in decision_failures (never a silent drop)',
             supersede: 'the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted',
             in_session_window: 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',

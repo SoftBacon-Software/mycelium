@@ -79,9 +79,11 @@ export async function runBench({
           // receipt quotes and the miss autopsy's per-question evidence
           if (w.timeline && typeof w.timeline === 'object') {
             writeInfo.timeline = writeInfo.timeline ?? {
-              candidates: 0, adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, fastpath_adds: 0, per_question: [],
+              candidates: 0, adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, fastpath_adds: 0, fastpath_skips_unembedded: 0, per_question: [],
             };
-            for (const k of ['candidates', 'adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures', 'fastpath_adds']) {
+            // fastpath_skips_unembedded (task 213) summed like its siblings; the
+            // guard does NOT ride WRITE_DECISION_FIELDS (the answer-row meta)
+            for (const k of ['candidates', 'adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures', 'fastpath_adds', 'fastpath_skips_unembedded']) {
               if (typeof w.timeline[k] === 'number') writeInfo.timeline[k] += w.timeline[k];
             }
             writeInfo.timeline.per_question.push(w.timeline);

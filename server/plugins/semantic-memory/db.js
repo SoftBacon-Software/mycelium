@@ -45,6 +45,24 @@ var BENCH_HIDDEN_SQL =
 // Exported for the cache default and the tests.
 export var VECTOR_SCAN_CAP = 5000;
 
+// -- Per-result embeddedness stamp (task 213) ----------------------------------
+// Rows are embedded asynchronously after indexing, so a search seconds later
+// ranks the newest rows keyword-only — and inside a hybrid result those
+// keyword-only scores are indistinguishable from semantic ones. Every search
+// result now states whether its OWN vector exists (the LEFT JOIN answer:
+// keyword-found row with a NULL embedding = false; a vector-scan hit = true),
+// so a caller — the bench reconcile fastpath first (task 213) — can refuse to
+// decide on a score that was never a semantic one. A row that cannot know (a
+// producer that predates the stamp carries no embedding column at all) stamps
+// null — never a guessed true.
+export function stampEmbedded(r) {
+  if (!r || typeof r !== 'object') return r;
+  if (r.embedded === undefined) {
+    r.embedded = 'embedding' in r ? r.embedding != null : null;
+  }
+  return r;
+}
+
 export default function createMemoryDB(db, opts) {
   // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
   // row's vector is JSON.parse'd ONCE, not on every query. Write paths below
@@ -307,7 +325,7 @@ export default function createMemoryDB(db, opts) {
           if (!full) return null;
           try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
           full.score = -r.rank; // FTS5 rank is negative (lower = better)
-          return full;
+          return stampEmbedded(full); // task 213: the row states its own embeddedness
         }).filter(Boolean);
         return this.collapseChunks(enriched).slice(0, limit);
       } catch (e) {
@@ -331,7 +349,7 @@ export default function createMemoryDB(db, opts) {
         return this.collapseChunks(likeRows.map(function (r) {
           try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
           r.score = 1.0; // no ranking for LIKE fallback
-          return r;
+          return stampEmbedded(r); // task 213: the row states its own embeddedness
         })).slice(0, limit);
       }
     },
@@ -375,7 +393,7 @@ export default function createMemoryDB(db, opts) {
         if (!full) return null;
         try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
         full.score = s.score;
-        return full;
+        return stampEmbedded(full); // task 213: a vector-scan hit is embedded by construction
       }).filter(Boolean);
     },
 

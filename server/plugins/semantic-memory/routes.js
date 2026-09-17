@@ -127,8 +127,13 @@ export default function (core) {
 
     // Strip raw vectors from the response — 768 floats per result is pure
     // payload waste for every consumer (scores already carry the signal).
+    // task 213: the per-row `embedded` stamp survives the strip — every result
+    // states whether its own vector exists (db.js stampEmbedded). A producer
+    // that could not know (legacy shape, no stamp at all) leaves as null —
+    // never a guessed true.
     results = results.map(function (r) {
       var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
+      if (rest.embedded === undefined) rest.embedded = null;
       return rest;
     });
     if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page

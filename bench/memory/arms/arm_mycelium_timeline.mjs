@@ -64,6 +64,19 @@
 // overfetches and filters client-side by question_id + current-only, which
 // bounds the damage; the answer phase waits for embedding coverage (run.mjs
 // afterWrite) as every platform arm already does.
+//
+// THE GUARD (task 213): the fastpath above must not DECIDE on a keyword-only
+// score. /memory/search results now carry `embedded` per row (the server's
+// stampEmbedded — whether the hit's own vector exists); when the best current
+// same-question hit is explicitly embedded:false, the fastpath is withheld and
+// the decision call is PAID (counted fastpath_skips_unembedded, ledger source
+// 'fastpath_skipped_unembedded'), in both directions: below the threshold the
+// pre-guard code auto-ADDed on the keyword-only score; above it the call was
+// always paid but now the ledger says the score it rests on was not semantic.
+// A hit with NO stamp (legacy platform, the golden fixture) keeps the pre-213
+// path byte-for-byte. The count rides w.timeline / summary.json write_info —
+// WRITE_DECISION_FIELDS (the answer-row meta) is untouched, so the task-210
+// golden-bytes gate stays green with zero generator changes.
 
 import { RAG_SYSTEM, BENCH_SOURCE_TYPE } from './arm_mycelium.mjs';
 import { EXTRACTION_SYSTEM, buildExtractionUserPrompt, parseFactsJson } from './arm_mycelium_extract.mjs';
@@ -391,6 +404,7 @@ export function createArmMyceliumTimeline({
         decision_calls: 0,
         decision_failures: 0,
         fastpath_adds: 0,
+        fastpath_skips_unembedded: 0,
         seconds_per_session: [],
       };
       // The per-candidate decision ledger (task 205): one record per extracted
@@ -548,6 +562,10 @@ export function createArmMyceliumTimeline({
           const shown = [];
           const shownIds = new Set();
           let topScore = null; // best CURRENT same-question fact the search surfaced
+          // that hit's own embeddedness, from the server's per-row stamp (task
+          // 213): true|false, or null when the hit carried no stamp (a legacy
+          // platform / the golden fixture — cannot know, never guessed)
+          let topEmbedded = null;
           const take = (f, thisSession = false) => {
             if (shownIds.has(f.id) || shown.length >= reconcileTopK) return;
             shown.push({ ...f, ...(thisSession ? { this_session: true } : {}) });
@@ -560,7 +578,10 @@ export function createArmMyceliumTimeline({
             const p = pending.get(r.source_id);
             if (!p) continue; // not ours (defensive; cannot happen for this question)
             if (p.metadata.valid_to != null) continue; // superseded — history, not a target
-            if (topScore === null && typeof r.score === 'number') topScore = r.score;
+            if (topScore === null && typeof r.score === 'number') {
+              topScore = r.score;
+              topEmbedded = r.embedded === true || r.embedded === false ? r.embedded : null;
+            }
             if (shown.length >= reconcileTopK) continue; // keep scanning for the true top score
             take({ id: r.source_id, text: p.content_text, valid_from: p.metadata.valid_from });
           }
@@ -574,15 +595,32 @@ export function createArmMyceliumTimeline({
             counts.auto_adds += 1;
             decisionSource = 'auto_add_on_no_match';
             decision = { action: 'ADD', id: null, ok: true };
-          } else if (topScore !== null && topScore < fastpath.threshold) {
+          } else if (topScore !== null && topScore < fastpath.threshold && topEmbedded !== false) {
             // the cost lever: even the best current fact is below the stamped
-            // threshold — nothing worth a decision ABOUT. ADD, no call.
+            // threshold — nothing worth a decision ABOUT. ADD, no call. The
+            // lever requires an EMBEDDED top hit (or one with no stamp at all —
+            // a legacy platform's shape, the golden fixture's: same path as
+            // pre-213); an explicitly unembedded hit falls through to the guard.
             counts.fastpath_adds += 1;
             decisionSource = 'fastpath_below_threshold';
             decision = { action: 'ADD', id: null, ok: true };
           } else {
             counts.decision_calls += 1;
-            decisionSource = 'decision';
+            if (topEmbedded === false) {
+              // THE GUARD (task 213): the best current hit is UNEMBEDDED — the
+              // server stamped embedded:false — so its score is keyword-only,
+              // high or low, and a keyword-only score is not evidence the
+              // candidate is (or is not) a reconcile case. Below the threshold
+              // this WITHHOLDS the fastpath (pre-guard it auto-ADDed on the
+              // keyword-only score); above it the call was always paid — the
+              // stamp now says what the score rests on. Every skip pays a
+              // decision call and is counted, so a run's reconcile decisions
+              // are auditable against embedder timing.
+              counts.fastpath_skips_unembedded += 1;
+              decisionSource = 'fastpath_skipped_unembedded';
+            } else {
+              decisionSource = 'decision';
+            }
             const reply = await reconcileChat({
               system: RECONCILE_SYSTEM,
               user: buildReconcileUserPrompt({ candidate, sessionDate, existing: shown }),

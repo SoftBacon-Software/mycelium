@@ -1,0 +1,52 @@
+{
+  "ledger": [
+    {
+      "index": 0,
+      "session_index": 0,
+      "text": "Signed a lease for an apartment in Lisbon",
+      "decision": "ADD",
+      "ok": true,
+      "source": "auto_add_on_no_match",
+      "shown_ids": [],
+      "top_score": null,
+      "source_id": "r1-q1-tl-f0"
+    },
+    {
+      "index": 0,
+      "session_index": 1,
+      "text": "Signed a lease for an apartment in Lisbon — moving in June",
+      "decision": "SUPERSEDE",
+      "ok": true,
+      "source": "decision",
+      "shown_ids": [
+        "r1-q1-tl-f0"
+      ],
+      "top_score": 0.9,
+      "source_id": "r1-q1-tl-f1"
+    },
+    {
+      "index": 0,
+      "session_index": 2,
+      "text": "User manager is Dana",
+      "decision": "ADD",
+      "ok": true,
+      "source": "fastpath_below_threshold",
+      "shown_ids": [
+        "r1-q1-tl-f1"
+      ],
+      "top_score": 0.2,
+      "source_id": "r1-q1-tl-f2"
+    }
+  ],
+  "counts": {
+    "candidates": 3,
+    "adds": 2,
+    "supersedes": 1,
+    "keeps": 0,
+    "auto_adds": 1,
+    "decision_calls": 1,
+    "decision_failures": 0,
+    "fastpath_adds": 1,
+    "fastpath_skips_unembedded": 0
+  }
+}
