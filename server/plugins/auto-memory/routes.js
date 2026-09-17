@@ -93,6 +93,34 @@ export default function (core) {
     res.json({ ok: true, index_removed: indexRemoved });
   });
 
+  // DELETE /auto-memory/facts?namespace=<ns> — purge a whole namespace (admin)
+  //
+  // The cleanup leg the bench contract needs (task 211): purge-everything-after.
+  // A timeline n=50 run writes ~21.5k am_facts rows — per-id DELETE /facts/:id
+  // is not a cleanup path, and skipping cleanup strands the run's rows in the
+  // lab's LIVE fact table forever. Deletes CURRENT and SUPERSEDED rows alike
+  // (a cleanup is not a supersede) and takes the index rows out through the
+  // same seam supersede/delete use, so a purged namespace stops answering
+  // /memory/search in the same request.
+  //
+  // UNSCOPED REFUSAL: this route NEVER touches a row with namespace IS NULL —
+  // legacy rows and Aria's internal writer are unreachable from it, ever. An
+  // unnamed (or empty/whitespace) namespace is a 400 naming that rule, NOT a
+  // wipe of the live store; a named namespace with zero rows is a 200
+  // {deleted: 0} — an honest count, not an error.
+  router.delete('/facts', function (req, res) {
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    var ns = requestedNamespace(req);
+    if (!ns) {
+      return apiError(res, 400, 'namespace is required: bulk delete purges ONLY the namespace you name — ' +
+        'rows with no namespace (legacy rows, Aria\'s internal writer) are unreachable from this route by design, ' +
+        'so an unscoped call refuses rather than guess');
+    }
+    var result = db.deleteFactsByNamespace(ns);
+    res.json({ deleted: result.deleted, namespaces: [ns] });
+  });
+
   // POST /auto-memory/facts — create a fact directly (Aria's writer ADD branch; provenance-aware)
   // A `namespace` (task 206) scopes the fact to a run/surface: it is stored on the
   // row, only reachable through namespace-named reads, and indexed into

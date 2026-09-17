@@ -147,6 +147,33 @@ export default function createAutoMemoryDB(db) {
       return unindexFacts([id]);
     },
 
+    // Bulk purge by namespace (task 211, BRIEF-lab-alive-memory §3): the bench
+    // contract is purge-everything-after, and a timeline n=50 run writes ~21.5k
+    // am_facts rows — per-id deletes are not a cleanup path, and skipping cleanup
+    // strands the run's rows in the lab's LIVE fact table forever. Deletes ALL
+    // rows in the namespace, CURRENT and SUPERSEDED alike (a cleanup is not a
+    // supersede: leaving tombstones behind would keep the run's rows in the
+    // table), then takes every index row out through the SAME seam every other
+    // removal path uses (unindexFacts above — both index shapes + the vector-
+    // cache hook), so the namespace stops answering /memory/search in the same
+    // request.
+    //
+    // NO namespace = no purge, by construction: the WHERE clause is
+    // `namespace = ?` and SQL NULL never equals anything, so legacy rows
+    // (namespace IS NULL — Aria's internal writer's rows) are unreachable from
+    // here whatever the caller passes. The route refuses an unnamed namespace
+    // before this runs; this predicate is the second layer of that refusal.
+    deleteFactsByNamespace(namespace) {
+      // Ids BEFORE the delete (the pruneOldSuperseded rule): afterwards there is
+      // nothing left to join against and the index rows would orphan.
+      var doomed = db.prepare('SELECT id FROM am_facts WHERE namespace = ?').all(namespace)
+        .map(function (r) { return r.id; });
+      if (!doomed.length) return { deleted: 0, index_removed: 0 };
+      var result = db.prepare('DELETE FROM am_facts WHERE namespace = ?').run(namespace);
+      var indexRemoved = unindexFacts(doomed);
+      return { deleted: result.changes, index_removed: indexRemoved };
+    },
+
     // opts.keepIndexed (namespaced facts only): the old row STAYS indexed. A
     // timeline fact's history is the point — "what did we believe on date X"
     // needs the superseded row retrievable with its valid_to and the

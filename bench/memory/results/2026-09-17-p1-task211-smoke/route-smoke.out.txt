@@ -1,0 +1,19 @@
+HEALTH {"ok":true,"version":"0.1.0","commit_sha":"4b5dd674"}
+ADD ids {"alex":1,"cats":2,"dana":3,"other":4}
+SUPERSEDE {"status":200,"old_superseded_by":3,"old_valid_to":"2026-09-17 21:43:18"}
+SEARCH BEFORE PURGE ns hits: 2 1,3
+PURGE {"status":200,"deleted":3,"namespaces":["bench-p1-smoke20260917-amfacts-purge"]}
+OTHER NS rows: 1 | still-searchable hits: 1
+SEARCH AFTER PURGE ns hits: 0
+UNSCOPED {"status":400,"error":"namespace is required: bulk delete purges ONLY the namespace you name — rows with no namespace (legacy rows, Aria's internal writer) are unreachable from this route by design, so an unscoped call refuses rather than guess"}
+NON-ADMIN {"status":403}
+ROUTE USAGE COUNTERS:
+method           route_pattern                        count     day          first_seen            last_seen
+------  --------------------------------  -----  ----------  -------------------  -------------------
+DELETE            /auto-memory/facts                      3  2026-09-17  2026-09-17 21:43:18  2026-09-17 21:43:18
+GET               /auto-memory/facts                      1  2026-09-17  2026-09-17 21:43:18  2026-09-17 21:43:18
+POST              /auto-memory/facts                      4  2026-09-17  2026-09-17 21:43:18  2026-09-17 21:43:18
+POST              /auto-memory/facts/:id/supersede        1  2026-09-17  2026-09-17 21:43:18  2026-09-17 21:43:18
+POST              /memory/search                          3  2026-09-17  2026-09-17 21:43:18  2026-09-17 21:43:18
+
+DONE — route smoke complete
