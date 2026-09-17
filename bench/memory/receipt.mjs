@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid } from './ingestion.mjs';
+import { renderAutopsySection } from './miss_autopsy.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -33,6 +34,33 @@ export function timelineCostLine(writeInfo) {
   return `Write cost (mycelium-timeline): ${sPerSession.toFixed(2)} s/session — cost ×${ratio.toFixed(2)} of extract; bound ≤ 2×`;
 }
 
+// The per-candidate decision ledgers live in summary.json — in the receipt's
+// Write-phase block they render as a count only, or a 50-question receipt
+// carries a megabyte of candidate records nobody reads in markdown.
+export function stripCandidateLedgers(writeInfo) {
+  if (!writeInfo || typeof writeInfo !== 'object') return writeInfo;
+  return Object.fromEntries(
+    Object.entries(writeInfo).map(([arm, w]) => {
+      const perQuestion = w?.timeline?.per_question;
+      if (!Array.isArray(perQuestion)) return [arm, w];
+      return [
+        arm,
+        {
+          ...w,
+          timeline: {
+            ...w.timeline,
+            per_question: perQuestion.map((pq) =>
+              Array.isArray(pq?.candidates_ledger)
+                ? { ...pq, candidates_ledger: `<${pq.candidates_ledger.length} candidate records — see summary.json write_info.${arm}.timeline.per_question>` }
+                : pq
+            ),
+          },
+        },
+      ];
+    })
+  );
+}
+
 export function renderReceipt({
   runId,
   summary,
@@ -41,6 +69,7 @@ export function renderReceipt({
   cleanup = null,
   handlabels = null,
   writeInfo = null,
+  autopsy = null, // computed autopsy (miss_autopsy.mjs) — rendered beside the cell table
   rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
@@ -82,6 +111,12 @@ export function renderReceipt({
     L.push('## Ingestion controls ({Mycelium, Mem0} × {raw, extract})');
     L.push('');
     for (const line of grid) L.push(line);
+    L.push('');
+  }
+  // task 205: the knowledge-update miss autopsy renders beside the cell table —
+  // the miss must be diagnosable, not just countable
+  if (autopsy) {
+    L.push(renderAutopsySection(autopsy));
     L.push('');
   }
   if ((rejudge || reanswer) && summary.original?.arms) {
@@ -135,7 +170,7 @@ export function renderReceipt({
     L.push('## Write phase');
     L.push('');
     L.push('```json');
-    L.push(JSON.stringify(writeInfo, null, 2));
+    L.push(JSON.stringify(stripCandidateLedgers(writeInfo), null, 2));
     L.push('```');
     L.push('');
   }

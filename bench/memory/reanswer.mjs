@@ -159,7 +159,10 @@ export async function reanswerRun({
         throw new Error(`reanswer: saved row ${i} (${arm}/${saved.question_id ?? '?'}) is missing question_id/gold/question`);
       }
       const t0 = Date.now();
-      const a = await inst.answer(saved.question);
+      // the saved row rides along: arms that stamp per-question provenance key
+      // off question_id (the timeline arm stamps write_decisions: null here —
+      // this path never writes, and a missing write phase is stamped, not faked)
+      const a = await inst.answer(saved.question, saved);
       const row = {
         question_id: saved.question_id,
         question_type: saved.question_type ?? null,

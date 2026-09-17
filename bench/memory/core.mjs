@@ -67,13 +67,14 @@ export async function runBench({
           // loss, counted the same way by mem0 (sidecar flag) and mycelium-extract
           if (typeof w.parse_failures === 'number') writeInfo.parse_failures = (writeInfo.parse_failures ?? 0) + w.parse_failures;
           // the timeline arm's reconcile ledger: scalars summed across
-          // questions, the per-question block (with its seconds_per_session)
-          // kept whole — the §3 counts the receipt quotes
+          // questions, the per-question block (with its seconds_per_session
+          // and per-candidate decisions ledger) kept whole — the §3 counts the
+          // receipt quotes and the miss autopsy's per-question evidence
           if (w.timeline && typeof w.timeline === 'object') {
             writeInfo.timeline = writeInfo.timeline ?? {
-              adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, per_question: [],
+              candidates: 0, adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, fastpath_adds: 0, per_question: [],
             };
-            for (const k of ['adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures']) {
+            for (const k of ['candidates', 'adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures', 'fastpath_adds']) {
               if (typeof w.timeline[k] === 'number') writeInfo.timeline[k] += w.timeline[k];
             }
             writeInfo.timeline.per_question.push(w.timeline);
@@ -87,7 +88,10 @@ export async function runBench({
     const rows = [];
     for (const item of items) {
       const t1 = Date.now();
-      const ans = await arm.answer(item.question);
+      // the item rides along (second arg): arms that stamp per-question
+      // provenance (the timeline arm's meta.write_decisions) key off
+      // item.question_id; arms that only want the question ignore it
+      const ans = await arm.answer(item.question, item);
       const text = typeof ans === 'string' ? ans : ans.text;
       const meta = typeof ans === 'string' ? {} : (ans.meta ?? {});
       if (!text || typeof text !== 'string') throw new Error(`Arm ${name} returned no text for ${item.question_id}`);

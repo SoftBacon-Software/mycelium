@@ -66,6 +66,48 @@ export function myceliumTimelineNamespaces(namespace) {
 // merge is a different arm: the name is the receipt.
 export const TIMELINE_READ_POLICY = 'fact-episode-interleave';
 
+// ---- the cost lever (task 205, pre-committed) ------------------------------
+// The reconcile decision LLM call is the arm's dominant write cost (r4 n=50:
+// reconcile_ms 24,683,199 of the write; 69 decision calls for 71 candidates in
+// the capped smoke). When the reconcile search's best CURRENT same-question
+// fact already scores below the threshold, there is nothing worth a decision
+// ABOUT — the candidate is an ADD with NO decision call. The threshold is a
+// named constant (this one), env-overridable, stamped in the regime
+// (mycelium_timeline.reconcile_policy.fastpath) with its source, so a fastpath
+// run and a non-fastpath run are never confused. The RECONCILE_SYSTEM prompt
+// is UNCHANGED by this lever — the fastpath only decides WHEN the prompt runs.
+export const RECONCILE_FASTPATH_THRESHOLD = 0.35;
+export const FASTPATH_THRESHOLD_ENV = 'BENCH_RECONCILE_FASTPATH_THRESHOLD';
+
+// Resolve the threshold once per process (run.mjs stamps the same resolution
+// the arm factory uses — a stamp that could disagree with the code path would
+// be a rumour). Throws on a non-numeric or out-of-range override: a typoed
+// env var must not silently disable or saturate the lever.
+export function resolveReconcileFastpathThreshold({ env = process.env } = {}) {
+  const raw = env[FASTPATH_THRESHOLD_ENV];
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { threshold: RECONCILE_FASTPATH_THRESHOLD, source: 'default' };
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0 || v > 1) {
+    throw new Error(`${FASTPATH_THRESHOLD_ENV} must be a number in [0, 1] (got ${JSON.stringify(raw)})`);
+  }
+  return { threshold: v, source: 'env' };
+}
+
+// The per-question write-decision fields stamped into every answer row's meta
+// (meta.write_decisions) — the same counts the write phase reports, so a row
+// carries its own ingestion provenance and the miss autopsy needs no guesswork.
+export const WRITE_DECISION_FIELDS = [
+  'candidates',
+  'adds',
+  'supersedes',
+  'keeps',
+  'decision_calls',
+  'decision_failures',
+  'fastpath_adds',
+];
+
 // Merge the two retrieval layers INSIDE the stamped budget: alternate
 // current-fact / episode, strongest current fact first; when one layer runs
 // dry the other takes the remaining live slots; superseded facts (least
@@ -82,6 +124,42 @@ export function interleaveLayers({ current, episodes, superseded, budget }) {
   let k = 0;
   while (out.length < budget && k < superseded.length) out.push(superseded[k++]);
   return out;
+}
+
+// Render ONE merged hit the way the context renders it, and return the parts
+// the read stamp carries: the rendered date and (for a superseded fact) the
+// exact supersede line. Pure — answer() builds the context string and the
+// meta.read_hits stamp from THESE structures, so the stamp can never drift
+// from what the model actually saw.
+export function renderMergedHit(r) {
+  const m = r.metadata ?? {};
+  if (r._layer === 'fact') {
+    const date = m.valid_from || 'unknown date';
+    const head = `[fact | ${date}] ${r.content_text}`;
+    const supersede =
+      m.valid_to != null ? `superseded on ${m.valid_to} by: ${m.superseded_by_text ?? '(new fact not recorded)'}` : null;
+    return { line: supersede ? `${head}\n${supersede}` : head, date, supersede_line: supersede };
+  }
+  const date = m.session_date || 'unknown date';
+  return { line: `[session | ${date}] ${r.content_text}`, date, supersede_line: null };
+}
+
+// The retrieval-provenance stamp (task 205): ordered, capped at the budget —
+// one entry per rendered context row, in context order. rank is the 0-based
+// position in the rendered context (0 = the row the model read first).
+// `score` is the server's hybrid score, null when the server did not send one.
+export function buildReadHits(merged) {
+  return merged.map((r, rank) => {
+    const { date, supersede_line } = renderMergedHit(r);
+    return {
+      layer: r._layer,
+      source_id: r.source_id,
+      rank,
+      score: typeof r.score === 'number' ? r.score : null,
+      rendered_date: date,
+      rendered_supersede_line: supersede_line,
+    };
+  });
 }
 
 // The pre-committed RECONCILE prompt (verbatim). Quote it in the receipt: the
@@ -181,6 +259,11 @@ export function createArmMyceliumTimeline({
   // filter), then keep the top-k for the decision call.
   reconcileTopK = 3,
   reconcileOverfetch = 25,
+  // the cost lever: a candidate whose best CURRENT same-question search hit
+  // scores below this is an ADD with NO decision call (counted fastpath_adds).
+  // Defaults to resolveReconcileFastpathThreshold() — the same resolution
+  // run.mjs stamps into the regime — and an explicit value wins for tests.
+  reconcileFastpathThreshold,
 }) {
   if (typeof extractionChat !== 'function') {
     throw new Error(
@@ -201,7 +284,18 @@ export function createArmMyceliumTimeline({
   if (!Number.isInteger(reconcileOverfetch) || reconcileOverfetch < reconcileTopK) {
     throw new Error(`reconcileOverfetch must be an int >= reconcileTopK (got ${reconcileOverfetch})`);
   }
+  const fastpath =
+    reconcileFastpathThreshold === undefined
+      ? resolveReconcileFastpathThreshold()
+      : { threshold: reconcileFastpathThreshold, source: 'explicit' };
+  if (!Number.isFinite(fastpath.threshold) || fastpath.threshold < 0 || fastpath.threshold > 1) {
+    throw new Error(`reconcileFastpathThreshold must be a number in [0, 1] (got ${fastpath.threshold})`);
+  }
   const factsNs = myceliumTimelineNamespace(namespace);
+  // per-question write-decision snapshots, keyed by question_id — answer()
+  // stamps them into meta.write_decisions so each row carries its own
+  // ingestion provenance (a reanswer row, which had no write phase, stamps null)
+  const writeDecisionsByQuestion = new Map();
 
   return {
     name: 'mycelium-timeline',
@@ -217,14 +311,22 @@ export function createArmMyceliumTimeline({
 
       const counts = {
         question_id: questionId,
+        candidates: 0,
         adds: 0,
         supersedes: 0,
         keeps: 0,
         auto_adds: 0,
         decision_calls: 0,
         decision_failures: 0,
+        fastpath_adds: 0,
         seconds_per_session: [],
       };
+      // The per-candidate decision ledger (task 205): one record per extracted
+      // candidate — what was extracted, what was decided, on what evidence.
+      // This is what the miss autopsy reads (summary.json
+      // write_info.timeline.per_question[].candidates); without it a MISS
+      // cannot be diagnosed after the fact.
+      const candidatesLedger = [];
       const factsPerSession = [];
       const parseFailures = [];
       let extractMs = 0;
@@ -325,12 +427,16 @@ export function createArmMyceliumTimeline({
         factsPerSession.push(facts.length);
 
         // (c) RECONCILIATION — per candidate: one search over the reconciled
-        //     layer, then ONE decision call. No existing current fact among the
-        //     overfetch window is itself the evidence for ADD — no decision
-        //     call is spent (stamped policy: auto_add_on_no_match).
+        //     layer, then (above the fastpath threshold) ONE decision call.
+        //     No existing current fact among the overfetch window is itself
+        //     the evidence for ADD — no decision call is spent (stamped
+        //     policy: auto_add_on_no_match); a weak best hit (score below the
+        //     stamped fastpath threshold) is ADD without a call either —
+        //     counted fastpath_adds, the pre-committed cost lever.
         const perSession = { add: 0, sup: 0, keep: 0 };
         for (let ci = 0; ci < facts.length; ci++) {
           const candidate = facts[ci];
+          counts.candidates += 1;
           const tr = Date.now();
           const s = await platform.search({
             query: candidate,
@@ -348,6 +454,7 @@ export function createArmMyceliumTimeline({
           // history and other users are not reconciliation targets.
           const shown = [];
           const shownIds = new Set();
+          let topScore = null; // best CURRENT same-question fact the search surfaced
           const take = (f, thisSession = false) => {
             if (shownIds.has(f.id) || shown.length >= reconcileTopK) return;
             shown.push({ ...f, ...(thisSession ? { this_session: true } : {}) });
@@ -355,23 +462,34 @@ export function createArmMyceliumTimeline({
           };
           for (const f of sessionFacts) take(f, true);
           for (const r of s.results ?? []) {
-            if (shown.length >= reconcileTopK) break;
             const m = r.metadata ?? {};
             if (m.question_id !== questionId) continue; // another user's facts
             const p = pending.get(r.source_id);
             if (!p) continue; // not ours (defensive; cannot happen for this question)
             if (p.metadata.valid_to != null) continue; // superseded — history, not a target
+            if (topScore === null && typeof r.score === 'number') topScore = r.score;
+            if (shown.length >= reconcileTopK) continue; // keep scanning for the true top score
             take({ id: r.source_id, text: p.content_text, valid_from: p.metadata.valid_from });
           }
 
+          // WHERE the decision came from — stamped per candidate in the ledger
+          let decisionSource;
           let decision;
           if (shown.length === 0) {
             // nothing current matches: ADD needs no model call (stamped policy
             // auto_add_on_no_match — the empty search IS the evidence)
             counts.auto_adds += 1;
+            decisionSource = 'auto_add_on_no_match';
+            decision = { action: 'ADD', id: null, ok: true };
+          } else if (topScore !== null && topScore < fastpath.threshold) {
+            // the cost lever: even the best current fact is below the stamped
+            // threshold — nothing worth a decision ABOUT. ADD, no call.
+            counts.fastpath_adds += 1;
+            decisionSource = 'fastpath_below_threshold';
             decision = { action: 'ADD', id: null, ok: true };
           } else {
             counts.decision_calls += 1;
+            decisionSource = 'decision';
             const reply = await reconcileChat({
               system: RECONCILE_SYSTEM,
               user: buildReconcileUserPrompt({ candidate, sessionDate, existing: shown }),
@@ -380,6 +498,21 @@ export function createArmMyceliumTimeline({
             if (!decision.ok) counts.decision_failures += 1; // fail-open ADD below, visibly
           }
           reconcileMs += Date.now() - tr;
+
+          // The ledger record for THIS candidate — written for every decision
+          // path (auto-add, fastpath, call, fail-open), before any write.
+          const ledgerEntry = {
+            index: ci,
+            session_index: idx,
+            text: candidate,
+            decision: decision.action,
+            ok: decision.ok,
+            source: decisionSource,
+            shown_ids: [...shownIds],
+            top_score: topScore,
+            source_id: null, // filled below when a fact row was written
+          };
+          candidatesLedger.push(ledgerEntry);
 
           if (decision.action === 'KEEP') {
             counts.keeps += 1;
@@ -390,6 +523,7 @@ export function createArmMyceliumTimeline({
             counts.supersedes += 1;
             perSession.sup += 1;
             const newFact = newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: decision.id });
+            ledgerEntry.source_id = newFact.source_id;
             // the old fact KEEPS its row: live metadata flipped in place (so no
             // later candidate sees it as current), and — if the row already
             // reached the platform — an upsert push carrying the flip
@@ -402,9 +536,10 @@ export function createArmMyceliumTimeline({
             sessionFacts.push({ id: newFact.source_id, text: candidate, valid_from: sessionDate });
             log(`timeline ${idx + 1}/${sessionTurns.length}: SUPERSEDE ${decision.id} — "${candidate.slice(0, 60)}" — q=${questionId}`);
           } else {
-            counts.adds += 1; // decided ADDs, auto-ADDs and fail-open ADDs all wrote a fact
+            counts.adds += 1; // decided ADDs, auto-ADDs, fastpath ADDs and fail-open ADDs all wrote a fact
             perSession.add += 1;
             const newFact = newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: null });
+            ledgerEntry.source_id = newFact.source_id;
             sessionFacts.push({ id: newFact.source_id, text: candidate, valid_from: sessionDate });
           }
         }
@@ -423,6 +558,15 @@ export function createArmMyceliumTimeline({
         );
       }
 
+      // the answer rows' meta.write_decisions snapshot (the 7 stamped fields —
+      // candidates, adds, supersedes, keeps, decision_calls, decision_failures,
+      // fastpath_adds) + the full per-candidate ledger rides summary.json via
+      // w.timeline (core.mjs keeps per_question whole)
+      writeDecisionsByQuestion.set(
+        questionId,
+        Object.fromEntries(WRITE_DECISION_FIELDS.map((f) => [f, counts[f]]))
+      );
+
       return {
         docs: sessionTurns.length,
         rows: rowsWritten,
@@ -433,56 +577,68 @@ export function createArmMyceliumTimeline({
         parse_failures: parseFailures.length,
         parse_failure_detail: parseFailures,
         facts_reused: reused,
-        timeline: counts,
+        timeline: { ...counts, candidates_ledger: candidatesLedger },
       };
     },
 
-    async answer(question) {
+    async answer(question, item) {
       // READ — both layers searched at the stamped budget (the comparability
       // contract: context stays ≤5 rows, same as every other arm), then merged
       // by TIMELINE_READ_POLICY — fact/episode interleave, superseded facts the
       // dated tail (they carry their supersede line: the assistant can cite
       // when something changed). The r3 run proved facts-first starves the
       // episodic layer entirely; see the header comment.
+      //
+      // A LAYER SEARCH FAILURE is stamped, never faked (task 205): the failed
+      // layer yields meta.read_hits == null + retrieval_error, and the healthy
+      // layer's hits still answer — an empty array is stamped ONLY when both
+      // searches truly returned nothing.
+      const searchLayer = async (layer, namespace) => {
+        try {
+          return { ok: true, layer, res: await platform.search({ query: question, namespace, sourceTypes: [sourceType], limit: retrievalBudget }) };
+        } catch (e) {
+          return { ok: false, layer, error: `${layer} search failed: ${String(e.message).slice(0, 200)}` };
+        }
+      };
       const [f, e] = await Promise.all([
-        platform.search({ query: question, namespace: factsNs, sourceTypes: [sourceType], limit: retrievalBudget }),
-        platform.search({ query: question, namespace, sourceTypes: [sourceType], limit: retrievalBudget }),
+        searchLayer('fact', factsNs),
+        searchLayer('episode', namespace),
       ]);
-      const factHits = (f.results ?? []).map((r) => ({ ...r, _layer: 'fact' }));
-      const episodeHits = (e.results ?? []).map((r) => ({ ...r, _layer: 'episode' }));
+      const retrievalErrors = [f, e].filter((x) => !x.ok).map((x) => x.error);
+      const factHits = (f.ok ? f.res.results ?? [] : []).map((r) => ({ ...r, _layer: 'fact' }));
+      const episodeHits = (e.ok ? e.res.results ?? [] : []).map((r) => ({ ...r, _layer: 'episode' }));
       const current = factHits.filter((r) => r.metadata?.valid_to == null);
       const superseded = factHits.filter((r) => r.metadata?.valid_to != null);
       const merged = interleaveLayers({ current, episodes: episodeHits, superseded, budget: retrievalBudget });
 
-      const context = merged
-        .map((r) => {
-          const m = r.metadata ?? {};
-          if (r._layer === 'fact') {
-            const head = `[fact | ${m.valid_from || 'unknown date'}] ${r.content_text}`;
-            return m.valid_to != null ? `${head}\nsuperseded on ${m.valid_to} by: ${m.superseded_by_text ?? '(new fact not recorded)'}` : head;
-          }
-          return `[session | ${m.session_date || 'unknown date'}] ${r.content_text}`;
-        })
-        .join('\n\n---\n\n');
+      const rendered = merged.map(renderMergedHit);
+      const context = rendered.map((x) => x.line).join('\n\n---\n\n');
 
       const r = await answerChat({
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
+      // the question's own write-decision snapshot: null when this arm never
+      // wrote that question in-process (the --reanswer path) — a missing write
+      // phase is stamped null, never an empty
+      const wd = item && typeof item.question_id === 'string' ? writeDecisionsByQuestion.get(item.question_id) ?? null : null;
       return {
         text: r.text,
         meta: {
           hits: merged.length,
-          facts_hits: factHits.length,
-          episode_hits: episodeHits.length,
-          current_facts: current.length,
-          superseded_facts: superseded.length,
+          facts_hits: f.ok ? factHits.length : null,
+          episode_hits: e.ok ? episodeHits.length : null,
+          current_facts: f.ok ? current.length : null,
+          superseded_facts: f.ok ? superseded.length : null,
           context_facts: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to == null).length,
           context_episodes: merged.filter((h) => h._layer === 'episode').length,
           context_superseded: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
+          read_hits: retrievalErrors.length ? null : buildReadHits(merged),
+          retrieval_error: retrievalErrors.length ? retrievalErrors.join('; ') : null,
+          write_decisions: wd,
           read_policy: TIMELINE_READ_POLICY,
-          retrieval_mode: f.mode,
-          degraded_reason: f.degraded ? f.degraded.reason : e.degraded ? e.degraded.reason : null,
+          retrieval_mode: f.ok ? f.res.mode : e.ok ? e.res.mode : null,
+          degraded_reason: f.ok ? (f.res.degraded ? f.res.degraded.reason : null) : e.ok ? (e.res.degraded ? e.res.degraded.reason : null) : null,
           ingestion: 'timeline',
           had_think: !!r.hadThink,
         },

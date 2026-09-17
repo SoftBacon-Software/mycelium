@@ -17,6 +17,7 @@ import path from 'node:path';
 
 import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
+import { autopsyRun, renderAutopsySection, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
 export class GridRefusal extends Error {
@@ -256,7 +257,7 @@ function secondsPerAdd(writeInfo) {
   return (ms / writeInfo.docs / 1000).toFixed(2);
 }
 
-export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
+export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null }) {
   const runIds = runs.map((r) => r.runId);
   const L = [];
   L.push(`# Receipt — memory benchmark P1 grid (${runIds.join(' + ')})`);
@@ -317,6 +318,23 @@ export function renderGridReceipt({ runs, generatedAt, commands = [] }) {
     );
   }
   L.push('');
+
+  // task 205: per-run knowledge-update miss autopsies, rendered beside the
+  // cell table — a run whose stamps are present must be diagnosable from the
+  // receipt, not re-derived by hand. Runs without the arm simply don't appear.
+  if (autopsies) {
+    for (const a of autopsies) {
+      if (!a) continue;
+      L.push(`## Knowledge-update miss autopsy (${a.arm} — ${a.run_id})`);
+      L.push('');
+      if (a.error) {
+        L.push(`NOT COMPUTED — ${a.error}`);
+      } else {
+        L.push(renderAutopsySection(a, { heading: null }));
+      }
+      L.push('');
+    }
+  }
 
   // ingestion stats per arm (facts per session, seconds per add where stamped)
   L.push('## Ingestion stats per arm');
@@ -421,6 +439,7 @@ export function composeGrid({
   generatedAt,
   receiptsDir = RECEIPTS_DIR,
   write = true, // false = dry run: check comparability, write nothing
+  autopsy = false, // render per-run knowledge-update miss autopsies beside the 2×2
   existsFn = fs.existsSync,
   readFileFn = defaultReadFile,
   writeFn = fs.writeFileSync,
@@ -434,11 +453,25 @@ export function composeGrid({
   assertComparable(runs);
   const runIds = runs.map((r) => r.runId);
   const commands =
-    commandLine != null ? [commandLine] : [`node bench/memory/run.mjs --grid-from-results ${dirs.join(',')} --receipt`];
+    commandLine != null ? [commandLine] : [`node bench/memory/run.mjs --grid-from-results ${dirs.join(',')} --receipt${autopsy ? ' --autopsy' : ''}`];
   const { armsUnion } = buildUnion(runs);
   const gridRendered = GRID_ROWS.flatMap((r) => [r.raw, r.extract]).every((n) => armsUnion[n]);
   if (!write) return { file: null, runIds, gridRendered, receipt: null };
-  const md = renderGridReceipt({ runs, generatedAt, commands });
+  // the autopsies need the arm's rows file — loaded only when asked for, and
+  // only for runs that carry the arm; a run without it just doesn't appear
+  const autopsies = autopsy
+    ? runs
+        .filter((r) => r.summary.arms?.[DEFAULT_AUTOPSY_ARM])
+        .map((r) => {
+          try {
+            return { ...autopsyRun({ dir: r.dir, arm: DEFAULT_AUTOPSY_ARM, existsFn, readFileFn }), run_id: r.runId };
+          } catch (e) {
+            // a finished run missing its rows file must not sink the grid — but it is said, not swallowed
+            return { arm: DEFAULT_AUTOPSY_ARM, run_id: r.runId, wrong_knowledge_update: 0, classes: {}, flags: {}, stamps: { rows: 0 }, details: [], ledger_coverage: null, error: e.message };
+          }
+        })
+    : null;
+  const md = renderGridReceipt({ runs, generatedAt, commands, autopsies });
   mkdirFn(receiptsDir, { recursive: true });
   const file = path.join(receiptsDir, `${runIds.join('+')}-grid.md`);
   writeFn(file, md);

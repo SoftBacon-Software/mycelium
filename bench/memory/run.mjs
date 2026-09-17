@@ -19,7 +19,8 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, RECONCILE_SYSTEM, TIMELINE_READ_POLICY } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
+import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
@@ -44,7 +45,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock') { out[key] = true; continue; }
+    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock' || key === 'autopsy') { out[key] = true; continue; }
     out[key] = argv[++i];
   }
   return out;
@@ -56,6 +57,19 @@ function readJsonl(file) {
 
 function utcStamp(d) {
   return d.toISOString().replace(/\.\d+Z$/, 'Z');
+}
+
+// The knowledge-update miss autopsy for a finished run dir, for the receipt.
+// A run without the timeline arm (or without its evidence files) ships no
+// section — said on stderr, never a silent absence.
+function maybeAutopsy(dir, summary) {
+  if (!summary?.arms?.[DEFAULT_AUTOPSY_ARM]) return null;
+  try {
+    return autopsyRun({ dir, arm: DEFAULT_AUTOPSY_ARM });
+  } catch (e) {
+    console.error(`[run] autopsy not rendered: ${e.message}`);
+    return null;
+  }
 }
 
 async function main() {
@@ -280,6 +294,7 @@ async function main() {
       handlabels: handlabelsMeta,
       cleanup: summary.cleanup ?? null,
       writeInfo: summary.write_info ?? null,
+      autopsy: maybeAutopsy(dir, summary),
       commands: summary.commands ?? [],
       generatedAt: utcStamp(new Date()),
     });
@@ -302,7 +317,7 @@ async function main() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt) });
+    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy) });
     console.log(
       JSON.stringify(
         {
@@ -563,6 +578,9 @@ async function main() {
   const judgeFn = makeJudge({ chat: judgeChat });
 
   const git = await gitState(REPO_ROOT);
+  // the cost lever's resolution is stamped with its source — the arm factory
+  // resolves the SAME way, so the stamp and the code path cannot disagree
+  const fastpath = resolveReconcileFastpathThreshold();
   const regime = buildRegime({
     dateUtc: utcStamp(new Date()),
     git,
@@ -647,13 +665,22 @@ async function main() {
           decision_temperature: 0,
           decision_max_tokens: EXTRACT_MAX_TOKENS,
           decision_thinking: 'off',
-          decision_shape: 'ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact',
+          decision_shape:
+            'ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact AND that best hit scores at/above the fastpath threshold (below it: ADD with NO call, counted fastpath_adds)',
           reconcile_prompt: RECONCILE_SYSTEM,
+          reconcile_prompt_changed: 'UNCHANGED this round (task 205): the fastpath lever only decides WHEN this prompt runs — the prompt text is byte-identical, quoted here verbatim as the receipt',
           reconcile_policy: {
             top_k: 3,
             search_overfetch: 25,
             scope: 'CURRENT same-question facts only (metadata.question_id match, valid_to null) — the server has no metadata filter, so the search overfetches and the arm filters client-side',
             auto_add_on_no_match: true,
+            fastpath: {
+              enabled: true,
+              threshold: fastpath.threshold,
+              threshold_source: fastpath.source,
+              threshold_env: FASTPATH_THRESHOLD_ENV,
+              rule: 'top qualifying current-fact score < threshold ⇒ ADD with NO decision LLM call (counted fastpath_adds); the prompt is unchanged',
+            },
             fail_open_on_malformed_decision: 'ADD, counted in decision_failures (never a silent drop)',
             supersede: 'the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted',
             in_session_window: 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',
@@ -682,6 +709,10 @@ async function main() {
             hit_rendering:
               'each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line ' +
               '"superseded on <valid_to> by: <new fact>"',
+            read_stamp:
+              'every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty',
+            decision_stamp:
+              'every answer row stamps meta.write_decisions = {candidates, adds, supersedes, keeps, decision_calls, decision_failures, fastpath_adds} for its own question (null when this process never wrote it, e.g. --reanswer); the per-candidate decision ledger (text, decision, source, shown_ids, top_score, source_id) lives in summary.json write_info.timeline.per_question[].candidates_ledger for the miss autopsy',
             rag_prompt: 'arm_mycelium RAG_SYSTEM, unchanged',
           },
           read_policy: TIMELINE_READ_POLICY, // also top-level: regime.timeline.read_policy
@@ -714,7 +745,7 @@ async function main() {
         ? `arms this run: ${arms.join(', ')}; mycelium-extract = the EXTRACTION control for the Mycelium column (task 182): the answerer model (${answerModel}, temperature 0, THINKING OFF via chat_template_kwargs) extracts a fact list per session, facts indexed ONE ROW PER FACT, namespace suffixed -extract; retrieval + answer identical to arm mycelium`
         : null,
       arms.includes('mycelium-timeline')
-        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines`
+        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold ${fastpath.threshold} (${fastpath.source}), else ADD with no call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance`
         : null,
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
@@ -907,6 +938,7 @@ async function main() {
         handlabels: handlabelsMeta,
         cleanup,
         writeInfo: writeInfoByArm,
+        autopsy: maybeAutopsy(outDir, summary),
         commands: summary.commands,
         generatedAt: utcStamp(new Date()),
       });
