@@ -31,15 +31,28 @@
 //
 // WHY MEMORY ROWS AND NOT THE am_facts ROUTES: the bi-temporal am_facts table
 // and its supersede/reverify routes ARE deployed on the live platform (checked
-// 2026-09-10: GET /auto-memory/facts answers), but they do not fit the bench
-// row model without a deploy or shared-state damage: am_facts has no semantic
-// search route (reconciliation and the read path need /memory/search hybrid at
-// the stamped budget), no namespace/run scoping (bench rows would land in the
-// lab's LIVE fact store alongside its 1.8k real facts), and no bulk cleanup
-// path (the bench contract is purge-everything-after). So the layer is modeled
-// as memory rows in a suffixed namespace with the bi-temporal metadata
-// (valid_from / valid_to / superseded_by / supersedes / episode) carried in
-// metadata — exactly the lane's pre-authorized fallback.
+// 2026-09-10: GET /auto-memory/facts answers), but they did not fit the bench
+// row model: no semantic index, no namespace/run scoping, no bulk cleanup path.
+// So the layer was modeled as memory rows in a suffixed namespace with the
+// bi-temporal metadata (valid_from / valid_to / superseded_by / supersedes /
+// episode) carried in metadata — exactly the lane's pre-authorized fallback.
+//
+// THE ROUTES GREW THE MISSING PIECES (2026-09-17, task 206 — this arm's flag is
+// their first caller): am_facts facts now carry a nullable `namespace` column
+// (scoped reads; unscoped views see only legacy rows), namespaced facts index
+// into sm_embeddings under source_type 'am_fact' through the same index path
+// memory rows use (row + embed scheduler, so /memory/search hybrid hits them),
+// and a namespaced supersede keeps the old row searchable with its valid_to and
+// the "superseded on <date> by: …" line in the hit. Set MYCELIUM_TIMELINE_FACTS
+// =am_facts (or pass opts.factsLayer) and the reconciled layer reads/writes the
+// /auto-memory/facts routes in a per-run namespace (`<namespace>-amfacts`)
+// instead of memory rows — SAME metadata contract, keys and all; the ids in the
+// ledger become the route-minted am_facts ids. Default unset = today's
+// memory-row shape, byte for byte. The flag path is exercised by tests + a
+// capped smoke only. Cleanup note: the index rows purge with the run's
+// namespaces (DELETE /memory/index?namespace=); the am_facts ROWS themselves
+// have no bulk purge yet — a capped smoke leaves a handful of namespaced rows,
+// removed per-id, and a namespace-scoped purge route is the follow-up.
 //
 // Known platform condition, stamped here rather than hidden: rows just written
 // are embedded asynchronously, so a reconcile search seconds later may rank the
@@ -57,8 +70,39 @@ export function myceliumTimelineNamespace(namespace) {
   return `${namespace}-timeline`;
 }
 
+// The reconciled layer's namespace in MYCELIUM_TIMELINE_FACTS=am_facts mode: a
+// DIFFERENT suffix, still per-run, so the two storage regimes never share a
+// namespace and cleanup stays exact.
+export function myceliumTimelineFactsNamespace(namespace) {
+  return `${namespace}-amfacts`;
+}
+
 export function myceliumTimelineNamespaces(namespace) {
   return [namespace, myceliumTimelineNamespace(namespace)];
+}
+
+// What the routes index namespaced facts under in sm_embeddings — mirrors
+// server/plugins/auto-memory/routes.js's FACT_INDEX_SOURCE_TYPE. Keep in sync.
+export const FACT_INDEX_SOURCE_TYPE = 'am_fact';
+
+// The reconciled layer's storage regime: memory rows in a suffixed namespace
+// (default, byte-identical to pre-206) or the /auto-memory/facts routes in a
+// per-run namespace (MYCELIUM_TIMELINE_FACTS=am_facts).
+export const TIMELINE_FACTS_LAYERS = {
+  MEMORY_ROWS: 'memory-rows',
+  ROUTES: 'am_facts',
+};
+
+export function resolveTimelineFactsLayer(factsLayer) {
+  if (factsLayer) {
+    if (!Object.values(TIMELINE_FACTS_LAYERS).includes(factsLayer)) {
+      throw new Error(`arm_mycelium_timeline: unknown factsLayer '${factsLayer}' (expected one of ${Object.values(TIMELINE_FACTS_LAYERS).join(', ')})`);
+    }
+    return factsLayer;
+  }
+  return (typeof process !== 'undefined' && process.env?.MYCELIUM_TIMELINE_FACTS === 'am_facts')
+    ? TIMELINE_FACTS_LAYERS.ROUTES
+    : TIMELINE_FACTS_LAYERS.MEMORY_ROWS;
 }
 
 // The read policy's name — stamped in every answer row's meta (read_policy)
@@ -173,6 +217,10 @@ export function createArmMyceliumTimeline({
   sourceType = BENCH_SOURCE_TYPE,
   runId,
   log = () => {},
+  // The reconciled layer's storage regime (TIMELINE_FACTS_LAYERS). Default:
+  // MYCELIUM_TIMELINE_FACTS=am_facts selects the routes, anything else keeps
+  // the memory-row shape byte-for-byte.
+  factsLayer,
   // optional facts store (bench/memory/facts_store.mjs): extraction is paid once
   // across runs under the SAME extraction regime — identical to the extract arm.
   factsStore = null,
@@ -201,7 +249,14 @@ export function createArmMyceliumTimeline({
   if (!Number.isInteger(reconcileOverfetch) || reconcileOverfetch < reconcileTopK) {
     throw new Error(`reconcileOverfetch must be an int >= reconcileTopK (got ${reconcileOverfetch})`);
   }
-  const factsNs = myceliumTimelineNamespace(namespace);
+  const layer = resolveTimelineFactsLayer(factsLayer);
+  const useFactRoutes = layer === TIMELINE_FACTS_LAYERS.ROUTES;
+  if (useFactRoutes && (typeof platform.factsCreate !== 'function' || typeof platform.factsSupersede !== 'function')) {
+    throw new Error(
+      'arm_mycelium_timeline: factsLayer am_facts needs a platform client with factsCreate/factsSupersede (bench/memory/platform.mjs) — refusing to silently fall back to memory rows'
+    );
+  }
+  const factsNs = useFactRoutes ? myceliumTimelineFactsNamespace(namespace) : myceliumTimelineNamespace(namespace);
 
   return {
     name: 'mycelium-timeline',
@@ -209,7 +264,10 @@ export function createArmMyceliumTimeline({
     namespace: factsNs,
     // every namespace this arm indexes — run.mjs feeds it to purgeNamespaces so
     // cleanup covers both layers
-    namespaces: myceliumTimelineNamespaces(namespace),
+    namespaces: [namespace, factsNs],
+    // the reconciled layer's storage regime — stamped on every receipt so a
+    // results row says which regime produced it
+    factsLayer: layer,
 
     async write(sessionTurns, { questionId, sessionDates } = {}) {
       if (!Array.isArray(sessionTurns)) throw new Error('arm_mycelium_timeline.write expects haystack_sessions (array of sessions)');
@@ -247,7 +305,13 @@ export function createArmMyceliumTimeline({
 
       const factSourceId = () => `${runId}-${questionId}-tl-f${factSeq}`;
 
-      function newFactItem({ text, idx, sessionDate, episodeId, supersedesId }) {
+      // Mint a fact and put it in the ledger. memory-rows mode: the item joins
+      // the session's bulk flush, keyed by its deterministic source_id (as
+      // before). am_facts mode: the fact goes through POST /auto-memory/facts
+      // NOW (per-run namespace, same metadata contract) and the ledger keys on
+      // the route-minted am_facts id — the id the reconcile window and the
+      // decision prompt will see in search hits. Returns the LEDGER id.
+      async function newFactItem({ text, idx, sessionDate, episodeId, supersedesId }) {
         const sourceId = factSourceId();
         factSeq += 1;
         const metadata = {
@@ -267,9 +331,24 @@ export function createArmMyceliumTimeline({
           ingestion: 'timeline',
         };
         const item = { source_type: sourceType, source_id: sourceId, content_text: text, namespace: factsNs, metadata };
+        if (useFactRoutes) {
+          const r = await platform.factsCreate({
+            fact_text: text,
+            namespace: factsNs,
+            category: 'general',
+            source_type: sourceType,
+            source_id: sourceId,
+            valid_from: sessionDate || null,
+            metadata,
+          });
+          item.serverId = r.id;
+          const ledgerId = String(r.id);
+          pending.set(ledgerId, item);
+          return ledgerId;
+        }
         pending.set(sourceId, item);
         bulk.push(item); // written with the session's flush (a later in-place SUPERSEDE mutates this object)
-        return item;
+        return sourceId;
       }
 
       function supersedeInPlace(item, { sessionDate, byId, byText }) {
@@ -335,7 +414,7 @@ export function createArmMyceliumTimeline({
           const s = await platform.search({
             query: candidate,
             namespace: factsNs,
-            sourceTypes: [sourceType],
+            sourceTypes: useFactRoutes ? [FACT_INDEX_SOURCE_TYPE] : [sourceType],
             limit: reconcileOverfetch,
           });
           // The reconcile window: this session's just-decided facts FIRST (the
@@ -389,23 +468,31 @@ export function createArmMyceliumTimeline({
           if (decision.action === 'SUPERSEDE') {
             counts.supersedes += 1;
             perSession.sup += 1;
-            const newFact = newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: decision.id });
+            const newFactId = await newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: decision.id });
             // the old fact KEEPS its row: live metadata flipped in place (so no
             // later candidate sees it as current), and — if the row already
             // reached the platform — an upsert push carrying the flip
             const target = pending.get(decision.id);
-            supersedeInPlace(target, { sessionDate, byId: newFact.source_id, byText: candidate });
-            if (flushedIds.has(decision.id)) {
+            if (useFactRoutes) {
+              // routes mode: the SUPERSEDE goes through POST /facts/:id/supersede
+              // FIRST — the server closes the interval, re-indexes the old row
+              // with its valid_to + the supersede line, and returns both rows —
+              // then the ledger flips. A refused supersede throws: the ledger
+              // never claims a flip the routes did not perform.
+              await platform.factsSupersede(decision.id, newFactId, factsNs);
+            }
+            supersedeInPlace(target, { sessionDate, byId: newFactId, byText: candidate });
+            if (!useFactRoutes && flushedIds.has(decision.id)) {
               bulk.push({ ...target, metadata: { ...target.metadata } });
             }
             sessionFacts = sessionFacts.filter((f) => f.id !== decision.id);
-            sessionFacts.push({ id: newFact.source_id, text: candidate, valid_from: sessionDate });
+            sessionFacts.push({ id: newFactId, text: candidate, valid_from: sessionDate });
             log(`timeline ${idx + 1}/${sessionTurns.length}: SUPERSEDE ${decision.id} — "${candidate.slice(0, 60)}" — q=${questionId}`);
           } else {
             counts.adds += 1; // decided ADDs, auto-ADDs and fail-open ADDs all wrote a fact
             perSession.add += 1;
-            const newFact = newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: null });
-            sessionFacts.push({ id: newFact.source_id, text: candidate, valid_from: sessionDate });
+            const newFactId = await newFactItem({ text: candidate, idx, sessionDate, episodeId, supersedesId: null });
+            sessionFacts.push({ id: newFactId, text: candidate, valid_from: sessionDate });
           }
         }
 
@@ -433,6 +520,7 @@ export function createArmMyceliumTimeline({
         parse_failures: parseFailures.length,
         parse_failure_detail: parseFailures,
         facts_reused: reused,
+        facts_layer: layer,
         timeline: counts,
       };
     },
@@ -445,7 +533,7 @@ export function createArmMyceliumTimeline({
       // when something changed). The r3 run proved facts-first starves the
       // episodic layer entirely; see the header comment.
       const [f, e] = await Promise.all([
-        platform.search({ query: question, namespace: factsNs, sourceTypes: [sourceType], limit: retrievalBudget }),
+        platform.search({ query: question, namespace: factsNs, sourceTypes: useFactRoutes ? [FACT_INDEX_SOURCE_TYPE] : [sourceType], limit: retrievalBudget }),
         platform.search({ query: question, namespace, sourceTypes: [sourceType], limit: retrievalBudget }),
       ]);
       const factHits = (f.results ?? []).map((r) => ({ ...r, _layer: 'fact' }));
@@ -481,6 +569,7 @@ export function createArmMyceliumTimeline({
           context_episodes: merged.filter((h) => h._layer === 'episode').length,
           context_superseded: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
           read_policy: TIMELINE_READ_POLICY,
+          facts_layer: layer,
           retrieval_mode: f.mode,
           degraded_reason: f.degraded ? f.degraded.reason : e.degraded ? e.degraded.reason : null,
           ingestion: 'timeline',

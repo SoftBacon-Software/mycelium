@@ -10,6 +10,35 @@ export default function (core) {
   var { checkAgentOrAdmin, checkAdmin } = core.auth;
   var { apiError, parseIntParam } = core;
 
+  // The source_type namespaced facts index under in sm_embeddings — distinct from
+  // the legacy 'memory' rows so a scoped search targets facts precisely and the
+  // two index shapes never mix. bench/memory/arms/arm_mycelium_timeline.mjs
+  // carries the same constant (FACT_INDEX_SOURCE_TYPE) — keep them in sync.
+  var FACT_INDEX_SOURCE_TYPE = 'am_fact';
+
+  // A query/body namespace that is present-and-meaningful, else null — an empty
+  // `namespace=` is "unscoped", not a namespace named "".
+  function requestedNamespace(req) {
+    var v = (req.query && req.query.namespace) || (req.body && req.body.namespace) || null;
+    return (typeof v === 'string' && v.trim().length > 0) ? v : null;
+  }
+
+  // Namespace isolation guard (task 206). A non-admin caller may only touch facts
+  // in the namespace they name — and unscoped callers only reach legacy
+  // (NULL-namespace) rows, so a run's facts never leak into another surface's
+  // reads. Refusal is a 404 (the fact is "not there" in your namespace), naming
+  // the fact's namespace so the caller can re-scope; admins bypass it.
+  // Returns true when the request was refused (response already sent).
+  function namespaceGuard(req, fact, res, action) {
+    if (req._authIsAdmin) return false;
+    var owner = fact.namespace || null;
+    if ((requestedNamespace(req) || null) === owner) return false;
+    apiError(res, 404, (action ? action + ' refused: ' : '') + 'fact ' + fact.id + ' lives in namespace ' +
+      (owner ? "'" + owner + "'" : '(legacy, unscoped)') +
+      ' — pass namespace=' + (owner ? "'" + owner + "'" + ' to reach it' : '(none) to reach it'));
+    return true;
+  }
+
   // GET /auto-memory/facts — list facts
   router.get('/facts', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
@@ -19,6 +48,7 @@ export default function (core) {
       project_id: req.query.project_id,
       category: req.query.category,
       min_confidence: req.query.min_confidence ? parseFloat(req.query.min_confidence) : undefined,
+      namespace: requestedNamespace(req),
       limit: parseInt(req.query.limit) || 50,
       offset: parseInt(req.query.offset) || 0
     });
@@ -33,6 +63,7 @@ export default function (core) {
     if (!who) return;
     res.json(db.factsDueForReverification({
       older_than_days: parseInt(req.query.older_than_days) || 30,
+      namespace: requestedNamespace(req),
       limit: parseInt(req.query.limit) || 50
     }));
   });
@@ -43,6 +74,7 @@ export default function (core) {
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
+    if (namespaceGuard(req, fact, res, 'read')) return;
     res.json(fact);
   });
 
@@ -62,7 +94,14 @@ export default function (core) {
   });
 
   // POST /auto-memory/facts — create a fact directly (Aria's writer ADD branch; provenance-aware)
-  router.post('/facts', function (req, res) {
+  // A `namespace` (task 206) scopes the fact to a run/surface: it is stored on the
+  // row, only reachable through namespace-named reads, and indexed into
+  // semantic-memory under source_type 'am_fact' so searchHybrid can hit it — the
+  // SAME index path memory rows use (row + embed scheduler; keyword-searchable
+  // immediately, vector follows one-at-a-time per model, degrade-to-keyword on
+  // backlog). Optional `metadata` (free-form object — the bench contract carries
+  // episode/valid_from/supersedes/...) rides along on the index row.
+  router.post('/facts', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var b = req.body || {};
@@ -71,17 +110,42 @@ export default function (core) {
     if (['verified', 'directive', 'inferred'].indexOf(authority) === -1) {
       return apiError(res, 400, 'source_authority must be one of: verified, directive, inferred');
     }
+    if (b.namespace != null && (typeof b.namespace !== 'string' || b.namespace.trim().length === 0 || b.namespace.length > 200)) {
+      return apiError(res, 400, 'namespace must be a non-empty string (<= 200 chars)');
+    }
+    if (b.metadata != null && (typeof b.metadata !== 'object' || Array.isArray(b.metadata))) {
+      return apiError(res, 400, 'metadata must be a JSON object');
+    }
     var conf = (b.confidence == null) ? 0.8 : Number(b.confidence);
     var id = db.createFact(b.agent_id || who, b.project_id || null, b.category || 'general',
-      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null);
+      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null);
     // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
     // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
     // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
     var memoryIndex; // assigned on both paths below
     try {
-      memoryIndex = indexFactInMemory(core.db, id,
-        { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
-        b.agent_id || who, b.project_id || null);
+      if (b.namespace) {
+        var fact = db.getFact(id);
+        // Column mirrors WIN over caller metadata: the index row always tells the
+        // row's bi-temporal truth, even if the caller's metadata went stale.
+        var meta = Object.assign({}, b.metadata || {}, {
+          namespace: b.namespace,
+          category: b.category || 'general',
+          source_authority: authority,
+          confidence: conf,
+          agent_id: b.agent_id || who,
+          project_id: b.project_id || null,
+          fact_source_id: b.source_id || null,
+          valid_from: fact.valid_from || null,
+          valid_to: fact.valid_to || null,
+          superseded_by: fact.superseded_by || null
+        });
+        memoryIndex = await indexFactSemantic(core.db, id, String(b.fact_text), meta, b.namespace);
+      } else {
+        memoryIndex = indexFactInMemory(core.db, id,
+          { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
+          b.agent_id || who, b.project_id || null);
+      }
     } catch (e) {
       memoryIndex = { indexed: false, reason: e.message };
     }
@@ -93,22 +157,66 @@ export default function (core) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
-    if (!db.getFact(id)) return apiError(res, 404, 'Fact not found');
+    var fact = db.getFact(id);
+    if (!fact) return apiError(res, 404, 'Fact not found');
+    if (namespaceGuard(req, fact, res, 'reverify')) return;
     var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
     db.reverifyFact(id, conf);
     res.json({ ok: true, fact: db.getFact(id) });
   });
 
   // POST /auto-memory/facts/:id/supersede — a newer fact replaces this one (Aria's UPDATE branch)
-  router.post('/facts/:id/supersede', function (req, res) {
+  // Namespaced facts (task 206): the guard refuses a cross-namespace pair, and the
+  // old row STAYS indexed — re-indexed in place with its valid_to, the new fact's
+  // text (superseded_by_text), and the row's caller metadata preserved, so the
+  // timeline's "what did we believe on date X" keeps its history searchable. The
+  // response carries both rows so the caller's ledger updates without a re-read;
+  // the legacy (no-namespace) path returns {ok:true} exactly as before.
+  router.post('/facts/:id/supersede', async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var oldId = parseIntParam(req.params.id);
     var newId = req.body && parseInt(req.body.new_id);
     if (!newId) return apiError(res, 400, 'new_id is required');
-    if (!db.getFact(oldId)) return apiError(res, 404, 'Fact not found');
-    if (!db.getFact(newId)) return apiError(res, 400, 'new_id does not exist');
-    db.supersedeFact(oldId, newId);
+    var oldFact = db.getFact(oldId);
+    if (!oldFact) return apiError(res, 404, 'Fact not found');
+    var newFact = db.getFact(newId);
+    if (!newFact) return apiError(res, 400, 'new_id does not exist');
+    if (namespaceGuard(req, oldFact, res, 'supersede')) return;
+    if ((oldFact.namespace || null) !== (newFact.namespace || null)) {
+      return apiError(res, 404, 'supersede refused: fact ' + oldId + ' lives in namespace ' +
+        (oldFact.namespace ? "'" + oldFact.namespace + "'" : '(legacy, unscoped)') + ', fact ' + newId + ' lives in namespace ' +
+        (newFact.namespace ? "'" + newFact.namespace + "'" : '(legacy, unscoped)'));
+    }
+    var namespaced = !!oldFact.namespace;
+    var result = db.supersedeFact(oldId, newId, namespaced ? { keepIndexed: true } : undefined);
+    if (namespaced) {
+      var memoryIndex; // assigned on every path below before the response reads it
+      // Re-index the old row in place: same (source_type, source_id) key, so the
+      // upsert REPLACES the live text with the dated supersede line — a hit for
+      // the old fact now renders "superseded on <date> by: <new text>".
+      var priorMeta = {};
+      try {
+        var prior = core.db.prepare('SELECT metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = 0')
+          .get(FACT_INDEX_SOURCE_TYPE, String(oldId));
+        if (prior && prior.metadata) priorMeta = JSON.parse(prior.metadata);
+      } catch (e) { /* semantic-memory absent — build from the row alone */ }
+      var meta = Object.assign({}, priorMeta, {
+        valid_from: result.old.valid_from || priorMeta.valid_from || null,
+        valid_to: result.old.valid_to || null,
+        superseded_by: result.old.superseded_by || null,
+        superseded_by_text: result.replacement.fact_text
+      });
+      try {
+        memoryIndex = await indexFactSemantic(core.db, oldId,
+          result.old.fact_text + '\n\n[superseded on ' + result.old.valid_to + ' by: ' + result.replacement.fact_text + ']',
+          meta, oldFact.namespace);
+      } catch (e) {
+        memoryIndex = { indexed: false, reason: e.message };
+      }
+      res.json({ ok: true, fact: result.old, replacement: result.replacement, memory_index: memoryIndex });
+      return;
+    }
     res.json({ ok: true });
   });
 
@@ -347,6 +455,106 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
   }
+}
+
+// -- Namespaced fact index (task 206) -----------------------------------------
+// The namespaced counterpart of indexFactInMemory: instead of a bare NULL-
+// embedding row, the fact goes through the SAME path a memory row takes via
+// POST /memory/index — an sm_embeddings row carrying its namespace + metadata,
+// then the embed scheduler (semantic-memory/embeddings.js: one-at-a-time per
+// model, query embeds jump the bulk lane, degrade-to-keyword on backlog). The
+// row is keyword/FTS-searchable the moment it lands; the vector follows.
+//
+// SEAM: direct shared-db access, the same seam unindexFacts() in db.js already
+// uses for the delete direction (both plugins receive core.db; a cross-plugin
+// IMPORT would make auto-memory unloadable on deployments without semantic-
+// memory, which is why the import below is dynamic and every failure is
+// fail-soft to keyword-only). The event-hook alternative loses the §F4
+// honesty surface — hook errors are swallowed, so POST /facts could no longer
+// report whether its write reached the index.
+//
+// One row per fact (chunk_index 0): facts are fact-sized. An oversized outlier
+// takes the same path legacy rows always did — POST /memory/reindex's
+// expandOversizedRows chunk-splits it on the next backfill.
+
+// semantic-memory's config lives in sm_config on the SHARED db (its getAllConfig
+// also merges plugin_config; sm_config is canonical and readable without the
+// wrapper — creating a second createMemoryDB instance here would REPLACE the
+// shared decoded-vector cache on db.__myceliumVectorCache).
+function readSmConfig(coreDb) {
+  var config = {};
+  try {
+    var rows = coreDb.prepare('SELECT key, value FROM sm_config').all();
+    for (var r of rows) config[r.key] = r.value;
+  } catch (e) { /* no sm_config → provider 'none' → keyword-only */ }
+  return config;
+}
+
+// Fire-and-forget embed through semantic-memory's scheduler. Returns what the
+// CALLER can honestly claim now: 'off' (no provider) or 'scheduled'. The
+// dynamic import keeps auto-memory loadable when semantic-memory is not
+// deployed; a failed embed leaves the row keyword-searchable (degrade-to-
+// keyword) and logs — never silent, never fatal to the fact write.
+function scheduleFactEmbed(coreDb, sourceType, sourceId, contentText) {
+  try {
+    import('../semantic-memory/embeddings.js').then(function (mod) {
+      var config = readSmConfig(coreDb);
+      if (!config.embedding_provider || config.embedding_provider === 'none') return;
+      mod.generateEmbedding(config, contentText, { sourceType: sourceType, sourceId: sourceId, chunkIndex: 0 })
+        .then(function (embedding) {
+          if (!embedding) return;
+          try {
+            // The WRITE side of the 196 side-channel (attached by
+            // semantic-memory/db.js next to __myceliumVectorCache): updateEmbedding's
+            // exact SQL + vector-cache hook, WITHOUT constructing a second
+            // createMemoryDB instance (that would REPLACE the shared decoded-vector
+            // cache). The raw UPDATE lives only in semantic-memory's db.js — the
+            // vector-cache-resilience gate pins that invariant.
+            var write = coreDb.__myceliumEmbeddingWrite;
+            if (!write) return; // older semantic-memory without the hook — keyword-only, honest
+            write(sourceType, sourceId, 0, embedding, config.embedding_model || config.embedding_provider);
+          } catch (e) {
+            console.error('[auto-memory] fact embed write-back failed (row stays keyword-searchable): ' + e.message);
+          }
+        })
+        .catch(function (e) {
+          console.error('[auto-memory] fact embed failed (row stays keyword-searchable): ' + e.message);
+        });
+    }).catch(function () { /* semantic-memory not deployed — keyword-only is the honest state */ });
+    return 'scheduled';
+  } catch (e) {
+    return 'off';
+  }
+}
+
+async function indexFactSemantic(coreDb, factId, contentText, metadata, namespace) {
+  try {
+    coreDb.prepare || (function () { throw new Error('no db'); })();
+    // Same upsert shape as semantic-memory's db.index (a re-index REPLACES the
+    // row: text, metadata — and the vector, which the scheduler refills).
+    coreDb.prepare(`
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
+      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL)
+      ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
+        content_text = excluded.content_text, namespace = excluded.namespace,
+        metadata = excluded.metadata, embedding = excluded.embedding,
+        embedding_model = excluded.embedding_model, updated_at = datetime('now')
+    `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}));
+  } catch (e) {
+    return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
+  }
+  try {
+    var vc = coreDb.__myceliumVectorCache;
+    if (vc) vc.onUpsert('am_fact', String(factId), 0);
+  } catch (e) { /* cache hook is optimistic; the signature reconcile self-heals */ }
+  var embedState = scheduleFactEmbed(coreDb, 'am_fact', String(factId), contentText);
+  return {
+    indexed: true,
+    embedded: false,
+    vector_search: embedState === 'scheduled'
+      ? 'scheduled via the embed scheduler (keyword-searchable now; one-at-a-time per model)'
+      : 'no embedding provider configured (keyword-searchable only)'
+  };
 }
 
 // ---- Consolidation ----

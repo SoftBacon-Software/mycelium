@@ -19,7 +19,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, RECONCILE_SYSTEM, TIMELINE_READ_POLICY } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, RECONCILE_SYSTEM, TIMELINE_READ_POLICY } from './arms/arm_mycelium_timeline.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
@@ -343,6 +343,10 @@ async function main() {
   // `mycelium` does; `mem0-raw` shares the mem0 sidecar (in its own -raw scope).
   // The §3 timeline arm is a platform arm too (episodic + reconciled layers).
   const wantsPlatform = arms.includes('mycelium') || arms.includes('mycelium-extract') || arms.includes('mycelium-timeline');
+  // MYCELIUM_TIMELINE_FACTS=am_facts: the reconciled layer uses the am_facts
+  // routes (task 206) instead of memory rows. Resolved ONCE here so the regime
+  // stamp, the purge list, and the arm all agree.
+  const timelineFactsLayer = resolveTimelineFactsLayer();
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
@@ -671,17 +675,34 @@ async function main() {
               row_shape: 'arm_mycelium\'s verbatim session row (same source_id shape, same `role: content` rendering) + metadata.layer=episode + metadata.session_date (dataset haystack_dates, verbatim)',
             },
             reconciled: {
-              namespace: myceliumTimelineNamespace(`bench-p1-${runId}`),
+              namespace: timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES
+                ? myceliumTimelineFactsNamespace(`bench-p1-${runId}`)
+                : myceliumTimelineNamespace(`bench-p1-${runId}`),
               row_shape:
                 'one row per surviving fact; metadata carries episode (the episodic row\'s source_id), session_date, valid_from, valid_to (null while current), supersedes / superseded_by / superseded_by_text',
             },
           },
-          store_not_am_facts_why:
-            'the am_facts bi-temporal routes ARE deployed (checked live 2026-09-10: GET /auto-memory/facts answers) but do not fit the bench row model ' +
-            'without a deploy or shared-state damage: am_facts has no semantic-search route (reconcile + read need /memory/search hybrid at the stamped budget), ' +
-            'no namespace/run scoping (bench rows would land in the lab\'s LIVE fact store beside its ~1.8k real facts), and no bulk cleanup path (the bench ' +
-            'contract is purge-everything-after). So the layer is modeled as memory rows in a suffixed namespace with the bi-temporal fields in metadata — ' +
-            'the lane\'s pre-authorized fallback.',
+          // task 206: WHICH store the reconciled layer used this run — the
+          // memory-row model (default) or the am_facts bi-temporal routes
+          // (MYCELIUM_TIMELINE_FACTS=am_facts). Never inferred after the fact.
+          facts_layer: timelineFactsLayer,
+          ...(timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES
+            ? {
+                facts_routes: {
+                  store: 'am_facts (POST /auto-memory/facts + POST .../supersede; per-run namespace <ns>-amfacts; semantic index source_type am_fact)',
+                  read: 'searchHybrid over the am_fact index rows in the run namespace (superseded facts stay indexed with their valid_to + supersede line)',
+                  scope_why: 'task 206 gave the routes a nullable namespace column — bench rows stay OUT of the lab\'s live (unscoped) fact store',
+                  known_gap: 'am_facts has no namespace bulk-purge route: the index rows purge via /memory/index?namespace=…, the fact ROWS remain (per-id DELETE only)',
+                },
+              }
+            : {
+                store_not_am_facts_why:
+                  'the am_facts bi-temporal routes ARE deployed (checked live 2026-09-10: GET /auto-memory/facts answers) but did not fit the bench row model ' +
+                  'before task 206: am_facts had no semantic-search index (reconcile + read need /memory/search hybrid at the stamped budget), ' +
+                  'no namespace/run scoping (bench rows would land in the lab\'s LIVE fact store beside its real facts), and no bulk cleanup path (the bench ' +
+                  'contract is purge-everything-after). So the layer is modeled as memory rows in a suffixed namespace with the bi-temporal fields in metadata — ' +
+                  'the lane\'s pre-authorized fallback. MYCELIUM_TIMELINE_FACTS=am_facts switches to the routes (stamped facts_layer=am_facts).',
+              }),
           read: {
             budget,
             read_policy: TIMELINE_READ_POLICY,
@@ -748,7 +769,13 @@ async function main() {
     ? [
         regime.retrieval.namespace,
         ...(arms.includes('mycelium-extract') ? [myceliumExtractNamespace(regime.retrieval.namespace)] : []),
-        ...(arms.includes('mycelium-timeline') ? [myceliumTimelineNamespace(regime.retrieval.namespace)] : []),
+        ...(arms.includes('mycelium-timeline')
+          ? [
+              timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES
+                ? myceliumTimelineFactsNamespace(regime.retrieval.namespace)
+                : myceliumTimelineNamespace(regime.retrieval.namespace),
+            ]
+          : []),
       ]
     : [];
   let platformCleanupDone = !platform || Boolean(args.keep);

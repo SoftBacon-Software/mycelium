@@ -1,0 +1,1 @@
+[run] FAILED: 3090 slots busy: 1/1 held — pid 1181 (2026-09-17-p1-155748 mycelium-timeline, since 2026-09-17T15:57:48.786Z). A benchmark run never shares a slot with another client (a call queued behind a long generation is how the Mem0 smokes died); wait for the holders to finish, or run with --no-slot-lock deliberately. Lock dir: /Users/grb/.cache/mycelium-bench/slot-locks

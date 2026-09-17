@@ -67,6 +67,24 @@ export default function createMemoryDB(db, opts) {
   // reconcile still self-heals (pinned by the negative-control test).
   try { db.__myceliumVectorCache = vectorCache; } catch (e) { /* frozen host */ }
 
+  // The WRITE side of the same side-channel (task 206): the raw UPDATE of
+  // sm_embeddings stays in THIS file only — the vector-cache-resilience gate
+  // pins that ("no raw UPDATE of sm_embeddings in product code outside the
+  // hooked db.js") — so an out-of-plugin embedding write-back (auto-memory's
+  // fact routes) rides this hook: same SQL, same cache hook. Fail-soft like
+  // the read side: an absent hook leaves the row keyword-searchable and the
+  // signature reconcile still self-heals.
+  function updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model) {
+    // A null embedding must NOT be stored as the string "null" — that
+    // escapes `embedding IS NULL` and orphans the row from backfill.
+    if (embedding == null) return;
+    db.prepare(
+      "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
+    ).run(JSON.stringify(embedding), model, sourceType, sourceId, chunkIndex || 0);
+    vectorCache.onUpsert(sourceType, sourceId, chunkIndex || 0);
+  }
+  try { db.__myceliumEmbeddingWrite = updateEmbeddingRow; } catch (e) { /* frozen host */ }
+
   return {
 
     // -- Config --
@@ -415,14 +433,7 @@ export default function createMemoryDB(db, opts) {
     },
 
     updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model) {
-      // A null embedding must NOT be stored as the string "null" — that
-      // escapes `embedding IS NULL` and orphans the row from backfill.
-      if (embedding == null) return;
-      var embeddingStr = embedding == null ? null : JSON.stringify(embedding);
-      db.prepare(
-        "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
-      ).run(embeddingStr, model, sourceType, sourceId, chunkIndex || 0);
-      vectorCache.onUpsert(sourceType, sourceId, chunkIndex || 0);
+      updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model);
     },
 
     getUnembedded(limit) {
