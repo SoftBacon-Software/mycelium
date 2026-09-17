@@ -40,6 +40,14 @@ export function registerAgentRoutes(router, deps) {
     }
     var status = req.body.status || 'online';
     if (!validateEnum(res, req.body.status, AGENT_STATUSES, 'status')) return;
+    // A heartbeat IS liveness — it can never store 'offline' under a fresh
+    // stamp (task 191, 2026-09-17). The MCP fork's shutdown goodbye stamped a
+    // fresh last_heartbeat WITH status 'offline', manufacturing the
+    // offline-with-fresh-heartbeat rows the read side now has to override;
+    // with the stored field deriving from the same stamp, the two must agree.
+    // Going quiet is how an agent goes offline: stop heartbeating and the
+    // staleness bar — not a status byte — flips the row.
+    if (status === 'offline') status = 'online';
     var workingOn = req.body.working_on || '';
     // Allow agent metadata to be updated via heartbeat
     var agentUpdates = {};
@@ -213,8 +221,9 @@ export function registerAgentRoutes(router, deps) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     // Presence derives from heartbeat age at the boundary (roster-truth,
-    // 2026-08-17): a stale 'online' reads offline; stored offline/retired/
-    // paused pass through. Velum and roster.py read THIS shape.
+    // 2026-08-17; two-way since task 191, 2026-09-17): a stale present-claim
+    // reads offline, a fresh heartbeat reads present even over a stored
+    // 'offline', retired/paused stick. Velum and roster.py read THIS shape.
     res.json(listAgents().map(function (a) { return deriveAgentPresence(a); }));
   }));
 
