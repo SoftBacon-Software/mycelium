@@ -1,0 +1,9 @@
+ADD  alex -> id 8 | cats -> id 9
+SEARCH ns hits: 8:q-003, 9:q-002
+SEARCH other-ns hits: 0
+ADD  dana -> id 10
+SUPERSEDE receipt: {"ok":true,"old_valid_to":"2026-09-17 17:09:16","old_superseded_by":10,"old_ns":"bench-p1-smoke20260917-amfacts","replacement_id":10}
+OLD ROW via /memory/list shape: {"results":[{"source_type":"am_fact","source_id":"8","content_text":"User's manager is Alex\n\n[superseded on 2026-09-17 17:09:16 by: User's new manager is Dana now]","namespace":"bench-p1-smoke20260917-amfacts","metadata":"{\"question_id\":\"q-003\",\"layer\":\"fact\",\"episode\":\"smoke-q003-s0\",
+SEARCH after supersede: 8[superseded], 10[current], 9[current]
+LIST ns: 2 rows | other-ns: 0 rows | unscoped: 0 rows
+DONE — route smoke complete

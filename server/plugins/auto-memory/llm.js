@@ -1,6 +1,23 @@
 // LLM provider abstraction for auto-memory extraction + consolidation
 // Supports: ollama (default, free), openai, anthropic, custom HTTP
 
+// How long ollama may keep the extraction model resident after a call.
+// MUST be finite: the platform box is small and shared (on jetson01, node +
+// the semantic-memory embedder + the extraction model all live on one board),
+// and an ollama unit running OLLAMA_KEEP_ALIVE=-1 pins whatever this plugin
+// loaded forever. Measured 2026-09-11: nemotron-mini (2,696 MB) sat resident
+// 1.5 days with no requests in 90 min; the box reached 948 MB available /
+// 1,965 MB swap and wedged its event loop three times in 3.5 h. An explicit
+// keep_alive here overrides the unit default per call. The semantic-memory
+// embedder is deliberately NOT given one — it is hit constantly and must
+// stay warm. Override with AUTO_MEMORY_LLM_KEEP_ALIVE ('0' evicts at once).
+var DEFAULT_KEEP_ALIVE = '10m';
+
+function extractionKeepAlive() {
+  var v = process.env.AUTO_MEMORY_LLM_KEEP_ALIVE;
+  return (v === undefined || v === '') ? DEFAULT_KEEP_ALIVE : v;
+}
+
 export async function callLLM(config, prompt) {
   var provider = config.llm_provider || 'none';
   var model = config.llm_model || '';
@@ -30,7 +47,7 @@ async function callOllama(baseUrl, model, prompt) {
   var response = await fetch(baseUrl + '/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: model, prompt: prompt, stream: false }),
+    body: JSON.stringify({ model: model, prompt: prompt, stream: false, keep_alive: extractionKeepAlive() }),
     signal: AbortSignal.timeout(60000)
   });
   if (!response.ok) throw new Error('Ollama error: HTTP ' + response.status);

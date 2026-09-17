@@ -53,7 +53,8 @@ export function updateAgentHeartbeat(id, status, workingOn) {
     WHERE id = ?`).run(status || 'online', workingOn || '', id);
 }
 
-// ── status follows the heartbeat (2026-08-17 roster-truth) ───────────────────
+// ── status follows the heartbeat (2026-08-17 roster-truth; two-way since
+//    2026-09-17, task 191) ────────────────────────────────────────────────────
 // Velum rendered agents as dormant while the operator was actively talking to
 // them. Two causes, both fixed here:
 //   (1) the sweepers wrote offline through updateAgentHeartbeat(), which
@@ -62,27 +63,46 @@ export function updateAgentHeartbeat(id, status, workingOn) {
 //       wrote the row", manufacturing offline-with-fresh-heartbeat rows.
 //       markAgentOffline() is the sweepers' writer now: no stamp.
 //   (2) status was a raw stored byte at read time. deriveAgentPresence()
-//       demotes a present-claiming row whose heartbeat is stale to 'offline'
-//       at the API boundary. It NEVER promotes: a stored 'offline' under a
-//       fresh heartbeat is a deliberate shutdown (the SDK's goodbye), and
-//       'retired'/'paused' are operator states only an explicit write moves.
+//       derives presence from heartbeat age at the API boundary. It was
+//       demote-only at first, trusting a stored 'offline' as "a deliberate
+//       shutdown" — but the MCP fork's shutdown goodbye stamps a FRESH
+//       heartbeat with status 'offline' (measured on jetson01 2026-09-17:
+//       GET /agents/m5Max read offline beside a 2-minute-old heartbeat), so
+//       the byte is a lie a writer can leave by accident. It now derives
+//       BOTH ways: a fresh heartbeat reads present even when the stored byte
+//       says 'offline', a stale one reads offline. 'retired'/'paused' are
+//       operator states only an explicit write moves.
 export function markAgentOffline(id) {
   stmt('dvMarkOffline', "UPDATE agents SET status = 'offline', working_on = '' WHERE id = ?").run(id);
 }
 
 // Mirrors the health patrol's default staleness bar (patrol_stale_agent_minutes = 15).
+// This is the platform's liveness bound for the ON/OFF roster listing.
 export const AGENT_PRESENCE_STALE_SECONDS = 15 * 60;
 const PRESENCE_STATUSES = new Set(['online', 'idle', 'busy']);
 
 export function deriveAgentPresence(row, nowMs) {
-  if (!row || !PRESENCE_STATUSES.has(row.status)) return row;
+  if (!row) return row;
+  var stored = row.status;
+  // Operator states ('retired', 'paused') are labels, not presence claims.
+  if (stored !== 'offline' && !PRESENCE_STATUSES.has(stored)) return row;
+  // Never heartbeated: the stored byte is all we know (schema default
+  // 'offline'). A present-claim with no stamp at all still reads offline —
+  // nothing has proven liveness.
+  if (!row.last_heartbeat) {
+    return PRESENCE_STATUSES.has(stored) ? Object.assign({}, row, { status: 'offline' }) : row;
+  }
   // last_heartbeat is naive-UTC 'YYYY-MM-DD HH:MM:SS' (datetime('now')) — parse as UTC.
-  var hb = row.last_heartbeat ? Date.parse(String(row.last_heartbeat).replace(' ', 'T') + 'Z') : NaN;
+  var hb = Date.parse(String(row.last_heartbeat).replace(' ', 'T') + 'Z');
   var ageS = ((nowMs === undefined ? Date.now() : nowMs) - hb) / 1000;
   if (!Number.isFinite(ageS) || ageS >= AGENT_PRESENCE_STALE_SECONDS) {
     return Object.assign({}, row, { status: 'offline' });
   }
-  return row;
+  // Fresh heartbeat: liveness is proven. A stored presence sub-state
+  // ('idle'/'busy') is richer than 'online' and stays; a stored 'offline'
+  // (sweeper write, goodbye stamp) is overridden by the evidence.
+  if (PRESENCE_STATUSES.has(stored)) return row;
+  return Object.assign({}, row, { status: 'online' });
 }
 
 export function updateAgentKey(id, apiKeyHash) {

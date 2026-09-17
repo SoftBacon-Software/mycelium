@@ -231,6 +231,25 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
     },
     async stats() { return call('GET', '/memory/stats'); },
     async config() { return call('GET', '/memory/config'); },
+    // auto-memory fact routes (task 206) — the reconciled layer's seam in
+    // MYCELIUM_TIMELINE_FACTS=am_facts mode. factsCreate carries the full
+    // metadata contract (episode/valid_from/supersedes/...); the server
+    // mirrors the bi-temporal columns into the index row's metadata.
+    async factsCreate(body) {
+      return call('POST', '/auto-memory/facts', body);
+    },
+    async factsSupersede(id, newId, namespace) {
+      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      const body = namespace ? { new_id: newId, namespace } : { new_id: newId };
+      return call('POST', `/auto-memory/facts/${encodeURIComponent(id)}/supersede${q}`, body);
+    },
+    async factsList({ namespace, limit } = {}) {
+      const q = new URLSearchParams();
+      if (namespace) q.set('namespace', namespace);
+      if (limit) q.set('limit', String(limit));
+      const qs = q.toString();
+      return call('GET', `/auto-memory/facts${qs ? `?${qs}` : ''}`);
+    },
     async health() {
       // /health is served at the server ROOT, not under /api/mycelium
       const url = `${baseUrl}/health`;

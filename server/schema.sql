@@ -489,6 +489,8 @@ CREATE TABLE IF NOT EXISTS plugins (
   enabled         INTEGER NOT NULL DEFAULT 1,
   route_prefix    TEXT NOT NULL DEFAULT '',
   mcp_tool_count  INTEGER NOT NULL DEFAULT 0,
+  orphaned        INTEGER NOT NULL DEFAULT 0, -- task 186 §5: no plugin directory (boot reconcile)
+  orphaned_at     TEXT,                       -- when the boot reconcile marked it
   installed_at    TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

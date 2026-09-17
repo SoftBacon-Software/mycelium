@@ -462,9 +462,11 @@ export function registerTools(server) {
       assignee: z.string().optional().describe('Filter by assignee agent ID')
     },
     async (args) => {
-      var tasks = await apiGet('/tasks' + qs(args, ['project_id', 'status', 'assignee']));
+      // Task 200: the list is the honest envelope now — items + total.
+      var page = await apiGet('/tasks' + qs(args, ['project_id', 'status', 'assignee']));
+      var tasks = page.items || [];
       if (!tasks.length) return text('No tasks found.');
-      var lines = ['=== Tasks (' + tasks.length + ') ==='];
+      var lines = ['=== Tasks (' + tasks.length + ' of ' + page.total + ') ==='];
       for (var t of tasks) {
         var line = formatTask(t);
         if (t.project_id) line += ' [' + t.project_id + ']';
@@ -625,7 +627,9 @@ export function registerTools(server) {
     },
     async (args) => {
       var effectiveArgs = Object.assign({}, args, { status: args.status || 'active' });
-      var plans = await apiGet('/plans' + qs(effectiveArgs, ['project_id', 'status']));
+      // Task 200: envelope — iterate items.
+      var planPage = await apiGet('/plans' + qs(effectiveArgs, ['project_id', 'status']));
+      var plans = planPage.items || [];
       if (!plans.length) return text('No plans found.');
 
       var lines = [];
@@ -996,7 +1000,11 @@ export function registerTools(server) {
       status: z.string().optional().describe('Filter by status: open, in_progress, fixed, closed')
     },
     async (args) => {
-      var bugs = await apiGet('/bugs' + qs(args, ['project_id', 'status']));
+      // Task 200: envelope — read items. (This also fixes the latent
+      // always-empty read: .length on the old {bugs,counts} object was
+      // undefined, so this tool answered "No bugs found." unconditionally.)
+      var bugPage = await apiGet('/bugs' + qs(args, ['project_id', 'status']));
+      var bugs = bugPage.items || [];
       if (!bugs.length) return text('No bugs found.');
       return text(bugs.map(formatBug).join('\n'));
     }

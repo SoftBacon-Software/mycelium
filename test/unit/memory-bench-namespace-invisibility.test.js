@@ -145,7 +145,7 @@ describe('bench rows are invisible to plain recall (route level)', () => {
     }
     // Route-level hybrid without a provider never reaches searchVector, so the
     // vector arm is asserted directly against the same db the route uses.
-    const rows = ctx.mem.searchVector(V, { limit: 50 });
+    const rows = await ctx.mem.searchVector(V, { limit: 50 });
     expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows.map((r) => r.source_type + ':' + r.source_id)).toContain('preference:pref-1');
     for (const r of rows) {

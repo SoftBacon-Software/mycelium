@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS workflows (
   risk         TEXT,                               -- green|yellow|red (runner-computed at claim)
   requested_by TEXT NOT NULL DEFAULT '',
   claimed_by   TEXT,
+  claimed_at   TEXT,                                -- stamped by the atomic claim; aged by the stale-claim sweep
   error        TEXT,
   created_at   TEXT DEFAULT (datetime('now')),
   started_at   TEXT,
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS workflow_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   workflow_id INTEGER NOT NULL,
   ts          TEXT DEFAULT (datetime('now')),
-  kind        TEXT NOT NULL,   -- created|claimed|risk_assessed|wave_started|invocation_started|invocation_finished|invocation_failed|completed|failed|cancelled
+  kind        TEXT NOT NULL,   -- created|claimed|claim_released|stalled|risk_assessed|wave_started|invocation_started|invocation_finished|invocation_failed|completed|failed|cancelled
   payload     TEXT DEFAULT '{}'
 );
 

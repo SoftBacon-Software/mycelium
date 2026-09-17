@@ -19,12 +19,14 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import jwt from 'jsonwebtoken';
 import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
 import { resolveTrustProxy } from './lib/trust-proxy.js';
+import { createTurnCredentialIssuer } from './lib/turn-secret.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 import { routeUsageCounter } from './lib/route-usage.js';
 
@@ -57,13 +59,46 @@ var PORT = process.env.PORT || 3002;
 var pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 var APP_VERSION = pkgJson.version || '0.0.0';
 
+// ---- Runtime instance identity: which commit is this? ----
+// APP_VERSION is read once from package.json, so between releases EVERY
+// instance on earth reports the same frozen string, and no instance could
+// answer the "commit hash" half of the bug-report ask (CONTRIBUTING "Reporting
+// bugs"). Resolution order, asked once here at boot and cached:
+//   1. MYCELIUM_GIT_SHA env var — the deployment seam. Containers/PaaS deploys
+//      have no .git to ask (the Dockerfile copies none and .dockerignore
+//      excludes it), so image builds pass the sha in via ARG/ENV.
+//   2. `git rev-parse --short HEAD` with cwd = repo root (works from a
+//      worktree too). A source checkout gets truth this way.
+//   3. 'unknown' on ANY failure — no git binary, not a repo, spawn error.
+//      Fail-soft on purpose: boot must not gain a new way to die.
+var COMMIT_SHA = (function () {
+  var fromEnv = process.env.MYCELIUM_GIT_SHA;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim();
+  try {
+    var out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      encoding: 'utf8'
+    });
+    var sha = String(out).trim();
+    return sha || 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+})();
+
 // ---- Startup validation ----
 if (!process.env.ADMIN_KEY || !process.env.JWT_SECRET) {
   console.error('FATAL: ADMIN_KEY and JWT_SECRET must be set');
   process.exit(1);
 }
-if (!process.env.TURN_SECRET) {
-  console.warn('[mycelium] TURN_SECRET not set — using default OpenRelay secret. Set TURN_SECRET env var for production.');
+// Resolved ONCE here — every TURN credential this boot issues is keyed by the
+// same secret. Never re-resolve per request (per-boot stability is the
+// contract; see lib/turn-secret.js).
+var turnCredentials = createTurnCredentialIssuer(process.env);
+if (turnCredentials.generated) {
+  console.warn('[mycelium] TURN_SECRET not set — generated a per-boot random TURN credential secret. Credentials from this boot will NOT authenticate against external TURN relays until TURN_SECRET is set to the relay\'s shared secret.');
 }
 
 // Initialize database
@@ -240,7 +275,8 @@ app.get('/health', function (req, res) {
     db_ok: dbOk,
     agents_online: agentsOnline,
     memory_usage_mb: Math.round(mem.rss / 1024 / 1024),
-    version: APP_VERSION
+    version: APP_VERSION,
+    commit_sha: COMMIT_SHA
   });
 });
 
@@ -250,20 +286,11 @@ app.get('/setup-admin.ps1', function (req, res) {
   res.type('text/plain').sendFile(path.join(publicRoot, 'setup-admin.ps1'));
 });
 
-// ---- A2A Agent Card (public, no auth) ----
-app.get('/.well-known/agent.json', function (req, res) {
-  // Proxy to the a2a-gateway plugin's agent card endpoint
-  req.url = '/api/mycelium/a2a/agent-card';
-  app.handle(req, res);
-});
-
-// ---- A2A JSON-RPC endpoint (public with API key auth) ----
-app.post('/a2a', function (req, res) {
-  req.url = '/api/mycelium/a2a/rpc';
-  app.handle(req, res);
-});
-
 // ---- API routes ----
+// (Task 186: the two A2A root rewrites — /.well-known/agent.json and
+// POST /a2a into the a2a-gateway plugin's mount — were removed with the
+// plugin; their target has 404'd in practice since the plugin shipped
+// disabled. The A2A surface is gone, not dormant.)
 // Route-usage counter sits BEFORE the routes router on the same mount so it
 // sees every /api/mycelium request; it records the matched route pattern at
 // response-finish (see server/lib/route-usage.js). Read via
@@ -288,12 +315,9 @@ app.get('/api/voice/peers', function (req, res) {
 
 app.get('/api/voice/turn-credentials', function (req, res) {
   if (!checkVoiceAuth(req, res)) return;
-  var secret = process.env.TURN_SECRET || 'openrelayprojectsecret';
-  var expiry = Math.floor(Date.now() / 1000) + 24 * 3600;
-  var username = expiry + ':studiouser';
-  var hmac = crypto.createHmac('sha1', secret);
-  hmac.update(username);
-  var credential = hmac.digest('base64');
+  var creds = turnCredentials.issue(Date.now());
+  var username = creds.username;
+  var credential = creds.credential;
   res.json({
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -358,9 +382,26 @@ process.on('SIGTERM', function () { gracefulShutdown('SIGTERM'); });
 process.on('SIGINT', function () { gracefulShutdown('SIGINT'); });
 
 // ---- SQLite backup system ----
+import { resolveBackupSettings } from './lib/backup-config.js';
 var DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 var BACKUP_DIR = path.join(DATA_DIR, 'backups');
-var MAX_BACKUPS = 10;
+// Task 186 §1 (AUDIT-lab-clockwork-2026-09-12): interval + retention were
+// hardcoded 6h × 10 — 4.8 GB on an 8 GB board beside the Mac's 13 GB off-box
+// set. D6: defaults drop to 24h × 3; env (deploy layer) or instance_config
+// (admin layer) override. The boot log names which layer won per key —
+// no silent precedence.
+var BACKUP_SETTINGS = resolveBackupSettings({
+  env: process.env,
+  getConfig: function (key) {
+    try {
+      var row = getDB().prepare('SELECT value FROM instance_config WHERE key = ?').get(key);
+      return row ? row.value : null;
+    } catch (e) { return null; /* pre-migration boot — defaults apply */ }
+  },
+});
+var MAX_BACKUPS = BACKUP_SETTINGS.maxBackups;
+console.log('[backup] SQLite backup config: every ' + BACKUP_SETTINGS.intervalHours + 'h, keep ' + BACKUP_SETTINGS.maxBackups
+  + ' (interval: ' + BACKUP_SETTINGS.sources.intervalHours + ', retention: ' + BACKUP_SETTINGS.sources.maxBackups + ')');
 
 async function runBackup() {
   try {
@@ -396,8 +437,8 @@ async function runBackup() {
 
 // Backup on startup
 runBackup();
-// Backup every 6 hours
-setInterval(runBackup, 6 * 60 * 60 * 1000);
+// Backup on the resolved interval (D6 default: 24h)
+setInterval(runBackup, BACKUP_SETTINGS.intervalHours * 60 * 60 * 1000);
 
 // Daily maintenance: stale requests + webhook log pruning (runs every 24h)
 setInterval(function () {
@@ -432,6 +473,7 @@ var wss = new WebSocketServer({ noServer: true });
 var peerCounter = 0;
 
 wss.on('connection', function (ws, req) {
+  voiceHeartbeat.ensure(); // Task 186 §2: first client wakes the ping timer
   // Authenticate via ?token= query param (JWT)
   var url = new URL(req.url, 'http://localhost');
   var token = url.searchParams.get('token');
@@ -498,18 +540,21 @@ wss.on('connection', function (ws, req) {
   });
 });
 
-setInterval(function () {
-  wss.clients.forEach(function (ws) {
-    if (!ws.isAlive) {
-      var me = voicePeers.get(ws);
-      voicePeers.delete(ws);
-      if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
-      return ws.terminate();
-    }
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 10000);
+// Task 186 §2 (AUDIT-lab-clockwork-2026-09-12): this timer used to run
+// unconditionally from boot, un-unref'd — a live 10s timer for a surface with
+// zero voice clients. It now starts lazily (wss 'connection' above) and never
+// holds the process open. Dead-peer cleanup (peer_left broadcast) rides the
+// onDead seam so the tick logic stays shared with the file-drone heartbeat.
+import { createHeartbeat } from './lib/ws-heartbeat.js';
+var voiceHeartbeat = createHeartbeat({
+  clients: function () { return wss.clients; },
+  intervalMs: 10000,
+  onDead: function (ws) {
+    var me = voicePeers.get(ws);
+    voicePeers.delete(ws);
+    if (me) broadcastToChannel({ type: 'peer_left', id: me.id }, me.channel, null);
+  },
+});
 
 function getPeersInChannel(channel) {
   var peers = [];
@@ -546,6 +591,7 @@ var fileDroneWss = new WebSocketServer({ noServer: true });
 var _fileDroneReqCounter = 0;
 
 fileDroneWss.on('connection', function (ws, req) {
+  fileDroneHeartbeat.ensure(); // Task 186 §2: first drone wakes the heartbeat
   var url = new URL(req.url, 'http://localhost');
   var agentKey = url.searchParams.get('key');
   var droneId = url.searchParams.get('drone_id');
@@ -619,14 +665,12 @@ fileDroneWss.on('connection', function (ws, req) {
   });
 });
 
-// Heartbeat for file drones
-setInterval(function () {
-  fileDroneWss.clients.forEach(function (ws) {
-    if (!ws.isAlive) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 15000);
+// Heartbeat for file drones — Task 186 §2: lazy + unref'd (see voice above);
+// zero drones connected = zero timers.
+var fileDroneHeartbeat = createHeartbeat({
+  clients: function () { return fileDroneWss.clients; },
+  intervalMs: 15000,
+});
 
 // ---- Manual WebSocket upgrade routing (required for multiple WSS on one HTTP server) ----
 server.on('upgrade', function (request, socket, head) {

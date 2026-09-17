@@ -476,7 +476,7 @@ var inboxIds = core.inbox.createInboxItemForAllOperators(
 
 ## Example: Full Plugin
 
-See the `marketing` plugin in `server/plugins/marketing/` for a complete, loaded example: it carries a database + schema, routes (`/bip`, `/social`, `/x`, `/outreach`), event hooks, MCP tools, a gated action (`bip_post_publish`), and operator-inbox integration.
+See the `marketing` plugin in `server/plugins/marketing/` for a complete, loaded example: it carries a database + schema, routes (mounted at `/marketing`: `/marketing/bip`, `/marketing/social`, `/marketing/x`, `/marketing/outreach`), event hooks, MCP tools, a gated action (`bip_post_publish`), and operator-inbox integration.
 
 ## Tips
 

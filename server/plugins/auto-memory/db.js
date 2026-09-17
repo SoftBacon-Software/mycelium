@@ -19,6 +19,17 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_valid ON am_facts(valid_to)'); } catch (e) { /* */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_authority ON am_facts(source_authority)'); } catch (e) { /* */ }
 
+  // Migration: namespace scoping (2026-09-17, task 206 — the am_facts routes' first
+  // real caller, BRIEF-lab-alive-memory §3). A NULL namespace is a LEGACY row: it
+  // behaves exactly as before this column existed. A named namespace (a bench run,
+  // a per-run scratch) is invisible to every unscoped read — the guarantee that let
+  // the timeline arm move off memory-row modeling was "bench facts never land in
+  // the lab's live fact store". Like every column-dependent index above, this one
+  // lives HERE, not in schema.sql (on an existing DB the CREATE TABLE is a no-op
+  // and a CREATE INDEX on a not-yet-added column throws at plugin load).
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN namespace TEXT'); } catch (e) { /* already exists */ }
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_namespace ON am_facts(namespace)'); } catch (e) { /* */ }
+
   // The inverse of indexFactInMemory() in routes.js. Every path that stops a fact
   // being CURRENT must also stop it being SEARCHABLE — otherwise a retracted or
   // superseded fact keeps ranking in /memory/search as though it were live, with
@@ -37,13 +48,38 @@ export default function createAutoMemoryDB(db) {
   function unindexFacts(ids) {
     if (!ids || !ids.length) return 0;
     try {
-      var stmt = db.prepare("DELETE FROM sm_embeddings WHERE source_type = 'memory' AND source_id = ?");
+      // Both fact index shapes: legacy rows index under 'memory' (indexFactInMemory),
+      // namespaced rows under 'am_fact' (indexFactSemantic in routes.js). The second
+      // type cannot affect legacy rows — none existed before task 206.
+      var stmt = db.prepare("DELETE FROM sm_embeddings WHERE source_type IN ('memory', 'am_fact') AND source_id = ?");
       var removed = 0;
-      for (var id of ids) removed += stmt.run(String(id)).changes;
+      var removedIds = [];
+      for (var id of ids) {
+        var changes = stmt.run(String(id)).changes;
+        if (changes > 0) { removed += changes; removedIds.push(String(id)); }
+      }
+      // F-mycelium/196: keep semantic-memory's decoded-vector cache exact in
+      // the same tick. Before this, every delete here moved the freshness
+      // signature and the NEXT search paid a corpus-wide rebuild on the
+      // event loop. Looked up off the shared db instance (both plugins
+      // receive core.db), so this file stays loadable when semantic-memory
+      // is not deployed — the property is simply absent and the signature
+      // reconcile remains the net, exactly as before. Like every cache
+      // hook it is optimistic: a rolled-back delete is caught by the
+      // post-write signature check on the next search.
+      var vc = db.__myceliumVectorCache;
+      if (vc && removedIds.length) vc.onRemoveMany('memory', removedIds);
       return removed;
     } catch (e) {
       return 0;
     }
+  }
+
+  // Plain row fetch WITHOUT the access-count side effect getFact() carries —
+  // internal reads (supersede's receipt, the re-index) must not masquerade as
+  // reader interest.
+  function factRow(id) {
+    return db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
   }
 
   return {
@@ -65,12 +101,13 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Facts --
-    // sourceAuthority (verified|directive|inferred) + validFrom are optional & appended,
-    // so existing 7-arg callers keep working (defaults: inferred, valid_from=now).
-    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom) {
+    // sourceAuthority (verified|directive|inferred), validFrom and namespace are
+    // optional & appended, so existing 7-arg callers keep working (defaults:
+    // inferred, valid_from=now, namespace=NULL = a legacy row).
+    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace) {
       var result = db.prepare(
-        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now'))) RETURNING id"
-      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null);
+        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?) RETURNING id"
+      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null);
       return result.id;
     },
 
@@ -90,6 +127,13 @@ export default function createAutoMemoryDB(db) {
       if (opts.project_id) { where.push('project_id = ?'); params.push(opts.project_id); }
       if (opts.category) { where.push('category = ?'); params.push(opts.category); }
       if (opts.min_confidence) { where.push('confidence >= ?'); params.push(opts.min_confidence); }
+      // Namespace scoping (task 206): a named namespace returns exactly that
+      // namespace; NO namespace returns only legacy (NULL-namespace) rows. That is
+      // byte-for-byte today's behavior for every row that exists today, and it is
+      // the isolation guarantee: a bench run's facts never surface in the lab's
+      // live fact-store view.
+      if (opts.namespace) { where.push('namespace = ?'); params.push(opts.namespace); }
+      else { where.push('namespace IS NULL'); }
       var limit = Math.min(opts.limit || 50, 500);
       var offset = opts.offset || 0;
       params.push(limit, offset);
@@ -103,9 +147,18 @@ export default function createAutoMemoryDB(db) {
       return unindexFacts([id]);
     },
 
-    supersedeFact(oldId, newId) {
+    // opts.keepIndexed (namespaced facts only): the old row STAYS indexed. A
+    // timeline fact's history is the point — "what did we believe on date X"
+    // needs the superseded row retrievable with its valid_to and the
+    // supersede line renderable from a hit (task 206). Legacy supersede keeps
+    // the old behavior: unindex, so a retracted fact cannot rank against its
+    // replacement in the shared live recall.
+    supersedeFact(oldId, newId, opts) {
       // Close the validity interval (bi-temporal supersession) — don't just tombstone.
       db.prepare("UPDATE am_facts SET superseded_by = ?, valid_to = datetime('now') WHERE id = ?").run(newId, oldId);
+      if (opts && opts.keepIndexed) {
+        return { old: factRow(oldId), replacement: factRow(newId) };
+      }
       // A superseded fact is no longer current, and listFacts() already hides it
       // (`superseded_by IS NULL`). Drop it from the index too, or it keeps ranking
       // in /memory/search against the very fact that replaced it.
@@ -128,15 +181,19 @@ export default function createAutoMemoryDB(db) {
 
     // The re-verification queue: CURRENT, inferred (not directive/verified) facts never
     // checked, or last checked longer than older_than_days ago. Aria's loop drains this.
+    // Namespace rule mirrors listFacts: scoped = that namespace only; unscoped =
+    // legacy rows only, so a bench run's facts never enter Aria's prod queue.
     factsDueForReverification(opts) {
       opts = opts || {};
       var olderThanDays = parseInt(opts.older_than_days) || 30;
       var limit = Math.min(opts.limit || 50, 500);
+      var namespaceSql = opts.namespace ? 'namespace = ?' : 'namespace IS NULL';
+      var params = opts.namespace ? [opts.namespace, olderThanDays, limit] : [olderThanDays, limit];
       return db.prepare(
-        "SELECT * FROM am_facts WHERE superseded_by IS NULL AND source_authority = 'inferred' " +
+        "SELECT * FROM am_facts WHERE superseded_by IS NULL AND source_authority = 'inferred' AND " + namespaceSql + ' ' +
         "AND (verified_at IS NULL OR verified_at < datetime('now', '-' || ? || ' days')) " +
         "ORDER BY (verified_at IS NULL) DESC, COALESCE(verified_at, created_at) ASC LIMIT ?"
-      ).all(olderThanDays, limit);
+      ).all(...params);
     },
 
     // Bi-temporal "as of": facts whose validity interval [valid_from, valid_to) contains asOf.
@@ -222,9 +279,10 @@ export default function createAutoMemoryDB(db) {
     getDecayableFacts() {
       // Operator DIRECTIVES (stated intent/preference) do NOT decay — they hold until a new
       // directive supersedes them. verified + inferred still decay (verified is re-checked via
-      // verified_at, not eroded to zero by time alone).
+      // verified_at, not eroded to zero by time alone). Namespaced rows (bench runs) are
+      // excluded: a prod decay loop must never rewrite a run's data mid-run. (task 206)
       return db.prepare(
-        "SELECT id, category, confidence, last_accessed_at, updated_at FROM am_facts WHERE superseded_by IS NULL AND source_authority != 'directive' AND (last_accessed_at IS NULL OR last_accessed_at < datetime('now', '-1 day'))"
+        "SELECT id, category, confidence, last_accessed_at, updated_at FROM am_facts WHERE superseded_by IS NULL AND namespace IS NULL AND source_authority != 'directive' AND (last_accessed_at IS NULL OR last_accessed_at < datetime('now', '-1 day'))"
       ).all();
     },
 

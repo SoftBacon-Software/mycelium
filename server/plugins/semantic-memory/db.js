@@ -2,6 +2,7 @@
 
 import { cosineSimilarity, embedQueueDepth } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
+import { createVectorCache } from './vector-cache.js';
 
 // -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
 // Benchmark harnesses write into the ONE index live recall reads from (task
@@ -15,10 +16,10 @@ import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 // all sees no bench rows. Enforced in the query layer (not post-filter) so the
 // caller's `limit` is spent on visible rows instead of being burned on hidden
 // ones before the slice.
-var BENCH_TYPE_PREFIX = 'bench_';
-var BENCH_NS_PREFIX = 'bench-';
+export var BENCH_TYPE_PREFIX = 'bench_';
+export var BENCH_NS_PREFIX = 'bench-';
 
-function benchOptIn(opts) {
+export function benchOptIn(opts) {
   opts = opts || {};
   if (Array.isArray(opts.source_types) &&
       opts.source_types.some(function (t) {
@@ -37,7 +38,53 @@ var BENCH_HIDDEN_SQL =
   "NOT (substr(COALESCE(source_type,''),1," + BENCH_TYPE_PREFIX.length + ") = '" + BENCH_TYPE_PREFIX + "'" +
   " OR substr(COALESCE(namespace,''),1," + BENCH_NS_PREFIX.length + ") = '" + BENCH_NS_PREFIX + "')";
 
-export default function createMemoryDB(db) {
+// DoS bound shared by BOTH vector arms: only the newest N candidate rows
+// among the filtered set are scored — what the old per-query SQL expressed as
+// `ORDER BY updated_at DESC LIMIT <cap>`, and what the decoded-vector cache
+// (vector-cache.js) expresses as an early break in its recency order.
+// Exported for the cache default and the tests.
+export var VECTOR_SCAN_CAP = 5000;
+
+export default function createMemoryDB(db, opts) {
+  // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
+  // row's vector is JSON.parse'd ONCE, not on every query. Write paths below
+  // keep it exact through hooks; the freshness signature in vector-cache.js
+  // self-heals writers nothing hooks — incrementally since 196, so a drift
+  // no longer re-decodes the corpus on the event loop. auto-memory's
+  // unindexFacts lands through the same-tick side-channel below.
+  // Memory bound: 25k rows x 768 dims x 4 B = 77 MB.
+  var vectorCache = createVectorCache(db, Object.assign({
+    benchOptIn: benchOptIn,
+    benchTypePrefix: BENCH_TYPE_PREFIX,
+    benchNsPrefix: BENCH_NS_PREFIX,
+    scanCap: VECTOR_SCAN_CAP
+  }, (opts && opts.vectorCache) || {}));
+  // The per-db side-channel auto-memory's unindexFacts uses (196): both
+  // plugins receive the SAME core.db instance, and a property on it needs no
+  // cross-plugin import — auto-memory must stay loadable on deployments
+  // without this plugin (the loader can boot a temp plugins dir carrying one
+  // plugin alone). Fail-soft: if the property cannot be set, the signature
+  // reconcile still self-heals (pinned by the negative-control test).
+  try { db.__myceliumVectorCache = vectorCache; } catch (e) { /* frozen host */ }
+
+  // The WRITE side of the same side-channel (task 206): the raw UPDATE of
+  // sm_embeddings stays in THIS file only — the vector-cache-resilience gate
+  // pins that ("no raw UPDATE of sm_embeddings in product code outside the
+  // hooked db.js") — so an out-of-plugin embedding write-back (auto-memory's
+  // fact routes) rides this hook: same SQL, same cache hook. Fail-soft like
+  // the read side: an absent hook leaves the row keyword-searchable and the
+  // signature reconcile still self-heals.
+  function updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model) {
+    // A null embedding must NOT be stored as the string "null" — that
+    // escapes `embedding IS NULL` and orphans the row from backfill.
+    if (embedding == null) return;
+    db.prepare(
+      "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
+    ).run(JSON.stringify(embedding), model, sourceType, sourceId, chunkIndex || 0);
+    vectorCache.onUpsert(sourceType, sourceId, chunkIndex || 0);
+  }
+  try { db.__myceliumEmbeddingWrite = updateEmbeddingRow; } catch (e) { /* frozen host */ }
+
   return {
 
     // -- Config --
@@ -109,6 +156,7 @@ export default function createMemoryDB(db) {
       db.prepare(
         'DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index >= ?'
       ).run(sourceType, sourceId, fromIndex);
+      vectorCache.onRemovePair(sourceType, sourceId, fromIndex);
     },
 
     getDocChunks(sourceType, sourceId) {
@@ -134,6 +182,7 @@ export default function createMemoryDB(db) {
           metadata = excluded.metadata, embedding = excluded.embedding,
           embedding_model = excluded.embedding_model, updated_at = datetime('now')
       `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel);
+      vectorCache.onUpsert(sourceType, sourceId, chunkIndex);
     },
 
     // Chunk-aware bulk index. Items carrying an explicit chunk_index are
@@ -184,6 +233,7 @@ export default function createMemoryDB(db) {
 
     remove(sourceType, sourceId) {
       db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
+      vectorCache.onRemovePair(sourceType, sourceId, null);
     },
 
     // Admin bulk purge by exact filter — how a finished benchmark run cleans up
@@ -200,6 +250,7 @@ export default function createMemoryDB(db) {
       if (filters.namespace) { where.push('namespace = ?'); params.push(filters.namespace); }
       if (where.length === 0) return null; // never delete unfiltered
       var info = db.prepare('DELETE FROM sm_embeddings WHERE ' + where.join(' AND ')).run(...params);
+      vectorCache.onPurge(filters);
       return info.changes;
     },
 
@@ -286,7 +337,54 @@ export default function createMemoryDB(db) {
     },
 
     // -- Vector Search --
-    searchVector(queryEmbedding, opts) {
+    // The query path NEVER JSON.parses an embedding: vectors are decoded once
+    // into the cache (vector-cache.js) and search is a filter + tight dot
+    // loop. Per-query parse of up to 5,000 vectors was 2.4-4.3 s on jetson01
+    // and blocked the event loop hard enough to wedge the platform
+    // (F-mycelium/194). The original algorithm lives on verbatim as
+    // searchVectorJsonPath — the oracle the tests hold the cache to, and the
+    // fallback if the cache ever throws or its breaker is open (never worse
+    // than before the cache). Async since 196: a search arriving mid-build
+    // waits on the ONE in-flight build instead of running a second one or
+    // blocking the loop on the corpus decode.
+    async searchVector(queryEmbedding, opts) {
+      opts = opts || {};
+      await vectorCache.ensureFresh();
+      if (!vectorCache.available()) {
+        // Breaker open — skip the cache entirely (no build attempt inside a
+        // window; the window's ONE log line already fired at the failure).
+        vectorCache.fallbackServed();
+        return this.searchVectorJsonPath(queryEmbedding, opts);
+      }
+      try {
+        var scored = vectorCache.scored(queryEmbedding, opts);
+        return this.finishScored(scored, Math.min(opts.limit || 10, 100));
+      } catch (e) {
+        console.error('[semantic-memory] vector cache failed, falling back to JSON path:', e.message);
+        return this.searchVectorJsonPath(queryEmbedding, opts);
+      }
+    },
+
+    // Shared tail for both vector arms: collapse chunked docs to their best
+    // chunk BEFORE slicing to the page limit (mirrors searchKeyword), then
+    // fetch full rows only for the top results.
+    finishScored(scored, limit) {
+      var topIds = this.collapseChunks(scored).slice(0, limit);
+      return topIds.map(function (s) {
+        var full = db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id);
+        if (!full) return null;
+        try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
+        full.score = s.score;
+        return full;
+      }).filter(Boolean);
+    },
+
+    // The pre-194 algorithm, kept verbatim as the correctness oracle for the
+    // cache (test/unit/search-vector-decode-cache.test.js asserts identical
+    // ranking and scores to 1e-6) and as the emergency fallback above. Not
+    // called on the hot path; do not optimize or "clean up" this method —
+    // its value is being exactly what shipped before the cache.
+    searchVectorJsonPath(queryEmbedding, opts) {
       opts = opts || {};
       var limit = Math.min(opts.limit || 10, 100);
       var where = ['embedding IS NOT NULL'];
@@ -303,8 +401,7 @@ export default function createMemoryDB(db) {
       if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
 
       // Cap rows loaded for JS-side cosine sim to prevent DoS on large tables
-      var vectorCap = 5000;
-      params.push(vectorCap);
+      params.push(VECTOR_SCAN_CAP);
       var rows = db.prepare(
         'SELECT id, source_type, source_id, chunk_index, embedding FROM sm_embeddings WHERE ' + where.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
       ).all(...params);
@@ -327,30 +424,16 @@ export default function createMemoryDB(db) {
       }
 
       scored.sort(function (a, b) { return b.score - a.score; });
-      // Collapse chunked docs to their best chunk BEFORE slicing to the page
-      // limit — otherwise one multi-chunk doc floods the results. Mirrors
-      // searchKeyword (collapse then slice). scored rows carry source_type +
-      // source_id, so collapseChunks keys them directly.
-      var topIds = this.collapseChunks(scored).slice(0, limit);
+      return this.finishScored(scored, limit);
+    },
 
-      // Fetch full rows only for top results
-      return topIds.map(function (s) {
-        var full = db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id);
-        if (!full) return null;
-        try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
-        full.score = s.score;
-        return full;
-      }).filter(Boolean);
+    // Cache observability for tests and ops (additive, read-only).
+    vectorCacheInfo() {
+      return vectorCache.info();
     },
 
     updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model) {
-      // A null embedding must NOT be stored as the string "null" — that
-      // escapes `embedding IS NULL` and orphans the row from backfill.
-      if (embedding == null) return;
-      var embeddingStr = embedding == null ? null : JSON.stringify(embedding);
-      db.prepare(
-        "UPDATE sm_embeddings SET embedding = ?, embedding_model = ?, updated_at = datetime('now') WHERE source_type = ? AND source_id = ? AND chunk_index = ?"
-      ).run(embeddingStr, model, sourceType, sourceId, chunkIndex || 0);
+      updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model);
     },
 
     getUnembedded(limit) {
@@ -363,7 +446,8 @@ export default function createMemoryDB(db) {
       return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
     },
 
-    searchHybrid(query, opts, queryEmbedding) {
+    // Async since 196: the vector arm may wait on an in-flight cache build.
+    async searchHybrid(query, opts, queryEmbedding) {
       opts = opts || {};
       var limit = opts.limit || 10;
 
@@ -376,7 +460,7 @@ export default function createMemoryDB(db) {
       }
 
       // Vector search
-      var vectorResults = this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
+      var vectorResults = await this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
 
       // Reciprocal Rank Fusion (RRF)
       var K = 60; // standard RRF constant
@@ -494,7 +578,7 @@ export default function createMemoryDB(db) {
         total: total,
         embedded: withEmbedding,
         coverage_pct: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
-        vector_scan_capped: withEmbedding > 5000 // mirrors the cap in searchVector()
+        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP // mirrors the cap in searchVector()
       };
     },
 
@@ -515,7 +599,11 @@ export default function createMemoryDB(db) {
         embed_queue: embedQueueDepth(),
         by_source_type: byType,
         by_namespace: byNamespace,
-        vector_scan_capped: withEmbedding > 5000
+        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP,
+        // The decoded-vector cache's own state (194) + its breaker/fallback
+        // windows (196): what /stats shows when search latency or the log's
+        // "JSON fallback for Ns" line needs explaining. (§F1 honesty)
+        vector_cache: vectorCache.info()
       };
     }
   };

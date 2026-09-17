@@ -5,7 +5,7 @@
 // injection); DB functions are imported directly. The route contract is identical
 // to before extraction — enforced by test/refactor/route-manifest.mjs.
 import {
-  listTasksNeedingApproval, listTasks, createTask, updateTask,
+  listTasksNeedingApproval, listTasks, countTasks, createTask, updateTask,
   setTaskDependency, getTask, resolveTaskDependencies, updateAsset,
   completeLinkedPlanSteps, getMessage, resolveMessage, getDB,
   getSleepMode, appendSleepLog, incrementProfileCounter, dispatchWebhook,
@@ -19,7 +19,7 @@ export function registerTaskRoutes(router, deps) {
     agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
     emitEvent,
     validateStringLength, checkProjectScope, warnSuspectTransition,
-    dispatchWorkToIdleAgents,
+    dispatchWorkToIdleAgents, pageEnvelope,
     MAX_TITLE, MAX_DESCRIPTION, TASK_STATUSES, TASK_PRIORITIES,
   } = deps;
 
@@ -40,7 +40,12 @@ export function registerTaskRoutes(router, deps) {
       limit: parseLimit(req.query.limit, 50),
       offset: parseInt(req.query.offset) || 0
     };
-    res.json(listTasks(filters));
+    // Task 200: the honest envelope by default ({items,total,limit,offset,
+    // next_offset} — total honors the filters); the pre-envelope bare array
+    // survives ONE release behind ?shape=array for external old clients.
+    var rows = listTasks(filters);
+    if (req.query.shape === 'array') return res.json(rows);
+    res.json(pageEnvelope(rows, countTasks(filters), filters.limit, filters.offset));
   }));
 
   router.post('/tasks', agentWriteLimiter, asyncHandler(function (req, res) {

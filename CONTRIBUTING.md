@@ -2,10 +2,12 @@
 
 Thanks for being here. Mycelium is small enough that one good
 contributor makes a real difference, and big enough (~284 endpoints,
-7 plugins, SDK + MCP + runner) that there's plenty of
+5 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
+
+Prerequisite: Node 20 or later — `engines` in package.json enforces the same floor, and CI tests Node 20 and 22.
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
@@ -123,7 +125,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 122 files across `test/unit/`,
+There's a vitest suite under `test/` — 140 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
@@ -218,5 +220,6 @@ Operational runbooks and landed design docs live outside `docs/`:
 
 - [Jetson deploy runbook](runbooks/jetson-deploy.md)
 - [Jetson legacy-file supersession](runbooks/jetson-legacy-file-supersession.md)
+- [Jetson ollama keep-alive](runbooks/jetson-ollama-keep-alive.md)
 - [Jetson orderly-deploy plan](superpowers/plans/2026-08-16-jetson-orderly-deploy.md)
 - [Jetson deploy design](superpowers/specs/2026-08-16-jetson-mycelium-deploy-design.md)

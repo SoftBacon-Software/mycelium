@@ -61,3 +61,68 @@ test('auto-memory: event hooks register without throwing and subscribe to ≥1 e
   registerHooks(core);
   assert.ok(core._subscriptions.length > 0, 'auto-memory subscribed to at least one platform event');
 });
+
+// -- Namespace scoping regressions (task 206): absent namespace = today's
+// behavior, byte for byte; namespaced rows never leak into the unscoped views.
+// These dispatch through a real express app so the guards run as mounted.
+import express from 'express';
+
+// Both plugin schemas: the semantic index (sm_embeddings) is part of the fact
+// routes' contract — indexFactInMemory's fail-soft 'indexed:false' is what a
+// semantic-memory-less deployment honestly reports, and this regression pins
+// the deploy-with-both case.
+function freshDBBoth() {
+  var db = new Database(':memory:');
+  db.exec(fs.readFileSync(path.join(here, 'schema.sql'), 'utf8'));
+  db.exec(fs.readFileSync(path.join(here, '../semantic-memory/schema.sql'), 'utf8'));
+  return db;
+}
+
+async function listenApp(core) {
+  var app = express();
+  app.use(express.json());
+  app.use('/api/mycelium/auto-memory', createRoutes(core));
+  var server = app.listen(0, '127.0.0.1');
+  await new Promise(function (r) { server.on('listening', r); });
+  return { base: 'http://127.0.0.1:' + server.address().port + '/api/mycelium/auto-memory', close: function () { server.close(); } };
+}
+
+test('auto-memory: no-namespace fact routes behave exactly as before namespaces (create → list → supersede)', async () => {
+  var core = makeCore(freshDBBoth());
+  var svc = await listenApp(core);
+  try {
+    var res = await fetch(svc.base + '/facts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fact_text: 'A legacy fact from the internal writer' }) });
+    var body = await res.json();
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(body).sort(), ['fact', 'id', 'memory_index', 'ok']);
+    assert.equal(body.memory_index.indexed, true);
+    assert.equal(body.fact.namespace, null);
+
+    var list = await (await fetch(svc.base + '/facts')).json();
+    assert.equal(list.length, 1);
+    assert.equal(list[0].id, body.id);
+
+    var neu = await (await fetch(svc.base + '/facts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fact_text: 'The replacement legacy fact, restated' }) })).json();
+    var sup = await fetch(svc.base + '/facts/' + body.id + '/supersede', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ new_id: neu.id }) });
+    assert.equal(sup.status, 200);
+    assert.deepEqual(await sup.json(), { ok: true }); // legacy supersede response, unchanged
+
+    var after = await (await fetch(svc.base + '/facts')).json();
+    assert.deepEqual(after.map(function (f) { return f.id; }), [neu.id]); // superseded row hidden
+  } finally { svc.close(); }
+});
+
+test('auto-memory: namespaced facts are invisible to every unscoped read', async () => {
+  var core = makeCore(freshDBBoth());
+  var svc = await listenApp(core);
+  try {
+    var ns = 'bench-p1-regression';
+    await fetch(svc.base + '/facts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fact_text: 'A bench run fact for question one', namespace: ns }) });
+    var unscoped = await (await fetch(svc.base + '/facts')).json();
+    assert.equal(unscoped.length, 0, 'unscoped GET /facts must not surface namespaced rows');
+    var due = await (await fetch(svc.base + '/facts/due-reverification')).json();
+    assert.equal(due.length, 0, 'unscoped re-verify queue must not surface namespaced rows');
+    var scoped = await (await fetch(svc.base + '/facts?namespace=' + encodeURIComponent(ns))).json();
+    assert.equal(scoped.length, 1);
+  } finally { svc.close(); }
+});

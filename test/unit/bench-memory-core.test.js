@@ -31,10 +31,16 @@ describe('runBench with a fake arm + fake judge (hermetic end-to-end)', () => {
     const judgedRows = [];
     const fakeFactory = (name) => (_ctx) => ({
       name,
-      async write(sessionTurns, { questionId }) {
-        writes.push({ name, questionId, sessions: sessionTurns.length });
-        return { docs: sessionTurns.length, rows: sessionTurns.length };
-      },
+      // the production `none` arm has no write phase — model that, so the
+      // write_ms stamp contract is exercised on both sides (stamped vs absent)
+      ...(name === 'none'
+        ? {}
+        : {
+            async write(sessionTurns, { questionId }) {
+              writes.push({ name, questionId, sessions: sessionTurns.length });
+              return { docs: sessionTurns.length, rows: sessionTurns.length };
+            },
+          }),
       async answer(_question) {
         return {
           text: name === 'none' ? 'I do not know.' : 'Lisbon.',
@@ -80,7 +86,10 @@ describe('runBench with a fake arm + fake judge (hermetic end-to-end)', () => {
       { name: 'fake', questionId: 'q-2', sessions: 1 },
     ]);
     const fakeAfter = writes.find((w) => w.name === 'afterWrite:fake');
-    expect(fakeAfter.writeInfo).toEqual({ docs: 2, rows: 2, skipped: false });
+    // write_ms: the ingestion path's wall-clock stamp (task 199) — present on
+    // every arm with a write phase, absent on write-less arms (none)
+    expect(fakeAfter.writeInfo).toEqual({ docs: 2, rows: 2, skipped: false, write_ms: expect.any(Number) });
+    expect(writes.find((w) => w.name === 'afterWrite:none').writeInfo.write_ms).toBeUndefined();
   });
 
   it('judges every row and tallies per arm', async () => {

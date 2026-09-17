@@ -130,7 +130,10 @@ export class MyceliumAgent {
       for (var k in filters) params.set(k, filters[k])
     }
     var qs = params.toString()
-    return this.api.get('/tasks' + (qs ? '?' + qs : ''))
+    // Task 200: the server returns the honest envelope; the SDK's contract
+    // stays "a list of tasks", so unwrap items.
+    var page = await this.api.get('/tasks' + (qs ? '?' + qs : ''))
+    return page.items
   }
 
   // ── Messages ────────────────────────────────────────────────────
@@ -203,7 +206,9 @@ export class MyceliumAgent {
       for (var k in filters) params.set(k, filters[k])
     }
     var qs = params.toString()
-    return this.api.get('/plans' + (qs ? '?' + qs : ''))
+    // Task 200: envelope — unwrap items (same contract as listTasks).
+    var page = await this.api.get('/plans' + (qs ? '?' + qs : ''))
+    return page.items
   }
 
   async getPlan(planId) {

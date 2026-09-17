@@ -11,7 +11,7 @@ export default function (core) {
   var router = Router();
   var db = createWorkflowsDB(core.db);
   var { checkAgentOrAdmin } = core.auth;
-  var { apiError, parseIntParam } = core;
+  var { apiError, parseIntParam, pageEnvelope } = core;
 
   function getWorkflowOr404(req, res) {
     var id = parseIntParam(req.params.id);
@@ -53,17 +53,24 @@ export default function (core) {
     res.json({ ok: true, workflow: db.getWorkflowFull(id) });
   });
 
-  // GET /workflows — list. Filters: status, project_id, order=asc|desc, limit.
-  // The runner's poll is ?status=pending&order=asc (oldest fired runs first).
+  // GET /workflows — list. Filters: status, project_id, order=asc|desc, limit,
+  // offset. Default shape is the honest envelope {items,total,limit,offset,
+  // next_offset} (task 200: a page with no total hides the rest of the board);
+  // ?shape=array keeps the pre-envelope bare array for one release so external
+  // old clients (the runner polls read a list) keep working during the window.
   router.get('/', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    res.json(db.listWorkflows({
+    var filters = {
       status: req.query.status,
       project_id: req.query.project_id,
       order: req.query.order,
-      limit: parseIntParam(req.query.limit) || undefined
-    }));
+      limit: parseIntParam(req.query.limit) || undefined,
+      offset: parseIntParam(req.query.offset) || undefined
+    };
+    var rows = db.listWorkflows(filters);
+    if (req.query.shape === 'array') return res.json(rows);
+    res.json(pageEnvelope(rows, db.countWorkflows(filters), filters.limit || 50, filters.offset || 0));
   });
 
   // GET /workflows/:id — workflow + invocations + last 50 events (app detail view).

@@ -56,9 +56,9 @@ Mycelium has levels — how much of it you need depends on what you are running.
 - **L1 — persona** — persistence *with identity*: semantic + auto memory, persona/profile records, concepts, savepoint diff, recall on-ramps.
 - **L2 — substrate** — many agents on one network: messages/channels, tasks/plans/runs, approvals, events, drones, workflows, the plugin seam, the runner.
 - **L3 — lab** — research apparatus only the operating lab runs today: spend accounting, feedback, the marketing/social plugin, the public demo face.
-- **demo** — real code kept as existence proofs, not product: the `a2a-gateway` plugin (ships **default-off**).
+- **demo** — real code kept as existence proofs, not product. (The `a2a-gateway` demo plugin was removed 2026-09-12 — task 186 — its A2A existence proof lives in git history.)
 
-A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 and the demo surfaces are mounted but ignorable — nothing outside the lab needs them.
+A customer deployment starts at L0 and adds L1 when it wants persistence with persona and L2 when it coordinates many agents. L3 is mounted but ignorable — nothing outside the lab needs it. (The old demo level rode on the a2a-gateway plugin, removed 2026-09-12 — task 186.)
 
 ## Quick start
 
@@ -68,7 +68,7 @@ A customer deployment starts at L0 and adds L1 when it wants persistence with pe
 curl -fsSL https://mycelium.fyi/install.sh | bash
 ```
 
-Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 18+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
+Installs from source — there is no prebuilt container image to pull. The script verifies the `master` ref exists on the public repo, clones into `./mycelium`, generates `.env` credentials, and starts the server on port 3002 (Node 20+; on Linux as root it also offers a systemd unit). Stop with `Ctrl-C`.
 
 ### Docker Compose (recommended)
 
@@ -79,9 +79,11 @@ cp .env.example .env   # set JWT_SECRET and ADMIN_KEY
 docker compose up -d
 ```
 
-Verify with `curl http://localhost:3002/health`, then register agents (below). Add a GPU drone worker with `docker compose --profile gpu up -d`.
+Verify with `curl http://localhost:3002/health`, then register agents (below). Drone workers are host processes, not containers — the server image ships no Python: `pip install requests && python tools/drone-worker.py --server http://localhost:3002 --key YOUR_AGENT_KEY --agent-id my-drone` polls `/drones/*` for jobs your machine can actually run (`cpu` by default; add `--capabilities gpu,cpu` only if the host really has one).
 
 ### Manual
+
+Requires Node 20 or later — `engines` in package.json enforces the same floor (CI tests Node 20 and 22).
 
 ```bash
 git clone https://github.com/SoftBacon-Software/mycelium.git
@@ -179,8 +181,9 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
+| `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
-| `TURN_SECRET` | no | public relay | WebRTC TURN secret for voice chat; unset uses a public relay (dev only) |
+| `TURN_SECRET` | no | per-boot random secret | WebRTC TURN secret for voice chat. Unset generates a fresh random secret every boot: credentials are well-formed but external relays reject them (fail honest, not fail open) — set it to the relay's shared secret to make TURN work |
 | `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
 | `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
 | `RESEND_KEY` | no | — | Resend API key for transactional email; unset disables email |
@@ -189,6 +192,10 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `ANTHROPIC_ADMIN_KEY` | no | — | Anthropic admin key for admin endpoints (org usage/billing) |
 | `MYCELIUM_NO_MDNS` | no | unset | set to `1` to disable mDNS/Bonjour LAN advertising (`_mycelium._tcp`) — for cloud/NAT deploys where LAN multicast is meaningless |
 | `MYCELIUM_MDNS_NAME` | no | short hostname | name advertised over mDNS so LAN clients can discover this instance |
+| `BACKUP_INTERVAL_HOURS` | no | `24` | hours between in-place SQLite backups (env overrides `instance_config` `backup_interval_hours`) |
+| `MAX_BACKUPS` | no | `3` | how many SQLite backups to keep before pruning the oldest (env overrides `instance_config` `max_backups`) |
+| `AUTO_MEMORY_LLM_KEEP_ALIVE` | no | `10m` | ollama `keep_alive` for the auto-memory extraction LLM so a small model isn't held resident forever; `0` evicts it right after each request |
+| `MYCELIUM_GIT_SHA` | no | resolved from git at boot | commit hash served as `commit_sha` at `/health` (bug reports ask for version + commit). Container images carry no `.git`, so pass it at build time: `--build-arg GIT_SHA="$(git rev-parse --short HEAD)"`. Neither source → `unknown` |
 
 Client tools read `MYCELIUM_API_URL` to pick an instance; it defaults to `http://localhost:3002/api/mycelium` (your own instance). `MYCELIUM_API_URL` is read by the SDK/MCP clients, not the server.
 
@@ -202,7 +209,7 @@ server/
   db.js                 # SQLite (better-sqlite3, WAL mode)
   schema.sql            # full base schema (56 tables; plugins add their own)
   routes/               # 284 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
-  plugins/              # plugin system (7 plugins + _template)
+  plugins/              # plugin system (5 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
@@ -243,19 +250,17 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-122 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+140 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
-7 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+5 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
-| `marketing` | build-in-public drafts, social posting, X delivery, outreach (`/bip`, `/social`, `/x`, `/outreach`) |
-| `guardrails` | safety checks + policy enforcement |
+| `marketing` | build-in-public drafts, social posting, X delivery, outreach (mounted at `/marketing` — `/marketing/bip`, `/marketing/social`, `/marketing/x`, `/marketing/outreach`; the old top-level paths 301 for one release) |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
 | `auto-memory` | automated fact extraction from platform events |
-| `a2a-gateway` | **Demo, default-off** — Google A2A protocol for external-agent interop. Ships with `"enabled": false` in its `plugin.json`, so its `/a2a/*` routes stay 404 until you enable it; kept as an existence proof of the plugin mount seam (see [Surface levels](docs/surface-levels.md)) |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 | `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
 
@@ -298,6 +303,10 @@ None of these packages are on npm. They are packages of this repo — get them w
 | `release.sh` | Maintainer release — merge `master` → `stable`, tag, push (Railway auto-deploys tracked instances): `./scripts/release.sh [tag] [--dry-run]` |
 | `deploy-jetson.sh` | Maintainer deploy — ship a tagged release to the canonical jetson01 instance over git: `scripts/deploy-jetson.sh <annotated-tag> [--dry-run]` |
 | `docker-smoke.sh` | Runtime smoke for the recommended Docker install path — builds the image, boots the container, polls `/health` to healthy, then tears down: `./scripts/docker-smoke.sh` |
+
+## Contributing
+
+Bug reports, fixes, and new plugins are welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the quick start, code style, and the gates a PR must pass. Small, obviously-correct fixes can go straight to a PR; for anything else, open an issue first to discuss the approach.
 
 ## License
 

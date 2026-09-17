@@ -84,7 +84,6 @@ on top. Add it when the assistant should have identity, not just state:
 |---|---|
 | `semantic-memory` plugin | chunk + embed + recall over platform data (vector search until you configure a provider, FTS5 keyword always on) |
 | `auto-memory` plugin | fact extraction from platform events, with due re-verification so facts decay honestly |
-| `guardrails` plugin | allow/deny rule engine — persona safety |
 | Concepts | shared character / style / ruleset records, linkable across projects |
 | Profiles | agent persona cards + resolve |
 | Reasoning traces | `POST /reasoning` — the persona's reasoning, recorded |
@@ -178,13 +177,14 @@ letting the keep-reason stand unmeasured.
 
 ## Demo: existence proofs, kept honest
 
-- **`a2a-gateway` plugin — default-off.** Google A2A protocol support: when
-  enabled it serves an agent card and JSON-RPC under `/a2a/*` (`agent-card`,
-  `rpc`, `discover`, `agents`, `send`, `tasks`), and the root app rewrites
-  `/.well-known/agent.json` and `POST /a2a` into that mount. It ships with
-  `"enabled": false` in its `plugin.json`, so those paths return 404 until
-  you enable it — by design. It stays in the tree as the A2A existence proof
-  and a worked example of the plugin mount seam.
+- **`a2a-gateway` — REMOVED 2026-09-12 (task 186).** The Google A2A protocol
+  plugin shipped `"enabled": false` from the day it landed; its routes never
+  mounted and its 3 MCP tools were dark, so the "existence proof" proved
+  nothing a running system exercised. The plugin directory, its `test.js`,
+  the root-app rewrites (`/.well-known/agent.json`, `POST /a2a`) that pointed
+  at its never-mounted routes, and its auth smoke test went with it. The A2A
+  existence proof lives in git history (the mount seam itself is the
+  `guardPluginRouter` / loader path, still exercised by every enabled plugin).
 
 (`appointments` used to be listed here too — a staged, not-loaded foundation.
 It was mounted on 2026-09-09 once the squad dispatcher's live dependency on it

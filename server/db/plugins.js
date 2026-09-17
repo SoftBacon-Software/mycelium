@@ -39,6 +39,39 @@ export function updatePluginEnabled(name, enabled) {
   return db.prepare("UPDATE plugins SET enabled = ?, updated_at = datetime('now') WHERE name = ?").run(enabled ? 1 : 0, name);
 }
 
+// ======== REGISTRY RECONCILE (task 186 §5, AUDIT-lab-clockwork-2026-09-12) ========
+// The registry carried rows whose plugin DIRECTORY no longer exists (12 on the
+// live box — removed plugins leave permanent ghosts, one reading `enabled`
+// with no code behind it). ensurePluginRecord only syncs rows for dirs that
+// exist, so nothing ever cleaned these up. The loader now reconciles at boot:
+// a row with no directory is MARKED orphaned — rows are never deleted, the
+// operator's enabled flag is never touched — and a directory that comes back
+// clears the flag on the next boot.
+
+export function ensurePluginOrphanColumns() {
+  try { db.prepare('ALTER TABLE plugins ADD COLUMN orphaned INTEGER NOT NULL DEFAULT 0').run(); } catch (e) { /* column exists */ }
+  try { db.prepare('ALTER TABLE plugins ADD COLUMN orphaned_at TEXT').run(); } catch (e) { /* column exists */ }
+}
+
+export function reconcilePluginOrphans(existingDirs) {
+  ensurePluginOrphanColumns();
+  var dirs = existingDirs || [];
+  var marked = 0;
+  var restored = 0;
+  var rows = db.prepare('SELECT name, orphaned FROM plugins').all();
+  for (var row of rows) {
+    var hasDir = dirs.indexOf(row.name) !== -1;
+    if (hasDir && row.orphaned) {
+      db.prepare("UPDATE plugins SET orphaned = 0, orphaned_at = NULL, updated_at = datetime('now') WHERE name = ?").run(row.name);
+      restored++;
+    } else if (!hasDir && !row.orphaned) {
+      db.prepare("UPDATE plugins SET orphaned = 1, orphaned_at = datetime('now') WHERE name = ?").run(row.name);
+      marked++;
+    }
+  }
+  return { marked: marked, restored: restored };
+}
+
 export function getPluginMigrationVersion(pluginName) {
   var row = db.prepare('SELECT MAX(version) as v FROM plugin_migrations WHERE plugin_name = ?').get(pluginName);
   return row ? (row.v || 0) : 0;
