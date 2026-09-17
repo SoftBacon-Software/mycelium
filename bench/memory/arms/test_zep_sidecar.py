@@ -39,15 +39,24 @@ TEST_ENV = {
 class FakeEdge:
     """Stands in for graphiti_core.edges.EntityEdge — the search result shape."""
 
-    def __init__(self, fact, uuid, created_at=None):
+    def __init__(self, fact, uuid, created_at=None, episodes=None):
         self.fact = fact
         self.uuid = uuid
         self.created_at = created_at or datetime(2026, 9, 9, 12, 0, 0, tzinfo=timezone.utc)
+        self.episodes = episodes or []
+
+
+class FakeEpisodeNode:
+    """Stands in for graphiti_core.nodes.EpisodicNode — carries the uuid."""
+
+    def __init__(self, uuid):
+        self.uuid = uuid
 
 
 class FakeEpisodeResult:
-    def __init__(self, edges):
+    def __init__(self, edges, episode_uuid=None):
         self.edges = edges
+        self.episode = FakeEpisodeNode(episode_uuid) if episode_uuid else None
 
 
 class FakeConn:
@@ -91,13 +100,16 @@ class FakeGraphiti:
                 **kwargs,
             }
         )
-        return FakeEpisodeResult([FakeEdge("User likes tea.", "e1"), FakeEdge("User moved to Lisbon.", "e2")])
+        return FakeEpisodeResult(
+            [FakeEdge("User likes tea.", "e1"), FakeEdge("User moved to Lisbon.", "e2")],
+            episode_uuid="ep-uuid-1",
+        )
 
     async def search(self, query, group_ids=None, num_results=10):
         self.searches.append({"query": query, "group_ids": group_ids, "num_results": num_results})
         return [
-            FakeEdge("User likes tea.", "e1"),
-            FakeEdge("User moved to Lisbon.", "e2"),
+            FakeEdge("User likes tea.", "e1", episodes=["ep-uuid-1"]),
+            FakeEdge("User moved to Lisbon.", "e2", episodes=["ep-uuid-1"]),
         ]
 
 
@@ -168,6 +180,7 @@ class SidecarHTTPTest(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["count"], 2)  # facts extracted by Graphiti
         self.assertEqual(body["episode"], "q1-s0")  # provenance in the episode name
+        self.assertEqual(body["episode_uuid"], "ep-uuid-1")  # task 207: joins search results to this session
         self.assertEqual(len(self.fake.episodes), 1)
         call = self.fake.episodes[0]
         self.assertEqual(call["group_id"], "bench-p1-run")  # the scope IS the graphiti group_id
@@ -246,6 +259,9 @@ class SidecarHTTPTest(unittest.TestCase):
         self.assertEqual(body["results"][0]["memory"], "User likes tea.")
         self.assertEqual(body["results"][0]["id"], "e1")
         self.assertTrue(body["results"][0]["created_at"].startswith("2026-09-09T12:00:00"))
+        # task 207: the fact's source-episode uuids ride the result (the arm's
+        # read stamp joins them to the session via its uuid→session map)
+        self.assertEqual(body["results"][0]["episode_uuids"], ["ep-uuid-1"])
         call = self.fake.searches[0]
         self.assertEqual(call["num_results"], 5)  # the retrieval budget, verbatim
         self.assertEqual(call["group_ids"], ["bench-p1-run"])  # strict scope

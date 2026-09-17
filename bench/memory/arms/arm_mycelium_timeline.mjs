@@ -634,7 +634,12 @@ export function createArmMyceliumTimeline({
           context_episodes: merged.filter((h) => h._layer === 'episode').length,
           context_superseded: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
           read_hits: retrievalErrors.length ? null : buildReadHits(merged),
+          read_hits_available: true,
           retrieval_error: retrievalErrors.length ? retrievalErrors.join('; ') : null,
+          // task 207: the shared budget stamp (every arm's rows carry it; the
+          // rank stats read it). The read_hits entries keep the task-205 shape
+          // above — the shape the shared seam generalizes.
+          budget: retrievalBudget,
           write_decisions: wd,
           read_policy: TIMELINE_READ_POLICY,
           retrieval_mode: f.ok ? f.res.mode : e.ok ? e.res.mode : null,

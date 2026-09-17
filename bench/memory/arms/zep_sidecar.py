@@ -11,7 +11,7 @@ against its embedded Kuzu graph store and exposes exactly four routes on
     POST /add      {user_id, messages, metadata?}  -> one Graphiti episode (one POST per
                                                       haystack session, extraction via the LLM)
     POST /search   {query, user_id, limit}         -> {results: [{memory (the fact), score,
-                                                      id, created_at}]}
+                                                      id, created_at, episode_uuids}]}
     POST /delete_all {user_id}                     -> purge the scope (group_id) from the graph
 
 The Graphiti client is created lazily on first use, so /health works (and the
@@ -415,12 +415,17 @@ def make_handler(state, inflight=None):
             edges = list(getattr(result, "edges", []) or [])
             # Graphiti episodes carry no metadata table: bench provenance lives in
             # the episode name (question-session) and the arm's checkpoint files.
+            # task 207: the episode NODE's uuid rides the receipt, so the arm can
+            # join search results (whose edges carry `episodes` uuids) back to the
+            # session this add wrote.
+            episode = getattr(result, "episode", None)
+            episode_uuid = getattr(episode, "uuid", None)
             print(
                 f"[zep-sidecar] add {name}: {len(edges)} facts extracted in {time.time() - t0:.1f}s",
                 file=sys.stderr,
                 flush=True,
             )
-            return {"ok": True, "episode": name, "count": len(edges)}
+            return {"ok": True, "episode": name, "episode_uuid": episode_uuid, "count": len(edges)}
 
         def _search(self, body):
             user_id = body.get("user_id")
@@ -441,6 +446,9 @@ def make_handler(state, inflight=None):
                     "score": None,  # RRF returns a ranked list; graphiti.search() exposes no scores
                     "id": e.uuid,
                     "created_at": e.created_at.isoformat() if getattr(e, "created_at", None) else None,
+                    # task 207: the episode uuids this fact was derived from —
+                    # the arm's uuid→session map turns [0] into session_index
+                    "episode_uuids": list(getattr(e, "episodes", None) or []),
                 }
                 for e in edges
             ]

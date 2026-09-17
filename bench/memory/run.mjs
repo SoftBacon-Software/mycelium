@@ -21,6 +21,7 @@ import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
 import { myceliumTimelineNamespace, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
 import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
+import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
@@ -45,7 +46,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock' || key === 'autopsy') { out[key] = true; continue; }
+    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock' || key === 'autopsy' || key === 'retrieval-audit') { out[key] = true; continue; }
     out[key] = argv[++i];
   }
   return out;
@@ -317,7 +318,7 @@ async function main() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const out = composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy) });
+    const out = await composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy), audit: Boolean(args['retrieval-audit']) });
     console.log(
       JSON.stringify(
         {
@@ -354,8 +355,23 @@ async function main() {
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
-  const items = selectItems(split.items, n);
+  let items = selectItems(split.items, n);
   if (items.length < n) throw new Error(`split ${splitName} has only ${split.items.length} items; requested n=${n}`);
+  // --question-type <t>: the diagnostic lever (task 207) — replay ONE collapsed
+  // cell (e.g. single-session-preference at budget 10). It narrows AFTER the
+  // deterministic selection so the subset is exactly the full run's questions
+  // of that type, and it stamps the regime so the run can never pass as a full
+  // run: question sets and budgets are comparability keys, a filtered run is
+  // refused in every grid.
+  let questionTypeFilter = null;
+  if (args['question-type']) {
+    questionTypeFilter = String(args['question-type']);
+    const filtered = items.filter((it) => it.question_type === questionTypeFilter);
+    if (!filtered.length) {
+      throw new Error(`--question-type ${questionTypeFilter}: none of the ${items.length} selected items is of that type`);
+    }
+    items = filtered;
+  }
 
   const runId = `${utcStamp(new Date()).slice(0, 10)}-p1-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
 
@@ -738,6 +754,9 @@ async function main() {
     write: maxSessions ? { max_sessions_per_question: maxSessions } : null,
     n: items.length,
     notes: [
+      questionTypeFilter
+        ? `diagnostic: question-type filter '${questionTypeFilter}' (${items.length} of the selected questions) — NON-COMPARABLE with full runs; do not grid, do not quote as a score`
+        : null,
       arms.includes('mem0-raw')
         ? `arms this run: ${arms.join(', ')}; mem0-raw = the RAW-ingestion control for the Mem0 column (task 182): Memory.add(infer=False) stores each non-system turn verbatim, no extraction LLM; same sidecar/embedder/answerer/budget as arm mem0, scope suffixed -raw`
         : null,
@@ -837,6 +856,9 @@ async function main() {
         // 2026-09-08 rows all show meta.hits=10. Carrying both names keeps the
         // stamped budget and the exercised budget the same thing.
         retrievalBudget: budget,
+        // task 207: the shared retrieval-provenance seam — every arm stamps
+        // meta.read_hits + meta.budget through this one helper at read time
+        recordHits,
         resumeDir: outDir,
         // one competitor sidecar per run is the P1 shape; if a run ever carries
         // MORE, each arm also gets a bound restart on its own ctx object

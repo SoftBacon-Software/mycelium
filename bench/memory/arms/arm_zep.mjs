@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseSubstrateConf } from '../platform.mjs';
 import { RAG_SYSTEM } from './arm_mycelium.mjs';
+import { recordHits } from '../retrieval_stamp.mjs';
 
 export const ZEP_SIDECAR_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'zep_sidecar.py');
 export const ZEP_VENV_PYTHON = path.join(path.dirname(fileURLToPath(import.meta.url)), '.zep-venv', 'bin', 'python');
@@ -389,6 +390,7 @@ export function createArmZep({
   resumeDir = null, // results dir — per-question checkpoint of how many sessions are in the store
   restartSidecar = null, // async () => fresh {request} against the SAME store (sidecar died mid-run)
   maxRestarts = 5,
+  recordHits: stampHits = recordHits,
 }) {
   sidecar = sidecar ?? zep?.sidecar ?? null;
   zepVersion = zepVersion ?? zep?.zepVersion ?? null;
@@ -403,6 +405,15 @@ export function createArmZep({
     throw new Error('arm_zep requires a started sidecar — startZepSidecar() / run.mjs provides it');
   }
   const scope = zepScope(runId);
+
+  // task 207: episode uuid → haystack session index, learned from each add's
+  // receipt (the sidecar returns the episode node's uuid; graphiti's search
+  // results carry `episodes` — the uuids a fact was derived from). Graphiti
+  // exposes no session identity on search results themselves, so THIS map is
+  // the only session provenance there is — sessions written in a PRIOR process
+  // (resume) or a re-answer run have no entry and stamp session_index null,
+  // which the audit counts as no-provenance rather than guessing.
+  const sessionByEpisodeUuid = new Map();
 
   // The sidecar is long-lived (a 50-item write phase is hours of LLM
   // extractions), so it can die mid-run to something outside this process. A
@@ -473,6 +484,7 @@ export function createArmZep({
         });
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
         log(`add ${idx + 1}/${sessionTurns.length} (${kb} KB, ${r.count ?? 0} facts) in ${secs}s — q=${questionId}`);
+        if (r.episode_uuid) sessionByEpisodeUuid.set(r.episode_uuid, idx);
         rows += r.count ?? 0;
         if (resumeDir) writeCp(questionId, idx + 1);
       }
@@ -486,15 +498,21 @@ export function createArmZep({
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
-      return {
-        text: r.text,
-        meta: {
+      const meta = stampHits(
+        {
           hits: facts.length,
           retrieval_mode: 'zep-oss-kuzu-hybrid-rrf',
           zep_version: zepVersion,
           had_think: !!r.hadThink,
         },
-      };
+        facts.map((f) => ({
+          source_id: f.id,
+          score: f.score, // RRF: graphiti exposes no scores — stamped null, honestly
+          session_index: sessionByEpisodeUuid.get(f.episode_uuids?.[0]) ?? null,
+        })),
+        retrievalBudget
+      );
+      return { text: r.text, meta };
     },
     async dispose() {
       if (ownsSidecar && typeof sidecar.stop === 'function') await sidecar.stop();

@@ -7,7 +7,7 @@ The bench arms are JavaScript; Mem0 is Python. This sidecar runs Mem0's OSS
 
     GET  /health                 -> {ok, pid, mem0_version, llm{...}, embedder{...}, vector_store{...}}
     POST /add     {user_id, messages, metadata?}   -> Mem0 add()  (one POST per haystack session)
-    POST /search  {query, user_id, limit}          -> {results: [{memory, score, ...}]}
+    POST /search  {query, user_id, limit}          -> {results: [{memory, score, id, created_at, metadata}]}
     POST /delete_all {user_id}                     -> purge the scope
 
 The Mem0 client is created lazily on first use, so /health works (and the
@@ -512,6 +512,11 @@ def make_handler(state, inflight=None):
                     "score": r.get("score"),
                     "id": r.get("id"),
                     "created_at": r.get("created_at"),
+                    # task 207: the metadata stored at add() (question_id,
+                    # session_index, …) comes back inside each search result —
+                    # the arm's read stamp uses session_index. Absent → None,
+                    # never invented.
+                    "metadata": r.get("metadata"),
                 }
                 for r in raw
             ]

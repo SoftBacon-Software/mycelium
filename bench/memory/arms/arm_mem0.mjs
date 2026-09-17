@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseSubstrateConf } from '../platform.mjs';
 import { RAG_SYSTEM } from './arm_mycelium.mjs';
+import { recordHits } from '../retrieval_stamp.mjs';
 
 export const MEM0_SIDECAR_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mem0_sidecar.py');
 export const MEM0_VENV_PYTHON = path.join(path.dirname(fileURLToPath(import.meta.url)), '.mem0-venv', 'bin', 'python');
@@ -412,6 +413,7 @@ export function createArmMem0({
   resumeDir = null, // results dir — per-question checkpoint of how many sessions are in the store
   restartSidecar = null, // async () => fresh {request} against the SAME store (sidecar died mid-run)
   maxRestarts = 5,
+  recordHits: stampHits = recordHits,
   // task 182 control-arm options — the raw-ingestion arm (arm_mem0_raw) pins
   // these; the extract arm keeps the defaults below.
   name = 'mem0', // row/receipt identity; also names the resume checkpoint file
@@ -535,16 +537,25 @@ export function createArmMem0({
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
-      return {
-        text: r.text,
-        meta: {
+      // task 207: mem0 returns the metadata stored at add() (it carries
+      // session_index) — the sidecar passes it through, so each stamped hit
+      // knows which haystack session its memory came from
+      const meta = stampHits(
+        {
           hits: memories.length,
           retrieval_mode: 'mem0-oss-local-vector',
           ingestion: infer ? 'extract' : 'raw',
           mem0_version: mem0Version,
           had_think: !!r.hadThink,
         },
-      };
+        memories.map((m) => ({
+          source_id: m.id,
+          score: m.score,
+          session_index: m.metadata?.session_index,
+        })),
+        retrievalBudget
+      );
+      return { text: r.text, meta };
     },
     async dispose() {
       if (ownsSidecar && typeof sidecar.stop === 'function') await sidecar.stop();

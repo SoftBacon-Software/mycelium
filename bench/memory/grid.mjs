@@ -18,6 +18,13 @@ import path from 'node:path';
 import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
 import { autopsyRun, renderAutopsySection, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
+import {
+  buildGoldIndex,
+  computeRetrievalAudit,
+  decideDiagnostic,
+  classifyRow,
+} from './retrieval_stamp.mjs';
+import { SPLITS, loadSplit, selectItems } from './split.mjs';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
 export class GridRefusal extends Error {
@@ -257,7 +264,200 @@ function secondsPerAdd(writeInfo) {
   return (ms / writeInfo.docs / 1000).toFixed(2);
 }
 
-export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null }) {
+// --- retrieval audit (task 207) ------------------------------------------------
+//
+// The collapsed cells (single-session-preference 0.071, multi-session ≤ 0.333
+// in EVERY arm) cannot be diagnosed from banked rows: meta.hits is a count.
+// This section renders the read side — hit@budget, median gold rank, MRR per
+// question_type × arm — over STAMPED rows only, plus the pre-committed
+// diagnostic rule's mechanical branch. Banked rows (stamped before the
+// instrument) are counted as `banked` and never assigned ranks.
+
+/** One run's <arm>.rows.jsonl — where the per-row read stamps live. */
+export function loadArmRows(dir, arm, { existsFn = fs.existsSync, readFileFn = defaultReadFile } = {}) {
+  const file = path.join(dir, `${arm}.rows.jsonl`);
+  if (!existsFn(file)) throw new GridInputError(`${file}: no rows file for arm '${arm}'`);
+  return readFileFn(file)
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+/** Resolve the split a run ran on (regime.dataset.name → SPLITS key) and re-select its items. */
+export async function loadAuditItems(summary, { loadSplitFn = loadSplit, selectItemsFn = selectItems } = {}) {
+  const name = summary?.regime?.dataset?.name;
+  const key = Object.keys(SPLITS).find((k) => SPLITS[k].name === name);
+  if (!key) throw new GridInputError(`no split matches regime.dataset.name '${name}' — the audit refuses to guess the corpus`);
+  const split = await loadSplitFn(key);
+  const n = summary.n ?? summary.regime?.n;
+  return selectItemsFn(split.items, n);
+}
+
+const AUDIT_COLUMNS = [
+  ['rows', 'rows'],
+  ['stamped', 'stamped'],
+  ['unstamped_banked', 'banked'],
+  ['null_error', 'err-null'],
+  ['null_no_retrieval', 'no-retr'],
+  ['unmapped', 'unmapped'],
+  ['gold_not_written', 'gold≥cap'],
+  ['no_provenance', 'no-prov'],
+  ['ranked', 'ranked'],
+];
+
+function fmt1(v) {
+  return v == null ? '—' : Number.isInteger(v) ? String(v) : v.toFixed(3);
+}
+
+/** The per-arm monotone pooling: any arm's replay branch fires the replay; else the first answer-side verdict. */
+export function poolDiagnostic(audit, budget) {
+  const perArm = Object.entries(audit.cells).map(([arm, byType]) => ({
+    arm,
+    decision: decideDiagnostic(byType['single-session-preference'] ?? null, budget),
+  }));
+  const branch = perArm.some((d) => d.decision.branch === 'budget-10-replay')
+    ? 'budget-10-replay'
+    : perArm.some((d) => d.decision.branch === 'answer-side-transcripts')
+      ? 'answer-side-transcripts'
+      : 'insufficient-stamps';
+  return { branch, perArm };
+}
+
+/** Per-question transcript block: what every arm was asked, held, retrieved, and answered. */
+export function renderTranscripts(groups) {
+  const L = [];
+  for (const g of groups) {
+    L.push(`#### ${g.question_id} — ${g.question_type}`);
+    L.push('');
+    L.push(`**Q:** ${g.question}`);
+    L.push('');
+    L.push(`**Gold:** ${g.gold}`);
+    L.push('');
+    L.push('| arm | judged | gold rank (1-based) | answer |');
+    L.push('|---|---|---|---|');
+    for (const a of g.perArm) {
+      L.push(`| ${a.arm} | ${a.label ?? '—'} | ${a.gold_rank ?? '—'} | ${truncate(a.answer ?? '', 200)} |`);
+    }
+    L.push('');
+  }
+  return L;
+}
+
+export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget, transcripts = null }) {
+  const L = [];
+  L.push('## Retrieval audit — read-side provenance (task 207)');
+  L.push('');
+  L.push(
+    `Gold mapping method + coverage: ${goldCoverage.mapped}/${goldCoverage.total} questions mapped ` +
+      `(methods: ${Object.entries(goldCoverage.methods).map(([m, c]) => `\`${m}\` ${c}`).join(', ')}; ` +
+      `unmapped ${goldCoverage.unmapped} — counted, EXCLUDED from rank stats` +
+      `${goldCoverage.sample_unmapped.length ? `; e.g. ${goldCoverage.sample_unmapped.join(', ')}` : ''}).`
+  );
+  L.push('');
+  L.push(
+    `Retrieval budget: ${audit.budget}. ` +
+      (writeCapValue != null
+        ? `Write phase was CAPPED at ${writeCapValue} sessions/question — a gold session at index ≥ cap was never written and is counted \`gold≥cap\`, never charged against retrieval.`
+        : 'No write cap stamped.') +
+      ' Rows stamped before this instrument carry counts only (`meta.hits`) — they appear as `banked` and are never assigned ranks. ' +
+      'Rank stats run over STAMPED, mapped, gold-written, provenance-carrying rows only (`ranked`).'
+  );
+  L.push('');
+  L.push(`| arm | question_type | ${AUDIT_COLUMNS.map(([, h]) => h).join(' | ')} | hit@budget | med gold rank | MRR |`);
+  L.push(`|---|---|${AUDIT_COLUMNS.map(() => '---').join('|')}|---|---|---|`);
+  for (const [arm, byType] of Object.entries(audit.cells)) {
+    for (const [qtype, cell] of Object.entries(byType)) {
+      L.push(
+        `| ${arm} | ${qtype} | ${AUDIT_COLUMNS.map(([k]) => cell[k]).join(' | ')} | ${fmt1(cell.hit_at_budget)} | ${fmt1(cell.median_gold_rank)} | ${fmt1(cell.mrr)} |`
+      );
+    }
+  }
+  L.push('');
+  L.push('### Pre-committed diagnostic rule (decided by the stamped ranks alone)');
+  L.push('');
+  for (const d of diagnostic.perArm) {
+    L.push(`- ${d.arm} / single-session-preference: ${d.decision.reason}`);
+  }
+  L.push('');
+  L.push(`**Pooled branch: \`${diagnostic.branch}\`.**`);
+  L.push('');
+  if (diagnostic.branch === 'budget-10-replay') {
+    L.push(
+      'NEXT (director, after this receipt): replay the single-session-preference questions at `--budget 10`, all arms — ' +
+        '`node bench/memory/run.mjs --split longmemeval --arms <arms> --n 50 --question-type single-session-preference --budget 10 --receipt` — ' +
+        'and stamp the receipt `diagnostic: budget-10, NON-COMPARABLE`: budget is a comparability key, so a budget-10 run can never enter a grid with the banked budget-5 runs.'
+    );
+    L.push('');
+  } else if (diagnostic.branch === 'answer-side-transcripts') {
+    L.push(
+      'The gold already sits within the top-budget context — the collapsed cells are an ANSWER-side miss. ' +
+        'Transcripts below (all single-session-preference questions + the 12 worst multi-session rows by gold rank) are for hand labels.'
+    );
+    L.push('');
+    if (transcripts?.length) {
+      L.push('### Transcripts for hand labels');
+      L.push('');
+      L.push(...renderTranscripts(transcripts));
+    } else {
+      L.push('(No transcripts rendered — no ranked rows met the selection.)');
+      L.push('');
+    }
+  }
+  return L;
+}
+
+/** The transcript groups behind the answer-side branch: all preference questions + the 12 worst multi-session rows. */
+export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 12 }) {
+  const perRow = [];
+  for (const run of runs) {
+    for (const [arm, rows] of Object.entries(run.rowsByArm ?? {})) {
+      for (const row of rows ?? []) {
+        const mapping = goldIndex.byQuestion.get(row.question_id) ?? null;
+        const c = classifyRow({
+          readHits: row.meta?.read_hits,
+          readHitsAvailable: row.meta?.read_hits_available,
+          mapping,
+          writeCap: writeCapValue,
+        });
+        const judged = run.judged?.find((j) => j.arm === arm && j.question_id === row.question_id);
+        perRow.push({
+          question_id: row.question_id,
+          question_type: row.question_type,
+          question: row.question,
+          gold: row.gold,
+          arm,
+          answer: row.answer,
+          label: judged?.label ?? null,
+          gold_rank: c.gold_rank,
+          ranked: c.stamp === 'stamped' && !c.unmapped && c.gold_written !== false && c.session_provenance && c.gold_rank != null,
+        });
+      }
+    }
+  }
+  const byQuestion = new Map();
+  for (const r of perRow) {
+    if (!byQuestion.has(r.question_id)) {
+      byQuestion.set(r.question_id, {
+        question_id: r.question_id,
+        question_type: r.question_type,
+        question: r.question,
+        gold: r.gold,
+        perArm: [],
+      });
+    }
+    byQuestion.get(r.question_id).perArm.push({ arm: r.arm, label: r.label, answer: r.answer, gold_rank: r.gold_rank });
+  }
+  const preference = [...byQuestion.values()].filter((g) => g.question_type === 'single-session-preference');
+  const multiWorst = perRow
+    .filter((r) => r.question_type === 'multi-session' && r.ranked)
+    .sort((a, b) => (b.gold_rank ?? 0) - (a.gold_rank ?? 0))
+    .slice(0, limit)
+    .map((r) => r.question_id);
+  const multi = [...new Set(multiWorst)].map((qid) => byQuestion.get(qid)).filter(Boolean);
+  return [...preference, ...multi];
+}
+
+export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null, auditSection = null }) {
   const runIds = runs.map((r) => r.runId);
   const L = [];
   L.push(`# Receipt — memory benchmark P1 grid (${runIds.join(' + ')})`);
@@ -318,6 +518,14 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     );
   }
   L.push('');
+
+  // task 207: the read-side retrieval audit — rendered only when asked for
+  // (--retrieval-audit); it reads the runs' stamped rows, never invents ranks
+  // for banked ones, and decides the pre-committed diagnostic branch.
+  if (auditSection) {
+    L.push(...auditSection);
+    L.push('');
+  }
 
   // task 205: per-run knowledge-update miss autopsies, rendered beside the
   // cell table — a run whose stamps are present must be diagnosable from the
@@ -440,11 +648,14 @@ export function composeGrid({
   receiptsDir = RECEIPTS_DIR,
   write = true, // false = dry run: check comparability, write nothing
   autopsy = false, // render per-run knowledge-update miss autopsies beside the 2×2
+  audit = false, // task 207: render the retrieval audit + the pre-committed diagnostic branch
   existsFn = fs.existsSync,
   readFileFn = defaultReadFile,
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
+  loadSplitFn = loadSplit, // test seams for the audit's corpus resolution
+  selectItemsFn = selectItems,
 }) {
   if (!Array.isArray(dirs) || dirs.length < 2) {
     throw new GridInputError(`--grid-from-results needs at least two run dirs (got ${dirs?.length ?? 0})`);
@@ -453,10 +664,13 @@ export function composeGrid({
   assertComparable(runs);
   const runIds = runs.map((r) => r.runId);
   const commands =
-    commandLine != null ? [commandLine] : [`node bench/memory/run.mjs --grid-from-results ${dirs.join(',')} --receipt${autopsy ? ' --autopsy' : ''}`];
+    commandLine != null
+      ? [commandLine]
+      : [`node bench/memory/run.mjs --grid-from-results ${dirs.join(',')} --receipt${autopsy ? ' --autopsy' : ''}${audit ? ' --retrieval-audit' : ''}`];
   const { armsUnion } = buildUnion(runs);
   const gridRendered = GRID_ROWS.flatMap((r) => [r.raw, r.extract]).every((n) => armsUnion[n]);
   if (!write) return { file: null, runIds, gridRendered, receipt: null };
+
   // the autopsies need the arm's rows file — loaded only when asked for, and
   // only for runs that carry the arm; a run without it just doesn't appear
   const autopsies = autopsy
@@ -471,9 +685,67 @@ export function composeGrid({
           }
         })
     : null;
-  const md = renderGridReceipt({ runs, generatedAt, commands, autopsies });
-  mkdirFn(receiptsDir, { recursive: true });
-  const file = path.join(receiptsDir, `${runIds.join('+')}-grid.md`);
-  writeFn(file, md);
-  return { file, runIds, gridRendered };
+
+  // task 207: the retrieval audit. Loads each run's <arm>.rows.jsonl (a missing
+  // rows file is an ERROR line in the section, not a silent absence), maps the
+  // dataset's gold answer sessions, computes the per-type × arm stats over
+  // STAMPED rows, and runs the pre-committed rule — mechanical, no judgement.
+  let auditSection = null;
+  let auditMeta = null;
+  if (audit) {
+    const budget = runs[0].summary.regime?.retrieval?.budget;
+    const capValue = writeCap(runs[0].summary);
+    auditMeta = (async () => {
+      const loaded = runs.map((r) => {
+        const rowsByArm = {};
+        const errors = [];
+        for (const arm of Object.keys(r.summary.arms ?? {})) {
+          try {
+            rowsByArm[arm] = loadArmRows(r.dir, arm, { existsFn, readFileFn });
+          } catch (e) {
+            errors.push(`${r.runId}/${arm}: ${e.message}`);
+          }
+        }
+        return { runId: r.runId, summary: r.summary, judged: r.judged, rowsByArm, errors };
+      });
+      const goldIndex = buildGoldIndex(await loadAuditItems(runs[0].summary, { loadSplitFn, selectItemsFn }));
+      const anyRows = loaded.some((r) => Object.keys(r.rowsByArm).length > 0);
+      if (!anyRows) {
+        return {
+          lines: [
+            '## Retrieval audit — read-side provenance (task 207)',
+            '',
+            `NOT COMPUTED — no run carried a rows file this audit could read (${[...loaded.flatMap((r) => r.errors)].join('; ') || 'no arms resolved'}).`,
+            '',
+          ],
+          branch: null,
+        };
+      }
+      const aud = computeRetrievalAudit({ runs: loaded, goldIndex, budget, writeCap: capValue });
+      const diagnostic = poolDiagnostic(aud, budget);
+      const transcripts =
+        diagnostic.branch === 'answer-side-transcripts' ? buildTranscriptGroups({ runs: loaded, goldIndex, writeCapValue: capValue }) : null;
+      return {
+        lines: renderRetrievalAuditSection({
+          audit: aud,
+          goldCoverage: goldIndex.coverage,
+          writeCapValue: capValue,
+          diagnostic,
+          budget,
+          transcripts,
+        }),
+        branch: diagnostic.branch,
+      };
+    })();
+  }
+
+  const finish = (resolvedAudit) => {
+    const md = renderGridReceipt({ runs, generatedAt, commands, autopsies, auditSection: resolvedAudit?.lines ?? null });
+    mkdirFn(receiptsDir, { recursive: true });
+    const file = path.join(receiptsDir, `${runIds.join('+')}-grid.md`);
+    writeFn(file, md);
+    return { file, runIds, gridRendered, diagnosticBranch: resolvedAudit?.branch ?? null };
+  };
+  if (audit && auditMeta) return auditMeta.then(finish);
+  return finish(null);
 }

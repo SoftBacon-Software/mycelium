@@ -8,6 +8,15 @@
 //
 // The retrieval budget (top-k) is a regime parameter, identical for every
 // question and stamped into every result row.
+//
+// task 207: rows stamp the read side through the shared seam — meta.read_hits
+// (ordered {source_id, rank, score, session_index}, rank 0 = the row the model
+// read first, capped at the budget) + meta.budget. The server's search results
+// carry source_id, score and metadata.session_index (the index of the haystack
+// session this row came from), which is what makes gold-session ranks
+// computable for this arm.
+
+import { recordHits } from '../retrieval_stamp.mjs';
 
 export const RAG_SYSTEM =
   'You are a personal assistant with a long-term memory store. Answer the question ' +
@@ -16,7 +25,15 @@ export const RAG_SYSTEM =
 
 export const BENCH_SOURCE_TYPE = 'bench_longmemeval';
 
-export function createArmMycelium({ answerChat, platform, namespace, retrievalBudget, sourceType = BENCH_SOURCE_TYPE, runId }) {
+export function createArmMycelium({
+  answerChat,
+  platform,
+  namespace,
+  retrievalBudget,
+  sourceType = BENCH_SOURCE_TYPE,
+  runId,
+  recordHits: stampHits = recordHits,
+}) {
   // refuse to run on an unstamped budget: undefined fell through to the
   // server's default limit (10) while the regime stamped 5 — the banked
   // 2026-09-08 rows all retrieved top-10 under a budget-5 stamp
@@ -52,15 +69,21 @@ export function createArmMycelium({ answerChat, platform, namespace, retrievalBu
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
-      return {
-        text: r.text,
-        meta: {
+      const meta = stampHits(
+        {
           hits: (s.results || []).length,
           retrieval_mode: s.mode,
           degraded_reason: s.degraded ? s.degraded.reason : null,
           had_think: !!r.hadThink,
         },
-      };
+        (s.results || []).map((h) => ({
+          source_id: h.source_id,
+          score: h.score,
+          session_index: h.metadata?.session_index,
+        })),
+        retrievalBudget
+      );
+      return { text: r.text, meta };
     },
   };
 }

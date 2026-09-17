@@ -23,6 +23,7 @@
 // deterministic (`<runId>-<qid>-s<idx>-f<j>`), same as arm_mycelium's shape.
 
 import { RAG_SYSTEM, BENCH_SOURCE_TYPE } from './arm_mycelium.mjs';
+import { recordHits } from '../retrieval_stamp.mjs';
 
 // The extract arm's namespace is SUFFIXED off the mycelium arm's: two
 // mycelium-family arms in one run must never see each other's rows.
@@ -125,6 +126,7 @@ export function createArmMyceliumExtract({
   sourceType = BENCH_SOURCE_TYPE,
   runId,
   log = () => {},
+  recordHits: stampHits = recordHits,
   // optional facts store (bench/memory/facts_store.mjs): every session's facts
   // are saved as extracted; a session the store already holds (from a prior
   // run under the SAME extraction regime — the store refuses otherwise) is
@@ -250,16 +252,24 @@ export function createArmMyceliumExtract({
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
-      return {
-        text: r.text,
-        meta: {
+      const meta = stampHits(
+        {
           hits: (s.results || []).length,
           retrieval_mode: s.mode,
           degraded_reason: s.degraded ? s.degraded.reason : null,
           ingestion: 'extract',
           had_think: !!r.hadThink,
         },
-      };
+        // fact rows carry metadata.session_index = the haystack session the
+        // fact was extracted from — the same provenance the raw rows carry
+        (s.results || []).map((h) => ({
+          source_id: h.source_id,
+          score: h.score,
+          session_index: h.metadata?.session_index,
+        })),
+        retrievalBudget
+      );
+      return { text: r.text, meta };
     },
   };
 }

@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseSubstrateConf } from '../platform.mjs';
 import { RAG_SYSTEM } from './arm_mycelium.mjs';
+import { recordHits } from '../retrieval_stamp.mjs';
 
 export const LETTA_SIDECAR_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'letta_sidecar.py');
 export const LETTA_VENV_PYTHON = path.join(path.dirname(fileURLToPath(import.meta.url)), '.letta-venv', 'bin', 'python');
@@ -48,6 +49,17 @@ export const LETTA_VENV_PYTHON = path.join(path.dirname(fileURLToPath(import.met
 // Model ids are harness defaults (stamped into the regime), not addresses.
 export const LETTA_DEFAULT_LLM_MODEL = 'qwen3.8:27b'; // the answerer default in run.mjs
 export const LETTA_DEFAULT_EMBEDDER_MODEL = 'nomic-embed-text'; // the platform's embedder
+
+// task 207: the passage's insert-time tags carry the session provenance —
+// `session_index:<n>` among them. Returns the int, or null when the SDK hid
+// the tags or the tag is absent/malformed (never a guess).
+export function sessionIndexFromTags(tags) {
+  if (!Array.isArray(tags)) return null;
+  const hit = tags.find((t) => typeof t === 'string' && t.startsWith('session_index:'));
+  if (!hit) return null;
+  const n = Number.parseInt(hit.slice('session_index:'.length), 10);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
 export const LETTA_DEFAULT_EMBEDDER_DIMS = 768; // measured on the platform host's ollama
 
 // Retrieval scope: the run namespace, same granularity as the other arms. For
@@ -409,6 +421,7 @@ export function createArmLetta({
   resumeDir = null, // results dir — per-question checkpoint of how many sessions are in the store
   restartSidecar = null, // async () => fresh {request} against the SAME letta server (sidecar died mid-run)
   maxRestarts = 5,
+  recordHits: stampHits = recordHits,
 }) {
   sidecar = sidecar ?? letta?.sidecar ?? null;
   lettaVersion = lettaVersion ?? letta?.lettaVersion ?? null;
@@ -507,16 +520,25 @@ export function createArmLetta({
         system: RAG_SYSTEM,
         user: `Memory context:\n${context || '(no memory found)'}\n\nQuestion: ${question}`,
       });
-      return {
-        text: r.text,
-        meta: {
+      const meta = stampHits(
+        {
           hits: memories.length,
           retrieval_mode: 'letta-oss-archival-semantic',
           letta_version: lettaVersion,
           letta_client_version: lettaClientVersion,
           had_think: !!r.hadThink,
         },
-      };
+        // each passage was inserted with tags `session_index:<n>` / `question_id:<q>`
+        // (letta_sidecar.py /add); the sidecar passes whatever tags the SDK
+        // returns on search — an SDK that hides them stamps null, honestly
+        memories.map((m) => ({
+          source_id: m.id,
+          score: m.score,
+          session_index: sessionIndexFromTags(m.tags),
+        })),
+        retrievalBudget
+      );
+      return { text: r.text, meta };
     },
     async dispose() {
       if (ownsSidecar && typeof sidecar.stop === 'function') await sidecar.stop();

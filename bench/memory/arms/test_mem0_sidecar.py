@@ -53,7 +53,16 @@ class FakeMemory:
         self.searches.append({"query": query, "top_k": top_k, "filters": filters, "threshold": threshold})
         return {
             "results": [
-                {"id": "mem-1", "memory": "User likes tea.", "score": 0.42, "created_at": "2026-09-08T00:00:00Z"},
+                {
+                    "id": "mem-1",
+                    "memory": "User likes tea.",
+                    "score": 0.42,
+                    "created_at": "2026-09-08T00:00:00Z",
+                    # what mem0 2.0.20 returns: the add()-time metadata rides
+                    # each result (task 207 — the arm's read stamp reads
+                    # session_index from here)
+                    "metadata": {"question_id": "q1", "session_index": 3, "bench": "longmemeval"},
+                },
                 {"id": "mem-2", "memory": "User moved to Lisbon.", "score": 0.31, "created_at": "2026-09-08T00:00:01Z"},
             ]
         }
@@ -159,8 +168,16 @@ class SidecarHTTPTest(unittest.TestCase):
         self.assertEqual(body["count"], 2)
         self.assertEqual(
             body["results"][0],
-            {"memory": "User likes tea.", "score": 0.42, "id": "mem-1", "created_at": "2026-09-08T00:00:00Z"},
+            {
+                "memory": "User likes tea.",
+                "score": 0.42,
+                "id": "mem-1",
+                "created_at": "2026-09-08T00:00:00Z",
+                "metadata": {"question_id": "q1", "session_index": 3, "bench": "longmemeval"},
+            },
         )
+        # a result without metadata exposes metadata: null — never an invented dict
+        self.assertIsNone(body["results"][1]["metadata"])
         call = self.fake.searches[0]
         self.assertEqual(call["top_k"], 5)  # the retrieval budget, verbatim
         self.assertEqual(call["filters"], {"user_id": "bench-p1-run"})  # strict scope

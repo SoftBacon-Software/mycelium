@@ -13,7 +13,7 @@ on 127.0.0.1 (never on a routable interface):
                                                       haystack session (the whole
                                                       session flattened to text)
     POST /search   {query, user_id, limit}         -> {results: [{memory, score,
-                                                       id, created_at}]}
+                                                       id, created_at, tags}]}
     POST /delete_all {user_id}                     -> DELETE the run's Letta agent
                                                       (its archival memory with it)
 
@@ -267,6 +267,9 @@ class LettaRuntime:
                 "score": item.score,
                 "id": item.passage.id,
                 "created_at": item.passage.created_at.isoformat() if item.passage.created_at else None,
+                # task 207: the insert-time tags (`session_index:<n>`) when the
+                # SDK returns them — an SDK that hides them stamps null
+                "tags": getattr(item.passage, "tags", None),
             }
             for item in items
         ]

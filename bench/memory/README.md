@@ -25,6 +25,14 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #   --judge-model ID        (default Laguna-XS-2.1-mlx-oq4e-agentic-ours)
 #   --handlabels FILE       judge-agreement vs a hand-scored set (see below)
 #   --from-results DIR      rebuild the receipt from a finished run's own output
+#   --retrieval-audit       grid receipts: render the retrieval audit (task 207)
+#                           — per type × arm hit@budget / median gold rank / MRR
+#                           over STAMPED rows (meta.read_hits), the gold-mapping
+#                           method + coverage, and the pre-committed diagnostic
+#                           branch (budget-10 replay vs answer-side transcripts)
+#   --question-type T       run ONLY the selected items of that type (the
+#                           budget-10 diagnostic replay lever) — the receipt is
+#                           stamped NON-COMPARABLE: do not grid, do not quote
 #
 # re-judge a saved run under the CURRENT judge rubric (task 168):
 #   node bench/memory/run.mjs --from-results bench/memory/results/<runId> \

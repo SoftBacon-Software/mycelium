@@ -36,10 +36,11 @@ TEST_ENV = {
 
 
 class FakePassage:
-    def __init__(self, pid, text, created_at=None):
+    def __init__(self, pid, text, created_at=None, tags=None):
         self.id = pid
         self.text = text
         self.created_at = created_at
+        self.tags = tags
 
 
 class FakeSearchItem:
@@ -56,15 +57,31 @@ class FakePassages:
 
     def create(self, agent_id, text=None, tags=None):
         self._outer.adds.append({"agent_id": agent_id, "text": text, "tags": tags})
-        passage = FakePassage(f"passage-{len(self._outer.passages_store) + 1}", text)
+        passage = FakePassage(f"passage-{len(self._outer.passages_store) + 1}", text, tags=tags)
         self._outer.passages_store.append(passage)
         return [passage]
 
     def search(self, agent_id, query=None, top_k=None):
         self._outer.searches.append({"agent_id": agent_id, "query": query, "top_k": top_k})
         items = [
-            FakeSearchItem(FakePassage("passage-1", "User moved to Lisbon.", datetime(2026, 9, 8, 0, 0, 0)), 0.42),
-            FakeSearchItem(FakePassage("passage-2", "User likes tea.", datetime(2026, 9, 8, 0, 0, 1)), 0.31),
+            FakeSearchItem(
+                FakePassage(
+                    "passage-1",
+                    "User moved to Lisbon.",
+                    datetime(2026, 9, 8, 0, 0, 0),
+                    tags=["bench-p1-run", "bench:longmemeval", "question_id:q1", "session_index:0"],
+                ),
+                0.42,
+            ),
+            FakeSearchItem(
+                FakePassage(
+                    "passage-2",
+                    "User likes tea.",
+                    datetime(2026, 9, 8, 0, 0, 1),
+                    tags=["bench-p1-run", "bench:longmemeval", "question_id:q1", "session_index:2"],
+                ),
+                0.31,
+            ),
         ]
         return items[:top_k] if isinstance(top_k, int) else items
 
@@ -313,6 +330,9 @@ class SidecarHTTPTest(unittest.TestCase):
         self.assertEqual(body["results"][0]["score"], 0.42)
         self.assertEqual(body["results"][0]["id"], "passage-1")
         self.assertEqual(body["results"][0]["created_at"], "2026-09-08T00:00:00")
+        # task 207: the insert-time provenance tags ride the search result
+        self.assertEqual(body["results"][0]["tags"][-1], "session_index:0")
+        self.assertEqual(body["results"][1]["tags"][-1], "session_index:2")
 
     def test_search_honours_a_budget_smaller_than_the_hit_count(self):
         post(f"{self.base}/add", {"user_id": "s", "messages": [{"role": "user", "content": "seed"}]})
