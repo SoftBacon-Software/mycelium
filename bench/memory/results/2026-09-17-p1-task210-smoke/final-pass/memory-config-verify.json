@@ -1,0 +1,1 @@
+{"embedding_provider":"ollama","embedding_model":"fake-embed","embedding_url":"http://127.0.0.1:3998","embedding_dimensions":"2"}

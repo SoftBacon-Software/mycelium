@@ -257,3 +257,54 @@ describe('arm_mycelium_timeline in factsLayer am_facts mode — the routes are t
     }
   });
 });
+
+// task 210, found live in the flag-path smoke: cleanup purged the -amfacts
+// namespace with the RUN's dataset source type (bench_longmemeval), the am_fact
+// index rows matched nothing, deleted 0 — and the run's fact index LEAKED past
+// cleanup. The arm now declares which source_type each of its namespaces
+// carries, and cleanup purges per namespace with its own type.
+import { purgeNamespaces } from '../../bench/memory/cleanup.mjs';
+
+describe('cleanup purges each namespace with ITS source type (the -amfacts leak)', () => {
+  it('the routes-mode arm declares am_fact for -amfacts and the dataset type for the base namespace', () => {
+    const arm = makeArm({ platform: fakePlatformFacts() });
+    expect(arm.namespaceSourceTypes).toEqual({
+      'bench-p1-r1': 'bench_longmemeval',
+      'bench-p1-r1-amfacts': FACT_INDEX_SOURCE_TYPE,
+    });
+  });
+
+  it('the default (memory-rows) arm declares the dataset type for BOTH namespaces', () => {
+    const saved = process.env.MYCELIUM_TIMELINE_FACTS;
+    delete process.env.MYCELIUM_TIMELINE_FACTS;
+    try {
+      const arm = makeArm({ platform: fakePlatformFacts(), factsLayer: TIMELINE_FACTS_LAYERS.MEMORY_ROWS });
+      expect(arm.namespaceSourceTypes).toEqual({
+        'bench-p1-r1': 'bench_longmemeval',
+        'bench-p1-r1-timeline': 'bench_longmemeval',
+      });
+    } finally {
+      if (saved !== undefined) process.env.MYCELIUM_TIMELINE_FACTS = saved;
+    }
+  });
+
+  it('purgeNamespaces passes each namespace its own source type and falls back to the run type', async () => {
+    const purged = [];
+    const result = await purgeNamespaces(null, {
+      sourceType: 'bench_longmemeval',
+      namespaces: ['ns-base', 'ns-base-amfacts', 'ns-extract'],
+      sourceTypesByNamespace: { 'ns-base-amfacts': 'am_fact' },
+      purge: async (platform, { sourceType, namespace }) => {
+        purged.push({ namespace, sourceType });
+        return { namespace, source_type: sourceType, batches: 1, deleted: 3, failed_deletes: [], rows_remaining_after: 0, kept: false };
+      },
+    });
+    expect(purged).toEqual([
+      { namespace: 'ns-base', sourceType: 'bench_longmemeval' },
+      { namespace: 'ns-base-amfacts', sourceType: 'am_fact' },
+      { namespace: 'ns-extract', sourceType: 'bench_longmemeval' },
+    ]);
+    expect(result.deleted).toBe(9);
+    expect(result.rows_remaining_after).toBe(0);
+  });
+});

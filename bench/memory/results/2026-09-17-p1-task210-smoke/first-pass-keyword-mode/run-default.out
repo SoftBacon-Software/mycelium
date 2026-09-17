@@ -1,0 +1,232 @@
+[mycelium-timeline] timeline 1/5: SUPERSEDE 2026-09-17-p1-203802-001be529-tl-f0 — "The user lives in Lisbon" — q=001be529
+[mycelium-timeline] timeline 1/5: 2 candidates → +1/~1/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 2/5: 2 candidates → +2/~0/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 3/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[mycelium-timeline] timeline 4/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[mycelium-timeline] timeline 5/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[run] mycelium-timeline: wrote 5 docs / 20 rows; waiting for embedding coverage (cap 8 min)...
+[run] embedding wait: {"waited_ms":480125,"coverage_after":0,"settled":false,"poll_failures":0,"note":"embedding coverage did not return to ~100% before the wait timeout — searches may have run keyword-fallback; per-query modes are recorded in the rows"}
+[run] cleanup bench-p1-2026-09-17-p1-203802: 5 deleted in 1 batches, 0 failed, 0 remaining
+[run] cleanup bench-p1-2026-09-17-p1-203802-timeline: 4 deleted in 1 batches, 0 failed, 0 remaining
+[run] receipt: /private/tmp/myc-tl-merge/bench/memory/receipts/2026-09-17-p1-203802.md
+{
+  "run_id": "2026-09-17-p1-203802",
+  "out_dir": "bench/memory/results/2026-09-17-p1-203802",
+  "arms": {
+    "mycelium-timeline": {
+      "n": 1,
+      "write": {
+        "docs": 5,
+        "rows": 20,
+        "skipped": false,
+        "sessions_capped_at": 5,
+        "facts": 10,
+        "facts_counts": [
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "extract_ms": 14,
+        "reconcile_ms": 42,
+        "parse_failures": 0,
+        "timeline": {
+          "candidates": 10,
+          "adds": 3,
+          "supersedes": 1,
+          "keeps": 6,
+          "auto_adds": 1,
+          "decision_calls": 8,
+          "decision_failures": 0,
+          "fastpath_adds": 1,
+          "per_question": [
+            {
+              "question_id": "001be529",
+              "candidates": 10,
+              "adds": 3,
+              "supersedes": 1,
+              "keeps": 6,
+              "auto_adds": 1,
+              "decision_calls": 8,
+              "decision_failures": 0,
+              "fastpath_adds": 1,
+              "seconds_per_session": [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "candidates_ledger": [
+                {
+                  "index": 0,
+                  "session_index": 0,
+                  "text": "The user has a manager named Alex",
+                  "decision": "ADD",
+                  "ok": true,
+                  "source": "auto_add_on_no_match",
+                  "shown_ids": [],
+                  "top_score": null,
+                  "source_id": "2026-09-17-p1-203802-001be529-tl-f0"
+                },
+                {
+                  "index": 1,
+                  "session_index": 0,
+                  "text": "The user lives in Lisbon",
+                  "decision": "SUPERSEDE",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f0"
+                  ],
+                  "top_score": null,
+                  "source_id": "2026-09-17-p1-203802-001be529-tl-f1"
+                },
+                {
+                  "index": 0,
+                  "session_index": 1,
+                  "text": "The user has a manager named Alex",
+                  "decision": "ADD",
+                  "ok": true,
+                  "source": "fastpath_below_threshold",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f1"
+                  ],
+                  "top_score": 0.0000032981564578039685,
+                  "source_id": "2026-09-17-p1-203802-001be529-tl-f2"
+                },
+                {
+                  "index": 1,
+                  "session_index": 1,
+                  "text": "The user lives in Lisbon",
+                  "decision": "ADD",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f2",
+                    "2026-09-17-p1-203802-001be529-tl-f1"
+                  ],
+                  "top_score": 4.83621401999307,
+                  "source_id": "2026-09-17-p1-203802-001be529-tl-f3"
+                },
+                {
+                  "index": 0,
+                  "session_index": 2,
+                  "text": "The user has a manager named Alex",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f2",
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3"
+                  ],
+                  "top_score": 7.08085343423557,
+                  "source_id": null
+                },
+                {
+                  "index": 1,
+                  "session_index": 2,
+                  "text": "The user lives in Lisbon",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3",
+                    "2026-09-17-p1-203802-001be529-tl-f2"
+                  ],
+                  "top_score": 4.015857954340301,
+                  "source_id": null
+                },
+                {
+                  "index": 0,
+                  "session_index": 3,
+                  "text": "The user has a manager named Alex",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f2",
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3"
+                  ],
+                  "top_score": 8.693648768057152,
+                  "source_id": null
+                },
+                {
+                  "index": 1,
+                  "session_index": 3,
+                  "text": "The user lives in Lisbon",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3",
+                    "2026-09-17-p1-203802-001be529-tl-f2"
+                  ],
+                  "top_score": 5.138919544189668,
+                  "source_id": null
+                },
+                {
+                  "index": 0,
+                  "session_index": 4,
+                  "text": "The user has a manager named Alex",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f2",
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3"
+                  ],
+                  "top_score": 9.636921543506595,
+                  "source_id": null
+                },
+                {
+                  "index": 1,
+                  "session_index": 4,
+                  "text": "The user lives in Lisbon",
+                  "decision": "KEEP",
+                  "ok": true,
+                  "source": "decision",
+                  "shown_ids": [
+                    "2026-09-17-p1-203802-001be529-tl-f1",
+                    "2026-09-17-p1-203802-001be529-tl-f3",
+                    "2026-09-17-p1-203802-001be529-tl-f2"
+                  ],
+                  "top_score": 5.788737838345753,
+                  "source_id": null
+                }
+              ]
+            }
+          ]
+        },
+        "write_ms": 69,
+        "embed_wait": {
+          "waited_ms": 480125,
+          "coverage_after": 0,
+          "settled": false,
+          "poll_failures": 0,
+          "note": "embedding coverage did not return to ~100% before the wait timeout — searches may have run keyword-fallback; per-query modes are recorded in the rows"
+        }
+      },
+      "elapsed_ms": 480199,
+      "score": {
+        "n": 1,
+        "counts": {
+          "exact": 1,
+          "partial": 0,
+          "wrong": 0
+        },
+        "unparsed": 0,
+        "p1_score": 1
+      },
+      "retrieval_modes": {
+        "keyword-fallback": 1
+      }
+    }
+  }
+}

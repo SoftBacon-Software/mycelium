@@ -363,6 +363,16 @@ export function createArmMyceliumTimeline({
     // every namespace this arm indexes — run.mjs feeds it to purgeNamespaces so
     // cleanup covers both layers
     namespaces: [namespace, factsNs],
+    // WHICH source_type each namespace's INDEX rows carry — cleanup must purge
+    // per namespace with the right type. The routes layer indexes as 'am_fact'
+    // (server/plugins/auto-memory/routes.js's FACT_INDEX_SOURCE_TYPE, mirrored
+    // in FACT_INDEX_SOURCE_TYPE above), not the dataset's bench source type:
+    // purging the -amfacts namespace with bench_longmemeval finds 0 rows and
+    // silently leaks the index (found live, task 210 flag-path smoke).
+    namespaceSourceTypes: {
+      [namespace]: sourceType,
+      [factsNs]: useFactRoutes ? FACT_INDEX_SOURCE_TYPE : sourceType,
+    },
     // the reconciled layer's storage regime — stamped on every receipt so a
     // results row says which regime produced it
     factsLayer: layer,

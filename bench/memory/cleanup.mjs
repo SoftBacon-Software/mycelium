@@ -46,11 +46,16 @@ export async function purgeRunRows(platform, { sourceType, namespace, batchLimit
  * dies mid-way must not leave thousands of bench rows for the embedder to
  * chew on (run B, 2026-09-09: 7,767 orphan rows after a 30 s timeout).
  */
-export async function purgeNamespaces(platform, { sourceType, namespaces, log = () => {}, purge = purgeRunRows } = {}) {
+export async function purgeNamespaces(platform, { sourceType, namespaces, sourceTypesByNamespace = null, log = () => {}, purge = purgeRunRows } = {}) {
   const per = [];
   for (const ns of namespaces) {
-    const p = await purge(platform, { sourceType, namespace: ns });
-    log(`cleanup ${ns}: ${p.deleted} deleted in ${p.batches} batches, ${p.failed_deletes.length} failed, ${p.rows_remaining_after} remaining`);
+    // a namespace's index rows may carry a DIFFERENT source type than the
+    // run's dataset type (the timeline arm's routes layer indexes as
+    // 'am_fact') — purge with the namespace's own type or the purge finds
+    // nothing and leaks (task 210 flag-path smoke)
+    const nsType = (sourceTypesByNamespace && sourceTypesByNamespace[ns]) || sourceType;
+    const p = await purge(platform, { sourceType: nsType, namespace: ns });
+    log(`cleanup ${ns} (${nsType}): ${p.deleted} deleted in ${p.batches} batches, ${p.failed_deletes.length} failed, ${p.rows_remaining_after} remaining`);
     per.push(p);
   }
   if (per.length === 1) return per[0];

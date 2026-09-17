@@ -77,7 +77,10 @@ describe('purgeNamespaces — every namespace a run indexed, one receipt shape',
     const logs = [];
     const r = await purgeNamespaces({}, { sourceType: 'bench_x', namespaces: ['bench-p1-a'], log: (m) => logs.push(m), purge: fakePurge });
     expect(r).toMatchObject({ namespace: 'bench-p1-a', deleted: 2 });
-    expect(logs).toEqual(['cleanup bench-p1-a: 2 deleted in 1 batches, 0 failed, 0 remaining']);
+    // task 210: the log names the type each namespace was purged with — the
+    // routes layer's -amfacts namespace purges as 'am_fact', not the run's
+    // dataset type (a type mismatch silently deletes 0 and leaks the index)
+    expect(logs).toEqual(['cleanup bench-p1-a (bench_x): 2 deleted in 1 batches, 0 failed, 0 remaining']);
   });
 
   it('several namespaces aggregate with per_namespace detail', async () => {

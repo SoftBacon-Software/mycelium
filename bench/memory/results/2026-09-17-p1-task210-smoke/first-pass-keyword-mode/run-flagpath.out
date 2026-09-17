@@ -1,0 +1,6 @@
+[mycelium-timeline] timeline 1/5: 2 candidates → +2/~0/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 2/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[mycelium-timeline] timeline 3/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[mycelium-timeline] timeline 4/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[mycelium-timeline] timeline 5/5: 2 candidates → +0/~0/=2 in 0s — q=001be529
+[run] mycelium-timeline: wrote 5 docs / 16 rows; waiting for embedding coverage (cap 8 min)...

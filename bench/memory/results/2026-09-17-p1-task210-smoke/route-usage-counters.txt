@@ -1,0 +1,9 @@
+POST  /auto-memory/facts                     5
+POST  /auto-memory/facts/:id/supersede       4
+GET   /memory/config                         3
+PUT   /memory/config                         1
+DELETE /memory/index/:sourceType/:sourceId    20
+POST  /memory/index/bulk                     10
+GET   /memory/list                           12
+POST  /memory/search                         14
+GET   /memory/stats                          4

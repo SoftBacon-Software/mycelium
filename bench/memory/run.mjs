@@ -19,7 +19,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
 import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
@@ -828,6 +828,16 @@ async function main() {
           : []),
       ]
     : [];
+  // WHICH source_type each namespace's index rows carry — the routes layer
+  // (MYCELIUM_TIMELINE_FACTS=am_facts) indexes as 'am_fact', everything else
+  // as the run's dataset source type. Cleanup purges per namespace with its
+  // own type; a single type leaks the am_fact index rows (found live, task
+  // 210 flag-path smoke: the -amfacts purge deleted 0 and left the index up).
+  const runNamespaceSourceTypes = {};
+  for (const ns of runNamespaces) runNamespaceSourceTypes[ns] = regime.retrieval.source_type;
+  if (arms.includes('mycelium-timeline') && timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES) {
+    runNamespaceSourceTypes[myceliumTimelineFactsNamespace(regime.retrieval.namespace)] = FACT_INDEX_SOURCE_TYPE;
+  }
   let platformCleanupDone = !platform || Boolean(args.keep);
   try {
     const namespace = regime.retrieval.namespace;
@@ -955,7 +965,7 @@ async function main() {
         // every namespace the run indexed: the extract control arm writes to a
         // suffixed namespace of its own — leaving it behind would leak rows
         // into the next run's substring-scoped lists
-        cleanup = await purgeNamespaces(platform, { sourceType, namespaces: runNamespaces, log: (m) => console.error(`[run] ${m}`) });
+        cleanup = await purgeNamespaces(platform, { sourceType, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] ${m}`) });
         platformCleanupDone = true;
       }
     }
@@ -1011,7 +1021,7 @@ async function main() {
     // queue and in every later substring-scoped list
     if (!platformCleanupDone && platform) {
       try {
-        const c = await purgeNamespaces(platform, { sourceType: regime.retrieval.source_type, namespaces: runNamespaces, log: (m) => console.error(`[run] cleanup after failure — ${m}`) });
+        const c = await purgeNamespaces(platform, { sourceType: regime.retrieval.source_type, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] cleanup after failure — ${m}`) });
         platformCleanupDone = true;
         console.error(`[run] cleanup after failure: ${c.deleted} rows deleted, ${c.rows_remaining_after} remaining`);
       } catch (e) {
