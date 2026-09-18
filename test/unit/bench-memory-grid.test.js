@@ -630,3 +630,270 @@ describe('the timeline write-cost line — cost ×N of extract; bound ≤ 2×', 
     );
   });
 });
+
+// ---- task 224: the grid admits a REJUDGED run --------------------------------
+//
+// Every judge-prompt bump leaves FINISHED runs holding summary.rejudge.json +
+// judged.rejudge.jsonl — and the 2026-09-18 r2 (2026-09-17-p1-224225) holds
+// them with NO summary.json at all (the run died after judging; rejudge.mjs
+// reconstructed what the evidence could prove). The grid's input contract
+// predates that shape and calls a finished, rejudged run "not finished". These
+// tests pin the admission: the pair loads, the header names the rejudge with
+// its judge-agreement leg, and every downstream check operates unchanged.
+
+// A rejudge fixture dir in the shape rejudge.mjs writes: summary.rejudge.json +
+// judged.rejudge.jsonl, NO summary.json. counts per arm must sum to the
+// question count; questionTypes maps question_id -> question_type (optional).
+function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTypes = null, regime = {}, summaryPatch = null }) {
+  const dir = path.join(root, name);
+  fs.mkdirSync(dir, { recursive: true });
+  const fullRegime = deepMerge(
+    deepMerge(BASE_REGIME, {
+      retrieval: { namespace: `bench-p1-${ofRunId}` },
+      n: questionIds.length,
+      judge: {
+        judge_prompt_version: jpv,
+        rejudge: {
+          of_run_id: ofRunId,
+          date_utc: '2026-09-18T06:00:00Z',
+          answers_modified: false,
+          note: 'labels re-computed from the saved answers (judged.rejudge.jsonl); no answerer or platform calls',
+        },
+      },
+    }),
+    regime
+  );
+  const judged = [];
+  const armsOut = {};
+  for (const [arm, counts] of Object.entries(arms)) {
+    const score = {
+      n: questionIds.length,
+      counts,
+      unparsed: 0,
+      p1_score: (counts.exact + 0.5 * counts.partial) / questionIds.length,
+    };
+    armsOut[arm] = { n: questionIds.length, score };
+    const labels = [
+      ...Array(counts.exact).fill('exact'),
+      ...Array(counts.partial).fill('partial'),
+      ...Array(counts.wrong).fill('wrong'),
+    ];
+    questionIds.forEach((qid, i) => {
+      judged.push({
+        question_id: qid,
+        arm,
+        question_type: questionTypes?.[qid] ?? 'single-session-user',
+        gold: 'a year',
+        answer: 'I do not know.',
+        label: labels[i],
+        judge_raw: labels[i].toUpperCase(),
+        judge_had_think: false,
+      });
+    });
+  }
+  const summary = {
+    run_id: `${ofRunId}-rejudge`,
+    rejudged_from: ofRunId,
+    judge_prompt_version: jpv,
+    generated_at_utc: '2026-09-18T06:00:00Z',
+    n: judged.length,
+    regime: fullRegime,
+    arms: armsOut,
+    original: {
+      run_id: ofRunId,
+      judge: fullRegime.judge,
+      arms: Object.fromEntries(Object.keys(armsOut).map((a) => [a, { n: questionIds.length }])),
+    },
+    ...(summaryPatch ?? {}),
+  };
+  fs.writeFileSync(path.join(dir, 'summary.rejudge.json'), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(dir, 'judged.rejudge.jsonl'), judged.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return dir;
+}
+
+function handlabelsDir() {
+  return path.join(root, 'handlabels');
+}
+
+describe('task 224: the grid admits a rejudged run', () => {
+  it('loadRun admits a rejudge pair (summary.json absent) and marks the run from the stamp', () => {
+    const dir = writeRejudgeFixture('rej-load', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    expect(fs.existsSync(path.join(dir, 'summary.json'))).toBe(false);
+    const run = loadRun(dir, { handlabelsDir: handlabelsDir() });
+    expect(run.runId).toBe('2026-09-17-p1-224225-rejudge');
+    expect(run.rejudge).toEqual({
+      of_run_id: '2026-09-17-p1-224225',
+      judge_prompt_version: 'judge-prompt.2',
+      agreement: null,
+    });
+    // the judged rows ARE the rejudge pair's rows
+    expect(run.judged).toHaveLength(2);
+    expect([...run.judgedIds].sort()).toEqual(['q1', 'q2']);
+    expect(run.judgedIdsByArm['mycelium-timeline'].size).toBe(2);
+  });
+
+  it('loadRun keeps a dir with summary.json PRIMARY even when a rejudge pair sits beside it', () => {
+    const dir = writeFixtureRun('primary-with-rejudge', {
+      runId: 'prim-run',
+      arms: { mem0: armEntry(2, 1, 0, 1) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2'],
+    });
+    // the 2026-09-09/09-10 shape: the rejudge pair lands BESIDE a live summary.json
+    writeRejudgeFixture('primary-with-rejudge', {
+      ofRunId: 'prim-run',
+      jpv: 'judge-prompt.3',
+      arms: { mem0: { exact: 0, partial: 0, wrong: 2 } },
+      questionIds: ['q1', 'q2'],
+    });
+    // marker answer written ONLY into the primary's judged.jsonl — if loadRun
+    // read the rejudge pair instead, the answers would be the fixture default
+    const lines = fs.readFileSync(path.join(dir, 'judged.jsonl'), 'utf8').trim().split('\n');
+    fs.writeFileSync(
+      path.join(dir, 'judged.jsonl'),
+      lines.map((l) => JSON.stringify({ ...JSON.parse(l), answer: 'primary-original-answer' })).join('\n') + '\n'
+    );
+    const run = loadRun(dir, { handlabelsDir: handlabelsDir() });
+    expect(run.runId).toBe('prim-run');
+    expect(run.rejudge).toBeNull();
+    expect(run.judged.every((r) => r.answer === 'primary-original-answer')).toBe(true); // judged.jsonl, not the pair
+  });
+
+  it('a rejudged run + a sibling rejudged run under the SAME judge_prompt_version compose green into ONE grid, header stamped', () => {
+    const dirA = writeRejudgeFixture('rej-a', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirB = writeRejudgeFixture('rej-b', {
+      ofRunId: '2026-09-09-p1-195034',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    expect(out.runIds).toEqual(['2026-09-17-p1-224225-rejudge', '2026-09-09-p1-195034-rejudge']);
+    expect(fs.existsSync(out.file)).toBe(true);
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('**CONTAINS REJUDGED RUN(S):');
+    expect(md).toContain(
+      '2026-09-17-p1-224225-rejudge is a REJUDGE of 2026-09-17-p1-224225 — labels re-computed under judge-prompt.2'
+    );
+    expect(md).toContain('2026-09-09-p1-195034-rejudge is a REJUDGE of 2026-09-09-p1-195034');
+    // the stamp sits at the TOP — before the scores section, beside the bold stamps
+    expect(md.indexOf('CONTAINS REJUDGED RUN(S)')).toBeLessThan(md.indexOf('## Scores'));
+    // downstream operates unchanged: every arm of every run gets its scores row
+    expect(md).toContain('| mycelium-timeline | 2026-09-17-p1-224225-rejudge | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).toContain('| mem0-raw | 2026-09-09-p1-195034-rejudge | 2 | 0 | 1 | 1 | 0.250 |');
+    // the artifacts line names the pair the run actually is
+    expect(md).toContain('(summary.rejudge.json, judged.rejudge.jsonl, <arm>.rows.jsonl)');
+  });
+
+  it('a judge-prompt.1 rejudge beside a judge-prompt.2 rejudge refuses, naming judge.judge_prompt_version', () => {
+    const dirA = writeRejudgeFixture('rej-v1', {
+      ofRunId: 'run-old-prompt',
+      jpv: 'judge-prompt.1',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirB = writeRejudgeFixture('rej-v2', {
+      ofRunId: 'run-new-prompt',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}judge\.judge_prompt_version: /m);
+    expect(err.message).toContain('run-old-prompt-rejudge=judge-prompt.1');
+    expect(err.message).toContain('run-new-prompt-rejudge=judge-prompt.2');
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a dir with NEITHER summary refuses with the existing message (nothing at all)', () => {
+    const dirA = writeFixtureRun('run-ok3', { runId: 'run-ok3', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'run-empty');
+    fs.mkdirSync(dirB, { recursive: true });
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json — a run without its summary is not finished \(in flight, crashed, or not a run dir\)/
+    );
+  });
+
+  it('judged.rejudge.jsonl without summary.rejudge.json refuses NAMING the missing file', () => {
+    const dirA = writeFixtureRun('run-ok4', { runId: 'run-ok4', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'rej-half-a');
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirB, 'judged.rejudge.jsonl'), '');
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json and the rejudge pair is incomplete — summary\.rejudge\.json is missing/
+    );
+  });
+
+  it('summary.rejudge.json without judged.rejudge.jsonl refuses NAMING the missing file', () => {
+    const dirA = writeFixtureRun('run-ok5', { runId: 'run-ok5', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'rej-half-b');
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirB, 'summary.rejudge.json'), JSON.stringify({ run_id: 'x', arms: {} }));
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json and the rejudge pair is incomplete — judged\.rejudge\.jsonl is missing/
+    );
+  });
+
+  it('the judge-agreement leg renders from the run’s handlabels file; its absence is stated, never silent', () => {
+    const questionIds = ['q1', 'q2', 'q3', 'q4'];
+    const dirA = writeRejudgeFixture('rej-agree', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 1, wrong: 2 } },
+      questionIds,
+      questionTypes: Object.fromEntries(questionIds.map((q) => [q, 'knowledge-update'])),
+      // judged labels: q1 exact, q2 partial, q3 wrong, q4 wrong
+    });
+    // hand labels: 3 of the 4 agree (q4 disagrees: hand exact, judge wrong)
+    fs.mkdirSync(handlabelsDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(handlabelsDir(), '2026-09-17-p1-224225.json'),
+      JSON.stringify({
+        hand_scorer: 'director',
+        run_id: '2026-09-17-p1-224225',
+        sample: [],
+        items: [
+          { question_id: 'q1', arm: 'mycelium-timeline', label: 'exact' },
+          { question_id: 'q2', arm: 'mycelium-timeline', label: 'partial' },
+          { question_id: 'q3', arm: 'mycelium-timeline', label: 'wrong' },
+          { question_id: 'q4', arm: 'mycelium-timeline', label: 'exact' },
+        ],
+      })
+    );
+    const run = loadRun(dirA, { handlabelsDir: handlabelsDir() });
+    expect(run.rejudge.agreement.agree).toBe(3);
+    expect(run.rejudge.agreement.n).toBe(4);
+    expect(run.rejudge.agreement.rate).toBeCloseTo(0.75);
+
+    const dirB = writeRejudgeFixture('rej-nohand', {
+      ofRunId: 'run-no-handlabels',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 1, partial: 1, wrong: 2 } },
+      questionIds,
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain(
+      'hand-vs-judge agreement 0.750 (n=4, 2026-09-17-p1-224225.json)'
+    );
+    expect(md).toContain(
+      'no handlabels file for run-no-handlabels — the judge-agreement leg is NOT rendered'
+    );
+  });
+});

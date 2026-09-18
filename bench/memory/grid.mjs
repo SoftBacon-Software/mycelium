@@ -11,9 +11,14 @@
 //
 // A composed grid is quotable only if every run under it is: a capped write
 // phase or a cleanup that left rows indexed is stamped in bold at the top.
+// A REJUDGED run (summary.json absent, summary.rejudge.json + judged.rejudge.jsonl
+// present — what every judge-prompt bump leaves behind) is a finished run too:
+// the pair loads, the run is marked from its own rejudge stamp, and the header
+// names it so a rejudged column is never mistaken for a primary run (task 224).
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
@@ -26,6 +31,15 @@ import {
 } from './retrieval_stamp.mjs';
 import { SPLITS, loadSplit, selectItems } from './split.mjs';
 import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
+import { agreement } from './judge.mjs';
+
+/** Where the director's hand-label files live, keyed by run id (<run_id>.json). */
+export const HANDLABELS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'handlabels');
+
+// The rejudge pair — what rejudge.mjs writes beside (or instead of) a run's
+// own summary.json. The grid admits the pair when the primary summary is gone.
+const REJUDGE_SUMMARY_FILE = 'summary.rejudge.json';
+const REJUDGE_JUDGED_FILE = 'judged.rejudge.jsonl';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
 export class GridRefusal extends Error {
@@ -73,12 +87,80 @@ export function writeCap(summary) {
   return summary.regime?.write?.max_sessions_per_question ?? summary.max_sessions_per_question ?? null;
 }
 
-/** Load one run dir: summary.json + the judged rows (for the question-id sets). */
-export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null } = {}) {
+/** Hand-vs-judge agreement for a rejudged run, from <handlabelsDir>/<of_run_id>.json when it exists; null when it doesn't. */
+function handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }) {
+  if (!ofRunId) return null;
+  const file = path.join(handlabelsDir, `${ofRunId}.json`);
+  if (!existsFn(file)) return null;
+  let hand;
+  try {
+    hand = JSON.parse(readFileFn(file));
+  } catch (e) {
+    throw new GridInputError(`${file}: handlabels file does not parse — ${e.message}`);
+  }
+  if (!Array.isArray(hand?.items)) {
+    throw new GridInputError(`${file}: handlabels file carries no items array — the agreement leg refuses to invent one`);
+  }
+  const a = agreement(judged, hand.items);
+  return { n: a.n, agree: a.agree, rate: a.rate, hand_scorer: hand.hand_scorer ?? null, file };
+}
+
+/**
+ * Load one run dir: summary.json + the judged rows (for the question-id sets).
+ * When summary.json is ABSENT but the rejudge pair (summary.rejudge.json +
+ * judged.rejudge.jsonl) is present, the dir is a FINISHED REJUDGED run: the
+ * pair loads and the run is marked `rejudge` — of_run_id + judge_prompt_version
+ * from the summary's own rejudge stamp. A rejudged run is never again called
+ * "not finished". A pair half-present is refused naming the missing file; a
+ * dir with neither summary refuses exactly as before. When the rejudged run's
+ * of_run_id has a handlabels file, the hand-vs-judge agreement of the rejudged
+ * labels is computed at load (the quoting law's judge-agreement leg).
+ */
+export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null, handlabelsDir = HANDLABELS_DIR } = {}) {
   const parseJsonl = parseJsonlFn ?? ((text) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l)));
+  const buildIdSets = (rows) => {
+    const judgedIds = new Set();
+    const judgedIdsByArm = {};
+    for (const row of rows) {
+      if (typeof row.question_id !== 'string' || row.question_id.length === 0) continue;
+      judgedIds.add(row.question_id);
+      if (row.arm) (judgedIdsByArm[row.arm] ??= new Set()).add(row.question_id);
+    }
+    return { judgedIds, judgedIdsByArm };
+  };
   const summaryFile = path.join(dir, 'summary.json');
   if (!existsFn(summaryFile)) {
-    throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
+    const rejSummaryFile = path.join(dir, REJUDGE_SUMMARY_FILE);
+    const rejJudgedFile = path.join(dir, REJUDGE_JUDGED_FILE);
+    const hasRejSummary = existsFn(rejSummaryFile);
+    const hasRejJudged = existsFn(rejJudgedFile);
+    if (!hasRejSummary && !hasRejJudged) {
+      throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
+    }
+    if (!hasRejSummary || !hasRejJudged) {
+      const missing = hasRejSummary ? REJUDGE_JUDGED_FILE : REJUDGE_SUMMARY_FILE;
+      throw new GridInputError(
+        `${dir}: no summary.json and the rejudge pair is incomplete — ${missing} is missing ` +
+          `(a rejudged run needs ${REJUDGE_SUMMARY_FILE} + ${REJUDGE_JUDGED_FILE})`
+      );
+    }
+    const summary = JSON.parse(readFileFn(rejSummaryFile));
+    const judged = parseJsonl(readFileFn(rejJudgedFile));
+    const { judgedIds, judgedIdsByArm } = buildIdSets(judged);
+    const ofRunId = summary.regime?.judge?.rejudge?.of_run_id ?? summary.rejudged_from ?? null;
+    return {
+      dir,
+      runId: summary.run_id ?? path.basename(dir),
+      summary,
+      judged,
+      judgedIds,
+      judgedIdsByArm,
+      rejudge: {
+        of_run_id: ofRunId,
+        judge_prompt_version: summary.judge_prompt_version ?? summary.regime?.judge?.judge_prompt_version ?? null,
+        agreement: handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }),
+      },
+    };
   }
   const summary = JSON.parse(readFileFn(summaryFile));
   const judgedFile = path.join(dir, 'judged.jsonl');
@@ -86,15 +168,9 @@ export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultRea
     throw new GridInputError(`${dir}: no judged.jsonl — the question-id check needs the judged rows`);
   }
   const judged = parseJsonl(readFileFn(judgedFile));
-  const judgedIds = new Set();
-  const judgedIdsByArm = {};
-  for (const row of judged) {
-    if (typeof row.question_id !== 'string' || row.question_id.length === 0) continue;
-    judgedIds.add(row.question_id);
-    if (row.arm) (judgedIdsByArm[row.arm] ??= new Set()).add(row.question_id);
-  }
+  const { judgedIds, judgedIdsByArm } = buildIdSets(judged);
   const runId = summary.run_id ?? path.basename(dir);
-  return { dir, runId, summary, judged, judgedIds, judgedIdsByArm };
+  return { dir, runId, summary, judged, judgedIds, judgedIdsByArm, rejudge: null };
 }
 
 function idSetSample(a, b) {
@@ -485,6 +561,30 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     L.push(`**NOT A QUOTABLE GRID: ${warnings.join('; ')}. A capped or unclean run is not a quotable grid.**`);
   }
 
+  // task 224: a rejudged run is named at the top, beside the bold stamps — a
+  // reader must not be able to mistake a rejudged column for a primary run.
+  // The judge-agreement leg rides the stamp when the run's handlabels file
+  // exists (the quoting law: the number is quoted only with its agreement
+  // leg); its absence is stated, never silent.
+  const rejudgedNotes = runs
+    .filter((r) => r.rejudge)
+    .map((r) => {
+      const jpv = r.rejudge.judge_prompt_version ?? '<unstamped>';
+      const leg = r.rejudge.agreement
+        ? `; hand-vs-judge agreement ${r.rejudge.agreement.rate.toFixed(3)} (n=${r.rejudge.agreement.n}, ${path.basename(r.rejudge.agreement.file)})`
+        : r.rejudge.of_run_id
+          ? `; no handlabels file for ${r.rejudge.of_run_id} — the judge-agreement leg is NOT rendered`
+          : '; no of_run_id in the rejudge stamp — the judge-agreement leg is NOT rendered';
+      return `${r.runId} is a REJUDGE of ${r.rejudge.of_run_id ?? '<unknown>'} — labels re-computed under ${jpv}${leg}`;
+    });
+  if (rejudgedNotes.length) {
+    L.push('');
+    L.push(
+      `**CONTAINS REJUDGED RUN(S): ${rejudgedNotes.join('; ')}.** ` +
+        'A rejudged run has no summary.json — its column is the rejudge pair (summary.rejudge.json + judged.rejudge.jsonl), its labels re-computed from the saved answers. It is not a primary run.'
+    );
+  }
+
   // scores: every arm of every run, one row each
   L.push('');
   L.push('## Scores');
@@ -670,7 +770,8 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
   L.push('## Artifacts');
   L.push('');
   for (const r of runs) {
-    L.push(`- rows + summary: \`${r.dir}\` (summary.json, judged.jsonl, <arm>.rows.jsonl)`);
+    const pair = r.rejudge ? 'summary.rejudge.json, judged.rejudge.jsonl' : 'summary.json, judged.jsonl';
+    L.push(`- rows + summary: \`${r.dir}\` (${pair}, <arm>.rows.jsonl)`);
   }
   L.push('');
   return L.join('\n');
@@ -690,6 +791,7 @@ export function composeGrid({
   audit = false, // task 207: render the retrieval audit + the pre-committed diagnostic branch
   existsFn = fs.existsSync,
   readFileFn = defaultReadFile,
+  handlabelsDir = HANDLABELS_DIR, // where a rejudged run's hand-label file is looked up
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
@@ -700,7 +802,7 @@ export function composeGrid({
   if (!Array.isArray(dirs) || dirs.length < 2) {
     throw new GridInputError(`--grid-from-results needs at least two run dirs (got ${dirs?.length ?? 0})`);
   }
-  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn }));
+  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn, handlabelsDir }));
   assertComparable(runs);
   const runIds = runs.map((r) => r.runId);
   const commands =
