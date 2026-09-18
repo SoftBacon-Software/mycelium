@@ -101,7 +101,7 @@ function deepMerge(base, patch) {
 }
 
 // One fixture run dir. questionIds: judged rows for every arm × question.
-function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, regime = {}, topCap = null, cleanup = null, summaryPatch = null }) {
+function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, questionType = 'single-session-user', regime = {}, topCap = null, cleanup = null, summaryPatch = null }) {
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
   const fullRegime = deepMerge(
@@ -123,7 +123,7 @@ function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, regime = {
   const rows = [];
   for (const [arm] of Object.entries(arms)) {
     for (const qid of questionIds) {
-      rows.push({ question_id: qid, arm, question_type: 'single-session-user', gold: 'a year', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false });
+      rows.push({ question_id: qid, arm, question_type: questionType, gold: 'a year', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false });
     }
   }
   fs.writeFileSync(path.join(dir, 'judged.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -156,6 +156,23 @@ function writeMatchingPair({ regimeA = {}, regimeB = {}, cleanupA = null, cleanu
 
 function receiptsDir() {
   return path.join(root, 'receipts');
+}
+
+// The task-225 run shape (the real 09-17 runs): each run carries ONLY the
+// timeline arm, its regime stamping facts_layer to name the store it measured
+// (results/2026-09-17-p1-203802 = memory-rows, 2026-09-17-p1-204603 = am_facts).
+// factsLayer null = an old-regime run (predates the 206 stamp, bare name).
+function writeTimelineRun(name, { runId, factsLayer = null, questionIds = ['q1', 'q2', 'q3', 'q4', 'q5'] } = {}) {
+  return writeFixtureRun(name, {
+    runId,
+    arms: { 'mycelium-timeline': armEntry(questionIds.length, 0, 0, questionIds.length) },
+    writeInfo: { 'mycelium-timeline': { docs: 100, rows: 900, extract_ms: 50_000, reconcile_ms: 900_000 } },
+    questionIds,
+    questionType: 'knowledge-update',
+    regime: factsLayer
+      ? { mycelium_timeline: { facts_layer: factsLayer, reconciled: { namespace: `bench-p1-${runId}-timeline` } } }
+      : {},
+  });
 }
 
 // ---- the matching pair -------------------------------------------------------
@@ -895,5 +912,142 @@ describe('task 224: the grid admits a rejudged run', () => {
     expect(md).toContain(
       'no handlabels file for run-no-handlabels — the judge-agreement leg is NOT rendered'
     );
+  });
+});
+
+// ---- task 225: the facts layer is part of a timeline arm's grid identity -----
+//
+// Both the rows-path n=50 and the flag-path n=50 name their arm
+// `mycelium-timeline` (the flag switches the STORE — regime.mycelium_timeline
+// .facts_layer — not the arm key), so grid.mjs's duplicate-arm rule refused the
+// exact §3 comparison the program exists to quote. The layer is part of the
+// arm's identity: differently-layered runs compose as two DISTINCTLY labeled
+// columns, the same layer twice still refuses, and unstamped regimes render —
+// and refuse — exactly as before.
+
+describe('task 225 — rows-path and flag-path timeline runs compose as labeled columns', () => {
+  it('a memory-rows run and an am_facts run compose, with two DISTINCTLY labeled timeline rows in the scores table', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    expect(out.file).toBe(path.join(receiptsDir(), 'run-rows+run-am-grid.md'));
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline [memory-rows] | run-rows | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+  });
+
+  it('the per-question-type tables label each timeline arm from its run\'s own regime', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('#### mycelium-timeline [memory-rows]');
+    expect(md).toContain('#### mycelium-timeline [am_facts]');
+  });
+
+  it('the win condition renders one labeled block per timeline run — one knowledge-update cell each, same bars', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| cell | bar | mycelium-timeline [memory-rows] | mem0 | mycelium-extract | verdict |');
+    expect(md).toContain('| cell | bar | mycelium-timeline [am_facts] | mem0 | mycelium-extract | verdict |');
+    // one judged KU cell per run at the SAME pre-committed bar (n=5 → judged, all wrong → FAIL)
+    expect(md.match(/\| knowledge-update \| ≥ 0\.60 \| 0\.000 \(n=5\)/g)?.length).toBe(2);
+    expect(md.match(/^VERDICT: /gm)?.length).toBe(2);
+  });
+
+  it('two runs with the SAME layer still refuse as duplicates — naming the layer', () => {
+    const dirA = writeTimelineRun('run-r1', { runId: 'run-r1', factsLayer: 'memory-rows' });
+    const dirB = writeTimelineRun('run-r2', { runId: 'run-r2', factsLayer: 'memory-rows' });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(
+      /duplicate_arm[\s\S]*run-r1='mycelium-timeline' \[memory-rows\] \| run-r2='mycelium-timeline' \[memory-rows\]/
+    );
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a composite where the SAME layer appears twice refuses, naming the layer', () => {
+    const dirs = [
+      writeTimelineRun('run-a', { runId: 'run-a', factsLayer: 'memory-rows' }),
+      writeTimelineRun('run-b', { runId: 'run-b', factsLayer: 'am_facts' }),
+      writeTimelineRun('run-c', { runId: 'run-c', factsLayer: 'memory-rows' }),
+    ];
+    expect(() => composeGrid({ dirs, generatedAt: 'x', receiptsDir: receiptsDir() })).toThrow(
+      /duplicate_arm[\s\S]*run-a='mycelium-timeline' \[memory-rows\][\s\S]*run-c='mycelium-timeline' \[memory-rows\]/
+    );
+  });
+
+  it('an old-regime run (no facts_layer stamp) composes and renders the bare name', () => {
+    const dirOld = writeTimelineRun('run-old', { runId: 'run-old' });
+    const dirMem0 = writeFixtureRun('run-mem0', {
+      runId: 'run-mem0',
+      arms: { mem0: armEntry(5, 3, 1, 1) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2', 'q3', 'q4', 'q5'],
+    });
+    const out = composeGrid({ dirs: [dirOld, dirMem0], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).not.toContain('mycelium-timeline [');
+  });
+
+  it('an old-regime timeline run composes beside a stamped one — bare beside labeled (the layers are distinct measurements)', () => {
+    const dirOld = writeTimelineRun('run-old', { runId: 'run-old' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirOld, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+  });
+
+  it('two old-regime timeline runs still refuse exactly as today (bare names, no brackets)', () => {
+    const dirA = writeTimelineRun('run-o1', { runId: 'run-o1' });
+    const dirB = writeTimelineRun('run-o2', { runId: 'run-o2' });
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir() })).toThrow(
+      /duplicate_arm[\s\S]*run-o1='mycelium-timeline' \| run-o2='mycelium-timeline'/
+    );
+  });
+});
+
+describe('task 225 — the single-run receipt is self-identifying', () => {
+  const baseSummary = (regime) => ({
+    run_id: 'r',
+    regime,
+    arms: { 'mycelium-timeline': { n: 2, score: { counts: { exact: 1, partial: 0, wrong: 1 }, p1_score: 0.5 } } },
+    write_info: {},
+  });
+  const judgedRows = (arm) =>
+    ['q1', 'q2'].map((qid) => ({ question_id: qid, arm, question_type: 'knowledge-update', label: 'wrong' }));
+
+  it('the scores table renders [am_facts] beside the arm name when the run stamps it', () => {
+    const md = renderReceipt({
+      runId: 'r',
+      summary: baseSummary({ mycelium_timeline: { facts_layer: 'am_facts' } }),
+      generatedAt: 'g',
+    });
+    expect(md).toContain('| mycelium-timeline [am_facts] | 2 | 1 | 0 | 1 | 0.500 |');
+  });
+
+  it('the per-question-type table labels the arm the same way', () => {
+    const md = renderReceipt({
+      runId: 'r',
+      summary: baseSummary({ mycelium_timeline: { facts_layer: 'am_facts' } }),
+      judged: judgedRows('mycelium-timeline'),
+      generatedAt: 'g',
+    });
+    expect(md).toContain('#### mycelium-timeline [am_facts]');
+  });
+
+  it('an old regime (no facts_layer key) renders the bare arm name', () => {
+    const md = renderReceipt({ runId: 'r', summary: baseSummary({ notes: [] }), generatedAt: 'g' });
+    expect(md).toContain('| mycelium-timeline | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).not.toContain('mycelium-timeline [');
   });
 });

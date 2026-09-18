@@ -40,6 +40,25 @@ export const WIN_CONDITION = {
 const fmtScore = (s) => s.toFixed(3);
 const fmtMin = (m) => m.toFixed(2);
 
+// The facts layer a run's timeline arm measured (task 206's regime stamp —
+// the MYCELIUM_TIMELINE_FACTS switch names its store; the arm KEY never
+// changes). Null when the regime predates the stamp: absence renders the
+// bare arm name everywhere, so banked pre-206 runs are untouched.
+export function factsLayerOf(regime) {
+  const v = regime?.mycelium_timeline?.facts_layer;
+  return typeof v === 'string' && v ? v : null;
+}
+
+// The rendered identity of an arm, read from its run's own regime — never a
+// hand-typed label: the timeline arm carries ` [<facts_layer>]` when stamped,
+// every other arm (and every unstamped run) renders bare. This is what keeps
+// a memory-rows run and an am_facts run distinguishable in one grid.
+export function timelineArmLabel(regime, arm = WIN_CONDITION.arm) {
+  if (arm !== WIN_CONDITION.arm) return arm;
+  const layer = factsLayerOf(regime);
+  return layer ? `${arm} [${layer}]` : arm;
+}
+
 // (exact + 0.5×partial) / n — the same p1_score the summary uses, per cell.
 export function p1ScoreOf({ n, exact, partial }) {
   if (!n) return null;
@@ -207,10 +226,10 @@ function cellText(counts, min) {
  * for context, 'not in grid' when absent. Ends with the pre-committed verdict
  * line: WIN / MISS (reasons) / UNDECIDED (n=<k>).
  */
-export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeByArm = {}, absentLabel = 'not in grid', notStampedPhrase = 'not stamped' }) {
+export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeByArm = {}, absentLabel = 'not in grid', notStampedPhrase = 'not stamped', armDisplay = WIN_CONDITION.arm, headingNote = null }) {
   const arm = WIN_CONDITION.arm;
   const L = [];
-  L.push('## Timeline arm win condition (pre-committed, brief §3)');
+  L.push(`## Timeline arm win condition (pre-committed, brief §3)${headingNote ? ` — ${headingNote}` : ''}`);
   L.push('');
   L.push(
     `Bars pre-committed in BRIEF-lab-alive-memory-program §3: ${WIN_CONDITION.cells.map((c) => `${c.type} ≥ ${fmtMin(c.min)}`).join('; ')} ` +
@@ -224,7 +243,7 @@ export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeBy
       'An unjudged cost bound never decides. Ingestion loss (≤ Mem0\'s 1.1%) is rendered in the ingestion stats above.'
   );
   L.push('');
-  const header = ['cell', 'bar', arm, ...WIN_CONDITION.comparators, 'verdict'];
+  const header = ['cell', 'bar', armDisplay, ...WIN_CONDITION.comparators, 'verdict'];
   L.push(`| ${header.join(' | ')} |`);
   L.push(`|${header.map(() => '---').join('|')}|`);
   const judgedCells = [];

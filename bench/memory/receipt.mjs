@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid } from './ingestion.mjs';
 import { renderAutopsySection } from './miss_autopsy.mjs';
-import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
+import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, timelineArmLabel } from './per_type.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -77,9 +77,13 @@ export function renderReceipt({
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
 }) {
-  const scoreRow = ([name, a]) => {
+  // The arm's rendered name comes from the run's own regime (task 225): a run
+  // that stamps facts_layer shows `mycelium-timeline [am_facts]`, so a lone
+  // receipt says which store it measured without its run dir. Old regimes
+  // render the bare arm name.
+  const scoreRow = ([name, a], regime = null) => {
     const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
-    return `| ${name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`;
+    return `| ${regime ? timelineArmLabel(regime, name) : name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`;
   };
   const L = [];
   L.push(`# Receipt — memory benchmark P1 skeleton (${runId})`);
@@ -103,7 +107,7 @@ export function renderReceipt({
   L.push('');
   L.push('| arm | n | exact | partial | wrong | p1_score |');
   L.push('|---|---|---|---|---|---|');
-  for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a]));
+  for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a], summary.regime));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
   // task 182: the ingestion-control 2×2 renders only when ALL FOUR grid arms
@@ -131,7 +135,7 @@ export function renderReceipt({
     L.push('');
     L.push('| arm | n | exact | partial | wrong | p1_score |');
     L.push('|---|---|---|---|---|---|');
-    for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a]));
+    for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a], summary.regime));
   }
   // a rejudge of a rejudge: the earlier pass's numbers render under "previous
   // judge", read from its own summary — never retyped, never overwritten
@@ -185,7 +189,7 @@ export function renderReceipt({
     L.push('');
     for (const name of Object.keys(summary.arms)) {
       perType[name] = tallyByType(judged.filter((r) => r.arm === name));
-      for (const line of renderPerTypeTable(name, perType[name])) L.push(line);
+      for (const line of renderPerTypeTable(timelineArmLabel(summary.regime, name), perType[name])) L.push(line);
       L.push('');
     }
     if (summary.arms[WIN_CONDITION.arm]) {
@@ -195,6 +199,7 @@ export function renderReceipt({
         regimeByArm: { [WIN_CONDITION.arm]: summary.regime ?? {} },
         absentLabel: 'not in this run',
         notStampedPhrase: 'not stamped in this run',
+        armDisplay: timelineArmLabel(summary.regime, WIN_CONDITION.arm),
       })) {
         L.push(line);
       }
