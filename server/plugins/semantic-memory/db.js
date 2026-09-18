@@ -653,11 +653,18 @@ export default function createMemoryDB(db, opts) {
     // order, which disagrees with reality the moment a batch migrates in.
     // History is the sibling view over source_type 'verdict' (prior workflow/
     // lane verdicts for a repo/class). Same provenance gate, same ordering.
+    // 237: superseded rows (metadata.superseded_by set) are EXCLUDED by default —
+    // the recall block stops teaching the dead version the moment the correction
+    // lands; ?include_superseded=1 reads them back with their pointer (the §3
+    // rule: history is kept, never erased).
     listProvenanceRows(sourceType, opts) {
       opts = opts || {};
       var limit = Math.min(parseInt(opts.limit, 10) || 20, 100);
       var where = ['source_type = ?', 'chunk_index = 0'];
       var args = [sourceType];
+      if (!opts.include_superseded) {
+        where.push("json_extract(metadata, '$.superseded_by') IS NULL");
+      }
       if (opts.task_class) { where.push("json_extract(metadata, '$.task_class') = ?"); args.push(opts.task_class); }
       if (opts.repo) { where.push("json_extract(metadata, '$.repo') = ?"); args.push(opts.repo); }
       if (opts.since) {
@@ -822,6 +829,18 @@ export default function createMemoryDB(db, opts) {
         embed_queue: Object.assign(embedQueueDepth(), embedDrainSnapshot()),
         by_source_type: byType,
         by_namespace: byNamespace,
+        // Lesson retirements (237): how many lesson rows have been superseded
+        // (metadata.superseded_by set) and the latest valid_to — the weekly
+        // report's "the lab corrected itself N times" line. Zero rows stamps
+        // count 0 / latest null, never an absent field.
+        lessons_superseded: (function () {
+          var row = db.prepare(
+            "SELECT COUNT(*) AS c, MAX(json_extract(metadata, '$.valid_to')) AS latest " +
+            "FROM sm_embeddings WHERE source_type = 'lesson' " +
+            "AND json_extract(metadata, '$.superseded_by') IS NOT NULL"
+          ).get();
+          return { count: row.c, latest: row.latest || null };
+        })(),
         vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP,
         // The decoded-vector cache's own state (194) + its breaker/fallback
         // windows (196): what /stats shows when search latency or the log's

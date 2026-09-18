@@ -405,6 +405,10 @@ export default function (core) {
   // (keyword arm when no embedder is configured; the response reports its mode
   // honestly, same contract as /search — a recall block must never answer from
   // a silently degraded query). q= relevance-ranks; the plain listing date-ranks.
+  // 237: SUPERSEDED rows are excluded from the default block (both arms) — a
+  // corrected lesson stops teaching the moment its correction lands;
+  // ?include_superseded=1 reads them back with their supersede line and
+  // provenance (history kept, never erased — the §3 rule).
   router.get('/lessons', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
@@ -413,16 +417,18 @@ export default function (core) {
       repo: nonEmptyQuery(req.query.repo),
       since: nonEmptyQuery(req.query.since)
     };
+    var includeSuperseded = req.query.include_superseded === '1' || req.query.include_superseded === 'true';
     var limit = Math.min(parseInt(req.query.limit) || 20, 100);
     if (filters.since && !/^\d{4}-\d{2}-\d{2}/.test(filters.since)) {
       return apiError(res, 400, "since must be an ISO date (YYYY-MM-DD); got: '" + filters.since + "'");
     }
 
     if (!req.query.q) {
-      var rows = db.listLessons(Object.assign({}, filters, { limit: limit }));
+      var rows = db.listLessons(Object.assign({}, filters, { limit: limit, include_superseded: includeSuperseded }));
       return res.json({
         source_type: 'lesson', count: rows.length, results: rows,
-        filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since }
+        filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since },
+        include_superseded: includeSuperseded
       });
     }
 
@@ -457,6 +463,7 @@ export default function (core) {
       var beforeFilter = results.length;
       results = results.filter(function (r) {
         var m = r.metadata || {};
+        if (!includeSuperseded && m.superseded_by) return false; // 237: the dead version teaches no more
         if (filters.task_class && m.task_class !== filters.task_class) return false;
         if (filters.repo && m.repo !== filters.repo) return false;
         if (filters.since) {
@@ -490,6 +497,163 @@ export default function (core) {
       res.json(response);
     }).catch(function (e) {
       apiError(res, 500, 'lesson recall failed: ' + e.message);
+    });
+  });
+
+  // POST /memory/lessons/:id/supersede — a corrected lesson replaces this one
+  // (2026-09-18, F-mycelium/237 — BRIEF-lab-alive-memory-program §1 refined
+  // with §3's own semantics: a change SUPERSEDES rather than overwrites;
+  // history is kept, never erased). Body: { by_text | by_id, reason, actor,
+  // evidence, [learned_at], [new_source_id], [metadata] }.
+  //
+  // The hole this closes: lesson rows had NO supersede path (only am_facts
+  // did), so a wrong or outdated lesson recalled FOREVER at full rank — the
+  // exact failure THE DIRECTIVE names. The store's own incident (a chronicler
+  // row banked a PLAN as a FACT; cured by hand with delete + supersede) is the
+  // proof the lab needs the lever its facts already have.
+  //
+  // Effect — mirroring the am_facts route and the timeline arm's rendering:
+  //   * the OLD row's metadata gains valid_to (now), superseded_by,
+  //     superseded_by_text; its indexed CONTENT gains
+  //     "[superseded on <date> by: <new lesson text>]" — a recall hit for the
+  //     old lesson renders its own death, the same line the timeline arm renders;
+  //   * by_text writes the NEW lesson row through the SAME index path, under
+  //     the FULL 186 provenance contract — an under-provenanced correction is
+  //     refused exactly like a first lesson;
+  //   * NEVER a delete: the old row stays (excluded from the default /lessons
+  //     block; ?include_superseded=1 reads it back).
+  //
+  // Refusals at the route, each naming the field: missing actor/evidence/reason
+  // → 400; self-supersede (by_id === :id) → 400; neither/both of by_text|by_id
+  // → 400; by_id naming no lesson → 400; unknown lesson → 404; already
+  // superseded → 409 naming the existing pointer; a new_source_id that already
+  // belongs to another lesson → 409 (never an overwrite). Both writes run in
+  // one transaction — a supersede is both rows or neither.
+  router.post('/lessons/:id/supersede', async function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var oldId = String(req.params.id || '');
+    var body = req.body || {};
+    function str(v) { return typeof v === 'string' ? v.trim() : ''; }
+    var reason = str(body.reason);
+    var actor = str(body.actor);
+    var evidence = str(body.evidence);
+    var byText = str(body.by_text);
+    var byId = str(body.by_id);
+
+    if (!reason) return apiError(res, 400, "supersede refused: 'reason' is required — a correction states why the old lesson dies");
+    if (!actor) return apiError(res, 400, "supersede refused: 'actor' is required — a correction is provenance like any lesson");
+    if (!evidence) return apiError(res, 400, "supersede refused: 'evidence' is required — a correction cites what changed its mind");
+    if (!byText && !byId) {
+      return apiError(res, 400, "supersede refused: 'by_text' or 'by_id' is required — the correcting lesson either arrives as text or already exists as a row");
+    }
+    if (byText && byId) {
+      return apiError(res, 400, "supersede refused: 'by_text' and 'by_id' are mutually exclusive — a correction is new text OR a pointer to an existing row, not both");
+    }
+
+    var oldRow = db.getDoc('lesson', oldId, 0);
+    if (!oldRow) return apiError(res, 404, "supersede refused: no lesson row '" + oldId + "' (lessons are memory rows — source_type 'lesson', source_id '" + oldId + "' not found)");
+    var oldMeta = {};
+    try { oldMeta = JSON.parse(oldRow.metadata || '{}'); } catch (e) { oldMeta = {}; }
+    if (oldMeta.superseded_by) {
+      return apiError(res, 409, "supersede refused: lesson '" + oldId + "' was already superseded on " +
+        (oldMeta.valid_to || '?') + " by '" + oldMeta.superseded_by +
+        "' — supersede the replacement, not the history", {
+        superseded_by: oldMeta.superseded_by,
+        valid_to: oldMeta.valid_to || null
+      });
+    }
+    if (byId && byId === oldId) {
+      return apiError(res, 400, "supersede refused: 'by_id' equals the lesson being superseded ('" + oldId + "') — a lesson cannot replace itself");
+    }
+
+    var now = core.db.prepare("SELECT datetime('now') AS n").get().n; // the store's clock, same format am_facts' valid_to uses
+    var newId, newText, newMeta;
+    if (byId) {
+      var succRow = db.getDoc('lesson', byId, 0);
+      if (!succRow) return apiError(res, 400, "supersede refused: 'by_id' '" + byId + "' names no lesson row — write the correcting lesson first (or pass by_text)");
+      newId = byId;
+      newText = succRow.content_text;
+      try { newMeta = JSON.parse(succRow.metadata || '{}'); } catch (e) { newMeta = {}; }
+    } else {
+      // The 186 gate runs on the ASSEMBLED new-row metadata — an
+      // under-provenanced correction is refused exactly like a first lesson.
+      newId = str(body.new_source_id) || (oldId + '-superseded-' + now.replace(/[^0-9]/g, ''));
+      var metaPassthrough = (body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)) ? body.metadata : {};
+      newMeta = Object.assign({}, oldMeta, metaPassthrough, {
+        actor: actor,
+        // learned_at defaults to now only when the caller left it ABSENT — a
+        // caller who PASSED an empty/whitespace one reaches the 186 gate and is
+        // refused exactly like a first lesson (an empty value is never
+        // silently rescued — the nonEmptyQuery convention).
+        learned_at: (body.learned_at === undefined || body.learned_at === null) ? now : str(body.learned_at),
+        evidence: evidence,
+        reason: reason,
+        supersedes: oldId
+      });
+      var missing = db.missingProvenanceFields(newMeta);
+      if (missing.length > 0) {
+        return apiError(res, 400, "supersede refused: source_type 'lesson' requires provenance metadata — missing: " + missing.join(', '));
+      }
+      if (db.getDoc('lesson', newId, 0)) {
+        return apiError(res, 409, "supersede refused: 'new_source_id' '" + newId + "' already names a lesson — passing one would overwrite it; choose a fresh id");
+      }
+      newText = byText;
+    }
+
+    try {
+      var writeBoth = core.db.transaction(function () {
+        // The new row first (the old row is about to point at it) — through the
+        // SAME index path POST /index uses, so it embeds and searches like
+        // every other lesson. Then the old row re-indexed IN PLACE (same
+        // source_type/source_id, so the upsert replaces its live text): its
+        // content gains the dated supersede line, its metadata the pointer.
+        if (byText) {
+          var chunks = db.indexDoc('lesson', newId, newText, {
+            namespace: oldRow.namespace || null,
+            metadata: newMeta
+          });
+          var stored = db.getDocChunks('lesson', newId);
+          for (var ci = 0; ci < chunks.length; ci++) {
+            autoEmbedUnembedded('lesson', newId, ci, stored[ci]);
+          }
+        }
+        var supersededContent = oldRow.content_text + '\n\n[superseded on ' + now + ' by: ' + newText + ']';
+        var reindexedMeta = Object.assign({}, oldMeta, {
+          valid_to: now,
+          superseded_by: newId,
+          superseded_by_text: newText
+        });
+        db.index('lesson', oldId, supersededContent, {
+          namespace: oldRow.namespace || null,
+          chunk_index: 0,
+          metadata: reindexedMeta
+        });
+        autoEmbedUnembedded('lesson', oldId, 0);
+      });
+      writeBoth();
+    } catch (e) {
+      return apiError(res, 500, 'lesson supersede failed: ' + e.message);
+    }
+
+    core.emitEvent('memory_indexed', who, null,
+      who + ' superseded lesson ' + oldId + ' -> ' + newId,
+      { source_type: 'lesson', source_id: oldId, superseded_by: newId });
+
+    res.json({
+      ok: true,
+      superseded: {
+        source_id: oldId,
+        valid_to: now,
+        superseded_by: newId,
+        superseded_by_text: newText,
+        reason: reason
+      },
+      replacement: {
+        source_id: newId,
+        content_text: newText,
+        metadata: newMeta
+      }
     });
   });
 
