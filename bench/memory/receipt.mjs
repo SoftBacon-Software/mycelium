@@ -121,7 +121,10 @@ export function renderReceipt({
     L.push(renderAutopsySection(autopsy));
     L.push('');
   }
-  if ((rejudge || reanswer) && summary.original?.arms) {
+  if ((rejudge || reanswer) && summary.original?.summary_missing) {
+    L.push('');
+    L.push(`Original run \`${(rejudge ?? reanswer).ofRunId}\` wrote NO summary.json (it died before its judge finished); there are no pre-${rejudge ? 'rejudge' : 'reanswer'} scores — run_id, arms and regime above were reconstructed from the saved <arm>.rows.jsonl.`);
+  } else if ((rejudge || reanswer) && summary.original?.arms) {
     L.push('');
     L.push(`Original run \`${(rejudge ?? reanswer).ofRunId}\` scores (pre-${rejudge ? 'rejudge' : 'reanswer'}, from the run's own summary):`);
     L.push('');
@@ -241,7 +244,9 @@ export function renderReceipt({
     L.push(`- rows (the saved answers, unchanged): \`bench/memory/results/${rejudge.ofRunId}/\` (<arm>.rows.jsonl)`);
     L.push(`- judged (rejudge): \`bench/memory/results/${rejudge.ofRunId}/judged.rejudge.jsonl\``);
     L.push(`- summary (rejudge): \`bench/memory/results/${rejudge.ofRunId}/summary.rejudge.json\``);
-    L.push(`- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
+    L.push(summary.original?.summary_missing
+      ? '- original receipt: none — the run died before writing summary.json or a receipt'
+      : `- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
     L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
   } else if (reanswer) {
     L.push(`- rows (re-answer of the kept namespaces): \`bench/memory/results/${reanswer.ofRunId}/\` (<arm>.rows.reanswer-${reanswer.readPolicy}.jsonl)`);

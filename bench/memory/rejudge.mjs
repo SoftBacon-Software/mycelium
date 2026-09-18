@@ -17,6 +17,50 @@ function readJsonlFile(file) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
+// The saved run's summary.json, or — when the run died before writing it (the
+// 2026-09-18 r2 run answered all 50 questions and then lost its judge to a
+// seat refusal, so the finally-cleanup ran and summary.json never existed) — a
+// reconstruction from the evidence that IS on disk: every <arm>.rows.jsonl row
+// carries the run's regime stamp (answerer, judge, retrieval, git_sha…), the
+// arm is the file's name and n is its row count. The reconstruction is stamped
+// as such in the rejudge summary; nothing is invented (no original scores, no
+// write_info) and a rows file whose rows disagree on the regime is refused.
+function loadOriginal(dir) {
+  const summaryPath = path.join(dir, 'summary.json');
+  if (fs.existsSync(summaryPath)) {
+    const original = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+    if (!original?.run_id || !original?.regime || !original?.arms) {
+      throw new Error(`rejudge: ${summaryPath} is not a bench summary (run_id/regime/arms missing)`);
+    }
+    return { original, summaryMissing: false };
+  }
+  const rowFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.rows.jsonl')).sort();
+  if (rowFiles.length === 0) {
+    throw new Error(`rejudge: ${summaryPath} is missing and ${dir} holds no <arm>.rows.jsonl — nothing to re-judge`);
+  }
+  const arms = {};
+  let regime = null;
+  for (const f of rowFiles) {
+    const arm = f.slice(0, -'.rows.jsonl'.length);
+    const armRows = readJsonlFile(path.join(dir, f));
+    for (const r of armRows) {
+      if (!r?.regime?.judge || !r?.regime?.answerer) {
+        throw new Error(`rejudge: ${summaryPath} is missing and a row in ${f} carries no regime stamp — cannot reconstruct the run's regime`);
+      }
+      const stamp = JSON.stringify(r.regime);
+      if (regime === null) regime = { json: stamp, value: r.regime };
+      else if (regime.json !== stamp) {
+        throw new Error(`rejudge: ${summaryPath} is missing and the rows in ${dir} disagree on the regime stamp — refusing to reconstruct`);
+      }
+    }
+    arms[arm] = { n: armRows.length };
+  }
+  return {
+    original: { run_id: path.basename(dir), regime: regime.value, arms },
+    summaryMissing: true,
+  };
+}
+
 export async function rejudgeRun({
   dir,                 // the saved run's results dir (summary.json + <arm>.rows.jsonl)
   judgeFn,             // async ({question, gold, answer}) => {label, raw, hadThink}
@@ -26,11 +70,7 @@ export async function rejudgeRun({
   onJudged,            // (row) => void — incremental persistence hook (run.mjs streams to judged.rejudge.jsonl)
   log = () => {},
 }) {
-  const summaryPath = path.join(dir, 'summary.json');
-  const original = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
-  if (!original?.run_id || !original?.regime || !original?.arms) {
-    throw new Error(`rejudge: ${summaryPath} is not a bench summary (run_id/regime/arms missing)`);
-  }
+  const { original, summaryMissing } = loadOriginal(dir);
   const rejudgedFrom = original.run_id;
   const outFile = path.join(dir, 'judged.rejudge.jsonl');
   if (fs.existsSync(outFile)) {
@@ -85,6 +125,7 @@ export async function rejudgeRun({
       date_utc: generatedAtUtc,
       answers_modified: false,
       note: 'labels re-computed from the saved answers (judged.rejudge.jsonl); no answerer or platform calls',
+      ...(summaryMissing ? { original_summary: 'missing — run_id, arms and regime reconstructed from <arm>.rows.jsonl (the run died before writing summary.json); no original scores exist' } : {}),
     },
   };
 
@@ -106,7 +147,7 @@ export async function rejudgeRun({
     arms,
     // the run's own pre-rejudge numbers, carried for the before/after read —
     // the receipt renders them, nothing is re-typed
-    original: { run_id: rejudgedFrom, judge: original.regime.judge, arms: original.arms },
+    original: { run_id: rejudgedFrom, judge: original.regime.judge, arms: original.arms, ...(summaryMissing ? { summary_missing: true } : {}) },
   };
 
   return { summary, judged, judgedFilePath: outFile };

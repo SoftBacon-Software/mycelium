@@ -207,4 +207,79 @@ describe('rejudge receipt rendering', () => {
     expect(md).toContain('| none | 2 | 0 | 0 | 2 | 0.000 |');
     expect(md).toContain('- summary: `bench/memory/results/run-a/summary.json`');
   });
+  it('reconstructs a run whose summary.json never existed from the regime-stamped rows, and stamps the reconstruction', async () => {
+    // the 2026-09-18 shape: 50 answers on disk, judge died at q1, finally-cleanup ran, no summary.json
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-rejudge-missing-'));
+    const dir = path.join(root, '2026-09-17-p1-224225');
+    fs.mkdirSync(dir);
+    const regime = {
+      date_utc: '2026-09-17T22:42:25Z', git_sha: 'd73978f0', git_dirty: false, harness: 'test',
+      dataset: { name: 'fixture', sha256: 'deadbeef' },
+      answerer: { model: 'qwen3.8:27b', url_host: '100.95.5.83:11434' },
+      judge: { model: 'Laguna-XS-2.1-mlx-oq4e-agentic-ours', url_host: 'localhost:8780', judge_prompt_version: 'judge-prompt.2' },
+      retrieval: { budget: 5, namespace: 'bench-p1-2026-09-17-p1-224225' },
+      platform: { url_host: '192.168.50.106:3002' },
+      n: 2, selection_rule: 'test', notes: [],
+    };
+    const row = (o) => JSON.stringify({ ...o, regime, arm: 'mycelium-timeline' });
+    fs.writeFileSync(path.join(dir, 'mycelium-timeline.rows.jsonl'), [
+      row({ question_id: 'q1', question_type: 'knowledge-update', question: 'Which city?', gold: 'Lisbon', answer: 'Lisbon.' }),
+      row({ question_id: 'q2', question_type: 'knowledge-update', question: 'How many?', gold: '43', answer: 'I do not know.' }),
+    ].join('\n'));
+    expect(fs.existsSync(path.join(dir, 'summary.json'))).toBe(false);
+
+    const calls = [];
+    const judgeFn = async ({ question, gold, answer }) => { calls.push({ question, gold, answer }); return { label: answer.includes(gold) ? 'exact' : 'wrong', raw: 'RAW', hadThink: false }; };
+    const result = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'Laguna-XS-2.1-mlx-oq4e-agentic-ours', url_host: '127.0.0.1:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T06:30:00Z',
+    });
+    expect(calls).toHaveLength(2);
+    expect(result.summary.rejudged_from).toBe('2026-09-17-p1-224225'); // the dir name IS the run id
+    expect(result.summary.run_id).toBe('2026-09-17-p1-224225-rejudge');
+    expect(result.summary.arms['mycelium-timeline'].n).toBe(2);
+    expect(result.summary.arms['mycelium-timeline'].score.counts).toEqual({ exact: 1, partial: 0, wrong: 1 });
+    // the regime is the rows' own stamp, not invented
+    expect(result.summary.regime.answerer).toEqual(regime.answerer);
+    expect(result.summary.regime.retrieval).toEqual(regime.retrieval);
+    // and the reconstruction is stamped where the receipt reads
+    expect(result.summary.regime.rejudge.original_summary).toMatch(/missing/);
+    expect(result.summary.original.summary_missing).toBe(true);
+    expect(result.summary.original.arms['mycelium-timeline']).toEqual({ n: 2 }); // no original score exists — none is typed
+    // the receipt still renders from a reconstructed run
+    const md = renderReceipt({
+      runId: result.summary.run_id, summary: result.summary, judged: result.judged,
+      rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
+      generatedAt: '2026-09-18T06:30:00Z',
+    });
+    expect(md).toContain('Re-judge of run `2026-09-17-p1-224225`');
+    expect(md).toContain('wrote NO summary.json'); // the receipt says so instead of rendering an invented original table
+    expect(md).not.toContain('Original run `2026-09-17-p1-224225` scores');
+    expect(md).toContain('original receipt: none');
+    expect(md).toContain('| mycelium-timeline | 2 | 1 | 0 | 1 |'); // the NEW labels render
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('refuses to reconstruct when the rows carry no regime stamp or disagree on it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-rejudge-refuse-'));
+    const dir = path.join(root, 'no-stamp');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'none.rows.jsonl'), JSON.stringify({ question_id: 'q1', question: 'x', gold: 'y', answer: 'y' }));
+    const judgeFn = async () => ({ label: 'exact', raw: 'RAW', hadThink: false });
+    await expect(rejudgeRun({ dir, judgeFn, judge: { model: 'j', url_host: 'h' }, judgePromptVersion: JUDGE_PROMPT_VERSION, generatedAtUtc: 'now' }))
+      .rejects.toThrow(/carries no regime stamp/);
+
+    const dir2 = path.join(root, 'disagree');
+    fs.mkdirSync(dir2);
+    const base = { answerer: { model: 'a', url_host: 'h' }, judge: { model: 'j', url_host: 'h' } };
+    fs.writeFileSync(path.join(dir2, 'none.rows.jsonl'), [
+      JSON.stringify({ question_id: 'q1', question: 'x', gold: 'y', answer: 'y', regime: { ...base, git_sha: 'aaa' } }),
+      JSON.stringify({ question_id: 'q2', question: 'x', gold: 'y', answer: 'y', regime: { ...base, git_sha: 'bbb' } }),
+    ].join('\n'));
+    await expect(rejudgeRun({ dir: dir2, judgeFn, judge: { model: 'j', url_host: 'h' }, judgePromptVersion: JUDGE_PROMPT_VERSION, generatedAtUtc: 'now' }))
+      .rejects.toThrow(/disagree on the regime stamp/);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });
