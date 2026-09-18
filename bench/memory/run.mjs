@@ -13,7 +13,7 @@ import { loadSplit, selectItems, BENCH_DIR } from './split.mjs';
 import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.mjs';
 import { makeOpenAIChat } from './answer.mjs';
 import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
-import { rejudgeRun } from './rejudge.mjs';
+import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from './rejudge.mjs';
 import { reanswerRun } from './reanswer.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
@@ -82,9 +82,16 @@ async function main() {
   // no answerer calls, no platform calls. Writes judged.rejudge.jsonl +
   // summary.rejudge.json beside the originals (originals never touched) and,
   // with --receipt, a `<runId>-rejudge` receipt whose regime block records the
-  // judge prompt version and which run was re-judged.
+  // judge prompt version and which run was re-judged. A rejudge over a dir that
+  // already carries a rejudge is evidence too — pass --rejudge-suffix <tag> to
+  // write judged.rejudge-<tag>.jsonl + summary.rejudge-<tag>.json + the
+  // <runId>-rejudge-<tag> receipt BESIDE the first pass (never an overwrite);
+  // the receipt then renders the earlier pass's numbers under "previous judge".
   if (args['from-results'] && args.rejudge) {
     const dir = path.resolve(args['from-results']);
+    const suffix = args['rejudge-suffix'] != null ? String(args['rejudge-suffix']) : null;
+    const names = rejudgeOutputNames(dir, { suffix });
+    assertRejudgeOutputsFree({ judgedFile: names.judgedFile, summaryFile: names.summaryFile });
     const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
     const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
     const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
@@ -95,16 +102,17 @@ async function main() {
       const result = await rejudgeRun({
         dir,
         judgeFn,
+        suffix,
         judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
         judgePromptVersion: JUDGE_PROMPT_VERSION,
         generatedAtUtc: utcStamp(new Date()),
         onJudged: (row) => {
-          if (fd === null) fd = fs.openSync(path.join(dir, 'judged.rejudge.jsonl'), 'w');
+          if (fd === null) fd = fs.openSync(names.judgedFile, 'w');
           fs.writeSync(fd, JSON.stringify(row) + '\n');
         },
         log: (m) => console.error(`[rejudge] ${m}`),
       });
-      const summaryFile = path.join(dir, 'summary.rejudge.json');
+      const summaryFile = names.summaryFile;
       fs.writeFileSync(summaryFile, JSON.stringify(result.summary, null, 2));
 
       let judgeAgreement = null;
@@ -114,6 +122,7 @@ async function main() {
         judgeAgreement = agreement(result.judged, hl.items);
         handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
       }
+      const previousJudges = loadPreviousRejudges(dir, { exclude: [names.summaryFile] });
 
       let receiptFile = null;
       if (args.receipt) {
@@ -124,11 +133,13 @@ async function main() {
           agreement: judgeAgreement,
           handlabels: handlabelsMeta,
           judged: result.judged,
+          previousJudges,
           commands: [
             `node bench/memory/run.mjs --from-results ${dirRel.startsWith('..') ? dir : dirRel} --rejudge` +
+              `${suffix ? ` --rejudge-suffix ${suffix}` : ''}` +
               `${args.handlabels ? ` --handlabels ${args.handlabels}` : ''} --receipt`,
           ],
-          rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
+          rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION, suffix },
           generatedAt: utcStamp(new Date()),
         });
         receiptFile = writeReceipt(result.summary.run_id, md);
@@ -138,6 +149,7 @@ async function main() {
       console.log(JSON.stringify({
         rejudged_from: result.summary.rejudged_from,
         judge_prompt_version: JUDGE_PROMPT_VERSION,
+        ...(suffix ? { rejudge_suffix: suffix } : {}),
         judged_file: path.relative(REPO_ROOT, result.judgedFilePath),
         summary_file: path.relative(REPO_ROOT, summaryFile),
         agreement: judgeAgreement

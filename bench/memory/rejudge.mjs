@@ -5,6 +5,10 @@
 // beside the originals as judged.rejudge.jsonl + summary.rejudge.json —
 // the originals are never written, and an existing rejudge output is
 // refused rather than silently overwritten (a rejudge run is evidence too).
+// A SUFFIXED pass (--rejudge-suffix <tag>) is how a SECOND rejudge happens
+// when one already ran: judged.rejudge-<tag>.jsonl + summary.rejudge-<tag>.json
+// + the <runId>-rejudge-<tag> receipt, all beside the first pass — a new
+// evidence file, never an overwrite of the old one.
 //
 // run.mjs --from-results <dir> --rejudge is the CLI; this module is what the
 // hermetic tests drive with a fake judge.
@@ -15,6 +19,59 @@ import { tally } from './judge.mjs';
 
 function readJsonlFile(file) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+// Output naming for a rejudge pass — the single source of truth shared by
+// rejudgeRun (which refuses on its own output) and run.mjs (which opens the
+// files). A tag must be filename-safe: it becomes part of three artifact names.
+export function rejudgeOutputNames(dir, { suffix = null } = {}) {
+  if (suffix != null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(suffix)) {
+    throw new Error(`rejudge: invalid --rejudge-suffix '${suffix}' — letters, digits, dot, dash, underscore only`);
+  }
+  const stem = suffix ? `rejudge-${suffix}` : 'rejudge';
+  return {
+    stem,
+    judgedFile: path.join(dir, `judged.${stem}.jsonl`),
+    summaryFile: path.join(dir, `summary.${stem}.json`),
+  };
+}
+
+// The refusal BEFORE any judge call: either of this pass's output files already
+// existing is a stop, never an overwrite. run.mjs calls this with
+// rejudgeOutputNames' result; rejudgeRun re-checks its judged file so the
+// module stays safe on its own.
+export function assertRejudgeOutputsFree({ judgedFile, summaryFile }) {
+  for (const f of [judgedFile, summaryFile]) {
+    if (fs.existsSync(f)) throw new Error(`rejudge: ${f} already exists — move or delete it explicitly before re-running`);
+  }
+}
+
+// The dir's PRIOR rejudge summaries (summary.rejudge*.json), oldest first — the
+// receipt renders their numbers under "previous judge" when this pass is a
+// rejudge of a rejudge. exclude = this pass's own output paths. A prior that
+// does not parse or lacks run_id/arms is a refusal, not a silent skip.
+export function loadPreviousRejudges(dir, { exclude = [] } = {}) {
+  const excl = new Set(exclude.map((e) => path.resolve(e)));
+  const found = [];
+  for (const f of fs.readdirSync(dir).filter((f) => /^summary\.rejudge.*\.json$/.test(f)).sort()) {
+    const full = path.join(dir, f);
+    if (excl.has(path.resolve(full))) continue;
+    const s = JSON.parse(fs.readFileSync(full, 'utf8'));
+    if (!s?.run_id || !s?.arms) throw new Error(`rejudge: ${full} is not a rejudge summary (run_id/arms missing)`);
+    found.push({
+      full,
+      file: f,
+      run_id: s.run_id,
+      judge_prompt_version: s.judge_prompt_version ?? null,
+      generated_at_utc: s.generated_at_utc ?? '',
+      arms: s.arms,
+    });
+  }
+  return found.sort((a, b) =>
+    a.generated_at_utc !== b.generated_at_utc
+      ? (a.generated_at_utc < b.generated_at_utc ? -1 : 1)
+      : (a.file < b.file ? -1 : 1)
+  );
 }
 
 // The saved run's summary.json, or — when the run died before writing it (the
@@ -67,12 +124,13 @@ export async function rejudgeRun({
   judge,               // {model, url_host} actually used this pass — stamped into the regime
   judgePromptVersion,  // e.g. 'judge-prompt.2' — stamped into the regime + summary
   generatedAtUtc,
-  onJudged,            // (row) => void — incremental persistence hook (run.mjs streams to judged.rejudge.jsonl)
+  suffix = null,       // 'prompt3' — names this pass judged.rejudge-<tag>.jsonl etc. beside any earlier one
+  onJudged,            // (row) => void — incremental persistence hook (run.mjs streams to the judged file)
   log = () => {},
 }) {
   const { original, summaryMissing } = loadOriginal(dir);
   const rejudgedFrom = original.run_id;
-  const outFile = path.join(dir, 'judged.rejudge.jsonl');
+  const { judgedFile: outFile } = rejudgeOutputNames(dir, { suffix });
   if (fs.existsSync(outFile)) {
     throw new Error(`rejudge: ${outFile} already exists — move or delete it explicitly before re-running`);
   }
@@ -124,7 +182,8 @@ export async function rejudgeRun({
       of_run_id: rejudgedFrom,
       date_utc: generatedAtUtc,
       answers_modified: false,
-      note: 'labels re-computed from the saved answers (judged.rejudge.jsonl); no answerer or platform calls',
+      note: `labels re-computed from the saved answers (${path.basename(outFile)}); no answerer or platform calls`,
+      ...(suffix ? { suffix } : {}),
       ...(summaryMissing ? { original_summary: 'missing — run_id, arms and regime reconstructed from <arm>.rows.jsonl (the run died before writing summary.json); no original scores exist' } : {}),
     },
   };
@@ -138,7 +197,7 @@ export async function rejudgeRun({
   }
 
   const summary = {
-    run_id: `${rejudgedFrom}-rejudge`,
+    run_id: `${rejudgedFrom}-rejudge${suffix ? `-${suffix}` : ''}`,
     rejudged_from: rejudgedFrom,
     judge_prompt_version: judgePromptVersion,
     generated_at_utc: generatedAtUtc,

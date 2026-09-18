@@ -72,7 +72,8 @@ export function renderReceipt({
   writeInfo = null,
   autopsy = null, // computed autopsy (miss_autopsy.mjs) — rendered beside the cell table
   judged = null, // the run's per-question judged rows (bench/memory/results/<run>/judged.jsonl)
-  rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
+  rejudge = null, // {ofRunId, judgePromptVersion, suffix?} — present on a rejudge receipt
+  previousJudges = null, // [{file, run_id, judge_prompt_version, arms}] — prior rejudge summaries (rejudgeOutputNames' siblings)
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
 }) {
@@ -86,7 +87,7 @@ export function renderReceipt({
   L.push(`Generated: ${generatedAt}`);
   if (rejudge) {
     L.push('');
-    L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`.`);
+    L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`${rejudge.suffix ? `, tagged \`${rejudge.suffix}\`` : ''}.`);
     L.push('The answers are the original run\'s own (no answerer calls, no platform calls) — only the');
     L.push('judge labels were re-computed. The original run\'s scores are rendered below the new ones.');
   }
@@ -131,6 +132,18 @@ export function renderReceipt({
     L.push('| arm | n | exact | partial | wrong | p1_score |');
     L.push('|---|---|---|---|---|---|');
     for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a]));
+  }
+  // a rejudge of a rejudge: the earlier pass's numbers render under "previous
+  // judge", read from its own summary — never retyped, never overwritten
+  if (rejudge && Array.isArray(previousJudges) && previousJudges.length) {
+    for (const p of previousJudges) {
+      L.push('');
+      L.push(`Previous judge \`${p.run_id}\` (prompt version \`${p.judge_prompt_version ?? 'unstamped'}\`, from \`${p.file}\`):`);
+      L.push('');
+      L.push('| arm | n | exact | partial | wrong | p1_score |');
+      L.push('|---|---|---|---|---|---|');
+      for (const [name, a] of Object.entries(p.arms)) L.push(scoreRow([name, a]));
+    }
   }
   L.push('');
   for (const [name, a] of Object.entries(summary.arms)) {
@@ -241,9 +254,10 @@ export function renderReceipt({
   L.push('## Artifacts');
   L.push('');
   if (rejudge) {
+    const stem = rejudge.suffix ? `rejudge-${rejudge.suffix}` : 'rejudge';
     L.push(`- rows (the saved answers, unchanged): \`bench/memory/results/${rejudge.ofRunId}/\` (<arm>.rows.jsonl)`);
-    L.push(`- judged (rejudge): \`bench/memory/results/${rejudge.ofRunId}/judged.rejudge.jsonl\``);
-    L.push(`- summary (rejudge): \`bench/memory/results/${rejudge.ofRunId}/summary.rejudge.json\``);
+    L.push(`- judged (${stem}): \`bench/memory/results/${rejudge.ofRunId}/judged.${stem}.jsonl\``);
+    L.push(`- summary (${stem}): \`bench/memory/results/${rejudge.ofRunId}/summary.${stem}.json\``);
     L.push(summary.original?.summary_missing
       ? '- original receipt: none — the run died before writing summary.json or a receipt'
       : `- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);

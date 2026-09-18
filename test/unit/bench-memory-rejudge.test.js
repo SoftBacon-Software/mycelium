@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { rejudgeRun } from '../../bench/memory/rejudge.mjs';
+import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from '../../bench/memory/rejudge.mjs';
 import { renderReceipt } from '../../bench/memory/receipt.mjs';
 import { JUDGE_PROMPT_VERSION } from '../../bench/memory/judge.mjs';
 
@@ -86,7 +86,7 @@ describe('rejudgeRun — re-judge a saved run\'s answers (hermetic)', () => {
     });
     expect(summary.run_id).toBe('run-a-rejudge');
     expect(summary.rejudged_from).toBe('run-a');
-    expect(summary.judge_prompt_version).toBe('judge-prompt.2');
+    expect(summary.judge_prompt_version).toBe(JUDGE_PROMPT_VERSION);
     // new labels: refusals are wrong now, stated facts are exact
     expect(summary.arms.none.score.counts).toEqual({ exact: 1, partial: 0, wrong: 1 });
     expect(summary.arms.mycelium.score.counts).toEqual({ exact: 1, partial: 0, wrong: 0 });
@@ -95,7 +95,7 @@ describe('rejudgeRun — re-judge a saved run\'s answers (hermetic)', () => {
     expect(summary.original.judge).toEqual({ model: 'old-judge', url_host: 'old:8780' });
     // regime: answers keep the original stamp; judge block + rejudge marker say what changed
     expect(summary.regime.dataset).toEqual({ name: 'fixture', sha256: 'deadbeef' });
-    expect(summary.regime.judge).toEqual({ model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: 'judge-prompt.2' });
+    expect(summary.regime.judge).toEqual({ model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: JUDGE_PROMPT_VERSION });
     expect(summary.regime.rejudge).toMatchObject({ of_run_id: 'run-a', answers_modified: false });
   });
 
@@ -194,6 +194,7 @@ describe('rejudge receipt rendering', () => {
     expect(md).toContain('"judge_prompt_version": "judge-prompt.2"'); // regime block records it
     expect(md).toContain('"of_run_id": "run-a"'); // regime block records the source run
     expect(md).not.toContain('NOT RECORDED in this receipt');
+    expect(md).not.toContain('Previous judge'); // no prior rejudge in the dir -> no previous-judge section
   });
 
   it('a plain (fresh-run) receipt is unchanged — no rejudge block, no second table', () => {
@@ -281,5 +282,164 @@ describe('rejudge receipt rendering', () => {
     await expect(rejudgeRun({ dir: dir2, judgeFn, judge: { model: 'j', url_host: 'h' }, judgePromptVersion: JUDGE_PROMPT_VERSION, generatedAtUtc: 'now' }))
       .rejects.toThrow(/disagree on the regime stamp/);
     fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('rejudge — the suffixed second pass (task 221): writes beside, never over', () => {
+  let root;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-rejudge-suffix-')); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  function fakeJudge(labelFor) {
+    return async ({ question, gold, answer }) => (
+      { label: labelFor({ question, gold, answer }), raw: 'RAW', hadThink: false }
+    );
+  }
+
+  // a dir whose FIRST rejudge already happened — the exact state that refuses a plain --rejudge
+  function writeRejudgedRunDir() {
+    const dir = writeRunDir(root);
+    fs.writeFileSync(path.join(dir, 'judged.rejudge.jsonl'), '{"planted": true}\n');
+    fs.writeFileSync(path.join(dir, 'summary.rejudge.json'), JSON.stringify({
+      run_id: 'run-a-rejudge', rejudged_from: 'run-a', judge_prompt_version: 'judge-prompt.2',
+      generated_at_utc: '2026-09-18T06:26:01Z',
+      arms: {
+        none: { n: 2, score: { n: 2, counts: { exact: 0, partial: 1, wrong: 1 }, unparsed: 0, p1_score: 0.25 } },
+        mycelium: { n: 1, score: { n: 1, counts: { exact: 1, partial: 0, wrong: 0 }, unparsed: 0, p1_score: 1 } },
+      },
+    }, null, 2));
+    return dir;
+  }
+
+  it('rejudgeOutputNames: plain vs suffixed names — and a suffix that would wander the filesystem is refused', () => {
+    expect(rejudgeOutputNames('/tmp/run-a')).toEqual({
+      stem: 'rejudge',
+      judgedFile: '/tmp/run-a/judged.rejudge.jsonl',
+      summaryFile: '/tmp/run-a/summary.rejudge.json',
+    });
+    expect(rejudgeOutputNames('/tmp/run-a', { suffix: 'prompt3' })).toEqual({
+      stem: 'rejudge-prompt3',
+      judgedFile: '/tmp/run-a/judged.rejudge-prompt3.jsonl',
+      summaryFile: '/tmp/run-a/summary.rejudge-prompt3.json',
+    });
+    for (const bad of ['../evil', 'a/b', 'has space', '', '.hidden']) {
+      expect(() => rejudgeOutputNames('/tmp/run-a', { suffix: bad })).toThrow(/invalid --rejudge-suffix/);
+    }
+  });
+
+  it('a suffixed rejudge runs where the plain one refuses — its outputs named beside the first pass', async () => {
+    const dir = writeRejudgedRunDir();
+    const firstPass = fs.readFileSync(path.join(dir, 'judged.rejudge.jsonl'), 'utf8');
+    const result = await rejudgeRun({
+      dir, judgeFn: fakeJudge(({ gold, answer }) => (answer.includes(gold) ? 'exact' : 'wrong')), suffix: 'prompt3',
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T07:00:00Z',
+    });
+    expect(result.judgedFilePath).toBe(path.join(dir, 'judged.rejudge-prompt3.jsonl'));
+    expect(fs.readFileSync(path.join(dir, 'judged.rejudge.jsonl'), 'utf8')).toBe(firstPass); // the first rejudge is untouched
+    expect(fs.existsSync(path.join(dir, 'judged.rejudge-prompt3.jsonl'))).toBe(false); // run.mjs owns the writing; rejudgeRun only names it
+  });
+
+  it('the suffixed summary is tagged: run_id <runId>-rejudge-<tag> and the suffix in the rejudge marker', async () => {
+    const dir = writeRejudgedRunDir();
+    const { summary } = await rejudgeRun({
+      dir, judgeFn: fakeJudge(({ gold, answer }) => (answer.includes(gold) ? 'exact' : 'wrong')), suffix: 'prompt3',
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T07:00:00Z',
+    });
+    expect(summary.run_id).toBe('run-a-rejudge-prompt3'); // the receipt lands at <runId>-rejudge-<tag>.md, beside the first
+    expect(summary.rejudged_from).toBe('run-a');
+    expect(summary.regime.rejudge.suffix).toBe('prompt3');
+    expect(summary.regime.rejudge.of_run_id).toBe('run-a');
+  });
+
+  it('refuses when its own suffixed output already exists — the suffix does not escape the evidence rule', async () => {
+    const dir = writeRejudgedRunDir();
+    fs.writeFileSync(path.join(dir, 'judged.rejudge-prompt3.jsonl'), '');
+    await expect(rejudgeRun({
+      dir, judgeFn: fakeJudge(() => 'exact'), suffix: 'prompt3',
+      judge: { model: 'j', url_host: 'h' }, judgePromptVersion: JUDGE_PROMPT_VERSION, generatedAtUtc: 'now',
+    })).rejects.toThrow(/judged\.rejudge-prompt3\.jsonl already exists/);
+  });
+
+  it('assertRejudgeOutputsFree: either artifact existing is a refusal before any judge call', () => {
+    const dir = writeRejudgedRunDir();
+    // both of THIS pass's outputs free -> passes (the first pass's files are different files)
+    expect(() => assertRejudgeOutputsFree({
+      judgedFile: path.join(dir, 'judged.rejudge-prompt3.jsonl'),
+      summaryFile: path.join(dir, 'summary.rejudge-prompt3.json'),
+    })).not.toThrow();
+    expect(() => assertRejudgeOutputsFree({
+      judgedFile: path.join(dir, 'judged.rejudge.jsonl'),
+      summaryFile: path.join(dir, 'summary.rejudge-prompt3.json'),
+    })).toThrow(/judged\.rejudge\.jsonl already exists/);
+    expect(() => assertRejudgeOutputsFree({
+      judgedFile: path.join(dir, 'judged.rejudge-prompt3.jsonl'),
+      summaryFile: path.join(dir, 'summary.rejudge.json'),
+    })).toThrow(/summary\.rejudge\.json already exists/);
+  });
+
+  it('loadPreviousRejudges: the dir\'s prior rejudge summaries, oldest first, never this pass\'s own output', () => {
+    const dir = writeRejudgedRunDir();
+    fs.writeFileSync(path.join(dir, 'summary.rejudge-aaa.json'), JSON.stringify({
+      run_id: 'run-a-rejudge-aaa', judge_prompt_version: 'judge-prompt.1', generated_at_utc: '2026-09-17T00:00:00Z',
+      arms: { none: { n: 2, score: { n: 2, counts: { exact: 2, partial: 0, wrong: 0 }, unparsed: 0, p1_score: 1 } } },
+    }));
+    const prev = loadPreviousRejudges(dir, { exclude: [path.join(dir, 'summary.rejudge-prompt3.json')] });
+    expect(prev.map((p) => p.run_id)).toEqual(['run-a-rejudge-aaa', 'run-a-rejudge']); // oldest first
+    expect(prev[0].judge_prompt_version).toBe('judge-prompt.1');
+    expect(prev[1].file).toBe('summary.rejudge.json');
+    expect(prev[1].arms.none.score.counts).toEqual({ exact: 0, partial: 1, wrong: 1 });
+    expect(prev.some((p) => p.file === 'summary.rejudge-prompt3.json')).toBe(false);
+    // excluding every prior -> nothing left (a first rejudge has no history)
+    expect(loadPreviousRejudges(dir, {
+      exclude: [path.join(dir, 'summary.rejudge.json'), path.join(dir, 'summary.rejudge-aaa.json')],
+    })).toEqual([]);
+  });
+
+  it('receipt of a rejudge of a rejudge: BOTH prompt versions named, previous numbers under "previous judge", suffixed artifacts', () => {
+    const summary = {
+      run_id: 'run-a-rejudge-prompt3',
+      rejudged_from: 'run-a',
+      judge_prompt_version: 'judge-prompt.3',
+      regime: {
+        date_utc: '2026-09-08T00:00:00Z', git_sha: 'abc123', git_dirty: false, harness: 'test',
+        dataset: { sha256: 'deadbeef' }, answerer: {}, judge: { model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: 'judge-prompt.3' },
+        retrieval: {}, platform: {}, n: 3, selection_rule: 'test', notes: [],
+        rejudge: { of_run_id: 'run-a', date_utc: '2026-09-18T07:00:00Z', answers_modified: false, suffix: 'prompt3' },
+      },
+      arms: {
+        none: { n: 2, score: { n: 2, counts: { exact: 1, partial: 0, wrong: 1 }, unparsed: 0, p1_score: 0.5 } },
+        mycelium: { n: 1, score: { n: 1, counts: { exact: 1, partial: 0, wrong: 0 }, unparsed: 0, p1_score: 1 } },
+      },
+      original: {
+        run_id: 'run-a', summary_missing: true,
+        arms: { none: { n: 2 }, mycelium: { n: 1 } }, // reconstruction — no original scores exist
+      },
+    };
+    const md = renderReceipt({
+      runId: 'run-a-rejudge-prompt3',
+      summary,
+      previousJudges: [
+        { file: 'summary.rejudge.json', run_id: 'run-a-rejudge', judge_prompt_version: 'judge-prompt.2', generated_at_utc: '2026-09-18T06:26:01Z',
+          arms: {
+            none: { n: 2, score: { n: 2, counts: { exact: 0, partial: 1, wrong: 1 }, unparsed: 0, p1_score: 0.25 } },
+            mycelium: { n: 1, score: { n: 1, counts: { exact: 1, partial: 0, wrong: 0 }, unparsed: 0, p1_score: 1 } },
+          } },
+      ],
+      rejudge: { ofRunId: 'run-a', judgePromptVersion: 'judge-prompt.3', suffix: 'prompt3' },
+      generatedAt: '2026-09-18T07:00:00Z',
+    });
+    expect(md).toContain('Re-judge of run `run-a` with judge prompt version `judge-prompt.3`, tagged `prompt3`');
+    expect(md).toMatch(/Previous judge `run-a-rejudge` \(prompt version `judge-prompt\.2`/);
+    expect(md).toContain('from `summary.rejudge.json`');
+    expect(md).toContain('| none | 2 | 0 | 1 | 1 | 0.250 |'); // the v2 numbers, read from summary.rejudge.json — not retyped
+    expect(md).toContain('wrote NO summary.json'); // the reconstruction stamp still renders
+    expect(md).toContain('judged.rejudge-prompt3.jsonl');
+    expect(md).toContain('summary.rejudge-prompt3.json');
+    expect(md).not.toContain('judged.rejudge.jsonl'); // never points at the first pass's artifacts
+    expect(md).toContain('"suffix": "prompt3"'); // regime block records the tag
   });
 });

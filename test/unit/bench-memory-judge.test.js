@@ -90,53 +90,70 @@ describe('bench/memory judge against a fake model', () => {
   });
 });
 
-describe('bench/memory judge prompt v2 — a non-answer is WRONG, never PARTIAL', () => {
+describe('bench/memory judge prompt v3 — an abstention gold makes a clean abstention EXACT', () => {
+  // the rule spans wrapped lines; normalize whitespace before matching long shapes
+  const norm = (s) => s.replace(/\s+/g, ' ');
+
   it('stamps the rubric version', () => {
-    expect(JUDGE_PROMPT_VERSION).toBe('judge-prompt.2');
+    expect(JUDGE_PROMPT_VERSION).toBe('judge-prompt.3');
   });
 
-  it('the rubric leads with does-not-state-the-gold-fact => WRONG and names every non-answer shape', () => {
+  it('carries the abstention rule and applies it FIRST — before the WRONG rule', () => {
+    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
+    expect(norm(p)).toMatch(
+      /ABSTENTION GOLD — apply this rule FIRST: if the gold reference answer itself says the information is not available \/ not enough \/ the premise is wrong/
+    );
+    expect(p.indexOf('ABSTENTION GOLD')).toBeLessThan(p.indexOf('- WRONG:'));
+  });
+
+  it('the abstention rule: declining without inventing is EXACT; asserting the unavailable fact is WRONG', () => {
+    const p = norm(judgePrompt({ question: 'q', gold: 'g', answer: 'a' }));
+    expect(p).toMatch(/an assistant answer that declines to assert the missing fact AND does not invent it is EXACT/);
+    expect(p).toMatch(/an answer that asserts a fact the gold says is not available is WRONG/);
+  });
+
+  it('keeps every v2 rule: non-answers WRONG, PARTIAL needs part of the gold fact, EXACT is equivalent wording', () => {
     const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
     expect(p).toMatch(/WRONG: the answer does not state the gold fact/);
     expect(p).toMatch(/not in my memory/i);
     expect(p).toMatch(/restatement of context or memory without the\s+fact/);
     expect(p).toMatch(/different question/);
-    // the rules are ordered: WRONG first, so a grader cannot reach PARTIAL
-    // without first passing the non-answer test
-    expect(p.indexOf('WRONG: the answer does not state')).toBeLessThan(p.indexOf('PARTIAL: the answer states part'));
-  });
-
-  it('PARTIAL requires part of the gold fact on the table — and says what happens otherwise', () => {
-    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
     expect(p).toMatch(/PARTIAL: the answer states part of the gold fact correctly/);
     expect(p).toMatch(/If no part of the gold fact appears,\n\s*the label is WRONG, not PARTIAL/);
     // v1's lenient phrasing must not survive anywhere in the prompt
     expect(p).not.toMatch(/same topic, but incomplete/);
-  });
-
-  it('EXACT keeps the however-phrased contract', () => {
-    const p = judgePrompt({ question: 'q', gold: 'g', answer: 'a' });
     expect(p).toMatch(/EXACT: the answer states the gold fact; essentially equivalent wording is fine/);
+    // the v2 ordering holds too: WRONG still leads the per-shape rules, so a
+    // grader cannot reach PARTIAL without first passing the non-answer test
+    expect(p.indexOf('WRONG: the answer does not state')).toBeLessThan(p.indexOf('PARTIAL: the answer states part'));
   });
 
-  it('the system prompt carries the never-partial rule', () => {
+  it('the system prompt keeps the never-partial rule and gains the abstention carve-out', () => {
     expect(JUDGE_SYSTEM).toMatch(/strict, fair grader/);
     expect(JUDGE_SYSTEM).toMatch(/does not state the gold fact is WRONG, never PARTIAL/);
+    expect(JUDGE_SYSTEM).toMatch(/information is not available/);
+    expect(JUDGE_SYSTEM).toMatch(/declines without inventing is EXACT/);
   });
 
-  it('makeJudge sends the v2 rubric and still parses the one-word reply', async () => {
+  it('makeJudge sends the v3 rubric — abstention rule on top — and still parses the one-word reply', async () => {
     let sawPrompt = null;
     const judge = makeJudge({
       chat: async ({ system, user }) => {
         sawPrompt = user;
         expect(system).toMatch(/never PARTIAL/);
-        return { text: 'WRONG', hadThink: false };
+        return { text: 'EXACT', hadThink: false };
       },
     });
-    const r = await judge({ question: 'How many years?', gold: '43', answer: 'I do not have that in my memory.' });
-    expect(r.label).toBe('wrong');
-    expect(sawPrompt).toContain('Gold reference answer: 43');
-    expect(sawPrompt).toMatch(/does not state the gold fact/);
+    // the 0ddfec37_abs shape: the gold itself says the premise is false
+    const r = await judge({
+      question: 'Do I collect autographed footballs?',
+      gold: 'The information provided is not enough. You mentioned collecting autographed baseball but not football.',
+      answer: 'I don\'t have any information about autographed footballs in your collection. The only autographed items I have records of are 20 autographed baseballs.',
+    });
+    expect(r.label).toBe('exact');
+    expect(sawPrompt).toContain('ABSTENTION GOLD');
+    expect(sawPrompt.indexOf('ABSTENTION GOLD')).toBeLessThan(sawPrompt.indexOf('- WRONG:'));
+    expect(sawPrompt).toContain('Gold reference answer: The information provided is not enough.');
   });
 });
 

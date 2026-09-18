@@ -15,12 +15,23 @@ export const LABELS = ['exact', 'partial', 'wrong'];
 //   rubric (does not state the gold fact — refusals, "not in my memory",
 //   restated context without the fact, a different question); PARTIAL now
 //   REQUIRES part of the gold fact on the table.
-export const JUDGE_PROMPT_VERSION = 'judge-prompt.2';
+// v3 (2026-09-18, task 221): abstention golds. LongMemEval's _abs variants have
+//   golds that THEMSELVES say the information is not available — v2 ruled an
+//   honest answer to those WRONG by rule (run 2026-09-17-p1-224225:
+//   031748ae_abs, 0ddfec37_abs stated the gold and were labelled wrong). The
+//   abstention rule is applied FIRST: a gold whose premise is false makes a
+//   clean decline (asserting nothing the gold says is unavailable) EXACT, and
+//   an answer that asserts the unavailable fact WRONG. Every v2 rule is kept;
+//   the director's hand labels for that run already used the same rule
+//   (167 protocol), so v3 moves the judge TO the hand standard.
+export const JUDGE_PROMPT_VERSION = 'judge-prompt.3';
 
 export const JUDGE_SYSTEM =
   'You are a strict, fair grader for a memory benchmark. You compare an assistant\'s answer ' +
   'to a gold reference answer and output exactly one word. No explanation. ' +
-  'An answer that does not state the gold fact is WRONG, never PARTIAL.';
+  'An answer that does not state the gold fact is WRONG, never PARTIAL. ' +
+  'When the gold reference answer itself says the information is not available, an answer ' +
+  'that likewise declines without inventing is EXACT.';
 
 export function judgePrompt({ question, gold, answer }) {
   return [
@@ -29,6 +40,10 @@ export function judgePrompt({ question, gold, answer }) {
     `Assistant answer: ${answer}`,
     '',
     'Score the assistant answer. Apply these rules in order:',
+    '- ABSTENTION GOLD — apply this rule FIRST: if the gold reference answer itself says the',
+    '  information is not available / not enough / the premise is wrong, then an assistant answer',
+    '  that declines to assert the missing fact AND does not invent it is EXACT; an answer that',
+    '  asserts a fact the gold says is not available is WRONG.',
     '- WRONG: the answer does not state the gold fact. Any refusal or "I don\'t know" /',
     '  "not in my memory" is WRONG; so is a restatement of context or memory without the',
     '  fact itself, an answer to a different question, and an answer asserting a different fact.',
