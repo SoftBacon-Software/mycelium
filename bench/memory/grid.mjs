@@ -435,7 +435,7 @@ export function renderTranscripts(groups) {
   return L;
 }
 
-export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget, transcripts = null }) {
+export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget: _budget, transcripts = null }) {
   const L = [];
   L.push('## Retrieval audit — read-side provenance (task 207)');
   L.push('');
@@ -891,7 +891,6 @@ export function composeGrid({
   // rows file is an ERROR line in the section, not a silent absence), maps the
   // dataset's gold answer sessions, computes the per-type × arm stats over
   // STAMPED rows, and runs the pre-committed rule — mechanical, no judgement.
-  let auditSection = null;
   let auditMeta = null;
   if (audit) {
     const budget = runs[0].summary.regime?.retrieval?.budget;
