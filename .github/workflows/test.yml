@@ -89,7 +89,7 @@ jobs:
   # and the stranger's first real API calls (project → agent → boot round trip).
   # See scripts/compose-smoke.sh.
   compose-smoke:
-    name: compose smoke (recommended path: up --wait + /health + agent round-trip)
+    name: "compose smoke (recommended path — up --wait, /health, agent round-trip)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
