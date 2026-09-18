@@ -375,7 +375,7 @@ export function parseDecision(text, shownIds) {
   const fence = s.match(/^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/);
   if (fence) s = fence[1].trim();
   const line = s.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
-  const sup = line.match(/^SUPERSEDE\s*[:\-]?\s*(\S+)$/i);
+  const sup = line.match(/^SUPERSEDE\s*[:-]?\s*(\S+)$/i);
   if (sup) {
     const id = sup[1].replace(/[.,;]+$/, '');
     if (shownIds.has(id)) return { action: 'SUPERSEDE', id, ok: true };
@@ -530,7 +530,7 @@ export function createArmMyceliumTimeline({
 
       // Facts decided THIS session, still current, visible to later candidates
       // of the same session before the bulk flush lands: {id, text, valid_from}.
-      let sessionFacts = [];
+      let sessionFacts;
       // Every fact row written this question, keyed by source_id, holding the
       // LIVE metadata: an in-session SUPERSEDE rewrites the entry in place so
       // later candidates never see a stale current fact. `flushedIds` marks the
@@ -615,7 +615,7 @@ export function createArmMyceliumTimeline({
         //     thinking off). A malformed reply drops the FACTS of the session,
         //     counted — never the episode row.
         const te = Date.now();
-        let facts = [];
+        let facts;
         const cached = factsStore ? factsStore.load(questionId, idx) : null;
         if (cached) {
           reused++;
