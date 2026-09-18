@@ -834,8 +834,11 @@ export default function createMemoryDB(db, opts) {
         // report's "the lab corrected itself N times" line. Zero rows stamps
         // count 0 / latest null, never an absent field.
         lessons_superseded: (function () {
+          // 241/F1 (review 239a): the supersede flip stamps EVERY chunk of the
+          // dead lesson with the pointer, so the count is per DOC — a
+          // multi-chunk row must retire once, not once per chunk.
           var row = db.prepare(
-            "SELECT COUNT(*) AS c, MAX(json_extract(metadata, '$.valid_to')) AS latest " +
+            "SELECT COUNT(DISTINCT source_id) AS c, MAX(json_extract(metadata, '$.valid_to')) AS latest " +
             "FROM sm_embeddings WHERE source_type = 'lesson' " +
             "AND json_extract(metadata, '$.superseded_by') IS NOT NULL"
           ).get();

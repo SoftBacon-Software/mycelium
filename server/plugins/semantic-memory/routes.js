@@ -618,18 +618,43 @@ export default function (core) {
             autoEmbedUnembedded('lesson', newId, ci, stored[ci]);
           }
         }
-        var supersededContent = oldRow.content_text + '\n\n[superseded on ' + now + ' by: ' + newText + ']';
+        // 241/F1 (review 239a): the flip goes through indexDoc, never a raw
+        // chunk_index-0 db.index — indexDoc replaces the doc's chunk rows and
+        // removes stale chunks 1..N in the SAME transaction. A multi-chunk
+        // lesson left behind used to keep its later chunks at the ORIGINAL
+        // content/metadata: searchHybrid fuses per-chunk, so the dead lesson
+        // stayed recallable at full rank, unmarked.
+        // The doc's content is the WHOLE doc: chunkText is lossless (chunks
+        // join back to the text), and oldRow.content_text is only chunk 0's
+        // slice — marking that slice alone would shrink the doc.
+        var oldChunks = db.getDocChunks('lesson', oldId);
+        var oldFullContent = oldChunks.map(function (c) { return c.content_text; }).join('');
+        var deathLine = '\n\n[superseded on ' + now + ' by: ' + newText + ']';
+        var supersededContent = oldFullContent + deathLine;
         var reindexedMeta = Object.assign({}, oldMeta, {
           valid_to: now,
           superseded_by: newId,
           superseded_by_text: newText
         });
-        db.index('lesson', oldId, supersededContent, {
+        db.indexDoc('lesson', oldId, supersededContent, {
           namespace: oldRow.namespace || null,
-          chunk_index: 0,
           metadata: reindexedMeta
         });
-        autoEmbedUnembedded('lesson', oldId, 0);
+        // The death line is a DOC-level stamp, but chunking may strand it in
+        // the last slice — every surviving chunk that lacks it gains it (still
+        // inside writeBoth), so a recall hit on ANY chunk renders the row's
+        // own death. Then embed what is stored, never a stale copy.
+        var storedChunks = db.getDocChunks('lesson', oldId);
+        for (var si = 0; si < storedChunks.length; si++) {
+          if (storedChunks[si].content_text.indexOf('[superseded on ') === -1) {
+            db.index('lesson', oldId, storedChunks[si].content_text + deathLine, {
+              namespace: storedChunks[si].namespace,
+              chunk_index: storedChunks[si].chunk_index,
+              metadata: reindexedMeta
+            });
+          }
+          autoEmbedUnembedded('lesson', oldId, si, db.getDoc('lesson', oldId, si));
+        }
       });
       writeBoth();
     } catch (e) {
