@@ -357,6 +357,11 @@ describe('makeOpenAIChat — transient failures are retried, deterministic ones 
     expect(isTransientChatError(new Error('chat m: no content in response'))).toBe(false);
     const s = new Error('chat m -> 500: boom'); s.transientStatus = 500;
     expect(isTransientChatError(s)).toBe(true);
+    // 2026-09-18 06:18 live shapes: undici cut the body of oMLX's admission-paused 500
+    // and threw a bare TypeError('terminated'); the seat's own text names the pressure.
+    expect(isTransientChatError(new TypeError('terminated'))).toBe(true);
+    expect(isTransientChatError(new Error('chat m -> 500: Request could not be admitted because memory pressure persisted for 60.4s (admission_paused).'))).toBe(true);
+    expect(isTransientChatError(new Error('chat m -> 400: oMLX prefill memory guard rejected this prompt'))).toBe(false); // a 4xx contract error stays deterministic
   });
 });
 

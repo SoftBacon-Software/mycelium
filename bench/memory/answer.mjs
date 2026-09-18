@@ -24,7 +24,13 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // and the empty-answer guard below (the same request would fail again).
 // A 14-hour detached run must not die on one blip at the answerer or the
 // judge — that is what --from-results --rejudge cannot repair.
-export const CHAT_TRANSIENT = /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|abort|timeout/i;
+// 2026-09-18 06:18: under memory pressure oMLX paused admission for 60 s and
+// answered 500 "Request could not be admitted … (admission_paused)"; undici cut
+// the body and the error surfaced as a bare TypeError('terminated'), which this
+// list did not name, so a 50-call judge pass died on one such blip three times.
+// 'terminated' is undici's body-stream drop; 'admission_paused' / 'memory
+// pressure' are the seat's own "not now".
+export const CHAT_TRANSIENT = /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|abort|timeout|terminated|admission_paused|memory pressure/i;
 
 export function isTransientChatError(e) {
   if (e?.transientStatus) return true;
