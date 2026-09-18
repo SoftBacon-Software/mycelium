@@ -600,6 +600,25 @@ export default function createMemoryDB(db, opts) {
       };
     },
 
+    // The SAME four definitions scoped to ONE namespace (task 214) — the
+    // per-namespace truth the bench's embedding wait needs: a run's own rows
+    // can be 100% embedded while the global index sits at 40% behind the lab's
+    // live write burst, and a wait that can only read the global number burns
+    // its cap on rows the run will never search. Superseded am_fact index rows
+    // count (namespace = ? matches them like any other row — they stay
+    // searchable by design, task 206); a namespace with no rows reads an
+    // honest 0/0/0, same convention as indexHealth's empty index.
+    namespaceHealth(namespace) {
+      var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE namespace = ?').get(namespace).c;
+      var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE namespace = ? AND embedding IS NOT NULL').get(namespace).c;
+      return {
+        rows: total,
+        embedded: withEmbedding,
+        coverage_pct: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
+        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP
+      };
+    },
+
     stats() {
       var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings').get().c;
       var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NOT NULL').get().c;

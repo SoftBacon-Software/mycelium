@@ -1,0 +1,23 @@
+{
+  "write_rows": 50,
+  "namespace_wait": {
+    "scope": "namespace",
+    "namespaces": [
+      "bench-p1-smoke214",
+      "bench-p1-smoke214-amfacts"
+    ],
+    "waited_ms": 15011,
+    "settled": true,
+    "poll_failures": 0,
+    "coverage_after": 100,
+    "coverage_by_namespace": {
+      "bench-p1-smoke214": 100,
+      "bench-p1-smoke214-amfacts": 100
+    }
+  },
+  "global_wait": {
+    "settled": false,
+    "waited_ms": 180379,
+    "last_coverage": 45
+  }
+}

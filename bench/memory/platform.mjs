@@ -231,6 +231,14 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
     },
     async stats() { return call('GET', '/memory/stats'); },
     async config() { return call('GET', '/memory/config'); },
+    // task 214: per-namespace coverage (the bench wait's scoped seam). No
+    // namespace → the global indexHealth shape. A platform older than the
+    // route answers 404 — the caller (embedding_wait) demotes to the global
+    // poll on exactly that signal.
+    async coverage(namespace) {
+      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      return call('GET', `/memory/coverage${q}`);
+    },
     // auto-memory fact routes (task 206) — the reconciled layer's seam in
     // MYCELIUM_TIMELINE_FACTS=am_facts mode. factsCreate carries the full
     // metadata contract (episode/valid_from/supersedes/...); the server

@@ -136,6 +136,23 @@ export function renderReceipt({
       L.push('');
     }
   }
+  // task 214: the per-arm embedding wait, honestly stamped — which scope the
+  // wait actually polled (this run's namespaces vs the global index), how long
+  // it held the run, whether it settled. An arm without a platform write has
+  // no wait; its absence renders as its absence.
+  for (const [name, w] of Object.entries(writeInfo ?? summary.write_info ?? {})) {
+    if (!w?.embed_wait) continue;
+    const ew = w.embed_wait;
+    const bits = [
+      `Embedding wait (${name} arm): scope=${ew.scope}`,
+      ew.namespaces ? ` namespaces=${JSON.stringify(ew.namespaces)}` : '',
+      ` waited_ms=${ew.waited_ms} settled=${ew.settled} poll_failures=${ew.poll_failures}`,
+      ew.coverage_after != null ? ` coverage_after=${ew.coverage_after}` : '',
+      ew.fallback_reason ? ` fallback=${ew.fallback_reason}` : '',
+    ];
+    L.push(bits.join(''));
+    L.push('');
+  }
   // task 188: the timeline arm's write cost against the extract control —
   // computed from the run's own stamps, never hand-typed
   const costLine = timelineCostLine(writeInfo ?? summary.write_info ?? null);

@@ -33,7 +33,7 @@ import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
 import { composeGrid } from './grid.mjs';
 import { purgeNamespaces } from './cleanup.mjs';
-import { waitForEmbeddings } from './embedding_wait.mjs';
+import { waitForArmEmbeddings, armWaitTimeoutMs } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
@@ -943,11 +943,15 @@ async function main() {
         // per-fact rows need the embedder too, or its answers run keyword-fallback
         if ((arm === 'mycelium' || arm === 'mycelium-extract' || arm === 'mycelium-timeline') && platform) {
           const expected = writeInfo.rows;
-          // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
-          // wait with the write size instead of failing into keyword-fallback
-          const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
-          console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
-          const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs, log: (m) => console.error(`[run] ${m}`) });
+          // task 214: the wait waits on THIS run's namespaces (every namespace
+          // the run indexes — base, the extract suffix, the timeline layer),
+          // not on the lab's global coverage; a 404 (older platform) demotes
+          // to the global poll and the stamp says which scope decided. The
+          // Jetson's ollama embedder is sequential (~0.3-0.5s/row): the cap
+          // still scales with the write size instead of failing into
+          // keyword-fallback.
+          console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for coverage of ${runNamespaces.join(', ')} (cap ${Math.round(armWaitTimeoutMs(expected) / 60000)} min)...`);
+          const wait = await waitForArmEmbeddings(platform, { expected, namespaces: runNamespaces, beforeStats: statsBefore, log: (m) => console.error(`[run] ${m}`) });
           console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
           writeInfoByArm[arm].embed_wait = wait;
         }

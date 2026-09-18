@@ -464,6 +464,30 @@ export default function (core) {
     res.json(db.stats());
   });
 
+  // GET /memory/coverage?namespace=<ns> — per-namespace embedding coverage
+  // (task 214). The scoped shape the bench's embedding wait (and any recall
+  // path that knows its own namespace) reads instead of the global number:
+  // {namespace, rows, embedded, coverage_pct} — indexHealth()'s definitions,
+  // scoped; superseded am_fact index rows count (searchable by design).
+  // GET /memory/coverage with no namespace → the global indexHealth() shape,
+  // the same block /memory/search stamps as `index`. Empty/whitespace
+  // namespace is a 400 (nonEmptyQuery — "no namespace" is the absence of the
+  // param, not a namespace named ""). Agent- OR admin-key readable: the lab's
+  // recall paths read their own coverage with agent keys.
+  router.get('/coverage', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    // "no namespace" is the ABSENCE of the param → the global shape. A param
+    // that is present but empty/whitespace is a caller bug (the nonEmptyQuery
+    // convention: an empty value is never silently "no filter") → 400.
+    var raw = req.query.namespace;
+    if (raw === undefined) return res.json(db.indexHealth());
+    var ns = nonEmptyQuery(raw);
+    if (!ns) return apiError(res, 400, 'namespace, when present, must be non-empty — an empty or whitespace namespace is not "the global index"');
+    var h = db.namespaceHealth(ns);
+    res.json({ namespace: ns, rows: h.rows, embedded: h.embedded, coverage_pct: h.coverage_pct });
+  });
+
   // A drone returning a vector for an embed job authenticates with the same
   // agent key it claims work with (checkAgentOrAdmin falls through to that
   // check). Scope a non-admin (drone) write to an embed job THAT drone claimed,
