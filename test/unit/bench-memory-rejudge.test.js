@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from '../../bench/memory/rejudge.mjs';
 import { renderReceipt } from '../../bench/memory/receipt.mjs';
+import { computeAutopsy, DEFAULT_AUTOPSY_ARM } from '../../bench/memory/miss_autopsy.mjs';
 import { JUDGE_PROMPT_VERSION } from '../../bench/memory/judge.mjs';
 
 // Hermetic rejudge: a fake saved-run dir on disk + a fake judge. No network,
@@ -441,5 +442,175 @@ describe('rejudge — the suffixed second pass (task 221): writes beside, never 
     expect(md).toContain('summary.rejudge-prompt3.json');
     expect(md).not.toContain('judged.rejudge.jsonl'); // never points at the first pass's artifacts
     expect(md).toContain('"suffix": "prompt3"'); // regime block records the tag
+  });
+});
+
+// --- task 223: the run's own summary is the write-phase stamp when the judge
+// died after the write phase. The rejudge prefers it; the reconstruction from
+// rows stays the fallback for runs that predate the stamp.
+
+// A judge-death run dir WITH its write-phase summary.json (the shape task 223
+// leaves on disk): five arms' rows files + summary carrying the write-phase
+// evidence — cost stamps, ingestion stats, the timeline candidates ledger.
+function writeJudgeDeathRunDir(root) {
+  const dir = fs.mkdtempSync(path.join(root, 'run-'));
+  const regime = {
+    date_utc: '2026-09-18T02:00:00Z', git_sha: 'abc123', git_dirty: false, harness: 'test',
+    dataset: { name: 'fixture', sha256: 'deadbeef' },
+    answerer: { model: 'fake-answerer', url_host: 'fake' },
+    judge: { model: 'old-judge', url_host: 'old:8780', judge_prompt_version: 'judge-prompt.2' },
+    retrieval: { budget: 5, namespace: 'bench-p1-run-w' },
+    platform: { url_host: 'fake:3002' },
+    n: 2, selection_rule: 'test', notes: [],
+  };
+  const writeInfo = {
+    mycelium: { docs: 2, rows: 2, skipped: false, write_ms: 500 },
+    'mycelium-extract': { docs: 2, rows: 2, skipped: false, extract_ms: 3600, facts: 5, facts_counts: [2, 3], parse_failures: 0 },
+    'mycelium-timeline': {
+      docs: 2, rows: 2, skipped: false, extract_ms: 3600, reconcile_ms: 5080, facts: 5, facts_counts: [2, 3], parse_failures: 1,
+      timeline: {
+        candidates: 3, adds: 2, supersedes: 1, keeps: 1, auto_adds: 0, decision_calls: 2, decision_failures: 0, fastpath_adds: 1, fastpath_skips_unembedded: 0,
+        per_question: [
+          {
+            question_id: 'q-ku-1',
+            candidates_ledger: [
+              { text: 'Mara is the head of security.', decision: 'ADD', source: 'fastpath_below_threshold', shown_ids: [], top_score: 0.31, source_id: 'f-1', session_index: 0, index: 0, ok: true },
+              { text: 'Mara is now the head of engineering.', decision: 'SUPERSEDE', source: 'decision_call', shown_ids: ['f-1'], top_score: 0.72, source_id: 'f-2', session_index: 1, index: 0, ok: true },
+            ],
+          },
+          {
+            question_id: 'q-ku-2',
+            candidates_ledger: [
+              { text: 'The launch moved to June.', decision: 'KEEP', source: 'decision_call', shown_ids: ['f-3'], top_score: 0.66, source_id: 'f-4', session_index: 1, index: 0, ok: true },
+            ],
+          },
+        ],
+      },
+    },
+    mem0: { docs: 2, rows: 2, skipped: false, write_ms: 4000, parse_failures: 0, facts: 4, facts_counts: [2, 2] },
+    'mem0-raw': { docs: 4, rows: 4, skipped: false, write_ms: 200 },
+  };
+  const arms = {};
+  for (const [name, w] of Object.entries(writeInfo)) arms[name] = { n: name === 'mem0-raw' ? 2 : 2, write: w, elapsed_ms: 10 };
+  fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify({ run_id: 'run-w', n: 2, regime, arms, write_info: writeInfo, phase: 'write' }, null, 2));
+  const row = (arm, o) => JSON.stringify({ regime, arm, ...o });
+  // every arm answers both questions; the timeline arm's q-ku-1 answer is wrong
+  for (const arm of ['mycelium', 'mycelium-extract', 'mem0', 'mem0-raw']) {
+    fs.writeFileSync(path.join(dir, `${arm}.rows.jsonl`), [
+      row(arm, { question_id: 'q-ku-1', question_type: 'knowledge-update', question: 'Who heads engineering?', gold: 'engineering', answer: `${arm} says engineering.` }),
+      row(arm, { question_id: 'q-ku-2', question_type: 'knowledge-update', question: 'When is the launch?', gold: 'June', answer: `${arm} says June.` }),
+    ].join('\n'));
+  }
+  fs.writeFileSync(path.join(dir, 'mycelium-timeline.rows.jsonl'), [
+    row('mycelium-timeline', { question_id: 'q-ku-1', question_type: 'knowledge-update', question: 'Who heads engineering?', gold: 'engineering', answer: 'I do not have that in my memory.', meta: { read_hits: [{ source_id: 'f-9', rank: 0 }], retrieval_mode: 'hybrid' } }),
+    row('mycelium-timeline', { question_id: 'q-ku-2', question_type: 'knowledge-update', question: 'When is the launch?', gold: 'June', answer: 'It moved to June.', meta: { read_hits: [{ source_id: 'f-4', rank: 0 }], retrieval_mode: 'hybrid' } }),
+  ].join('\n'));
+  return dir;
+}
+
+describe('rejudge prefers the run\'s own summary (task 223)', () => {
+  let root;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-rejudge-223-')); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  const judgeFn = async ({ gold, answer }) => ({ label: answer.includes(gold) ? 'exact' : 'wrong', raw: 'RAW', hadThink: false });
+
+  it('a judge-death run: write_info carried, regime from the summary, no reconstruction stamp, no invented original scores', async () => {
+    const dir = writeJudgeDeathRunDir(root);
+    const result = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T06:30:00Z',
+    });
+    // the run's OWN summary was read — no reconstruction
+    expect(result.summary.rejudged_from).toBe('run-w');
+    expect(result.summary.regime.answerer).toEqual({ model: 'fake-answerer', url_host: 'fake' });
+    expect(result.summary.regime.rejudge.original_summary).toBeUndefined();
+    expect(result.summary.original.summary_missing).toBeUndefined();
+    // the write-phase evidence rides through — the receipt's cost line, the
+    // ingestion section, and the miss autopsy's candidates ledger live here
+    expect(result.summary.write_info['mycelium-timeline'].extract_ms).toBe(3600);
+    expect(result.summary.write_info['mycelium-timeline'].reconcile_ms).toBe(5080);
+    expect(result.summary.write_info['mycelium-timeline'].parse_failures).toBe(1);
+    expect(result.summary.write_info['mycelium-timeline'].timeline.per_question[0].candidates_ledger).toHaveLength(2);
+    // a write-phase original has NO scores: the skeleton must not pose as a
+    // score table — the phase + note say what the original summary is instead
+    expect(result.summary.original.arms).toBeUndefined();
+    expect(result.summary.original.phase).toBe('write');
+    expect(result.summary.original.note).toMatch(/WRITE-phase/);
+    // and the labels still judged, all five arms
+    expect(result.judged).toHaveLength(10);
+    expect(result.summary.arms['mycelium-timeline'].score.counts).toEqual({ exact: 1, partial: 0, wrong: 1 });
+  });
+
+  it('the rejudge receipt renders the write-phase evidence — cost line, ingestion grid, JUDGED cost bound — and the autopsy reads the ledger', async () => {
+    const dir = writeJudgeDeathRunDir(root);
+    const result = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T06:30:00Z',
+    });
+    // the autopsy, computed the way run.mjs's rejudge block does: the REJUDGE
+    // labels + the saved rows + the ledger via the summary
+    const rows = fs.readFileSync(path.join(dir, 'mycelium-timeline.rows.jsonl'), 'utf8')
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const autopsy = computeAutopsy({ arm: DEFAULT_AUTOPSY_ARM, summary: result.summary, judged: result.judged, rows });
+    const md = renderReceipt({
+      runId: result.summary.run_id,
+      summary: result.summary,
+      judged: result.judged,
+      autopsy,
+      rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
+      generatedAt: '2026-09-18T06:30:00Z',
+    });
+    // the "cost ×N of extract" line (receipt.mjs timelineCostLine) renders from the fixture's stamps
+    expect(md).toContain('Write cost (mycelium-timeline): 4.34 s/session — cost ×0.90 of extract; bound ≤ 2×');
+    // the ingestion section renders (all four grid arms carry judged scores)
+    expect(md).toContain('## Ingestion controls');
+    expect(md).toContain('| Mycelium | ');
+    expect(md).toContain('Facts per session (mycelium-extract): 5 facts over 2 sessions');
+    // the win condition's cost bound is JUDGED from the run's own stamps —
+    // timeline (3600+5080)/2 vs extract 3600/2 = ×2.41 — FAIL (decided, not "NOT JUDGED").
+    // The fixture's cells are n=2 (< minN 5 → no cell verdict), so the judged
+    // cost FAIL is the verdict's sole reason: the bound decided, by the run.
+    expect(md).toContain('Cost bound (timeline write cost ≤ 2× extract): mycelium-timeline 4.34 s/session');
+    expect(md).toContain('×2.41 — FAIL');
+    expect(md).not.toContain('NOT JUDGED');
+    expect(md).toContain('VERDICT: MISS — cost ×2.41 > 2×');
+    // no "wrote NO summary.json" note and no invented original score table
+    expect(md).not.toContain('wrote NO summary.json');
+    expect(md).not.toContain('Original run `run-w` scores');
+    // the miss autopsy reads the candidates ledger — q-ku-1 classified, not
+    // unclassified-no-ledger
+    expect(md).toContain('1 wrong knowledge-update row(s); ledger classified 100%');
+    expect(md).toContain('- q-ku-1: superseded-but-unranked');
+    expect(md).not.toContain('unclassified-no-ledger | 1');
+  });
+
+  it('an old-layout dir (no summary.json at all) still reconstructs — and carries no write_info', async () => {
+    // the b478bd4e fallback: rows only, summary.json absent
+    const dir = path.join(root, '2026-09-17-p1-224225');
+    fs.mkdirSync(dir);
+    const regime = {
+      date_utc: '2026-09-17T22:42:25Z', git_sha: 'd73978f0', git_dirty: false, harness: 'test',
+      dataset: { name: 'fixture', sha256: 'deadbeef' },
+      answerer: { model: 'qwen3.8:27b', url_host: '100.95.5.83:11434' },
+      judge: { model: 'Laguna-XS-2.1-mlx-oq4e-agentic-ours', url_host: 'localhost:8780', judge_prompt_version: 'judge-prompt.2' },
+      retrieval: { budget: 5, namespace: 'bench-p1-2026-09-17-p1-224225' },
+      platform: { url_host: '192.168.50.106:3002' },
+      n: 1, selection_rule: 'test', notes: [],
+    };
+    fs.writeFileSync(path.join(dir, 'mycelium-timeline.rows.jsonl'), JSON.stringify({ ...{ question_id: 'q1', question_type: 'knowledge-update', question: 'Which city?', gold: 'Lisbon', answer: 'Lisbon.' }, regime, arm: 'mycelium-timeline' }));
+    const result = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'Laguna-XS-2.1-mlx-oq4e-agentic-ours', url_host: '127.0.0.1:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T06:30:00Z',
+    });
+    expect(result.summary.original.summary_missing).toBe(true); // reconstruction, stamped as such
+    expect(result.summary.regime.rejudge.original_summary).toMatch(/missing/);
+    expect(result.summary.write_info).toBeUndefined(); // nothing to carry — nothing invented
   });
 });

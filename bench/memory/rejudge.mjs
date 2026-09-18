@@ -82,6 +82,10 @@ export function loadPreviousRejudges(dir, { exclude = [] } = {}) {
 // arm is the file's name and n is its row count. The reconstruction is stamped
 // as such in the rejudge summary; nothing is invented (no original scores, no
 // write_info) and a rows file whose rows disagree on the regime is refused.
+// task 223: a run that stamps its write-phase summary before the judge starts
+// (summary.json present, phase "write") is read HERE — the run's own write
+// evidence (write_info) rides through, and only truly summary-less runs
+// reconstruct from rows.
 function loadOriginal(dir) {
   const summaryPath = path.join(dir, 'summary.json');
   if (fs.existsSync(summaryPath)) {
@@ -204,9 +208,26 @@ export async function rejudgeRun({
     n: judged.length,
     regime,
     arms,
+    // task 223: when the run's own summary.json exists, its write-phase
+    // evidence rides through — the receipt's cost line, the ingestion section
+    // and the miss autopsy's candidates ledger survive a judge death instead
+    // of vanishing with it. Reconstruction (no summary.json) carries nothing:
+    // nothing is invented.
+    ...(original.write_info ? { write_info: original.write_info } : {}),
     // the run's own pre-rejudge numbers, carried for the before/after read —
-    // the receipt renders them, nothing is re-typed
-    original: { run_id: rejudgedFrom, judge: original.regime.judge, arms: original.arms, ...(summaryMissing ? { summary_missing: true } : {}) },
+    // the receipt renders them, nothing is re-typed. A WRITE-phase original
+    // (the run died in its judge AFTER stamping summary.json) has no scores:
+    // its arms skeleton must not ride, or the receipt would render a zeros
+    // table — the phase + note say what the original summary is instead.
+    original: {
+      run_id: rejudgedFrom,
+      judge: original.regime.judge,
+      ...(original.phase !== 'write' ? { arms: original.arms } : {}),
+      ...(original.phase === 'write'
+        ? { phase: 'write', note: 'the original died in its judge phase — its summary.json is the WRITE-phase stamp (write-phase evidence, no original scores)' }
+        : {}),
+      ...(summaryMissing ? { summary_missing: true } : {}),
+    },
   };
 
   return { summary, judged, judgedFilePath: outFile };

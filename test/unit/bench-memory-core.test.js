@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { runBench, summarizeFromResults } from '../../bench/memory/core.mjs';
 import { buildRegime, requireCompleteRegime, REGIME_FIELDS } from '../../bench/memory/regime.mjs';
 import { renderReceipt } from '../../bench/memory/receipt.mjs';
@@ -179,6 +182,103 @@ describe('summarizeFromResults — receipt rebuildable from the run output alone
       judgeFn: ({ gold, answer }) => ({ label: answer.includes(gold) ? 'exact' : 'wrong', raw: 'RAW' }),
     });
   }
+});
+
+describe('write-phase summary — the run\'s evidence survives a judge death (task 223)', () => {
+  // a timeline-shaped fake arm: its write returns the §3 ledger shape core
+  // accumulates into write_info.timeline.per_question (the miss autopsy's
+  // evidence) plus the ingestion-loss stamps
+  const timelineArmFactory = (name) => () => ({
+    name,
+    ...(name === 'none'
+      ? {}
+      : {
+          async write(_sessions, { questionId }) {
+            return {
+              docs: 1, rows: 1, extract_ms: 10, reconcile_ms: 5, parse_failures: 0, facts: 2, facts_per_session: [2],
+              // the arm's per-question block, the shape core pushes whole into
+              // write_info.timeline.per_question (arm_mycelium_timeline.mjs)
+              timeline: {
+                question_id: questionId,
+                candidates: 2, adds: 1, supersedes: 0, keeps: 1, auto_adds: 0, decision_calls: 1, decision_failures: 0,
+                fastpath_adds: 0, fastpath_skips_unembedded: 0, seconds_per_session: [0.1],
+                candidates_ledger: [{ text: 'Mara leads engineering now', decision: 'ADD', source: 'decision_call', shown_ids: [], source_id: 'f-1' }],
+              },
+            };
+          },
+        }),
+    async answer(_question) {
+      return { text: name === 'none' ? 'I do not know.' : 'Lisbon.', meta: name === 'none' ? {} : { retrieval_mode: 'hybrid' } };
+    },
+  });
+  const armsTimeline = ['none', 'mycelium-timeline'].map((name) => ({ name, factory: timelineArmFactory(name) }));
+
+  it('a judge that dies after the write phase leaves a summary.json stamped phase "write" — the ledger and the ingestion stats on disk', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-write-phase-'));
+    const judgeCalls = [];
+    let judgeCallsAtWritePhase = null;
+    const judgeFn = async (arg) => { judgeCalls.push(arg); throw new Error('judge seat 400 prefill-guard cycle'); };
+    await expect(
+      runBench({
+        items: ITEMS, runId: 'run-judge-death', regime: makeRegime(),
+        armFactories: armsTimeline,
+        armContext: {},
+        judgeFn,
+        beforeJudge: ({ summary }) => {
+          judgeCallsAtWritePhase = judgeCalls.length;
+          // the exact write run.mjs performs at this seam (path + indent)
+          fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summary, null, 2));
+        },
+      })
+    ).rejects.toThrow(/prefill-guard/);
+
+    // the stamp landed BEFORE the first judge call
+    expect(judgeCallsAtWritePhase).toBe(0);
+
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'summary.json'), 'utf8'));
+    expect(onDisk.phase).toBe('write');
+    expect(onDisk.run_id).toBe('run-judge-death');
+    expect(onDisk.n).toBe(2);
+    expect(onDisk.regime.git_sha).toBe('abc123');
+    // the write phase's evidence, whole: the per-candidate ledger the miss
+    // autopsy reads, and the ingestion stats the receipt's loss leg quotes
+    const tl = onDisk.write_info['mycelium-timeline'];
+    expect(tl.timeline.per_question).toHaveLength(2);
+    expect(tl.timeline.per_question[0].candidates_ledger).toHaveLength(1);
+    expect(tl.parse_failures).toBe(0);
+    expect(tl.facts_counts).toEqual([2, 2]);
+    expect(tl.extract_ms).toBe(20);
+    expect(tl.reconcile_ms).toBe(10);
+    // arms skeleton: names, n, counts — never a score (none is judged yet)
+    expect(onDisk.arms['mycelium-timeline']).toMatchObject({ n: 2, write: { docs: 2, rows: 2, skipped: false } });
+    expect(onDisk.arms['mycelium-timeline'].retrieval_modes).toEqual({ hybrid: 2 });
+    expect(onDisk.arms['mycelium-timeline'].score).toBeUndefined();
+    expect(onDisk.arms.none.write.skipped).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the judged rewrite is a superset: phase flips to "judged", scores are added, every other key keeps its value', async () => {
+    let writeSummary = null;
+    const result = await runBench({
+      items: ITEMS, runId: 'run-superset', regime: makeRegime(),
+      armFactories: armsTimeline,
+      armContext: {},
+      judgeFn: ({ gold, answer }) => ({ label: answer.includes(gold) ? 'exact' : 'wrong', raw: 'RAW' }),
+      beforeJudge: ({ summary }) => { writeSummary = summary; },
+    });
+    expect(writeSummary.phase).toBe('write');
+    expect(result.summary.phase).toBe('judged');
+    for (const key of Object.keys(writeSummary)) {
+      if (key === 'phase' || key === 'arms') continue;
+      expect(result.summary[key]).toEqual(writeSummary[key]);
+    }
+    for (const [name, skeleton] of Object.entries(writeSummary.arms)) {
+      for (const k of Object.keys(skeleton)) {
+        expect(result.summary.arms[name][k]).toEqual(skeleton[k]);
+      }
+      expect(result.summary.arms[name].score).toBeDefined(); // the judged addition
+    }
+  });
 });
 
 describe('receipt rendering — numbers only from the run output', () => {

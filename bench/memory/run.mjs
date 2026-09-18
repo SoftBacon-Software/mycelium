@@ -20,7 +20,7 @@ import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
 import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, resolveTimelineReadPolicy, TIMELINE_READ_POLICY_HISTORY, TIMELINE_HISTORY_OVERFETCH, TIMELINE_HISTORY_MAX_PREDECESSORS, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
-import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
+import { autopsyRun, computeAutopsy, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
@@ -127,11 +127,29 @@ async function main() {
       let receiptFile = null;
       if (args.receipt) {
         const dirRel = path.relative(REPO_ROOT, dir);
+        // task 223: the rejudge receipt autopsies the NEW labels against the
+        // run's own ledger — the rejudge summary carries write_info through
+        // (from the original summary.json), so a judge-death run's per-candidate
+        // decisions are readable here and not just on a fresh-run receipt.
+        let autopsy = null;
+        if (result.summary.arms?.[DEFAULT_AUTOPSY_ARM]) {
+          try {
+            autopsy = computeAutopsy({
+              arm: DEFAULT_AUTOPSY_ARM,
+              summary: result.summary,
+              judged: result.judged,
+              rows: readJsonl(path.join(dir, `${DEFAULT_AUTOPSY_ARM}.rows.jsonl`)),
+            });
+          } catch (e) {
+            console.error(`[run] autopsy not rendered: ${e.message}`);
+          }
+        }
         const md = renderReceipt({
           runId: result.summary.run_id,
           summary: result.summary,
           agreement: judgeAgreement,
           handlabels: handlabelsMeta,
+          autopsy,
           judged: result.judged,
           previousJudges,
           commands: [
@@ -1057,6 +1075,15 @@ async function main() {
           console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
           writeInfoByArm[arm].embed_wait = wait;
         }
+      },
+      beforeJudge: ({ summary: writeSummary }) => {
+        // task 223: the write phase's evidence lands BEFORE the first judge
+        // call. A judge that dies now leaves a summary that is TRUE — it says
+        // what the write phase did (cost stamps, ingestion stats, the timeline
+        // candidates ledger), stamped phase "write" — instead of no summary at
+        // all. The judge phase rewrites this same path below, phase "judged".
+        fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(writeSummary, null, 2));
+        console.error(`[run] write-phase summary stamped (judge pending): ${path.join(outDir, 'summary.json')}`);
       },
       onRow: (row) => fs.writeSync(rowFiles[row.arm], JSON.stringify(row) + '\n'),
       onJudged: (row) => fs.writeSync(judgedFile, JSON.stringify(row) + '\n'),
