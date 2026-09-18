@@ -29,6 +29,7 @@ import { resolveTrustProxy } from './lib/trust-proxy.js';
 import { createTurnCredentialIssuer } from './lib/turn-secret.js';
 import { startMdnsAdvertising } from './lib/mdns-advertise.js';
 import { routeUsageCounter } from './lib/route-usage.js';
+import { rateLimited } from './lib/rate-limit.js';
 
 // isAdminKey (the timing-safe ADMIN_KEY comparator) is imported above from
 // ./routes/mycelium.js — the SOLE definition, already shared with the messages,
@@ -321,7 +322,13 @@ app.get('/api/voice/peers', function (req, res) {
   res.json({ peers: peers, count: peers.length });
 });
 
-app.get('/api/voice/turn-credentials', function (req, res) {
+// Rate-limited (task 240, alert #277): the route performs HMAC auth issuance,
+// and TURN creds are exactly what a client needs to relay through. Own tighter
+// bucket — 60/min is generous for voice clients (they fetch on session start,
+// not per frame). The machine callers of this daemon poll OTHER routes.
+app.get('/api/voice/turn-credentials',
+  rateLimited('voice/turn-credentials', { windowMs: 60000, max: 60 }),
+  function (req, res) {
   if (!checkVoiceAuth(req, res)) return;
   var creds = turnCredentials.issue(Date.now());
   var username = creds.username;
@@ -658,7 +665,7 @@ fileDroneWss.on('connection', function (ws, req) {
   ws.on('close', function () {
     console.log('[file-drone] Disconnected: ' + droneId);
     // Reject all pending requests
-    for (var [id, pending] of drone.pendingRequests) {
+    for (var [_id, pending] of drone.pendingRequests) {
       if (pending.reject) pending.reject(new Error('Drone disconnected'));
     }
     drone.pendingRequests.clear();
@@ -743,7 +750,6 @@ app.locals.streamFileDroneDownload = function (droneId, params, res, requestType
       drone.pendingRequests.delete(reqId);
       reject(new Error('Download timed out'));
     }, 300000); // 5 min timeout for downloads
-    var headersSent = false;
 
     drone.pendingRequests.set(reqId, {
       resolve: resolve,
@@ -754,7 +760,6 @@ app.locals.streamFileDroneDownload = function (droneId, params, res, requestType
           drone.pendingRequests.delete(reqId);
           reject(new Error((msg.data && msg.data.error) || 'Download error'));
         } else if (msg.type === 'file_start') {
-          headersSent = true;
           res.setHeader('Content-Type', msg.data.mime || 'application/octet-stream');
           res.setHeader('Content-Length', msg.data.size);
           res.setHeader('Content-Disposition', 'attachment; filename="' + (msg.data.name || 'file').replace(/"/g, '_') + '"');
