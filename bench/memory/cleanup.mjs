@@ -69,3 +69,83 @@ export async function purgeNamespaces(platform, { sourceType, namespaces, source
     per_namespace: per,
   };
 }
+
+/**
+ * The routes layer's cleanup (task 216): the fact ROWS a run wrote through
+ * POST /auto-memory/facts live in the auto-memory TABLE under the <ns>-amfacts
+ * namespace, which purgeNamespaces cannot reach — it drains the semantic-INDEX
+ * half only. This purges the rows first (DELETE /auto-memory/facts?namespace=
+ * <ns>, task 211), then the index purge, then the two verify reads the cleanup
+ * receipt states (factsList → 0 rows; a namespace-scoped /memory/search → 0
+ * hits — 206's seam indexes facts, so both halves must drain). factsNamespace
+ * is the routes layer's namespace ONLY: the episodic layer never has fact rows
+ * and never touches the facts route.
+ *
+ * Shared by the success path and the failure path of run.mjs — the order the
+ * receipt states holds for both. A rows-purge failure never masks the index
+ * purge (a mid-write death must not strand the index rows either): the index
+ * half runs anyway, then the rows error surfaces loudly. The default path
+ * (factsNamespace null) is purgeNamespaces, byte-identically — no facts calls,
+ * no facts_cleanup key.
+ */
+export async function purgeRunWithFacts(platform, {
+  sourceType,
+  namespaces,
+  sourceTypesByNamespace = null,
+  factsNamespace = null,
+  verify = null,
+  log = () => {},
+  purge = purgeRunRows,
+} = {}) {
+  if (factsNamespace && (!verify || !verify.query)) {
+    throw new Error('purgeRunWithFacts: routes-mode cleanup needs verify { query, sourceTypes, limit } — the cleanup receipt must state both post-purge reads (factsList rows, scoped search hits)');
+  }
+  let factsPurged = null;
+  let factsError = null;
+  if (factsNamespace) {
+    if (!namespaces.includes(factsNamespace)) {
+      throw new Error(`purgeRunWithFacts: facts namespace ${factsNamespace} is outside the run's own namespace list — refusing a purge this run did not earn`);
+    }
+    try {
+      factsPurged = await platform.factsPurgeByNamespace(factsNamespace);
+      log(`cleanup facts ${factsNamespace}: ${factsPurged.deleted} fact rows purged (DELETE /auto-memory/facts?namespace=${factsNamespace})`);
+    } catch (e) {
+      factsError = e;
+      log(`cleanup facts ${factsNamespace} FAILED (${String(e.message).slice(0, 120)}) — the index purge still runs, the rows remain`);
+    }
+  }
+  const out = await purgeNamespaces(platform, { sourceType, namespaces, sourceTypesByNamespace, log, purge });
+  if (factsNamespace) {
+    let verifyReads = null;
+    try {
+      const listed = await platform.factsList({ namespace: factsNamespace, limit: 1 });
+      const rows = Array.isArray(listed) ? listed : (listed.results ?? listed.items ?? []);
+      const searched = await platform.search({
+        query: verify.query,
+        namespace: factsNamespace,
+        sourceTypes: verify.sourceTypes,
+        limit: verify.limit,
+      });
+      verifyReads = {
+        facts_rows_remaining_after: rows.length,
+        search_hits_after: (searched.results ?? []).length,
+        search: { query: verify.query, namespace: factsNamespace, source_types: verify.sourceTypes },
+      };
+    } catch (e) {
+      if (!factsError) {
+        log(`cleanup verify reads FAILED for ${factsNamespace} (${String(e.message).slice(0, 120)}) — the receipt cannot state "drained"`);
+        throw e;
+      }
+      // the rows purge already failed — that is the error to surface
+    }
+    out.facts_cleanup = {
+      namespace: factsNamespace,
+      route: 'DELETE /auto-memory/facts?namespace=<ns>',
+      facts_deleted: factsPurged ? factsPurged.deleted : null,
+      ...verifyReads,
+      ...(factsError ? { facts_error: String(factsError.message).slice(0, 200) } : {}),
+    };
+    if (factsError) throw factsError;
+  }
+  return out;
+}

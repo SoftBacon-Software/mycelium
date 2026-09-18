@@ -1,0 +1,6 @@
+{"type":"header","run_id":"2026-09-18-p1-021544","extraction":{"model":"scripted-smoke","url_host":"127.0.0.1:3995","max_tokens":4096,"thinking":"off","prompt_sha256":"d8d34e4f2e254dccbf37e44aaec0bcf44d8a2cb8b3821c719c05dfabb5118cbc"},"written_at":"2026-09-18T02:15:44.224Z"}
+{"type":"session","question_id":"001be529","session_index":0,"facts":["The user has a manager named Alex"],"parse_failed":false,"finish_reason":"stop","extract_ms":4}
+{"type":"session","question_id":"001be529","session_index":1,"facts":["The user has a manager named Alex"],"parse_failed":false,"finish_reason":"stop","extract_ms":2}
+{"type":"session","question_id":"001be529","session_index":2,"facts":["The user has a manager named Alex"],"parse_failed":false,"finish_reason":"stop","extract_ms":2}
+{"type":"session","question_id":"001be529","session_index":3,"facts":["The user has a manager named Alex"],"parse_failed":false,"finish_reason":"stop","extract_ms":1}
+{"type":"session","question_id":"001be529","session_index":4,"facts":["The user has a manager named Alex"],"parse_failed":false,"finish_reason":"stop","extract_ms":2}

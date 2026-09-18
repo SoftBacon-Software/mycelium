@@ -32,7 +32,7 @@ import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
 import { composeGrid } from './grid.mjs';
-import { purgeNamespaces } from './cleanup.mjs';
+import { purgeRunWithFacts } from './cleanup.mjs';
 import { waitForArmEmbeddings, armWaitTimeoutMs } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
 
@@ -740,7 +740,20 @@ async function main() {
                   store: 'am_facts (POST /auto-memory/facts + POST .../supersede; per-run namespace <ns>-amfacts; semantic index source_type am_fact)',
                   read: 'searchHybrid over the am_fact index rows in the run namespace (superseded facts stay indexed with their valid_to + supersede line)',
                   scope_why: 'task 206 gave the routes a nullable namespace column — bench rows stay OUT of the lab\'s live (unscoped) fact store',
-                  known_gap: 'am_facts has no namespace bulk-purge route: the index rows purge via /memory/index?namespace=…, the fact ROWS remain (per-id DELETE only)',
+                  // task 216: the pre-211 stamp carried `known_gap: 'am_facts has no
+                  // namespace bulk-purge route: the index rows purge via
+                  // /memory/index?namespace=…, the fact ROWS remain (per-id DELETE
+                  // only)'`. 211 closed that gap (DELETE /auto-memory/facts
+                  // ?namespace=<ns>) and this run's cleanup MEASURES the purge — the
+                  // numbers below are stamped post-cleanup (null until then).
+                  facts_cleanup: {
+                    route: 'DELETE /auto-memory/facts?namespace=<ns> (task 211; bench wiring task 216 — rows first, then the index purge, then the verify reads)',
+                    measured: false,
+                    kept: false,
+                    facts_deleted: null,
+                    facts_rows_remaining_after: null,
+                    search_hits_after: null,
+                  },
                 },
               }
             : {
@@ -749,7 +762,12 @@ async function main() {
                   'before task 206: am_facts had no semantic-search index (reconcile + read need /memory/search hybrid at the stamped budget), ' +
                   'no namespace/run scoping (bench rows would land in the lab\'s LIVE fact store beside its real facts), and no bulk cleanup path (the bench ' +
                   'contract is purge-everything-after). So the layer is modeled as memory rows in a suffixed namespace with the bi-temporal fields in metadata — ' +
-                  'the lane\'s pre-authorized fallback. MYCELIUM_TIMELINE_FACTS=am_facts switches to the routes (stamped facts_layer=am_facts).',
+                  'the lane\'s pre-authorized fallback. MYCELIUM_TIMELINE_FACTS=am_facts switches to the routes (stamped facts_layer=am_facts). ' +
+                  'UPDATE task 216: the cleanup half is CLOSED — task 211\'s DELETE /auto-memory/facts?namespace=<ns> bulk-purges a namespace\'s fact rows ' +
+                  '(bench cleanup wires it: rows first, then the index purge, then the verify reads). History kept, not erased — the pre-211 routes stamp ' +
+                  'read known_gap "am_facts has no namespace bulk-purge route: the index rows purge via /memory/index?namespace=…, the fact ROWS remain ' +
+                  '(per-id DELETE only)", which is now quoted here so a reader can diff the claim against what shipped. What still keeps this run on memory ' +
+                  'rows is the ROW MODEL, not the cleanup: the default layer must fit the bench row shape and read path at the stamped budget.',
               }),
           read: {
             budget,
@@ -843,6 +861,40 @@ async function main() {
   if (arms.includes('mycelium-timeline') && timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES) {
     runNamespaceSourceTypes[myceliumTimelineFactsNamespace(regime.retrieval.namespace)] = FACT_INDEX_SOURCE_TYPE;
   }
+  // task 216: the routes layer's fact ROWS live in the auto-memory table (the
+  // <ns>-amfacts namespace) — purgeNamespaces cannot reach them, it drains the
+  // INDEX half only. The rows purge through task 211's DELETE
+  // /auto-memory/facts?namespace=<ns>, and ONLY this namespace: the episodic
+  // layer never has fact rows and never touches the facts route.
+  const factsPurgeNamespace =
+    platform && arms.includes('mycelium-timeline') && timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES
+      ? myceliumTimelineFactsNamespace(regime.retrieval.namespace)
+      : null;
+  // the verify reads' search query is production-shaped: the first question's
+  // own text — exactly what a stranded fact row would match on (a leftover row
+  // cannot hide from it; a drained namespace answers 0 to anything)
+  const factsVerifyReads = () => ({
+    query: String(items[0]?.question ?? 'bench').slice(0, 200),
+    sourceTypes: [FACT_INDEX_SOURCE_TYPE],
+    limit: 5,
+  });
+  // task 216: the regime's facts_routes block replaced its stale known_gap with
+  // the cleanup contract (nulls until measured) — this fills the measured
+  // numbers before summary.json is written. The failure path purges the same
+  // way but logs its numbers (no summary write follows a dead run).
+  const stampFactsCleanupMeasured = (cleanupResult) => {
+    const fc = cleanupResult?.facts_cleanup;
+    const block = regime?.mycelium_timeline?.facts_routes;
+    if (!factsPurgeNamespace || !block || !fc) return;
+    block.facts_cleanup = {
+      ...block.facts_cleanup,
+      measured: true,
+      facts_deleted: fc.facts_deleted,
+      facts_rows_remaining_after: fc.facts_rows_remaining_after,
+      search_hits_after: fc.search_hits_after,
+      verify_search: fc.search ?? null,
+    };
+  };
   let platformCleanupDone = !platform || Boolean(args.keep);
   try {
     const namespace = regime.retrieval.namespace;
@@ -970,12 +1022,29 @@ async function main() {
       const sourceType = regime.retrieval.source_type;
       if (args.keep) {
         cleanup = { deleted: 0, kept: true, namespace };
+        // task 216: --keep also keeps the fact rows — say so in the regime stamp
+        if (factsPurgeNamespace && regime?.mycelium_timeline?.facts_routes) {
+          regime.mycelium_timeline.facts_routes.facts_cleanup = {
+            ...regime.mycelium_timeline.facts_routes.facts_cleanup,
+            kept: true,
+          };
+        }
       } else {
         // every namespace the run indexed: the extract control arm writes to a
         // suffixed namespace of its own — leaving it behind would leak rows
-        // into the next run's substring-scoped lists
-        cleanup = await purgeNamespaces(platform, { sourceType, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] ${m}`) });
+        // into the next run's substring-scoped lists. In routes mode the fact
+        // ROWS purge first (task 211's route), then the index, then the verify
+        // reads — the order the cleanup receipt states.
+        cleanup = await purgeRunWithFacts(platform, {
+          sourceType,
+          namespaces: runNamespaces,
+          sourceTypesByNamespace: runNamespaceSourceTypes,
+          factsNamespace: factsPurgeNamespace,
+          verify: factsPurgeNamespace ? factsVerifyReads() : null,
+          log: (m) => console.error(`[run] ${m}`),
+        });
         platformCleanupDone = true;
+        stampFactsCleanupMeasured(cleanup);
       }
     }
 
@@ -1027,12 +1096,24 @@ async function main() {
     if (slotLock) slotLock.release();
     // a run that died before its own cleanup still purges what it wrote —
     // thousands of orphan bench rows would otherwise sit in the embedder's
-    // queue and in every later substring-scoped list
+    // queue and in every later substring-scoped list. Same routes-mode leg as
+    // the success path: fact ROWS first, then the index, then the verify reads.
     if (!platformCleanupDone && platform) {
       try {
-        const c = await purgeNamespaces(platform, { sourceType: regime.retrieval.source_type, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] cleanup after failure — ${m}`) });
+        const c = await purgeRunWithFacts(platform, {
+          sourceType: regime.retrieval.source_type,
+          namespaces: runNamespaces,
+          sourceTypesByNamespace: runNamespaceSourceTypes,
+          factsNamespace: factsPurgeNamespace,
+          verify: factsPurgeNamespace ? factsVerifyReads() : null,
+          log: (m) => console.error(`[run] cleanup after failure — ${m}`),
+        });
         platformCleanupDone = true;
-        console.error(`[run] cleanup after failure: ${c.deleted} rows deleted, ${c.rows_remaining_after} remaining`);
+        const fc = c.facts_cleanup;
+        console.error(
+          `[run] cleanup after failure: ${c.deleted} index rows deleted, ${c.rows_remaining_after} remaining` +
+            (fc ? `, facts ${fc.facts_deleted} purged, verify ${fc.facts_rows_remaining_after} rows / ${fc.search_hits_after} hits after` : ''),
+        );
       } catch (e) {
         console.error(`[run] cleanup after failure FAILED (orphan rows remain in ${runNamespaces.join(', ')}): ${e.message}`);
       }

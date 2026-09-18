@@ -258,6 +258,20 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
       const qs = q.toString();
       return call('GET', `/auto-memory/facts${qs ? `?${qs}` : ''}`);
     },
+    // task 216: the bench cleanup's ROWS half. DELETE /auto-memory/facts
+    // ?namespace=<ns> (task 211) purges a namespace's fact rows — current AND
+    // superseded — and takes their index rows out through the same seam every
+    // other removal path uses, so the namespace stops answering /memory/search
+    // in the same request. The admin-key header rides every call (the route is
+    // admin-only). Refuses locally on an empty/missing namespace —
+    // purgeRunRows's convention mirrored: bench cleanup is always scoped, and
+    // the route itself 400s an unscoped call rather than guess.
+    async factsPurgeByNamespace(namespace) {
+      if (!namespace || !String(namespace).trim()) {
+        throw new Error('factsPurgeByNamespace requires an explicit namespace — refusing an unscoped fact purge');
+      }
+      return call('DELETE', `/auto-memory/facts?namespace=${encodeURIComponent(namespace)}`);
+    },
     async health() {
       // /health is served at the server ROOT, not under /api/mycelium
       const url = `${baseUrl}/health`;
