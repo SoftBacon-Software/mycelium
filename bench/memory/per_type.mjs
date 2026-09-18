@@ -271,8 +271,14 @@ function cellText(counts, min) {
  * arm's own rows; the comparator arms (mem0, mycelium-extract) render beside
  * for context, 'not in grid' when absent. Ends with the pre-committed verdict
  * line: WIN / MISS (reasons) / UNDECIDED (n=<k>).
+ *
+ * `fallbackProvisional` (task 235, grid only) — set when the column's
+ * keyword-fallback share exceeds the pre-committed bound. The verdict then
+ * reads UNDECIDED regardless of the cells: a keyword-read cell is not the
+ * hybrid number the bars were pre-committed against, so it never decides WIN
+ * or MISS. The cells still render their mechanical verdicts beside it.
  */
-export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeByArm = {}, absentLabel = 'not in grid', notStampedPhrase = 'not stamped', armDisplay = WIN_CONDITION.arm, headingNote = null }) {
+export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeByArm = {}, absentLabel = 'not in grid', notStampedPhrase = 'not stamped', armDisplay = WIN_CONDITION.arm, headingNote = null, fallbackProvisional = null }) {
   const arm = WIN_CONDITION.arm;
   const L = [];
   L.push(`## Timeline arm win condition (pre-committed, brief §3)${headingNote ? ` — ${headingNote}` : ''}`);
@@ -309,7 +315,21 @@ export function renderWinCondition({ talliesByArm, writeInfoByArm = {}, regimeBy
   L.push('');
   const cost = judgeCost({ writeInfoByArm, regimeByArm, notStampedPhrase });
   for (const line of cost.lines) L.push(line);
-  const v = winVerdict({ cells: judgedCells, cost: cost.result });
+  let v = winVerdict({ cells: judgedCells, cost: cost.result });
+  if (fallbackProvisional) {
+    L.push('');
+    L.push(
+      `Keyword-fallback rule (pre-committed, task 235): ${fallbackProvisional.fallback}/${fallbackProvisional.answered} reads ran keyword-fallback — ` +
+        `share ${fallbackProvisional.share.toFixed(3)} > bound ${fallbackProvisional.bound} ` +
+        `(BENCH_GRID_MAX_FALLBACK_SHARE=${fallbackProvisional.source}); a keyword-read cell is not the hybrid number the bars were pre-committed against.`
+    );
+    L.push('');
+    v = {
+      verdict: 'UNDECIDED',
+      reasons: [],
+      line: `UNDECIDED (keyword-fallback ${fallbackProvisional.fallback}/${fallbackProvisional.answered} > bound ${fallbackProvisional.bound})`,
+    };
+  }
   L.push('');
   L.push(`VERDICT: ${v.line}`);
   return L;

@@ -34,6 +34,7 @@ import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, fac
 import { agreement } from './judge.mjs';
 import { rejudgeOutputNames, REJUDGE_SUFFIX_RE } from './rejudge.mjs';
 import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
+import { armFallbackState, columnFallbackSuffix, maxFallbackShare, renderFallbackBound } from './fallback_provisional.mjs';
 
 /** Where the director's hand-label files live, keyed by run id (<run_id>.json). */
 export const HANDLABELS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'handlabels');
@@ -701,6 +702,20 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
 
 export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null, auditSection = null, datasetTypes = null }) {
   const runIds = runs.map((r) => r.runId);
+  // task 235: the pre-committed keyword-fallback bound — read from the env at
+  // render time, its source stamped beside it
+  const boundStamp = maxFallbackShare();
+  const bound = boundStamp.bound;
+  // one state per (run, arm): the scores column's suffix and the win
+  // condition's UNDECIDED override both read this — a column whose reads
+  // degraded past the bound never decides WIN or MISS
+  const fallbackStateOf = (r, arm) => armFallbackState(r.summary.arms?.[arm], bound);
+  const provisionalOf = (r, arm) => {
+    const st = fallbackStateOf(r, arm);
+    return st.kind === 'provisional'
+      ? { fallback: st.fallback, answered: st.answered, share: st.share, bound, source: boundStamp.source }
+      : null;
+  };
   const L = [];
   L.push(`# Receipt — memory benchmark P1 grid (${runIds.join(' + ')})`);
   L.push('');
@@ -800,7 +815,11 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
       const a = r.summary.arms?.[arm];
       if (!a) continue;
       const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
-      L.push(`| ${timelineArmLabel(r.summary.regime, arm)} | ${r.runId} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`);
+      // task 235: the column's header stamp — PROVISIONAL above the bound,
+      // "unstamped (pre-mode run)" when the run predates the stamp; clean
+      // columns render exactly as before
+      const label = `${timelineArmLabel(r.summary.regime, arm)}${columnFallbackSuffix(a, bound)}`;
+      L.push(`| ${label} | ${r.runId} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`);
     }
   }
   L.push('');
@@ -927,6 +946,7 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
         writeInfoByArm: writeUnion,
         regimeByArm,
         armDisplay: only ? timelineArmLabel(only.summary.regime, WIN_CONDITION.arm) : WIN_CONDITION.arm,
+        fallbackProvisional: only ? provisionalOf(only, WIN_CONDITION.arm) : null,
       })) {
         L.push(line);
       }
@@ -941,6 +961,7 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
           regimeByArm: { ...regimeByArm, [WIN_CONDITION.arm]: r.summary.regime ?? {} },
           armDisplay: label,
           headingNote: `\`${label}\` — run ${r.runId}`,
+          fallbackProvisional: provisionalOf(r, WIN_CONDITION.arm),
         })) {
           L.push(line);
         }
@@ -959,6 +980,8 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     L.push(`| ${key} | ${truncate(fmtValue(read(runs[0])), 80)} |`);
   }
   L.push(`| question_ids | ${runs[0].judgedIds.size} ids (identical set across runs; order ignored) |`);
+  L.push('');
+  L.push(renderFallbackBound(boundStamp));
   L.push('');
 
   // per-run provenance

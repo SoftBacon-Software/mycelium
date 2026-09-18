@@ -9,6 +9,7 @@ import { renderIngestionGrid } from './ingestion.mjs';
 import { renderAutopsySection } from './miss_autopsy.mjs';
 import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, timelineArmLabel } from './per_type.mjs';
 import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
+import { maxFallbackShare, renderFallbackBound } from './fallback_provisional.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -139,6 +140,33 @@ export function renderReceipt({
   for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a], summary.regime));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
+  // task 235: keyword-fallback reads mark a column PROVISIONAL — the number is
+  // quotable only when its reads actually ran hybrid. The receipt marks on ANY
+  // fallback read (the grid's pre-committed bound is what decides verdicts);
+  // unstamped rows render n/a with their count, never guessed into either side.
+  const fallbackBoundStamp = maxFallbackShare();
+  const armsWriteInfo = writeInfo ?? summary.write_info ?? {};
+  for (const [name, a] of Object.entries(summary.arms)) {
+    const share = a.fallback_share ?? null;
+    const unstamped = share
+      ? (share.unstamped ?? 0)
+      : a.retrieval_modes
+        ? (a.n ?? 0) - Object.values(a.retrieval_modes).reduce((s, c) => s + c, 0)
+        : 0;
+    if (share && (share.answered ?? 0) > 0 && (share.fallback ?? 0) > 0) {
+      const settled = armsWriteInfo[name]?.embed_wait?.settled;
+      L.push(
+        `PROVISIONAL — ${share.fallback}/${share.answered} reads ran keyword-fallback ` +
+          `(embed wait settled=${settled === undefined ? 'not stamped' : String(settled)})`
+      );
+      L.push('');
+    }
+    if (unstamped > 0) {
+      const total = share ? unstamped + (share.answered ?? 0) : (a.n ?? 0);
+      L.push(`Retrieval mode unstamped (pre-mode run) on ${unstamped} of ${total} rows — fallback share n/a`);
+      L.push('');
+    }
+  }
   // task 182: the ingestion-control 2×2 renders only when ALL FOUR grid arms
   // are in the run — a smoke carrying just the controls has no grid.
   const grid = renderIngestionGrid(summary.arms, writeInfo ?? summary.write_info ?? null);
@@ -282,6 +310,10 @@ export function renderReceipt({
   L.push('```json');
   L.push(JSON.stringify(summary.regime, null, 2));
   L.push('```');
+  L.push('');
+  // task 235: the pre-committed fallback bound + its provenance — a bound
+  // tuned after seeing a run is not pre-committed, so the source is stamped
+  L.push(renderFallbackBound(fallbackBoundStamp));
   L.push('');
   if (writeInfo) {
     L.push('## Write phase');
