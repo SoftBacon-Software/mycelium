@@ -3,6 +3,7 @@
 // with a fake arm and a fake judge.
 
 import { tally } from './judge.mjs';
+import { computeFallbackShare } from './fallback_provisional.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,6 +159,10 @@ export async function runBench({
       write: armsOut[name].write,
       elapsed_ms: armsOut[name].elapsed_ms,
       ...(Object.keys(modes).length ? { retrieval_modes: modes } : {}),
+      // task 235: the keyword-fallback share, stamped at answer time — the
+      // rule (receipt banner, grid UNDECIDED) reads this stamp, never a guess
+      // from the modes distribution; pre-stamp rows land in `unstamped`
+      ...(rows.length ? { fallback_share: computeFallbackShare(rows) } : {}),
     };
   }
   // Everything the write phase produced — regime, n, the arms skeleton and the
@@ -231,13 +236,17 @@ export function summarizeFromResults({ runId, regime, rows, judged }) {
   for (const name of armNames) {
     const j = judged ? judged.filter((x) => x.arm === name) : [];
     const t = tally(judged ? j.map((x) => x.label) : []);
-    summary.arms[name] = { n: rows.filter((r) => r.arm === name).length, score: t };
+    const armRows = rows.filter((r) => r.arm === name);
+    summary.arms[name] = { n: armRows.length, score: t };
     const modes = {};
-    for (const r of rows.filter((x) => x.arm === name)) {
+    for (const r of armRows) {
       const m = r.meta?.retrieval_mode;
       if (m) modes[m] = (modes[m] || 0) + 1;
     }
     if (Object.keys(modes).length) summary.arms[name].retrieval_modes = modes;
+    // task 235: same stamp as the live summarizer — a re-rendered receipt
+    // reads its fallback state from the run's own rows
+    if (armRows.length) summary.arms[name].fallback_share = computeFallbackShare(armRows);
   }
   return summary;
 }

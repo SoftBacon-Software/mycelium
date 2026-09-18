@@ -212,10 +212,11 @@ describe('composeGrid: a comparable pair composes the grid receipt', () => {
     const out = composeGrid({ dirs, generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
     const md = fs.readFileSync(out.file, 'utf8');
     expect(md).toContain('| arm | run | n | exact | partial | wrong | p1_score |');
-    expect(md).toContain('| mem0 | run-a | 2 | 1 | 0 | 1 | 0.500 |');
-    expect(md).toContain('| mem0-raw | run-a | 2 | 1 | 1 | 0 | 0.750 |');
-    expect(md).toContain('| mycelium | run-b | 2 | 2 | 0 | 0 | 1.000 |');
-    expect(md).toContain('| mycelium-extract | run-b | 2 | 1 | 1 | 0 | 0.750 |');
+    // pre-mode fixtures: every column carries the task-235 unstamped marking
+    expect(md).toContain('| mem0 (retrieval-mode unstamped (pre-mode run)) | run-a | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).toContain('| mem0-raw (retrieval-mode unstamped (pre-mode run)) | run-a | 2 | 1 | 1 | 0 | 0.750 |');
+    expect(md).toContain('| mycelium (retrieval-mode unstamped (pre-mode run)) | run-b | 2 | 2 | 0 | 0 | 1.000 |');
+    expect(md).toContain('| mycelium-extract (retrieval-mode unstamped (pre-mode run)) | run-b | 2 | 1 | 1 | 0 | 0.750 |');
   });
 
   it('per-run provenance carries run id, git sha, harness, generated_at, slot-lock and thinking-off notes', () => {
@@ -809,8 +810,8 @@ describe('task 224: the grid admits a rejudged run', () => {
     // the stamp sits at the TOP — before the scores section, beside the bold stamps
     expect(md.indexOf('CONTAINS REJUDGED RUN(S)')).toBeLessThan(md.indexOf('## Scores'));
     // downstream operates unchanged: every arm of every run gets its scores row
-    expect(md).toContain('| mycelium-timeline | 2026-09-17-p1-224225-rejudge | 2 | 1 | 0 | 1 | 0.500 |');
-    expect(md).toContain('| mem0-raw | 2026-09-09-p1-195034-rejudge | 2 | 0 | 1 | 1 | 0.250 |');
+    expect(md).toContain('| mycelium-timeline (retrieval-mode unstamped (pre-mode run)) | 2026-09-17-p1-224225-rejudge | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).toContain('| mem0-raw (retrieval-mode unstamped (pre-mode run)) | 2026-09-09-p1-195034-rejudge | 2 | 0 | 1 | 1 | 0.250 |');
     // the artifacts line names the pair the run actually is
     expect(md).toContain('(summary.rejudge.json, judged.rejudge.jsonl, <arm>.rows.jsonl)');
   });
@@ -935,8 +936,8 @@ describe('task 225 — rows-path and flag-path timeline runs compose as labeled 
     const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
     expect(out.file).toBe(path.join(receiptsDir(), 'run-rows+run-am-grid.md'));
     const md = fs.readFileSync(out.file, 'utf8');
-    expect(md).toContain('| mycelium-timeline [memory-rows] | run-rows | 5 | 0 | 0 | 5 | 0.000 |');
-    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [memory-rows] (retrieval-mode unstamped (pre-mode run)) | run-rows | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] (retrieval-mode unstamped (pre-mode run)) | run-am | 5 | 0 | 0 | 5 | 0.000 |');
   });
 
   it('the per-question-type tables label each timeline arm from its run\'s own regime', () => {
@@ -997,7 +998,7 @@ describe('task 225 — rows-path and flag-path timeline runs compose as labeled 
     });
     const out = composeGrid({ dirs: [dirOld, dirMem0], generatedAt: 'x', receiptsDir: receiptsDir() });
     const md = fs.readFileSync(out.file, 'utf8');
-    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline (retrieval-mode unstamped (pre-mode run)) | run-old | 5 | 0 | 0 | 5 | 0.000 |');
     expect(md).not.toContain('mycelium-timeline [');
   });
 
@@ -1006,8 +1007,8 @@ describe('task 225 — rows-path and flag-path timeline runs compose as labeled 
     const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
     const out = composeGrid({ dirs: [dirOld, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
     const md = fs.readFileSync(out.file, 'utf8');
-    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
-    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline (retrieval-mode unstamped (pre-mode run)) | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] (retrieval-mode unstamped (pre-mode run)) | run-am | 5 | 0 | 0 | 5 | 0.000 |');
   });
 
   it('two old-regime timeline runs still refuse exactly as today (bare names, no brackets)', () => {
