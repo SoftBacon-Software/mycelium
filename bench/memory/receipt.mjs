@@ -12,29 +12,15 @@ import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
-// The bound's denominator, provenance-stamped (task 188): the extract control's
-// n=50 run — extract_ms 11,370,052 over 2,355 docs = 4.83 s/session. The
-// timeline arm's write cost is quoted as a RATIO of this figure; if the extract
-// arm ever re-runs its n=50 write, re-stamp these three numbers from the new
-// summary.json (never retype the ratio — the line computes it).
-export const EXTRACT_ARM_STAMPED = {
-  run_id: '2026-09-10-p1-001549',
-  extract_ms: 11_370_052,
-  docs: 2355,
-};
-
-// The timeline arm's write cost INCLUDING its reconcile phase (extract_ms alone
-// understates it ~10×: the ADD/SUPERSEDE/KEEP decision calls dominate), as a
-// ratio of the extract arm's stamped figure — the brief's ≤2× bound. Returns
-// null when the run carries no timeline write stats (no line for other arms).
-export function timelineCostLine(writeInfo) {
-  const w = writeInfo?.['mycelium-timeline'];
-  if (!w || typeof w.extract_ms !== 'number' || !w.docs) return null;
-  const sPerSession = (w.extract_ms + (w.reconcile_ms ?? 0)) / w.docs / 1000;
-  const extractSPerSession = EXTRACT_ARM_STAMPED.extract_ms / EXTRACT_ARM_STAMPED.docs / 1000;
-  const ratio = sPerSession / extractSPerSession;
-  return `Write cost (mycelium-timeline): ${sPerSession.toFixed(2)} s/session — cost ×${ratio.toFixed(2)} of extract; bound ≤ 2×`;
-}
+// THE COST LINE (task 234): the timeline arm's write cost renders ONCE per
+// receipt — the win-condition block's `Cost bound (timeline write cost ≤ 2×
+// extract)` line (per_type.mjs renderCostBound), whose denominator is the
+// extract ARM'S OWN stamped seconds_per_session from the SAME run. A second
+// renderer here (the old task-188 `Write cost (…): cost ×N of extract` line,
+// LLM-time numerator over a hard-coded 2026-09-10 extract stamp) quoted a
+// DIFFERENT ratio in the same receipt (×1.45 beside the bound's ×5.71 —
+// receipts/2026-09-18-p1-154254.md lines 39 vs 77); it was deleted, and the
+// one-renderer contract is pinned by test/unit/bench-memory-reconcile-batch.test.js.
 
 // The per-candidate decision ledgers live in summary.json — in the receipt's
 // Write-phase block they render as a count only, or a 50-question receipt
@@ -202,13 +188,11 @@ export function renderReceipt({
     L.push(bits.join(''));
     L.push('');
   }
-  // task 188: the timeline arm's write cost against the extract control —
-  // computed from the run's own stamps, never hand-typed
-  const costLine = timelineCostLine(writeInfo ?? summary.write_info ?? null);
-  if (costLine) {
-    L.push(costLine);
-    L.push('');
-  }
+  // task 234: the timeline arm's write cost renders ONCE — inside the
+  // win-condition block below (renderWinCondition → renderCostBound), judged
+  // from the run's own seconds_per_session stamps on BOTH sides. No second
+  // cost line here: two renderers quoted two ratios in one receipt
+  // (receipts/2026-09-18-p1-154254.md), and a quotable artifact quotes one.
   // task 199: per-question-type scores + (when the timeline arm is in the run)
   // its pre-committed win-condition block. The table needs the run's judged
   // rows; their absence renders as its absence, never a number from nothing.

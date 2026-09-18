@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { EXTRACT_ARM_STAMPED, renderReceipt, timelineCostLine } from '../../bench/memory/receipt.mjs';
+import { renderReceipt } from '../../bench/memory/receipt.mjs';
 
 import {
   COMPARABILITY_KEYS,
@@ -578,30 +578,19 @@ describe('composeGrid against the REAL n=50 run dir', () => {
 
 // ---- the timeline arm's write-cost line (task 188, deliverable 3) -----------
 
-describe('the timeline write-cost line — cost ×N of extract; bound ≤ 2×', () => {
+describe('the timeline write cost — ONE renderer, ONE ratio (task 234)', () => {
   // the r3 timeline run's stamped write stats (results/2026-09-11-p1-025039/summary.json)
   const r3write = { docs: 2355, rows: 21587, extract_ms: 3_056_804, reconcile_ms: 25_823_110 };
 
-  it('EXTRACT_ARM_STAMPED carries provenance for the bound\'s denominator (the extract control\'s n=50 run)', () => {
-    expect(EXTRACT_ARM_STAMPED).toEqual({ run_id: '2026-09-10-p1-001549', extract_ms: 11_370_052, docs: 2355 });
-  });
-
-  it('timelineCostLine: (extract+reconcile)/docs as a ratio of the extract arm\'s stamped s/session', () => {
-    expect(timelineCostLine({ 'mycelium-timeline': r3write })).toBe(
-      'Write cost (mycelium-timeline): 12.26 s/session — cost ×2.54 of extract; bound ≤ 2×'
-    );
-    expect(timelineCostLine({ 'mycelium-timeline': { docs: 100, extract_ms: 50_000 } })).toBe(
-      'Write cost (mycelium-timeline): 0.50 s/session — cost ×0.10 of extract; bound ≤ 2×'
-    );
-  });
-
-  it('no line without timeline write stats (the other arms carry no such bound)', () => {
-    expect(timelineCostLine(null)).toBeNull();
-    expect(timelineCostLine({ mycelium: { docs: 10, extract_ms: 1000 } })).toBeNull();
-    expect(timelineCostLine({ 'mycelium-timeline': { docs: 0, extract_ms: 1000 } })).toBeNull();
-  });
-
-  it('renderReceipt prints the line; a run without timeline stats gets none', () => {
+  // task 234: the old task-188 cost line (LLM-time numerator over a hard-coded
+  // 2026-09-10 extract stamp) quoted ×1.45 beside the win-condition bound's
+  // ×5.71 in the same receipt (receipts/2026-09-18-p1-154254.md lines 39 vs 77).
+  // The renderer was deleted — the win-condition block (per_type.mjs
+  // renderCostBound, both denominators the run's own stamped
+  // seconds_per_session) is the ONE place the cost renders. The full
+  // one-ratio receipt contract is pinned in
+  // test/unit/bench-memory-reconcile-batch.test.js.
+  it('renderReceipt prints NO second cost line — the ratio lives only in the win-condition bound', () => {
     const md = renderReceipt({
       runId: 'r',
       summary: {
@@ -611,7 +600,8 @@ describe('the timeline write-cost line — cost ×N of extract; bound ≤ 2×', 
       },
       generatedAt: 'g',
     });
-    expect(md).toContain('Write cost (mycelium-timeline): 12.26 s/session — cost ×2.54 of extract; bound ≤ 2×');
+    expect(md).not.toContain('Write cost (mycelium-timeline)');
+    expect(md).not.toContain('of extract; bound ≤ 2×');
 
     const plain = renderReceipt({
       runId: 'r2',

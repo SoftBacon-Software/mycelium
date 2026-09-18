@@ -569,8 +569,12 @@ describe('rejudge prefers the run\'s own summary (task 223)', () => {
       rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
       generatedAt: '2026-09-18T06:30:00Z',
     });
-    // the "cost ×N of extract" line (receipt.mjs timelineCostLine) renders from the fixture's stamps
-    expect(md).toContain('Write cost (mycelium-timeline): 4.34 s/session — cost ×0.90 of extract; bound ≤ 2×');
+    // task 234: ONE cost renderer — the old `Write cost (…): cost ×N of extract`
+    // line is gone; the ratio renders only in the win-condition bound below
+    // (whose ×2.41 is judged from the run's OWN seconds_per_session stamps on
+    // both sides, not from a hard-coded 2026-09-10 extract stamp)
+    expect(md).not.toContain('Write cost (mycelium-timeline)');
+    expect(md).not.toContain('of extract; bound ≤ 2×');
     // the ingestion section renders (all four grid arms carry judged scores)
     expect(md).toContain('## Ingestion controls');
     expect(md).toContain('| Mycelium | ');

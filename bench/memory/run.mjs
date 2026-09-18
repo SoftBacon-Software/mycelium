@@ -19,7 +19,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, resolveTimelineReadPolicy, TIMELINE_READ_POLICY_HISTORY, TIMELINE_HISTORY_OVERFETCH, TIMELINE_HISTORY_MAX_PREDECESSORS, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, RECONCILE_SYSTEM_BATCH, RECONCILE_PROMPT_VERSION_V1, RECONCILE_BATCH_PROMPT_VERSION, resolveTimelineReadPolicy, TIMELINE_READ_POLICY_HISTORY, TIMELINE_HISTORY_OVERFETCH, TIMELINE_HISTORY_MAX_PREDECESSORS, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV, resolveReconcileBatchMode, resolveReconcileBatchSize, RECONCILE_BATCH_ENV, RECONCILE_BATCH_SIZE_ENV } from './arms/arm_mycelium_timeline.mjs';
 import { autopsyRun, computeAutopsy, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
@@ -677,9 +677,17 @@ async function main() {
   const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
   const git = await gitState(REPO_ROOT);
-  // the cost lever's resolution is stamped with its source — the arm factory
-  // resolves the SAME way, so the stamp and the code path cannot disagree
+  // the cost levers' resolutions are stamped with their sources — the arm factory
+  // resolves the SAME way, so the stamps and the code paths cannot disagree
   const fastpath = resolveReconcileFastpathThreshold();
+  // task 234: the batch decision lever — WHICH reconcile policy this run paid
+  // (per-candidate = the measured arm; batch = the opt-in cost lever), stamped
+  // with the prompt version + sha so a batch run and a per-candidate run are
+  // never confused
+  const batchMode = resolveReconcileBatchMode();
+  const batchSize = resolveReconcileBatchSize();
+  const reconcilePrompt = batchMode.batch ? RECONCILE_SYSTEM_BATCH : RECONCILE_SYSTEM;
+  const reconcilePromptVersion = batchMode.batch ? RECONCILE_BATCH_PROMPT_VERSION : RECONCILE_PROMPT_VERSION_V1;
   const regime = buildRegime({
     dateUtc: utcStamp(new Date()),
     git,
@@ -764,11 +772,22 @@ async function main() {
           decision_temperature: 0,
           decision_max_tokens: EXTRACT_MAX_TOKENS,
           decision_thinking: 'off',
-          decision_shape:
-            'ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact AND that best hit scores at/above the fastpath threshold (below it: ADD with NO call, counted fastpath_adds)',
-          reconcile_prompt: RECONCILE_SYSTEM,
-          reconcile_prompt_changed: 'UNCHANGED this round (task 205): the fastpath lever only decides WHEN this prompt runs — the prompt text is byte-identical, quoted here verbatim as the receipt',
+          decision_shape: batchMode.batch
+            ? `ONE decision call per BATCH of up to ${batchSize.size} call-bound candidates (a remainder pays another call; env ${RECONCILE_BATCH_SIZE_ENV}), only when the reconcile search surfaced >=1 current same-question fact AND that best hit scores at/above the fastpath threshold (below it: ADD with NO call, counted fastpath_adds). counts.decision_calls counts CALLS; counts.decisions_batched counts the candidates decided in them`
+            : 'ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact AND that best hit scores at/above the fastpath threshold (below it: ADD with NO call, counted fastpath_adds)',
+          reconcile_prompt: reconcilePrompt,
+          reconcile_prompt_version: reconcilePromptVersion,
+          reconcile_prompt_changed: batchMode.batch
+            ? 'reconcile-prompt.2-batch (task 234): v1\'s rules carried verbatim plus the batch contract (N numbered candidates, existing facts shown once, exactly N numbered reply lines in order); the v1 per-candidate prompt is reconcile-prompt.1-per-candidate'
+            : 'UNCHANGED this round (task 205): the fastpath lever only decides WHEN this prompt runs — the prompt text is byte-identical, quoted here verbatim as the receipt',
           reconcile_policy: {
+            // task 234: WHICH policy the run paid, by name + prompt sha — a
+            // batch run and the measured per-candidate run are never confused
+            mode: batchMode.batch ? 'batch' : 'per-candidate',
+            mode_source: batchMode.source,
+            mode_env: RECONCILE_BATCH_ENV,
+            prompt_version: reconcilePromptVersion,
+            prompt_sha256: createHash('sha256').update(reconcilePrompt).digest('hex'),
             top_k: 3,
             search_overfetch: 25,
             scope: 'CURRENT same-question facts only (metadata.question_id match, valid_to null) — the server has no metadata filter, so the search overfetches and the arm filters client-side',
@@ -786,8 +805,27 @@ async function main() {
             fastpath_guard: 'skip_unembedded_top_hit',
             fastpath_guard_rule: 'the best current hit stamped embedded:false by the server pays the decision call (counted fastpath_skips_unembedded, ledger source fastpath_skipped_unembedded) regardless of its score; a hit with NO embedded stamp (legacy platform / the golden fixture) keeps the pre-213 path',
             fail_open_on_malformed_decision: 'ADD, counted in decision_failures (never a silent drop)',
+            // task 234: the batch path's first-wins rule for two candidates
+            // claiming the same supersede target in one batch
+            ...(batchMode.batch
+              ? {
+                  batch_size: batchSize.size,
+                  batch_size_source: batchSize.source,
+                  batch_size_env: RECONCILE_BATCH_SIZE_ENV,
+                  supersede_conflict_rule: 'two candidates SUPERSEDING the same id in one batch: the FIRST line wins, later ones fall back to ADD, counted supersede_conflicts',
+                  ledger_source: 'decision-batch (every candidate decided by a batch call)',
+                }
+              : {}),
             supersede: 'the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted',
-            in_session_window: 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',
+            in_session_window: batchMode.batch
+              ? 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands — EXCEPT the batch lever\'s stamped deviation below'
+              : 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',
+            // task 234: the batch lever's known, stamped cost of batching
+            ...(batchMode.batch
+              ? {
+                  in_session_window_deviation: 'candidates in one batch do NOT see each other\'s decisions — every search in the session ran before any of the batch\'s writes landed; the flush and later sessions see everything, as before',
+                }
+              : {}),
           },
           layers: {
             episodic: {
