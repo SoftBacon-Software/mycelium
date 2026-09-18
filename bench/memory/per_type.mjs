@@ -159,14 +159,39 @@ export function winVerdict({ cells, cost }) {
 
 /**
  * Seconds per session for one arm's write phase, from the arm's OWN stamp.
- * Prefers the wall-clock write_ms stamp (core.mjs stamps it on every arm since
- * task 199); falls back to the LLM-time stamps the extract/timeline arms
- * stamped before it existed (extract_ms [+ reconcile_ms]). Null when neither
- * exists or docs is missing — the caller renders "not stamped", never a number.
+ * Prefers the per-session stamps both mycelium-family arms carry since task
+ * 230 — the seconds_per_session arrays inside their per_question blocks
+ * (write_info[arm].timeline.per_question[] for the timeline arm,
+ * write_info[arm].extract.per_question[] for the extract arm), mean over every
+ * session the write phase actually paid for. Falls back to the wall-clock
+ * write_ms stamp (core.mjs stamps it on every arm since task 199), then to the
+ * LLM-time stamps the extract/timeline arms stamped before those existed
+ * (extract_ms [+ reconcile_ms]). Null when nothing exists or docs is missing —
+ * the caller renders "not stamped", never a number.
  */
 export function secondsPerSessionStamp(writeInfo) {
   const w = writeInfo;
   if (!w || typeof w.docs !== 'number' || !w.docs) return null;
+  // task 230: one reader over both arms' per-question channels — the stamp
+  // key (seconds_per_session) is the same on each side of the bound
+  const perSession = [];
+  for (const channel of [w.timeline, w.extract]) {
+    const perQuestion = channel?.per_question;
+    if (!Array.isArray(perQuestion)) continue;
+    for (const q of perQuestion) {
+      if (!Array.isArray(q?.seconds_per_session)) continue;
+      for (const v of q.seconds_per_session) {
+        if (typeof v === 'number' && Number.isFinite(v)) perSession.push(v);
+      }
+    }
+  }
+  if (perSession.length) {
+    return {
+      kind: 'seconds_per_session',
+      seconds: perSession.reduce((a, b) => a + b, 0) / perSession.length,
+      label: `stamped seconds_per_session over ${perSession.length} sessions (mean of the arm's own per-session write wall clock)`,
+    };
+  }
   if (typeof w.write_ms === 'number') {
     return {
       kind: 'write_ms',
@@ -186,6 +211,21 @@ export function secondsPerSessionStamp(writeInfo) {
   return null;
 }
 
+/**
+ * The ≤2×-of-extract cost bound as a PURE function over the two stamps
+ * (task 230): the inclusive boundary (exactly 2.0× = PASS), a missing or
+ * degenerate stamp on either side = not judged (never a crash, never a
+ * guessed verdict — a 0.0 reuse-only write divides by zero, it does not
+ * "pass"). Both renderers and the verdict take their judgment from here, so
+ * the row and the VERDICT line cannot disagree.
+ */
+export function judgeCostBound({ timelineSeconds, extractSeconds, bound = WIN_CONDITION.costBound.ratio }) {
+  const usable = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (!usable(timelineSeconds) || !usable(extractSeconds)) return { judged: false, verdict: null, ratio: null };
+  const ratio = timelineSeconds / extractSeconds;
+  return { judged: true, verdict: ratio <= bound ? 'PASS' : 'FAIL', ratio };
+}
+
 /** The ≤2×-of-extract cost bound, judged only when BOTH stamps exist. */
 export function renderCostBound({ timeline, extract, timelineRegime = null, notStampedPhrase = 'not stamped' }) {
   const tl = secondsPerSessionStamp(timeline);
@@ -199,11 +239,17 @@ export function renderCostBound({ timeline, extract, timelineRegime = null, notS
     L.push(`Cost bound (timeline write cost ≤ ${WIN_CONDITION.costBound.ratio}× extract): NOT JUDGED — mycelium-extract seconds-per-session ${notStampedPhrase}.`);
     return L;
   }
-  const ratio = tl.seconds / ex.seconds;
-  const verdict = ratio <= WIN_CONDITION.costBound.ratio ? 'PASS' : 'FAIL';
+  const j = judgeCostBound({ timelineSeconds: tl.seconds, extractSeconds: ex.seconds });
+  if (!j.judged) {
+    L.push(
+      `Cost bound (timeline write cost ≤ ${WIN_CONDITION.costBound.ratio}× extract): NOT JUDGED — a stamp is degenerate ` +
+        `(mycelium-timeline ${tl.seconds.toFixed(2)} s/session, mycelium-extract ${ex.seconds.toFixed(2)} s/session).`
+    );
+    return L;
+  }
   L.push(
     `Cost bound (timeline write cost ≤ ${WIN_CONDITION.costBound.ratio}× extract): mycelium-timeline ${tl.seconds.toFixed(2)} s/session (${tl.label}) ` +
-      `vs mycelium-extract ${ex.seconds.toFixed(2)} s/session (${ex.label}) — ×${ratio.toFixed(2)} — ${verdict}.`
+      `vs mycelium-extract ${ex.seconds.toFixed(2)} s/session (${ex.label}) — ×${j.ratio.toFixed(2)} — ${j.verdict}.`
   );
   const reused = timelineRegime?.facts_reused_from ?? timelineRegime?.mycelium_timeline?.facts_reused_from ?? null;
   if (reused?.run_id) {
@@ -281,12 +327,8 @@ function judgeCost({ writeInfoByArm, regimeByArm, notStampedPhrase }) {
   });
   const tl = secondsPerSessionStamp(timeline);
   const ex = secondsPerSessionStamp(extract);
-  let result = null;
-  if (tl && ex) {
-    const ratio = tl.seconds / ex.seconds;
-    result = { verdict: ratio <= WIN_CONDITION.costBound.ratio ? 'PASS' : 'FAIL', ratio };
-  }
-  return { lines, result };
+  const j = judgeCostBound({ timelineSeconds: tl?.seconds ?? null, extractSeconds: ex?.seconds ?? null });
+  return { lines, result: j.judged ? { verdict: j.verdict, ratio: j.ratio } : null };
 }
 
 /**

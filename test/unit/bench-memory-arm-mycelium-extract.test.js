@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createArmMyceliumExtract,
   buildExtractionUserPrompt,
@@ -9,6 +9,7 @@ import {
 import { RAG_SYSTEM } from '../../bench/memory/arms/arm_mycelium.mjs';
 import { makeOpenAIChat } from '../../bench/memory/answer.mjs';
 import { buildRegime } from '../../bench/memory/regime.mjs';
+import { runBench } from '../../bench/memory/core.mjs';
 
 const SESSIONS = [
   [
@@ -80,6 +81,12 @@ describe('arm_mycelium_extract — the extraction control arm (task 182)', () =>
       parse_failure_detail: [],
       facts_reused: 0,
       extract_ms: expect.any(Number),
+      extract: {
+        question_id: 'q-1',
+        sessions: 2,
+        seconds_per_session: [expect.any(Number), expect.any(Number)],
+        parse_failures: 0,
+      },
     });
     // one indexed item per fact, in the EXTRACT namespace
     expect(platform.calls.bulk).toHaveLength(1);
@@ -386,5 +393,148 @@ describe('the regime stamps the extraction-control block', () => {
     expect(r.mem0_raw).toMatchObject({ ingestion: 'raw', infer: false, scope: 'bench-p1-r-raw' });
     expect(String(r.mem0_raw.mem0_add_infer)).toContain('main.py:770');
     expect(buildRegime(base).mem0_raw).toBeUndefined();
+  });
+});
+
+// ---- the §3 cost stamps (task 230) --------------------------------------------
+//
+// BRIEF-lab-alive-memory-program §3 pre-commits "timeline write cost ≤ 2× the
+// extract arm's seconds per session". The bound's named comparator is THIS arm
+// — so the arm measures its own write cost the same way the timeline arm does:
+// one `seconds_per_session` entry per session, in a per-question block core.mjs
+// keeps whole, with the ingestion-loss count beside it. Until both sides carry
+// the same stamp shape, the cost cell can never render JUDGED.
+
+describe('the §3 cost stamps (task 230) — extract.seconds_per_session beside the ingestion loss', () => {
+  it('write(): one seconds_per_session entry per session, bracketing each session write — the SAME shape the timeline arm stamps', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      let call = 0;
+      const arm = createArmMyceliumExtract({
+        answerChat: async () => ({ text: 'x' }),
+        extractionChat: async () => {
+          call += 1;
+          vi.advanceTimersByTime(call === 1 ? 1200 : 300);
+          return { text: '{"facts": ["F"]}' };
+        },
+        platform: fakePlatform(),
+        namespace: 'bench-p1-run1',
+        retrievalBudget: 5,
+        runId: 'run1',
+      });
+      const w = await arm.write(SESSIONS, { questionId: 'q-1' });
+      expect(w.extract).toEqual({
+        question_id: 'q-1',
+        sessions: 2,
+        seconds_per_session: [1.2, 0.3],
+        parse_failures: 0,
+      });
+      // the seconds stamp is a WALL-CLOCK bracket, not the LLM-time extract_ms:
+      // extract_ms keeps its task-182 meaning (extraction calls only)
+      expect(typeof w.extract_ms).toBe('number');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a REUSED session stamps too — its (near-zero) write cost is measured, not hidden, exactly like the timeline arm', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const store = {
+        stats: { reuse_source_run_id: 'run-prev', reuse_file: '/x/facts.jsonl', saved: 0, reused: 0 },
+        reusing: true,
+        load: (qid, idx) => (idx === 1 ? { facts: ['from before'], parse_failed: false } : null),
+        save: () => {},
+      };
+      const arm = createArmMyceliumExtract({
+        answerChat: async () => ({ text: 'x' }),
+        extractionChat: async () => {
+          vi.advanceTimersByTime(2000);
+          return { text: '{"facts": ["F"]}' };
+        },
+        platform: fakePlatform(),
+        namespace: 'bench-p1-run1',
+        retrievalBudget: 5,
+        runId: 'run1',
+        factsStore: store,
+      });
+      const w = await arm.write(
+        [[{ role: 'user', content: 's0' }], [{ role: 'user', content: 's1' }], [{ role: 'user', content: 's2' }]],
+        { questionId: 'q1' }
+      );
+      // sessions 0 and 2 each paid 2s of extraction; session 1 was reused from
+      // the facts file — its ~0s write is STAMPED as 0, not skipped
+      expect(w.extract.seconds_per_session).toEqual([2, 0, 2]);
+      expect(w.extract.sessions).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a parse-dropped session stamps its seconds AND the ingestion-loss count rides beside them', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      let call = 0;
+      const arm = createArmMyceliumExtract({
+        answerChat: async () => ({ text: 'x' }),
+        extractionChat: async () => {
+          call += 1;
+          vi.advanceTimersByTime(500);
+          return call === 1 ? { text: 'not json at all' } : { text: '{"facts": ["ok"]}' };
+        },
+        platform: fakePlatform(),
+        namespace: 'bench-p1-run1',
+        retrievalBudget: 5,
+        runId: 'run1',
+      });
+      const w = await arm.write(SESSIONS, { questionId: 'q-1' });
+      expect(w.extract.seconds_per_session).toEqual([0.5, 0.5]);
+      expect(w.extract.parse_failures).toBe(1);
+      expect(w.parse_failures).toBe(1); // the same loss, arm-level (rendered by the receipt)
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the stamps ride the harness: core keeps extract.per_question whole per question (the extract mirror of timeline.per_question)', async () => {
+    let captured = null;
+    await runBench({
+      items: [
+        { question_id: 'q1', question_type: 't', question: 'Q?', answer: 'A', haystack_sessions: [[{ role: 'user', content: 's' }]], haystack_dates: [] },
+        { question_id: 'q2', question_type: 't', question: 'Q?', answer: 'A', haystack_sessions: [[{ role: 'user', content: 's' }]], haystack_dates: [] },
+      ],
+      armFactories: [
+        {
+          name: 'mycelium-extract',
+          factory: () =>
+            createArmMyceliumExtract({
+              answerChat: async () => ({ text: 'x' }),
+              extractionChat: async () => ({ text: '{"facts": ["F"]}' }),
+              platform: fakePlatform(),
+              namespace: 'bench-p1-run1',
+              retrievalBudget: 5,
+              runId: 'run1',
+            }),
+        },
+      ],
+      armContext: {},
+      regime: { ok: true },
+      runId: 'r',
+      afterWrite: async (info) => {
+        captured = info;
+      },
+    });
+    expect(captured.arm).toBe('mycelium-extract');
+    expect(captured.writeInfo.extract.per_question).toHaveLength(2);
+    expect(captured.writeInfo.extract.per_question[0]).toMatchObject({
+      question_id: 'q1',
+      sessions: 1,
+      parse_failures: 0,
+    });
+    expect(captured.writeInfo.extract.per_question[0].seconds_per_session).toHaveLength(1);
+    expect(captured.writeInfo.extract.per_question[1].question_id).toBe('q2');
   });
 });

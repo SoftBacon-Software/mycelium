@@ -154,17 +154,27 @@ export function createArmMyceliumExtract({
       const items = [];
       const factsPerSession = [];
       const parseFailures = [];
+      // task 230: the §3 cost bound's comparator side. The bound counts
+      // SECONDS PER SESSION, so the arm brackets each session's write the way
+      // the timeline arm does (wall clock of the whole session's write work,
+      // reused sessions included — their ~0s is stamped, not hidden) and
+      // reports the per-question block core.mjs keeps whole in
+      // write_info[arm].extract.per_question — the extract mirror of
+      // write_info[arm].timeline.per_question.
+      const secondsPerSession = [];
       let extractMs = 0;
       let reused = 0;
       for (let idx = 0; idx < sessionTurns.length; idx++) {
         const turns = sessionTurns[idx];
         const t0 = Date.now();
+        const stampSessionSeconds = () => secondsPerSession.push(Number(((Date.now() - t0) / 1000).toFixed(1)));
         const cached = factsStore ? factsStore.load(questionId, idx) : null;
         if (cached) {
           reused++;
           const facts = Array.isArray(cached.facts) ? cached.facts : [];
           if (cached.parse_failed) parseFailures.push({ session_index: idx, finish_reason: cached.finish_reason ?? null, reason: 'reused: parse failure in the source run' });
           factsPerSession.push(facts.length);
+          stampSessionSeconds();
           log(`extract ${idx + 1}/${sessionTurns.length}: ${facts.length} facts REUSED from ${factsStore.stats.reuse_source_run_id ?? 'the facts file'} — q=${questionId}`);
           for (let f = 0; f < facts.length; f++) {
             items.push({
@@ -223,6 +233,7 @@ export function createArmMyceliumExtract({
             },
           });
         }
+        stampSessionSeconds();
       }
       const receipts = items.length ? await platform.indexBulk(items) : [];
       const rows = receipts.reduce((acc, r) => acc + (r.rows ?? 0), 0);
@@ -237,6 +248,16 @@ export function createArmMyceliumExtract({
         parse_failure_detail: parseFailures,
         // sessions re-indexed from a prior run's facts file (no model call)
         facts_reused: reused,
+        // task 230: the per-question cost stamp — the SAME key name and shape
+        // the timeline arm stamps (one entry per session, s, one decimal), with
+        // the ingestion-loss count riding beside it. core.mjs keeps this block
+        // whole per question under write_info['mycelium-extract'].extract.per_question.
+        extract: {
+          question_id: questionId ?? null,
+          sessions: sessionTurns.length,
+          seconds_per_session: secondsPerSession,
+          parse_failures: parseFailures.length,
+        },
       };
     },
     async answer(question) {
