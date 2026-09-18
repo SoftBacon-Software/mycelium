@@ -2,6 +2,7 @@
 
 import createMemoryDB from './db.js';
 import { generateEmbedding } from './embeddings.js';
+import { startBootDrain } from './boot-drain.js';
 
 export function registerHooks(core) {
   var db = createMemoryDB(core.db);
@@ -324,5 +325,16 @@ export function registerHooks(core) {
     } catch (e) {
       console.error('[semantic-memory] auto-index plan_step_completed failed:', e.message);
     }
+  });
+
+  // Task 219 (2026-09-18): a restart forgets the in-memory embed queue, and
+  // nothing on the platform re-discovered the NULL rows — the Mac's 30-min
+  // launchd backfill job was the only sweep, so every restart cost up to 30
+  // minutes of a dead embedder. Boot now re-enqueues every NULL row at low
+  // priority and a self-check retries stragglers (boot-drain.js; the Mac job
+  // stays as the belt-and-braces outer loop). Fire-and-forget: the pass yields
+  // before sweeping, so registration never blocks on it.
+  startBootDrain(db).catch(function (e) {
+    console.error('[semantic-memory] boot embed drain failed:', e.message);
   });
 }

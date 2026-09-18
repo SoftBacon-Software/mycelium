@@ -11,9 +11,14 @@
 //
 // A composed grid is quotable only if every run under it is: a capped write
 // phase or a cleanup that left rows indexed is stamped in bold at the top.
+// A REJUDGED run (summary.json absent, summary.rejudge.json + judged.rejudge.jsonl
+// present — what every judge-prompt bump leaves behind) is a finished run too:
+// the pair loads, the run is marked from its own rejudge stamp, and the header
+// names it so a rejudged column is never mistaken for a primary run (task 224).
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './ingestion.mjs';
 import { RECEIPTS_DIR } from './receipt.mjs';
@@ -25,7 +30,16 @@ import {
   classifyRow,
 } from './retrieval_stamp.mjs';
 import { SPLITS, loadSplit, selectItems } from './split.mjs';
-import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
+import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, factsLayerOf, timelineArmLabel } from './per_type.mjs';
+import { agreement } from './judge.mjs';
+
+/** Where the director's hand-label files live, keyed by run id (<run_id>.json). */
+export const HANDLABELS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'handlabels');
+
+// The rejudge pair — what rejudge.mjs writes beside (or instead of) a run's
+// own summary.json. The grid admits the pair when the primary summary is gone.
+const REJUDGE_SUMMARY_FILE = 'summary.rejudge.json';
+const REJUDGE_JUDGED_FILE = 'judged.rejudge.jsonl';
 
 /** A set of runs that cannot share a grid: the message names every differing key. */
 export class GridRefusal extends Error {
@@ -73,12 +87,86 @@ export function writeCap(summary) {
   return summary.regime?.write?.max_sessions_per_question ?? summary.max_sessions_per_question ?? null;
 }
 
-/** Load one run dir: summary.json + the judged rows (for the question-id sets). */
-export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null } = {}) {
+/** Hand-vs-judge agreement for a rejudged run, from <handlabelsDir>/<of_run_id>.json when it exists; null when it doesn't. */
+function handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }) {
+  if (!ofRunId) return null;
+  const file = path.join(handlabelsDir, `${ofRunId}.json`);
+  if (!existsFn(file)) return null;
+  let hand;
+  try {
+    hand = JSON.parse(readFileFn(file));
+  } catch (e) {
+    throw new GridInputError(`${file}: handlabels file does not parse — ${e.message}`);
+  }
+  if (!Array.isArray(hand?.items)) {
+    throw new GridInputError(`${file}: handlabels file carries no items array — the agreement leg refuses to invent one`);
+  }
+  const a = agreement(judged, hand.items);
+  return { n: a.n, agree: a.agree, rate: a.rate, hand_scorer: hand.hand_scorer ?? null, file };
+}
+
+/**
+ * Load one run dir: summary.json + the judged rows (for the question-id sets).
+ * When summary.json is ABSENT but the rejudge pair (summary.rejudge.json +
+ * judged.rejudge.jsonl) is present, the dir is a FINISHED REJUDGED run: the
+ * pair loads and the run is marked `rejudge` — of_run_id + judge_prompt_version
+ * from the summary's own rejudge stamp. A rejudged run is never again called
+ * "not finished". A pair half-present is refused naming the missing file; a
+ * dir with neither summary refuses exactly as before. When the rejudged run's
+ * of_run_id has a handlabels file, the hand-vs-judge agreement of the rejudged
+ * labels is computed at load (the quoting law's judge-agreement leg).
+ */
+export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null, handlabelsDir = HANDLABELS_DIR } = {}) {
   const parseJsonl = parseJsonlFn ?? ((text) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l)));
+  const buildIdSets = (rows) => {
+    const judgedIds = new Set();
+    const judgedIdsByArm = {};
+    for (const row of rows) {
+      if (typeof row.question_id !== 'string' || row.question_id.length === 0) continue;
+      judgedIds.add(row.question_id);
+      if (row.arm) (judgedIdsByArm[row.arm] ??= new Set()).add(row.question_id);
+    }
+    return { judgedIds, judgedIdsByArm };
+  };
+  // task 225: each arm's rendered identity from THIS run's regime — the audit
+  // keys its cells by it so two same-named arms from differently-stamped runs
+  // (memory-rows vs am_facts) stay separate measurements
+  const armLabels = (summary) =>
+    Object.fromEntries(Object.keys(summary.arms ?? {}).map((a) => [a, timelineArmLabel(summary.regime, a)]));
   const summaryFile = path.join(dir, 'summary.json');
   if (!existsFn(summaryFile)) {
-    throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
+    const rejSummaryFile = path.join(dir, REJUDGE_SUMMARY_FILE);
+    const rejJudgedFile = path.join(dir, REJUDGE_JUDGED_FILE);
+    const hasRejSummary = existsFn(rejSummaryFile);
+    const hasRejJudged = existsFn(rejJudgedFile);
+    if (!hasRejSummary && !hasRejJudged) {
+      throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
+    }
+    if (!hasRejSummary || !hasRejJudged) {
+      const missing = hasRejSummary ? REJUDGE_JUDGED_FILE : REJUDGE_SUMMARY_FILE;
+      throw new GridInputError(
+        `${dir}: no summary.json and the rejudge pair is incomplete — ${missing} is missing ` +
+          `(a rejudged run needs ${REJUDGE_SUMMARY_FILE} + ${REJUDGE_JUDGED_FILE})`
+      );
+    }
+    const summary = JSON.parse(readFileFn(rejSummaryFile));
+    const judged = parseJsonl(readFileFn(rejJudgedFile));
+    const { judgedIds, judgedIdsByArm } = buildIdSets(judged);
+    const ofRunId = summary.regime?.judge?.rejudge?.of_run_id ?? summary.rejudged_from ?? null;
+    return {
+      dir,
+      runId: summary.run_id ?? path.basename(dir),
+      summary,
+      judged,
+      judgedIds,
+      judgedIdsByArm,
+      labelByArm: armLabels(summary),
+      rejudge: {
+        of_run_id: ofRunId,
+        judge_prompt_version: summary.judge_prompt_version ?? summary.regime?.judge?.judge_prompt_version ?? null,
+        agreement: handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }),
+      },
+    };
   }
   const summary = JSON.parse(readFileFn(summaryFile));
   const judgedFile = path.join(dir, 'judged.jsonl');
@@ -86,15 +174,9 @@ export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultRea
     throw new GridInputError(`${dir}: no judged.jsonl — the question-id check needs the judged rows`);
   }
   const judged = parseJsonl(readFileFn(judgedFile));
-  const judgedIds = new Set();
-  const judgedIdsByArm = {};
-  for (const row of judged) {
-    if (typeof row.question_id !== 'string' || row.question_id.length === 0) continue;
-    judgedIds.add(row.question_id);
-    if (row.arm) (judgedIdsByArm[row.arm] ??= new Set()).add(row.question_id);
-  }
+  const { judgedIds, judgedIdsByArm } = buildIdSets(judged);
   const runId = summary.run_id ?? path.basename(dir);
-  return { dir, runId, summary, judged, judgedIds, judgedIdsByArm };
+  return { dir, runId, summary, judged, judgedIds, judgedIdsByArm, labelByArm: armLabels(summary), rejudge: null };
 }
 
 function idSetSample(a, b) {
@@ -123,20 +205,29 @@ export function findDifferences(runs) {
   if (!sameIds) differences.push({ key: 'question_ids', idSetMismatch: true });
 
   // one arm may appear in at most one run — the union would otherwise quote
-  // the same arm twice (last writer wins is not evidence)
+  // the same arm twice (last writer wins is not evidence). TASK 225: for a run
+  // that stamps regime.mycelium_timeline, the arm's identity carries that run's
+  // facts layer — the rows-path n=50 and the flag-path n=50 are DIFFERENT
+  // measurements that both name their arm `mycelium-timeline`, and they compose
+  // as two labeled columns. The same layer appearing twice is still a duplicate,
+  // named as such; unstamped regimes key (and render) exactly as before.
   const seen = new Map();
   for (const r of runs) {
+    const layer = factsLayerOf(r.summary.regime);
     for (const arm of Object.keys(r.summary.arms ?? {})) {
-      if (!seen.has(arm)) seen.set(arm, []);
-      seen.get(arm).push(r.runId);
+      const key = JSON.stringify([arm, layer]);
+      if (!seen.has(key)) seen.set(key, { arm, layer, runIds: [] });
+      seen.get(key).runIds.push(r.runId);
     }
   }
-  for (const [arm, runIds] of seen) {
+  for (const { arm, layer, runIds } of seen.values()) {
     if (runIds.length > 1) {
       differences.push({
         key: 'duplicate_arm',
-        note: 'an arm may appear in at most one run — the union would quote it twice',
-        values: runIds.map((id) => ({ run: id, value: arm, display: `'${arm}'` })),
+        note: layer
+          ? `an arm may appear in at most one run per facts layer — '${arm}' [${layer}] is quoted twice`
+          : 'an arm may appear in at most one run — the union would quote it twice',
+        values: runIds.map((id) => ({ run: id, value: arm, display: layer ? `'${arm}' [${layer}]` : `'${arm}'` })),
       });
     }
   }
@@ -344,7 +435,7 @@ export function renderTranscripts(groups) {
   return L;
 }
 
-export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget, transcripts = null }) {
+export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget: _budget, transcripts = null }) {
   const L = [];
   L.push('## Retrieval audit — read-side provenance (task 207)');
   L.push('');
@@ -412,6 +503,9 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
   const perRow = [];
   for (const run of runs) {
     for (const [arm, rows] of Object.entries(run.rowsByArm ?? {})) {
+      // rendered under the arm's labeled identity from its own run's regime;
+      // judged-row joins stay on the raw arm name (task 225)
+      const label = run.labelByArm?.[arm] ?? arm;
       for (const row of rows ?? []) {
         const mapping = goldIndex.byQuestion.get(row.question_id) ?? null;
         const c = classifyRow({
@@ -426,7 +520,7 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
           question_type: row.question_type,
           question: row.question,
           gold: row.gold,
-          arm,
+          arm: label,
           answer: row.answer,
           label: judged?.label ?? null,
           gold_rank: c.gold_rank,
@@ -485,7 +579,32 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     L.push(`**NOT A QUOTABLE GRID: ${warnings.join('; ')}. A capped or unclean run is not a quotable grid.**`);
   }
 
-  // scores: every arm of every run, one row each
+  // task 224: a rejudged run is named at the top, beside the bold stamps — a
+  // reader must not be able to mistake a rejudged column for a primary run.
+  // The judge-agreement leg rides the stamp when the run's handlabels file
+  // exists (the quoting law: the number is quoted only with its agreement
+  // leg); its absence is stated, never silent.
+  const rejudgedNotes = runs
+    .filter((r) => r.rejudge)
+    .map((r) => {
+      const jpv = r.rejudge.judge_prompt_version ?? '<unstamped>';
+      const leg = r.rejudge.agreement
+        ? `; hand-vs-judge agreement ${r.rejudge.agreement.rate.toFixed(3)} (n=${r.rejudge.agreement.n}, ${path.basename(r.rejudge.agreement.file)})`
+        : r.rejudge.of_run_id
+          ? `; no handlabels file for ${r.rejudge.of_run_id} — the judge-agreement leg is NOT rendered`
+          : '; no of_run_id in the rejudge stamp — the judge-agreement leg is NOT rendered';
+      return `${r.runId} is a REJUDGE of ${r.rejudge.of_run_id ?? '<unknown>'} — labels re-computed under ${jpv}${leg}`;
+    });
+  if (rejudgedNotes.length) {
+    L.push('');
+    L.push(
+      `**CONTAINS REJUDGED RUN(S): ${rejudgedNotes.join('; ')}.** ` +
+        'A rejudged run has no summary.json — its column is the rejudge pair (summary.rejudge.json + judged.rejudge.jsonl), its labels re-computed from the saved answers. It is not a primary run.'
+    );
+  }
+
+  // scores: every arm of every run, one row each — the arm named from ITS OWN
+  // run's regime (task 225: `mycelium-timeline [memory-rows]` vs `… [am_facts]`)
   L.push('');
   L.push('## Scores');
   L.push('');
@@ -496,7 +615,7 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
       const a = r.summary.arms?.[arm];
       if (!a) continue;
       const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
-      L.push(`| ${arm} | ${r.runId} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`);
+      L.push(`| ${timelineArmLabel(r.summary.regime, arm)} | ${r.runId} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`);
     }
   }
   L.push('');
@@ -534,7 +653,7 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
   if (autopsies) {
     for (const a of autopsies) {
       if (!a) continue;
-      L.push(`## Knowledge-update miss autopsy (${a.arm} — ${a.run_id})`);
+      L.push(`## Knowledge-update miss autopsy (${a.label ?? a.arm} — ${a.run_id})`);
       L.push('');
       if (a.error) {
         L.push(`NOT COMPUTED — ${a.error}`);
@@ -545,68 +664,104 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     }
   }
 
-  // ingestion stats per arm (facts per session, seconds per add where stamped)
+  // ingestion stats per arm (facts per session, seconds per add where stamped) —
+  // one entry per (run, arm): a layer-aware composite can carry the same arm
+  // name twice, each with its own write stamps (task 225)
   L.push('## Ingestion stats per arm');
   L.push('');
   for (const arm of unionArms(runs)) {
-    const w = writeUnion[arm];
-    const owner = runs.find((r) => r.summary.arms?.[arm]);
-    if (!w) {
-      L.push(`- ${arm} (${owner?.runId ?? '?'}): no write-phase stats stamped.`);
-      continue;
+    for (const owner of runs) {
+      if (!owner.summary.arms?.[arm]) continue;
+      const label = timelineArmLabel(owner.summary.regime, arm);
+      const w = owner.summary.write_info?.[arm];
+      if (!w) {
+        L.push(`- ${label} (${owner.runId}): no write-phase stats stamped.`);
+        continue;
+      }
+      const facts = factsStatLine(w);
+      const perAdd = secondsPerAdd(w);
+      const bits = [`- ${label} (${owner.runId}): docs ${w.docs ?? 'n/a'}, rows ${w.rows ?? 'n/a'}.`];
+      if (facts) bits.push(`Facts per session: ${facts}.`);
+      const dropped = dropStatLine(w);
+      if (dropped) bits.push(`Ingestion loss: ${dropped}.`);
+      bits.push(
+        perAdd !== null
+          ? typeof w.reconcile_ms === 'number'
+            ? `Seconds per add (stamped extract_ms ${w.extract_ms} ms + reconcile_ms ${w.reconcile_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
+            : `Seconds per add (stamped extract_ms ${w.extract_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
+          : 'Seconds per add: not stamped.'
+      );
+      L.push(bits.join(' '));
     }
-    const facts = factsStatLine(w);
-    const perAdd = secondsPerAdd(w);
-    const bits = [`- ${arm} (${owner?.runId ?? '?'}): docs ${w.docs ?? 'n/a'}, rows ${w.rows ?? 'n/a'}.`];
-    if (facts) bits.push(`Facts per session: ${facts}.`);
-    const dropped = dropStatLine(w);
-    if (dropped) bits.push(`Ingestion loss: ${dropped}.`);
-    bits.push(
-      perAdd !== null
-        ? typeof w.reconcile_ms === 'number'
-          ? `Seconds per add (stamped extract_ms ${w.extract_ms} ms + reconcile_ms ${w.reconcile_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
-          : `Seconds per add (stamped extract_ms ${w.extract_ms} ms / ${w.docs} docs): ${perAdd} s/session.`
-        : 'Seconds per add: not stamped.'
-    );
-    L.push(bits.join(' '));
   }
 
   // task 199: per-question-type scores — the one-number score row cannot say
   // whether an arm won the CELLS it was built for (brief §3). From each arm's
   // own judged rows; a run whose per-question rows are absent renders that
-  // absence (never a number from nothing).
+  // absence (never a number from nothing). One table per (run, arm): a
+  // layer-aware composite can carry the same arm name on both sides of the
+  // facts-layer comparison, and each side is judged from ITS OWN rows (task 225).
   const talliesByArm = {};
   const regimeByArm = {};
+  const timelineEntries = []; // [{run, tally, label}] — the win condition renders one block per timeline-carrying run
   L.push('');
   L.push('## Per-question-type scores');
   L.push('');
   for (const arm of unionArms(runs)) {
-    const owner = runs.find((r) => r.summary.arms?.[arm]);
-    if (!Array.isArray(owner.judged)) {
-      L.push(`per-question rows absent for ${owner.runId}`);
+    for (const owner of runs) {
+      if (!owner.summary.arms?.[arm]) continue;
+      const label = timelineArmLabel(owner.summary.regime, arm);
+      if (!Array.isArray(owner.judged)) {
+        L.push(`per-question rows absent for ${owner.runId}`);
+        L.push('');
+        continue;
+      }
+      talliesByArm[arm] = tallyByType(owner.judged.filter((r) => r.arm === arm), {
+        typesByQuestionId: datasetTypes?.typesByQuestionId ?? null,
+        joinRule: datasetTypes?.joinRule ?? null,
+      });
+      regimeByArm[arm] = owner.summary.regime ?? {};
+      if (arm === WIN_CONDITION.arm) timelineEntries.push({ run: owner, tally: talliesByArm[arm], label });
+      for (const line of renderPerTypeTable(label, talliesByArm[arm])) L.push(line);
       L.push('');
-      continue;
     }
-    talliesByArm[arm] = tallyByType(owner.judged.filter((r) => r.arm === arm), {
-      typesByQuestionId: datasetTypes?.typesByQuestionId ?? null,
-      joinRule: datasetTypes?.joinRule ?? null,
-    });
-    regimeByArm[arm] = owner.summary.regime ?? {};
-    for (const line of renderPerTypeTable(arm, talliesByArm[arm])) L.push(line);
-    L.push('');
   }
 
   // the timeline arm judged by its pre-committed cells — its own bar, not the
-  // one number (renderWinCondition states the bars + the verdict rule)
+  // one number (renderWinCondition states the bars + the verdict rule).
+  // TASK 225: when the composite carries the timeline arm on BOTH sides of the
+  // facts-layer comparison, each side gets its own block under the SAME bars —
+  // the §3 greenfield question (does the product's am_facts table match the
+  // namespace simulation cell-for-cell?) is answered per column, never merged.
   if (armsUnion[WIN_CONDITION.arm]) {
-    for (const line of renderWinCondition({
-      talliesByArm,
-      writeInfoByArm: writeUnion,
-      regimeByArm,
-    })) {
-      L.push(line);
+    const timelineRuns = runs.filter((r) => r.summary.arms?.[WIN_CONDITION.arm]);
+    if (timelineRuns.length <= 1) {
+      const only = timelineRuns[0];
+      for (const line of renderWinCondition({
+        talliesByArm,
+        writeInfoByArm: writeUnion,
+        regimeByArm,
+        armDisplay: only ? timelineArmLabel(only.summary.regime, WIN_CONDITION.arm) : WIN_CONDITION.arm,
+      })) {
+        L.push(line);
+      }
+      L.push('');
+    } else {
+      for (const r of timelineRuns) {
+        const entry = timelineEntries.find((e) => e.run === r);
+        const label = timelineArmLabel(r.summary.regime, WIN_CONDITION.arm);
+        for (const line of renderWinCondition({
+          talliesByArm: { ...talliesByArm, [WIN_CONDITION.arm]: entry?.tally },
+          writeInfoByArm: { ...writeUnion, [WIN_CONDITION.arm]: r.summary.write_info?.[WIN_CONDITION.arm] },
+          regimeByArm: { ...regimeByArm, [WIN_CONDITION.arm]: r.summary.regime ?? {} },
+          armDisplay: label,
+          headingNote: `\`${label}\` — run ${r.runId}`,
+        })) {
+          L.push(line);
+        }
+        L.push('');
+      }
     }
-    L.push('');
   }
 
   // comparability: the keys that were checked and their shared value
@@ -670,7 +825,8 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
   L.push('## Artifacts');
   L.push('');
   for (const r of runs) {
-    L.push(`- rows + summary: \`${r.dir}\` (summary.json, judged.jsonl, <arm>.rows.jsonl)`);
+    const pair = r.rejudge ? 'summary.rejudge.json, judged.rejudge.jsonl' : 'summary.json, judged.jsonl';
+    L.push(`- rows + summary: \`${r.dir}\` (${pair}, <arm>.rows.jsonl)`);
   }
   L.push('');
   return L.join('\n');
@@ -690,6 +846,7 @@ export function composeGrid({
   audit = false, // task 207: render the retrieval audit + the pre-committed diagnostic branch
   existsFn = fs.existsSync,
   readFileFn = defaultReadFile,
+  handlabelsDir = HANDLABELS_DIR, // where a rejudged run's hand-label file is looked up
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
@@ -700,7 +857,7 @@ export function composeGrid({
   if (!Array.isArray(dirs) || dirs.length < 2) {
     throw new GridInputError(`--grid-from-results needs at least two run dirs (got ${dirs?.length ?? 0})`);
   }
-  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn }));
+  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn, handlabelsDir }));
   assertComparable(runs);
   const runIds = runs.map((r) => r.runId);
   const commands =
@@ -718,7 +875,11 @@ export function composeGrid({
         .filter((r) => r.summary.arms?.[DEFAULT_AUTOPSY_ARM])
         .map((r) => {
           try {
-            return { ...autopsyRun({ dir: r.dir, arm: DEFAULT_AUTOPSY_ARM, existsFn, readFileFn }), run_id: r.runId };
+            return {
+              ...autopsyRun({ dir: r.dir, arm: DEFAULT_AUTOPSY_ARM, existsFn, readFileFn }),
+              run_id: r.runId,
+              label: timelineArmLabel(r.summary.regime, DEFAULT_AUTOPSY_ARM),
+            };
           } catch (e) {
             // a finished run missing its rows file must not sink the grid — but it is said, not swallowed
             return { arm: DEFAULT_AUTOPSY_ARM, run_id: r.runId, wrong_knowledge_update: 0, classes: {}, flags: {}, stamps: { rows: 0 }, details: [], ledger_coverage: null, error: e.message };
@@ -730,7 +891,6 @@ export function composeGrid({
   // rows file is an ERROR line in the section, not a silent absence), maps the
   // dataset's gold answer sessions, computes the per-type × arm stats over
   // STAMPED rows, and runs the pre-committed rule — mechanical, no judgement.
-  let auditSection = null;
   let auditMeta = null;
   if (audit) {
     const budget = runs[0].summary.regime?.retrieval?.budget;
@@ -746,7 +906,7 @@ export function composeGrid({
             errors.push(`${r.runId}/${arm}: ${e.message}`);
           }
         }
-        return { runId: r.runId, summary: r.summary, judged: r.judged, rowsByArm, errors };
+        return { runId: r.runId, summary: r.summary, judged: r.judged, rowsByArm, errors, labelByArm: r.labelByArm };
       });
       const goldIndex = buildGoldIndex(await loadAuditItems(runs[0].summary, { loadSplitFn, selectItemsFn }));
       const anyRows = loaded.some((r) => Object.keys(r.rowsByArm).length > 0);

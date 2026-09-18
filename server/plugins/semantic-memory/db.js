@@ -1,6 +1,6 @@
 // Semantic Memory DB helpers
 
-import { cosineSimilarity, embedQueueDepth } from './embeddings.js';
+import { cosineSimilarity, embedQueueDepth, embedDrainSnapshot } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import { createVectorCache } from './vector-cache.js';
 
@@ -44,6 +44,56 @@ var BENCH_HIDDEN_SQL =
 // (vector-cache.js) expresses as an early break in its recency order.
 // Exported for the cache default and the tests.
 export var VECTOR_SCAN_CAP = 5000;
+
+// -- Per-result embeddedness stamp (task 213) ----------------------------------
+// Rows are embedded asynchronously after indexing, so a search seconds later
+// ranks the newest rows keyword-only — and inside a hybrid result those
+// keyword-only scores are indistinguishable from semantic ones. Every search
+// result now states whether its OWN vector exists (the LEFT JOIN answer:
+// keyword-found row with a NULL embedding = false; a vector-scan hit = true),
+// so a caller — the bench reconcile fastpath first (task 213) — can refuse to
+// decide on a score that was never a semantic one. A row that cannot know (a
+// producer that predates the stamp carries no embedding column at all) stamps
+// null — never a guessed true.
+export function stampEmbedded(r) {
+  if (!r || typeof r !== 'object') return r;
+  if (r.embedded === undefined) {
+    r.embedded = 'embedding' in r ? r.embedding != null : null;
+  }
+  return r;
+}
+
+// Keyword leg of hybrid search: the FTS5 MATCH is bounded. 2026-09-18 02:56,
+// 03:38 and 03:52 CDT the Jetson platform wedged three times — node's main
+// thread R at 100% for up to 30 CPU-min inside Statement.all → fts5FilterMethod
+// → fts5Bm25Function → fts5ApiInstCount (gdb on the live process). The query
+// builder quoted EVERY whitespace token of the caller's text and OR'd them, so a
+// 6 KB workflow brief (the runner's and the lanes' "prior work" retrieval sends
+// the brief itself) became a ~1,000-term MATCH that every row satisfies, ranked
+// by bm25 over every instance in every 40 KB episode row — and the client's
+// timeout + retry re-wedged the process seconds after each restart. Terms are
+// now distinct, lowercased, ≥ 3 chars, not stopwords, at most FTS_MAX_TERMS,
+// taken from the first FTS_MAX_QUERY_CHARS of the text.
+export var FTS_MAX_TERMS = 24;
+export var FTS_MAX_QUERY_CHARS = 2000;
+var FTS_STOPWORDS = new Set(('the and for are but not you all any can had her was one our out day get has him his how '
+  + 'its let may new now old see two way who did that this with from they have been will what when your than then '
+  + 'them into over such also more most some only very just like each other about after before under while where '
+  + 'which there their would could should does doing done being were because these those').split(' '));
+
+export function buildFtsQuery(query) {
+  var text = String(query || '').slice(0, FTS_MAX_QUERY_CHARS).replace(/['"*()]/g, ' ');
+  var seen = {};
+  var terms = [];
+  var toks = text.split(/\s+/);
+  for (var i = 0; i < toks.length && terms.length < FTS_MAX_TERMS; i++) {
+    var w = toks[i].toLowerCase();
+    if (w.length < 3 || FTS_STOPWORDS.has(w) || seen[w]) continue;
+    seen[w] = true;
+    terms.push('"' + w + '"');
+  }
+  return terms.join(' OR ');
+}
 
 export default function createMemoryDB(db, opts) {
   // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
@@ -136,6 +186,7 @@ export default function createMemoryDB(db, opts) {
       opts = opts || {};
       var chunks = chunkText(contentText, this.getChunkSize());
       var self = this;
+      var unchangedCount = 0;
       var txn = db.transaction(function () {
         for (var i = 0; i < chunks.length; i++) {
           var chunkOpts = Object.assign({}, opts, { chunk_index: i });
@@ -144,11 +195,16 @@ export default function createMemoryDB(db, opts) {
             delete chunkOpts.embedding;
             delete chunkOpts.embedding_model;
           }
-          self.index(sourceType, sourceId, chunks[i], chunkOpts);
+          var res = self.index(sourceType, sourceId, chunks[i], chunkOpts);
+          if (res && res.unchanged) unchangedCount++;
         }
         self.removeChunksFrom(sourceType, sourceId, chunks.length);
       });
       txn();
+      // Task 227: how many chunks were byte-identical no-ops, riding the
+      // established array return (callers read .length and the texts). A
+      // count equal to chunks.length means the doc wrote nothing at all.
+      chunks.unchangedCount = unchangedCount;
       return chunks;
     },
 
@@ -166,6 +222,18 @@ export default function createMemoryDB(db, opts) {
     },
 
     // -- Index --
+    // 2026-09-18 (task 227): re-indexing IDENTICAL content with no embedding in
+    // the request used to run `embedding = excluded.embedding` — resetting the
+    // stored vector to NULL and re-queueing the row — so the Mac's half-hourly
+    // memory backfill cost the Jetson ~2k re-embeds per tick and helped wedge
+    // the platform that night (node R at 100% CPU, 811s down). Two guards now:
+    // a read-before-write that SKIPS the write entirely when content, namespace
+    // and metadata all match and the request carries no embedding (no FTS
+    // rewrite, no cache touch, no embed — the row is byte-identical), and a
+    // CASE on the upsert itself so a metadata-only or namespace-only change
+    // keeps the stored vector while CHANGED content still resets it (stale
+    // vectors are worse than missing ones). Returns { unchanged } so callers
+    // (indexDoc → bulkIndex → the route) can skip the embed queue for no-ops.
     index(sourceType, sourceId, contentText, opts) {
       opts = opts || {};
       var namespace = opts.namespace || null;
@@ -174,37 +242,63 @@ export default function createMemoryDB(db, opts) {
       var embedding = opts.embedding || null;
       var embeddingModel = opts.embedding_model || null;
 
+      var prior = db.prepare(
+        'SELECT content_text, namespace, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
+      ).get(sourceType, sourceId, chunkIndex);
+      if (prior && embedding == null &&
+          prior.content_text === contentText &&
+          (prior.namespace || null) === namespace &&
+          (prior.metadata || '{}') === metadata) {
+        return { unchanged: true }; // a genuinely empty write — touch nothing
+      }
+
       db.prepare(`
         INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_type, source_id, chunk_index)
         DO UPDATE SET content_text = excluded.content_text, namespace = excluded.namespace,
-          metadata = excluded.metadata, embedding = excluded.embedding,
-          embedding_model = excluded.embedding_model, updated_at = datetime('now')
+          metadata = excluded.metadata,
+          embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.embedding ELSE excluded.embedding END,
+          embedding_model = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.embedding_model ELSE excluded.embedding_model END,
+          updated_at = CASE WHEN sm_embeddings.content_text = excluded.content_text
+            AND sm_embeddings.namespace = excluded.namespace
+            AND sm_embeddings.metadata = excluded.metadata
+            THEN sm_embeddings.updated_at ELSE datetime('now') END
       `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel);
       vectorCache.onUpsert(sourceType, sourceId, chunkIndex);
+      return { unchanged: false };
     },
 
     // Chunk-aware bulk index. Items carrying an explicit chunk_index are
     // stored as single rows (caller-managed chunking); everything else goes
     // through indexDoc so oversized content splits and stale chunks are
     // cleaned up. Returns the rows actually written (post-chunking) so the
-    // caller can embed each one.
+    // caller can embed each one; each row also carries `unchanged` (this row
+    // was a byte-identical no-op and needs no embed), and the array carries
+    // `unchangedCount` — the number of INPUT ITEMS that churned nothing — so
+    // the bulk route can answer the {ok, indexed, rows, unchanged} split
+    // (task 227).
     bulkIndex(items) {
       var self = this;
       var rows = [];
+      var unchangedItems = 0;
       var txn = db.transaction(function (items) {
         for (var item of items) {
           if (item.chunk_index !== undefined && item.chunk_index !== null) {
-            self.index(item.source_type, item.source_id, item.content_text, {
+            var one = self.index(item.source_type, item.source_id, item.content_text, {
               namespace: item.namespace, chunk_index: item.chunk_index,
               metadata: item.metadata, embedding: item.embedding,
               embedding_model: item.embedding_model
             });
+            var oneUnchanged = !!(one && one.unchanged);
+            if (oneUnchanged) unchangedItems++;
             rows.push({
               source_type: item.source_type, source_id: item.source_id,
               chunk_index: item.chunk_index, content_text: item.content_text,
-              embedding: item.embedding || null
+              embedding: item.embedding || null,
+              unchanged: oneUnchanged
             });
             continue;
           }
@@ -212,16 +306,23 @@ export default function createMemoryDB(db, opts) {
             namespace: item.namespace, metadata: item.metadata,
             embedding: item.embedding, embedding_model: item.embedding_model
           });
+          // Content that is unchanged is unchanged for every chunk of the doc
+          // (the split is deterministic), so the doc-level flag rides each row;
+          // a changed doc's rows are NULL-embedded and embed regardless.
+          var docUnchanged = chunks.unchangedCount === chunks.length;
+          if (docUnchanged) unchangedItems++;
           for (var i = 0; i < chunks.length; i++) {
             rows.push({
               source_type: item.source_type, source_id: item.source_id,
               chunk_index: i, content_text: chunks[i],
-              embedding: chunks.length === 1 ? (item.embedding || null) : null
+              embedding: chunks.length === 1 ? (item.embedding || null) : null,
+              unchanged: docUnchanged
             });
           }
         }
       });
       txn(items);
+      rows.unchangedCount = unchangedItems;
       return rows;
     },
 
@@ -278,10 +379,10 @@ export default function createMemoryDB(db, opts) {
       var where = [];
       var params = [];
 
-      // FTS5 match
+      // FTS5 match — bounded (see buildFtsQuery); a query with no usable term has no keyword leg
+      var ftsQuery = buildFtsQuery(query);
+      if (!ftsQuery) return [];
       where.push("sm_embeddings_fts MATCH ?");
-      // Escape special FTS5 chars and convert to prefix search
-      var ftsQuery = query.replace(/['"*()]/g, '').split(/\s+/).filter(Boolean).map(function (w) { return '"' + w + '"'; }).join(' OR ');
       params.push(ftsQuery);
 
       if (opts.source_types && opts.source_types.length > 0) {
@@ -307,7 +408,7 @@ export default function createMemoryDB(db, opts) {
           if (!full) return null;
           try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
           full.score = -r.rank; // FTS5 rank is negative (lower = better)
-          return full;
+          return stampEmbedded(full); // task 213: the row states its own embeddedness
         }).filter(Boolean);
         return this.collapseChunks(enriched).slice(0, limit);
       } catch (e) {
@@ -331,7 +432,7 @@ export default function createMemoryDB(db, opts) {
         return this.collapseChunks(likeRows.map(function (r) {
           try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
           r.score = 1.0; // no ranking for LIKE fallback
-          return r;
+          return stampEmbedded(r); // task 213: the row states its own embeddedness
         })).slice(0, limit);
       }
     },
@@ -375,7 +476,7 @@ export default function createMemoryDB(db, opts) {
         if (!full) return null;
         try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
         full.score = s.score;
-        return full;
+        return stampEmbedded(full); // task 213: a vector-scan hit is embedded by construction
       }).filter(Boolean);
     },
 
@@ -444,6 +545,42 @@ export default function createMemoryDB(db, opts) {
 
     countUnembedded() {
       return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
+    },
+
+    // Oversized NULL-embedding rows can never embed whole — the provider
+    // rejects them. Moved here from routes.js (task 219) so the boot drain
+    // (boot-drain.js) reuses the EXACT treatment /reindex and
+    // /backfill-embeddings give them instead of growing a second copy.
+    // Covers both legacy un-chunked docs AND docs whose chunks were cut at a
+    // larger (since-lowered) threshold. The full doc is rebuilt from ALL its
+    // chunk rows (chunking is lossless, so the join IS the original) and
+    // re-chunked at the current threshold — re-chunking from a single chunk's
+    // slice would drop sibling chunk content. Returns the expanded work list
+    // of rows to embed.
+    expandOversizedRows(rows) {
+      var work = [];
+      var rechunked = {}; // source_type:source_id — re-chunk each doc once
+      var chunkSize = this.getChunkSize(); // hoisted — static per request, not per row (N+1)
+      for (var row of rows) {
+        var key = row.source_type + ':' + row.source_id;
+        if (rechunked[key]) continue;
+        if (row.content_text.length > chunkSize) {
+          rechunked[key] = true;
+          var docRows = this.getDocChunks(row.source_type, row.source_id);
+          var fullText = docRows.map(function (c) { return c.content_text; }).join('');
+          var meta; // assigned on both paths below
+          try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
+          var chunks = this.indexDoc(row.source_type, row.source_id, fullText, {
+            namespace: docRows[0].namespace, metadata: meta
+          });
+          for (var ci = 0; ci < chunks.length; ci++) {
+            work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });
+          }
+        } else {
+          work.push(row);
+        }
+      }
+      return work;
     },
 
     // Async since 196: the vector arm may wait on an in-flight cache build.
@@ -566,6 +703,70 @@ export default function createMemoryDB(db, opts) {
       });
     },
 
+    // -- Episodes: the §3 EVENT half (2026-09-18, F-mycelium/218) ------------------
+    // An EPISODE is one squad session transcript stored VERBATIM as a memory row
+    // (source_type 'episode') so every reconciled fact can cite the session that
+    // established it — "the lab has the fact half and no episode half". Same index
+    // path, same plugin, no new organ; the provenance gate is 186's scoped to what
+    // an episode must carry: WHO (agent) and WHEN (session_date). session_id (the
+    // transcript's content hash) and origin (workflow_id or file path) are the
+    // documented contract but are not the gate — a fact cites the episode by
+    // agent+date+hash, so those two are the ones a writer cannot guess.
+    EPISODE_SOURCE_TYPES: { episode: true },
+    REQUIRED_EPISODE_PROVENANCE: ['agent', 'session_date'],
+    missingEpisodeFields(metadata) {
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        return this.REQUIRED_EPISODE_PROVENANCE.slice();
+      }
+      return this.REQUIRED_EPISODE_PROVENANCE.filter(function (f) {
+        var v = metadata[f];
+        return typeof v !== 'string' || v.trim().length === 0;
+      });
+    },
+
+    // GET /memory/episodes' query layer — the dated enumeration: "the indexed
+    // episodes of one agent/day" (the reconcile dry-run's input; tomorrow, the
+    // wake/boot blocks' dated-episode line). Metadata parsed; newest first by
+    // the episode's OWN session_date (falling back to created_at), not
+    // insertion order — a backfilled week must read as the week it was, not as
+    // the night it was indexed. An episode spans chunk rows 0..N (chunking.js
+    // is lossless: chunks.join('') === the original text), and the row out is
+    // the WHOLE text — its chunks concatenated in index order. Returning
+    // chunk 0 alone was the defect the 2026-09-18 live receipt caught: a
+    // 4000-char fragment whose first JSON line dies mid-string — nothing
+    // downstream could parse the transcript the row claims to carry.
+    listEpisodes(opts) {
+      opts = opts || {};
+      var limit = Math.min(parseInt(opts.limit, 10) || 20, 500);
+      var where = ["source_type = 'episode'", 'chunk_index = 0'];
+      var args = [];
+      if (opts.agent) { where.push("json_extract(metadata, '$.agent') = ?"); args.push(opts.agent); }
+      if (opts.session_date) { where.push("json_extract(metadata, '$.session_date') = ?"); args.push(opts.session_date); }
+      if (opts.namespace) { where.push('namespace = ?'); args.push(opts.namespace); }
+      // Pass 1: the episode heads (chunk 0 exists for every row — the chunker
+      // always emits at least one chunk), so LIMIT counts EPISODES, not chunks.
+      var sql = 'SELECT source_type, source_id, namespace, metadata, created_at, updated_at '
+              + 'FROM sm_embeddings WHERE ' + where.join(' AND ')
+              + " ORDER BY COALESCE(json_extract(metadata, '$.session_date'), created_at) DESC, created_at DESC LIMIT ?";
+      args.push(limit);
+      var heads = db.prepare(sql).all(...args);
+      if (heads.length === 0) return [];
+      // Pass 2: every chunk of those episodes, in index order, joined back.
+      var marks = heads.map(function () { return '?'; }).join(',');
+      var chunks = db.prepare("SELECT source_id, content_text FROM sm_embeddings "
+          + "WHERE source_type = 'episode' AND source_id IN (" + marks + ") "
+          + 'ORDER BY source_id, chunk_index').all(heads.map(function (h) { return h.source_id; }));
+      var byId = {};
+      for (var c of chunks) {
+        (byId[c.source_id] = byId[c.source_id] || []).push(c.content_text);
+      }
+      for (var h of heads) {
+        h.content_text = (byId[h.source_id] || []).join('');
+        try { h.metadata = JSON.parse(h.metadata); } catch (e) { h.metadata = {}; }
+      }
+      return heads;
+    },
+
     // Lightweight health snapshot for the search response — the four numbers a
     // caller needs to judge whether a result set is complete + healthy (total,
     // embedded, coverage %, vector-scan cap), WITHOUT the two GROUP BYs stats()
@@ -579,6 +780,25 @@ export default function createMemoryDB(db, opts) {
         embedded: withEmbedding,
         coverage_pct: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
         vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP // mirrors the cap in searchVector()
+      };
+    },
+
+    // The SAME four definitions scoped to ONE namespace (task 214) — the
+    // per-namespace truth the bench's embedding wait needs: a run's own rows
+    // can be 100% embedded while the global index sits at 40% behind the lab's
+    // live write burst, and a wait that can only read the global number burns
+    // its cap on rows the run will never search. Superseded am_fact index rows
+    // count (namespace = ? matches them like any other row — they stay
+    // searchable by design, task 206); a namespace with no rows reads an
+    // honest 0/0/0, same convention as indexHealth's empty index.
+    namespaceHealth(namespace) {
+      var total = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE namespace = ?').get(namespace).c;
+      var withEmbedding = db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE namespace = ? AND embedding IS NOT NULL').get(namespace).c;
+      return {
+        rows: total,
+        embedded: withEmbedding,
+        coverage_pct: total > 0 ? Math.round((withEmbedding / total) * 100) : 0,
+        vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP
       };
     },
 
@@ -596,7 +816,10 @@ export default function createMemoryDB(db, opts) {
         // watching a bulk index can see the embed pipeline drain here
         // instead of diagnosing it from search timeouts. (2026-09-09)
         embed_backlog: this.countUnembedded(),
-        embed_queue: embedQueueDepth(),
+        // + the drain receipt (task 219): last_drain_at / rows_enqueued_at_boot —
+        // how a client proves the boot drain ran and the self-check is alive,
+        // instead of diagnosing a frozen embedded count from the outside.
+        embed_queue: Object.assign(embedQueueDepth(), embedDrainSnapshot()),
         by_source_type: byType,
         by_namespace: byNamespace,
         vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP,

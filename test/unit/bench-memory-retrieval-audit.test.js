@@ -529,13 +529,18 @@ describe('composeGrid --retrieval-audit: the section lands in the grid receipt, 
     notes: [],
   };
 
-  function writeRun(name, runId, armName, readHits) {
+  function writeRun(name, runId, armName, readHits, factsLayer = null) {
     const dir = path.join(root, name);
     fs.mkdirSync(dir, { recursive: true });
     const summary = {
       run_id: runId,
       n: 1,
-      regime: { ...REGIME, retrieval: { ...REGIME.retrieval, namespace: `ns-${runId}` } },
+      regime: {
+        ...REGIME,
+        retrieval: { ...REGIME.retrieval, namespace: `ns-${runId}` },
+        // task 225: the facts-layer stamp that gives a timeline run its grid identity
+        ...(factsLayer ? { mycelium_timeline: { facts_layer: factsLayer } } : {}),
+      },
       arms: { [armName]: { n: 1, score: { counts: { exact: 0, partial: 0, wrong: 1 }, p1_score: 0 } } },
       write_info: {},
       commands: [],
@@ -610,5 +615,27 @@ describe('composeGrid --retrieval-audit: the section lands in the grid receipt, 
     expect(md).toMatch(/Pooled branch: `insufficient-stamps`/);
     expect(md).toMatch(/0 ranked preference rows/);
     expect(md).toMatch(/never assigned ranks/);
+  });
+
+  it('task 225: two same-named timeline runs on different facts layers audit as SEPARATE labeled cells, never pooled', async () => {
+    const hit = [{ source_id: 's0', rank: 0, score: 0.9, session_index: 0 }]; // gold session 0 at rank 0 → ranked
+    const dirs = [
+      writeRun('run-rows', 'run-rows', 'mycelium-timeline', hit, 'memory-rows'),
+      writeRun('run-am', 'run-am', 'mycelium-timeline', hit, 'am_facts'),
+    ];
+    const out = await composeGrid({
+      dirs,
+      generatedAt: '2026-09-18T00:00:00Z',
+      receiptsDir: path.join(root, 'receipts'),
+      audit: true,
+      loadSplitFn: async () => ({ items: AUDIT_ITEMS }),
+    });
+    const md = fs.readFileSync(out.file, 'utf8');
+    // each layer's rows land in ITS OWN cell — rows=1 each, not one pooled rows=2 row
+    expect(md).toMatch(/\| mycelium-timeline \[memory-rows\] \| single-session-preference \| 1 \| 1 \|/);
+    expect(md).toMatch(/\| mycelium-timeline \[am_facts\] \| single-session-preference \| 1 \| 1 \|/);
+    // the hand-label transcripts carry the labels too (judged joins stay on the raw arm)
+    expect(md).toContain('| mycelium-timeline [memory-rows] | wrong |');
+    expect(md).toContain('| mycelium-timeline [am_facts] | wrong |');
   });
 });

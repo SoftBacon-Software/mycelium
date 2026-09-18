@@ -112,6 +112,7 @@ All routes are under `/api/mycelium/memory`.
 | GET | `/list?source_type=` | agent/admin | Query-free retrieval by type, newest first — for always-on content. |
 | GET | `/lessons?task_class=&repo=&since=&limit=&q=` | agent/admin | Lesson recall (see below). Newest first by the lesson's own date; `q=` switches to semantic recall restricted to lessons. |
 | GET | `/history?repo=&task_class=&limit=` | agent/admin | Prior verdict rows (source_type `verdict`) for a repo/class, newest first — "what happened last time". |
+| GET | `/episodes?agent=&session_date=&namespace=&limit=` | agent/admin | Dated enumeration of episode rows (see below) — "the indexed episodes of one agent/day", newest first by the episode's own `session_date`. |
 | GET | `/stats` | agent/admin | Index counts, coverage, per-type/per-namespace breakdowns. |
 | GET / PUT | `/config` | admin | Read (key stripped) / write provider config. |
 | POST | `/reindex` | admin | Embed unembedded content in batches. 400 without a provider. |
@@ -145,6 +146,28 @@ writer lands separately; this route defines and accepts the shape.
 `tools/migrate-lessons-md.mjs` migrates the squad's legacy `lessons.md` into
 lesson rows (idempotent — `source_id` derives from date+title; it refuses to
 run against a non-loopback URL without `--allow-remote`).
+
+## Episodes — the verbatim event half (2026-09-18)
+
+An **episode** is one squad session transcript stored whole as a memory row
+(`source_type: 'episode'`) — the EVENT a lesson or reconciled fact can cite.
+BRIEF-lab-alive-memory-program §3: the lab had the fact half and no episode
+half, so no fact could point at the session that established it. Episodes ride
+the same `/index` path as every row (embedded, chunk-aware split, searchable);
+the writer lives jarvis-side (`tools/lab_episode_writer.py`) over
+`data/squad-transcripts/<agent>/<date>/*.jsonl`.
+
+The provenance gate is 186's, scoped to what an episode must carry: `POST /index`
+(and `/index/bulk`) **refuse** an episode row whose `metadata` lacks `agent` or
+`session_date` with a 400 naming the field — a transcript whose WHO or WHEN is
+unknown is not an episode. The full metadata contract: `agent`, `session_date`
+(the gate pair), `session_id` (the transcript file's content hash),
+`origin` (the workflow_id when the transcript carries one, else the file path).
+
+Read side: `POST /search` with `source_types: ['episode']` reaches episodes by
+meaning — each hit renders its `session_date`. `GET /episodes` is the dated
+enumeration ("all of Tuesday" is a filter, not a query): filter by `agent`
+and/or `session_date`, newest first by the episode's own date.
 
 ## MCP tools
 

@@ -64,9 +64,14 @@ Cost: $0 — the answerer and the judge are both local models.
   dataset identity is part of the regime stamp.
 - Selection rule (deterministic, stamped): sort by `question_id` ascending,
   take the first n. Same split + same n ⇒ same items forever.
-- Note: the cleaned S split carries NO abstention questions (six types:
+- Note: the cleaned S split's abstention variants are the question_ids carrying
+  the `_abs` suffix (e.g. `0862e8bf_abs`). Observed, not documented upstream:
+  every `_abs` gold in run 2026-09-17-p1-224225 begins "The information
+  provided is not enough" / "You did not mention". The judge classifies the
+  gold by that marker FIRST (task 226, judge-prompt.4) — a fact gold is never
+  judged under the abstention rule. The non-`_abs` types:
   single-session-user/assistant/preference, multi-session, temporal-reasoning,
-  knowledge-update).
+  knowledge-update.
 
 ## The regime stamp
 

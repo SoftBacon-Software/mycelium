@@ -1,0 +1,16 @@
+[mycelium-timeline] timeline 1/5: 1 candidates → +1/~0/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 2/5: SUPERSEDE 1 — "The user has a manager named Alex" — q=001be529
+[mycelium-timeline] timeline 2/5: 1 candidates → +0/~1/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 3/5: SUPERSEDE 2 — "The user has a manager named Alex" — q=001be529
+[mycelium-timeline] timeline 3/5: 1 candidates → +0/~1/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 4/5: SUPERSEDE 3 — "The user has a manager named Alex" — q=001be529
+[mycelium-timeline] timeline 4/5: 1 candidates → +0/~1/=0 in 0s — q=001be529
+[mycelium-timeline] timeline 5/5: SUPERSEDE 4 — "The user has a manager named Alex" — q=001be529
+[mycelium-timeline] timeline 5/5: 1 candidates → +0/~1/=0 in 0s — q=001be529
+[run] mycelium-timeline: wrote 5 docs / 16 rows; waiting for coverage of bench-p1-2026-09-18-p1-021617, bench-p1-2026-09-18-p1-021617-amfacts (cap 8 min)...
+[run] embedding wait: {"scope":"namespace","namespaces":["bench-p1-2026-09-18-p1-021617","bench-p1-2026-09-18-p1-021617-amfacts"],"waited_ms":15013,"settled":true,"poll_failures":0,"coverage_after":100,"coverage_by_namespace":{"bench-p1-2026-09-18-p1-021617":100,"bench-p1-2026-09-18-p1-021617-amfacts":100}}
+[run] cleanup after failure — cleanup facts bench-p1-2026-09-18-p1-021617-amfacts: 5 fact rows purged (DELETE /auto-memory/facts?namespace=bench-p1-2026-09-18-p1-021617-amfacts)
+[run] cleanup after failure — cleanup bench-p1-2026-09-18-p1-021617 (bench_longmemeval): 5 deleted in 1 batches, 0 failed, 0 remaining
+[run] cleanup after failure — cleanup bench-p1-2026-09-18-p1-021617-amfacts (am_fact): 0 deleted in 0 batches, 0 failed, 0 remaining
+[run] cleanup after failure: 5 index rows deleted, 0 remaining, facts 5 purged, verify 0 rows / 0 hits after
+[run] FAILED: chat scripted-smoke -> 500: {"error":{"message":"fake-chat: scripted mid-write death (task 216 failure leg)"}}

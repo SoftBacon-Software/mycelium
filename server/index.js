@@ -193,6 +193,14 @@ app.use(cors({
 // CSP). Applied globally: CSP is inert on JSON responses and HSTS is wanted on all.
 app.use(securityHeadersMiddleware());
 
+// Memory-index bodies run BIG by contract: an EPISODE row is one squad session
+// transcript stored VERBATIM (task 218, BRIEF-lab-alive-memory-program §3), and
+// real session files reach multi-MB — the app-wide 1mb cap below 413s them
+// before the semantic-memory route can refuse-or-store. This scoped parser is
+// mounted FIRST and body-parser skips an already-parsed body, so /memory writes
+// get 16mb and every other route keeps the 1mb cap.
+app.use('/api/mycelium/memory', express.json({ limit: '16mb' }));
+
 app.use(express.json({
   limit: '1mb',
   verify: function (req, res, buf) {

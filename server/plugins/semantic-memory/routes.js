@@ -127,8 +127,13 @@ export default function (core) {
 
     // Strip raw vectors from the response — 768 floats per result is pure
     // payload waste for every consumer (scores already carry the signal).
+    // task 213: the per-row `embedded` stamp survives the strip — every result
+    // states whether its own vector exists (db.js stampEmbedded). A producer
+    // that could not know (legacy shape, no stamp at all) leaves as null —
+    // never a guessed true.
     results = results.map(function (r) {
       var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
+      if (rest.embedded === undefined) rest.embedded = null;
       return rest;
     });
     if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page
@@ -180,6 +185,13 @@ export default function (core) {
   // verdict without provenance is the same failure. The 400 NAMES the missing
   // field(s) so the harness writer's first red run says what to fix.
   function refuseIfUnprovenanced(sourceType, metadata, res, label) {
+    if (db.EPISODE_SOURCE_TYPES[sourceType]) {
+      var missingEpisode = db.missingEpisodeFields(metadata);
+      if (missingEpisode.length === 0) return false;
+      apiError(res, 400, (label ? label + ': ' : '') + "source_type '" + sourceType +
+        "' requires episode provenance metadata — missing: " + missingEpisode.join(', '));
+      return true;
+    }
     if (!db.LESSON_SOURCE_TYPES[sourceType]) return false;
     var missing = db.missingProvenanceFields(metadata);
     if (missing.length === 0) return false;
@@ -192,6 +204,19 @@ export default function (core) {
   // is "no filter", not a repo named "".
   function nonEmptyQuery(v) {
     return (typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
+  }
+
+  // Embed only what lacks a vector (task 227): the row-state check, not the
+  // caller's churn, decides. An unchanged doc keeps its stored embedding, so
+  // a half-hourly re-post costs the embedder nothing — the same churn the
+  // bulk route's `!r.unchanged` filter stops, at the single-doc seam.
+  // `row` is an optional pre-read (the chunked path already has it); a row
+  // that cannot be read back fails soft — the drains key on embedding IS NULL
+  // and will find it.
+  function autoEmbedUnembedded(sourceType, sourceId, chunkIndex, row) {
+    row = row || db.getDoc(sourceType, sourceId, chunkIndex);
+    if (!row || row.embedding != null) return;
+    autoEmbed(sourceType, sourceId, row.content_text, chunkIndex);
   }
 
   // POST /memory/index — index content
@@ -211,7 +236,7 @@ export default function (core) {
         chunk_index: chunk_index,
         metadata: metadata
       });
-      autoEmbed(source_type, source_id, content_text, chunk_index);
+      autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
       // Chunk-aware: oversized content splits into chunk rows, and stale
       // chunks from a previous (larger) version of the doc are removed
@@ -220,8 +245,11 @@ export default function (core) {
         metadata: metadata
       });
       chunkCount = chunks.length;
+      // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
+      // 0..N-1 in place, so the rows align with the chunk texts.
+      var stored = db.getDocChunks(source_type, source_id);
       for (var ci = 0; ci < chunks.length; ci++) {
-        autoEmbed(source_type, source_id, chunks[ci], ci);
+        autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
       }
     }
     core.emitEvent('memory_indexed', who, null,
@@ -250,9 +278,13 @@ export default function (core) {
     // it returns the rows actually written so each one embeds separately.
     var rows = db.bulkIndex(items);
 
-    // Fire-and-forget embed for rows that didn't bring their own embedding.
-    // generateEmbeddingBatch is sequential for ollama, so this won't stampede.
-    var toEmbed = rows.filter(function (r) { return !r.embedding; });
+    // Fire-and-forget embed for rows that didn't bring their own embedding —
+    // EXCEPT unchanged rows (task 227): a byte-identical re-index kept its
+    // stored vector (or, never-embedded, belongs to the boot drain / fastpath,
+    // which key on embedding IS NULL), so re-embedding it is the churn that
+    // wedged the Jetson on 2026-09-18. generateEmbeddingBatch is sequential
+    // for ollama, so this won't stampede.
+    var toEmbed = rows.filter(function (r) { return !r.embedding && !r.unchanged; });
     if (toEmbed.length > 0) {
       var config = db.getAllConfig();
       if (config.embedding_provider && config.embedding_provider !== 'none') {
@@ -273,7 +305,12 @@ export default function (core) {
       }
     }
 
-    res.json({ ok: true, indexed: items.length, rows: rows.length });
+    res.json({
+      ok: true,
+      indexed: items.length,
+      rows: rows.length,
+      unchanged: rows.unchangedCount || 0
+    });
   });
 
   // DELETE /memory/index/:sourceType/:sourceId — remove from index
@@ -334,6 +371,30 @@ export default function (core) {
       limit: req.query.limit
     });
     res.json({ results: rows, source_type: sourceType, count: rows.length });
+  });
+
+  // GET /memory/episodes?agent=&session_date=&namespace=&limit= — the §3 read
+  // side (2026-09-18, F-mycelium/218): the dated enumeration of EPISODE rows —
+  // "the indexed episodes of one agent/day". The reconcile dry-run reads this
+  // to extract candidate facts; every reconciled fact cites an episode by
+  // agent + session_date + session_id, so this is the pointer's other end.
+  // Newest first by the episode's own session_date. (Meaning recall over
+  // episodes needs no new route — POST /search with source_types:['episode']
+  // already reaches them; this route exists because "all of Tuesday" is a
+  // filter, not a query.)
+  router.get('/episodes', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var rows = db.listEpisodes({
+      agent: nonEmptyQuery(req.query.agent),
+      session_date: nonEmptyQuery(req.query.session_date),
+      namespace: nonEmptyQuery(req.query.namespace),
+      limit: Math.min(parseInt(req.query.limit) || 20, 500)
+    });
+    res.json({
+      source_type: 'episode', count: rows.length, results: rows,
+      filters: { agent: nonEmptyQuery(req.query.agent), session_date: nonEmptyQuery(req.query.session_date) }
+    });
   });
 
   // GET /memory/lessons?task_class=&repo=&since=&limit=[&q=] — the §2 read side
@@ -459,6 +520,30 @@ export default function (core) {
     res.json(db.stats());
   });
 
+  // GET /memory/coverage?namespace=<ns> — per-namespace embedding coverage
+  // (task 214). The scoped shape the bench's embedding wait (and any recall
+  // path that knows its own namespace) reads instead of the global number:
+  // {namespace, rows, embedded, coverage_pct} — indexHealth()'s definitions,
+  // scoped; superseded am_fact index rows count (searchable by design).
+  // GET /memory/coverage with no namespace → the global indexHealth() shape,
+  // the same block /memory/search stamps as `index`. Empty/whitespace
+  // namespace is a 400 (nonEmptyQuery — "no namespace" is the absence of the
+  // param, not a namespace named ""). Agent- OR admin-key readable: the lab's
+  // recall paths read their own coverage with agent keys.
+  router.get('/coverage', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    // "no namespace" is the ABSENCE of the param → the global shape. A param
+    // that is present but empty/whitespace is a caller bug (the nonEmptyQuery
+    // convention: an empty value is never silently "no filter") → 400.
+    var raw = req.query.namespace;
+    if (raw === undefined) return res.json(db.indexHealth());
+    var ns = nonEmptyQuery(raw);
+    if (!ns) return apiError(res, 400, 'namespace, when present, must be non-empty — an empty or whitespace namespace is not "the global index"');
+    var h = db.namespaceHealth(ns);
+    res.json({ namespace: ns, rows: h.rows, embedded: h.embedded, coverage_pct: h.coverage_pct });
+  });
+
   // A drone returning a vector for an embed job authenticates with the same
   // agent key it claims work with (checkAgentOrAdmin falls through to that
   // check). Scope a non-admin (drone) write to an embed job THAT drone claimed,
@@ -526,38 +611,8 @@ export default function (core) {
     res.json({ ok: true, config: config });
   });
 
-  // Oversized NULL-embedding rows can never embed whole — the provider
-  // rejects them. Covers both legacy un-chunked docs AND docs whose chunks
-  // were cut at a larger (since-lowered) threshold. The full doc is rebuilt
-  // from ALL its chunk rows (chunking is lossless, so the join IS the
-  // original) and re-chunked at the current threshold — re-chunking from a
-  // single chunk's slice would drop sibling chunk content. Returns the
-  // expanded work list of rows to embed.
-  function expandOversizedRows(rows) {
-    var work = [];
-    var rechunked = {}; // source_type:source_id — re-chunk each doc once
-    var chunkSize = db.getChunkSize(); // hoisted — static per request, not per row (N+1)
-    for (var row of rows) {
-      var key = row.source_type + ':' + row.source_id;
-      if (rechunked[key]) continue;
-      if (row.content_text.length > chunkSize) {
-        rechunked[key] = true;
-        var docRows = db.getDocChunks(row.source_type, row.source_id);
-        var fullText = docRows.map(function (c) { return c.content_text; }).join('');
-        var meta; // assigned on both paths below
-        try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
-        var chunks = db.indexDoc(row.source_type, row.source_id, fullText, {
-          namespace: docRows[0].namespace, metadata: meta
-        });
-        for (var ci = 0; ci < chunks.length; ci++) {
-          work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });
-        }
-      } else {
-        work.push(row);
-      }
-    }
-    return work;
-  }
+  // expandOversizedRows lives on the db wrapper now (db.js, task 219) — the
+  // boot drain reuses it, and a second copy here was the wrong seam.
 
   // POST /memory/reindex — batch-embed all unembedded content (admin, async)
   router.post('/reindex', asyncHandler(async function (req, res) {
@@ -577,7 +632,7 @@ export default function (core) {
     }
 
     // Chunk-split oversized rows so each piece fits the embedding window
-    unembedded = expandOversizedRows(unembedded);
+    unembedded = db.expandOversizedRows(unembedded);
 
     // Drone provider: queue async jobs instead of embedding synchronously
     if (config.embedding_provider === 'drone') {
@@ -652,7 +707,7 @@ export default function (core) {
     // inside the loop would spin on them forever. Oversized rows (the
     // persistently-failing legacy docs) are chunk-split before embedding,
     // so processed/embedded count post-chunking rows.
-    var rows = expandOversizedRows(db.getUnembedded(limit));
+    var rows = db.expandOversizedRows(db.getUnembedded(limit));
     var processed = 0;
     var embedded = 0;
     var failed = 0;

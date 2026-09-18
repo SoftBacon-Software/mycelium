@@ -12,15 +12,15 @@ import path from 'node:path';
 import { loadSplit, selectItems, BENCH_DIR } from './split.mjs';
 import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.mjs';
 import { makeOpenAIChat } from './answer.mjs';
-import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
-import { rejudgeRun } from './rejudge.mjs';
+import { makeJudge, agreement, JUDGE_PROMPT_VERSION, JUDGE_PROMPT_SHA256 } from './judge.mjs';
+import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from './rejudge.mjs';
 import { reanswerRun } from './reanswer.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
-import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
+import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, resolveTimelineReadPolicy, TIMELINE_READ_POLICY_HISTORY, TIMELINE_HISTORY_OVERFETCH, TIMELINE_HISTORY_MAX_PREDECESSORS, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
+import { autopsyRun, computeAutopsy, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
@@ -32,8 +32,8 @@ import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
 import { composeGrid } from './grid.mjs';
-import { purgeNamespaces } from './cleanup.mjs';
-import { waitForEmbeddings } from './embedding_wait.mjs';
+import { purgeRunWithFacts } from './cleanup.mjs';
+import { waitForArmEmbeddings, armWaitTimeoutMs } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
 
 const REPO_ROOT = path.resolve(BENCH_DIR, '..', '..');
@@ -82,29 +82,39 @@ async function main() {
   // no answerer calls, no platform calls. Writes judged.rejudge.jsonl +
   // summary.rejudge.json beside the originals (originals never touched) and,
   // with --receipt, a `<runId>-rejudge` receipt whose regime block records the
-  // judge prompt version and which run was re-judged.
+  // judge prompt version and which run was re-judged. A rejudge over a dir that
+  // already carries a rejudge is evidence too — pass --rejudge-suffix <tag> to
+  // write judged.rejudge-<tag>.jsonl + summary.rejudge-<tag>.json + the
+  // <runId>-rejudge-<tag> receipt BESIDE the first pass (never an overwrite);
+  // the receipt then renders the earlier pass's numbers under "previous judge".
   if (args['from-results'] && args.rejudge) {
     const dir = path.resolve(args['from-results']);
+    const suffix = args['rejudge-suffix'] != null ? String(args['rejudge-suffix']) : null;
+    const names = rejudgeOutputNames(dir, { suffix });
+    assertRejudgeOutputsFree({ judgedFile: names.judgedFile, summaryFile: names.summaryFile });
     const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
     const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
     const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-    const judgeFn = makeJudge({ chat: judgeChat });
+    // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+    const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+    const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
     let fd = null;
     try {
       const result = await rejudgeRun({
         dir,
         judgeFn,
+        suffix,
         judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
         judgePromptVersion: JUDGE_PROMPT_VERSION,
         generatedAtUtc: utcStamp(new Date()),
         onJudged: (row) => {
-          if (fd === null) fd = fs.openSync(path.join(dir, 'judged.rejudge.jsonl'), 'w');
+          if (fd === null) fd = fs.openSync(names.judgedFile, 'w');
           fs.writeSync(fd, JSON.stringify(row) + '\n');
         },
         log: (m) => console.error(`[rejudge] ${m}`),
       });
-      const summaryFile = path.join(dir, 'summary.rejudge.json');
+      const summaryFile = names.summaryFile;
       fs.writeFileSync(summaryFile, JSON.stringify(result.summary, null, 2));
 
       let judgeAgreement = null;
@@ -114,21 +124,42 @@ async function main() {
         judgeAgreement = agreement(result.judged, hl.items);
         handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
       }
+      const previousJudges = loadPreviousRejudges(dir, { exclude: [names.summaryFile] });
 
       let receiptFile = null;
       if (args.receipt) {
         const dirRel = path.relative(REPO_ROOT, dir);
+        // task 223: the rejudge receipt autopsies the NEW labels against the
+        // run's own ledger — the rejudge summary carries write_info through
+        // (from the original summary.json), so a judge-death run's per-candidate
+        // decisions are readable here and not just on a fresh-run receipt.
+        let autopsy = null;
+        if (result.summary.arms?.[DEFAULT_AUTOPSY_ARM]) {
+          try {
+            autopsy = computeAutopsy({
+              arm: DEFAULT_AUTOPSY_ARM,
+              summary: result.summary,
+              judged: result.judged,
+              rows: readJsonl(path.join(dir, `${DEFAULT_AUTOPSY_ARM}.rows.jsonl`)),
+            });
+          } catch (e) {
+            console.error(`[run] autopsy not rendered: ${e.message}`);
+          }
+        }
         const md = renderReceipt({
           runId: result.summary.run_id,
           summary: result.summary,
           agreement: judgeAgreement,
           handlabels: handlabelsMeta,
+          autopsy,
           judged: result.judged,
+          previousJudges,
           commands: [
             `node bench/memory/run.mjs --from-results ${dirRel.startsWith('..') ? dir : dirRel} --rejudge` +
+              `${suffix ? ` --rejudge-suffix ${suffix}` : ''}` +
               `${args.handlabels ? ` --handlabels ${args.handlabels}` : ''} --receipt`,
           ],
-          rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION },
+          rejudge: { ofRunId: result.summary.rejudged_from, judgePromptVersion: JUDGE_PROMPT_VERSION, suffix },
           generatedAt: utcStamp(new Date()),
         });
         receiptFile = writeReceipt(result.summary.run_id, md);
@@ -138,6 +169,7 @@ async function main() {
       console.log(JSON.stringify({
         rejudged_from: result.summary.rejudged_from,
         judge_prompt_version: JUDGE_PROMPT_VERSION,
+        ...(suffix ? { rejudge_suffix: suffix } : {}),
         judged_file: path.relative(REPO_ROOT, result.judgedFilePath),
         summary_file: path.relative(REPO_ROOT, summaryFile),
         agreement: judgeAgreement
@@ -169,8 +201,10 @@ async function main() {
       ? resolveArms(String(args.arms).split(',').map((s) => s.trim()).filter(Boolean))
       : Object.keys(original.arms);
     // the read policy IN EFFECT NOW names the outputs: the same rows re-read
-    // under a different policy are different evidence
-    const readPolicy = selected.includes('mycelium-timeline') ? TIMELINE_READ_POLICY : 'asis';
+    // under a different policy are different evidence. --read-policy selects
+    // it (task 220); the default stays the MEASURED policy so a reanswer
+    // without the flag reproduces the original read byte-for-byte.
+    const readPolicy = selected.includes('mycelium-timeline') ? resolveTimelineReadPolicy(args['read-policy']) : 'asis';
 
     const platformEnv = resolvePlatformEnv();
     const adminKey = await resolveAdminKey({ keychainService: platformEnv.keychainService });
@@ -199,7 +233,9 @@ async function main() {
       extraBody: { chat_template_kwargs: { enable_thinking: false } },
     });
     const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-    const judgeFn = makeJudge({ chat: judgeChat });
+    // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+    const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+    const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
     // the answer phase dials the 3090 — the same one-run-one-slot discipline
     // as a fresh run (the box serves ONE 64k slot outside a benchmark window)
@@ -225,6 +261,8 @@ async function main() {
           extractionChat: thinkingOffChat,
           reconcileChat: thinkingOffChat,
           log: (m) => console.error(`[${ctx.arm}] ${m}`),
+          // task 220: the timeline arm answers under the selected read policy
+          ...(ctx.arm === 'mycelium-timeline' ? { readPolicy } : {}),
         }),
         judgeFn,
         judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
@@ -363,6 +401,12 @@ async function main() {
   // routes (task 206) instead of memory rows. Resolved ONCE here so the regime
   // stamp, the purge list, and the arm all agree.
   const timelineFactsLayer = resolveTimelineFactsLayer();
+  // task 220: WHICH read policy the timeline arm answers under — --read-policy
+  // <name>, default the MEASURED policy (the 0.400/0.533 stamp stays
+  // reproducible without the flag). Resolved ONCE here so the flag, the regime
+  // stamp, and the arm cannot disagree; an unknown name throws before any
+  // platform call.
+  const timelineReadPolicy = resolveTimelineReadPolicy(args['read-policy']);
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
@@ -602,7 +646,9 @@ async function main() {
   const ANSWER_MAX_TOKENS = parseInt(args['answer-max-tokens'] ?? '4096', 10);
   const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: ANSWER_MAX_TOKENS });
   const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-  const judgeFn = makeJudge({ chat: judgeChat });
+  // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+  const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+  const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
   const git = await gitState(REPO_ROOT);
   // the cost lever's resolution is stamped with its source — the arm factory
@@ -622,7 +668,7 @@ async function main() {
       citation: split.spec.citation,
     },
     answerer: { model: answerModel, url_host: new URL(answerUrl).host, temperature: 0, max_tokens: ANSWER_MAX_TOKENS },
-    judge: { model: judgeModel, url_host: new URL(judgeUrl).host, judge_prompt_version: JUDGE_PROMPT_VERSION },
+    judge: { model: judgeModel, url_host: new URL(judgeUrl).host, judge_prompt_version: JUDGE_PROMPT_VERSION, prompt_sha256: JUDGE_PROMPT_SHA256 },
     retrieval: {
       budget,
       chunking: 'one memory row per haystack session (server-side chunk-aware split for oversized rows)',
@@ -708,6 +754,11 @@ async function main() {
               threshold_env: FASTPATH_THRESHOLD_ENV,
               rule: 'top qualifying current-fact score < threshold ⇒ ADD with NO decision LLM call (counted fastpath_adds); the prompt is unchanged',
             },
+            // task 213: the fastpath must not decide on a keyword-only score —
+            // rows just written are embedded asynchronously, and an unembedded
+            // top hit's score is not semantic evidence in either direction
+            fastpath_guard: 'skip_unembedded_top_hit',
+            fastpath_guard_rule: 'the best current hit stamped embedded:false by the server pays the decision call (counted fastpath_skips_unembedded, ledger source fastpath_skipped_unembedded) regardless of its score; a hit with NO embedded stamp (legacy platform / the golden fixture) keeps the pre-213 path',
             fail_open_on_malformed_decision: 'ADD, counted in decision_failures (never a silent drop)',
             supersede: 'the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted',
             in_session_window: 'facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands',
@@ -735,7 +786,20 @@ async function main() {
                   store: 'am_facts (POST /auto-memory/facts + POST .../supersede; per-run namespace <ns>-amfacts; semantic index source_type am_fact)',
                   read: 'searchHybrid over the am_fact index rows in the run namespace (superseded facts stay indexed with their valid_to + supersede line)',
                   scope_why: 'task 206 gave the routes a nullable namespace column — bench rows stay OUT of the lab\'s live (unscoped) fact store',
-                  known_gap: 'am_facts has no namespace bulk-purge route: the index rows purge via /memory/index?namespace=…, the fact ROWS remain (per-id DELETE only)',
+                  // task 216: the pre-211 stamp carried `known_gap: 'am_facts has no
+                  // namespace bulk-purge route: the index rows purge via
+                  // /memory/index?namespace=…, the fact ROWS remain (per-id DELETE
+                  // only)'`. 211 closed that gap (DELETE /auto-memory/facts
+                  // ?namespace=<ns>) and this run's cleanup MEASURES the purge — the
+                  // numbers below are stamped post-cleanup (null until then).
+                  facts_cleanup: {
+                    route: 'DELETE /auto-memory/facts?namespace=<ns> (task 211; bench wiring task 216 — rows first, then the index purge, then the verify reads)',
+                    measured: false,
+                    kept: false,
+                    facts_deleted: null,
+                    facts_rows_remaining_after: null,
+                    search_hits_after: null,
+                  },
                 },
               }
             : {
@@ -744,22 +808,52 @@ async function main() {
                   'before task 206: am_facts had no semantic-search index (reconcile + read need /memory/search hybrid at the stamped budget), ' +
                   'no namespace/run scoping (bench rows would land in the lab\'s LIVE fact store beside its real facts), and no bulk cleanup path (the bench ' +
                   'contract is purge-everything-after). So the layer is modeled as memory rows in a suffixed namespace with the bi-temporal fields in metadata — ' +
-                  'the lane\'s pre-authorized fallback. MYCELIUM_TIMELINE_FACTS=am_facts switches to the routes (stamped facts_layer=am_facts).',
+                  'the lane\'s pre-authorized fallback. MYCELIUM_TIMELINE_FACTS=am_facts switches to the routes (stamped facts_layer=am_facts). ' +
+                  'UPDATE task 216: the cleanup half is CLOSED — task 211\'s DELETE /auto-memory/facts?namespace=<ns> bulk-purges a namespace\'s fact rows ' +
+                  '(bench cleanup wires it: rows first, then the index purge, then the verify reads). History kept, not erased — the pre-211 routes stamp ' +
+                  'read known_gap "am_facts has no namespace bulk-purge route: the index rows purge via /memory/index?namespace=…, the fact ROWS remain ' +
+                  '(per-id DELETE only)", which is now quoted here so a reader can diff the claim against what shipped. What still keeps this run on memory ' +
+                  'rows is the ROW MODEL, not the cleanup: the default layer must fit the bench row shape and read path at the stamped budget.',
               }),
           read: {
             budget,
-            read_policy: TIMELINE_READ_POLICY,
-            merge: 'both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget',
+            read_policy: timelineReadPolicy,
+            ...(timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+              ? {
+                  // task 220: the history policy's own stamp — the measured
+                  // policy's regime bytes stay exactly the pre-220 shape
+                  history: {
+                    overfetch: TIMELINE_HISTORY_OVERFETCH,
+                    max_predecessors_per_current_fact: TIMELINE_HISTORY_MAX_PREDECESSORS,
+                    rule:
+                      'every CURRENT fact in the context also carries its superseded predecessor chain, walked through ' +
+                      'metadata.supersedes over the overfetch page (newest predecessor first, oldest LAST), each rendered ' +
+                      '`[fact | <valid_from> → superseded <valid_to>] <text>`; the budget stays ' + budget + ' CURRENT facts — ' +
+                      'predecessors ride beside them and are counted separately (meta.context_facts vs meta.context_superseded); ' +
+                      'a chain link the overfetch window cannot close is stamped meta.history_chain_misses, never silently dropped',
+                  },
+                }
+              : {}),
+            merge:
+              timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? 'both layers searched (facts overfetched to ' + TIMELINE_HISTORY_OVERFETCH + ' so predecessor chains are reachable, episodes at the budget); interleaved fact/episode INSIDE the budget (strongest current fact first, a dry layer yields); then each current fact in the context carries its bounded predecessor chain — superseded history no longer depends on winning a search slot'
+                : 'both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget',
             hit_rendering:
               'each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line ' +
-              '"superseded on <valid_to> by: <new fact>"',
+              '"superseded on <valid_to> by: <new fact>"' +
+              (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? '; a chain predecessor renders one line `[fact | <valid_from> → superseded <valid_to>] <text>`'
+                : ''),
             read_stamp:
-              'every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty',
+              'every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty' +
+              (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? '; under the history policy the stamp lists EVERY rendered row (predecessor chains may exceed the budget) with chain_depth on chain rows'
+                : ''),
             decision_stamp:
               'every answer row stamps meta.write_decisions = {candidates, adds, supersedes, keeps, decision_calls, decision_failures, fastpath_adds} for its own question (null when this process never wrote it, e.g. --reanswer); the per-candidate decision ledger (text, decision, source, shown_ids, top_score, source_id) lives in summary.json write_info.timeline.per_question[].candidates_ledger for the miss autopsy',
             rag_prompt: 'arm_mycelium RAG_SYSTEM, unchanged',
           },
-          read_policy: TIMELINE_READ_POLICY, // also top-level: regime.timeline.read_policy
+          read_policy: timelineReadPolicy, // also top-level: regime.timeline.read_policy
           retrieval_budget: budget,
         }
       : null,
@@ -792,7 +886,10 @@ async function main() {
         ? `arms this run: ${arms.join(', ')}; mycelium-extract = the EXTRACTION control for the Mycelium column (task 182): the answerer model (${answerModel}, temperature 0, THINKING OFF via chat_template_kwargs) extracts a fact list per session, facts indexed ONE ROW PER FACT, namespace suffixed -extract; retrieval + answer identical to arm mycelium`
         : null,
       arms.includes('mycelium-timeline')
-        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold ${fastpath.threshold} (${fastpath.source}), else ADD with no call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance`
+        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold ${fastpath.threshold} (${fastpath.source}), else ADD with no call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance` +
+          (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+            ? `; READ POLICY ${TIMELINE_READ_POLICY_HISTORY} (task 220): each current fact in the context also carries its bounded superseded predecessor chain (metadata.supersedes walk, at most ${TIMELINE_HISTORY_MAX_PREDECESSORS} predecessors, oldest last), rendered with its validity window — the knowledge-update "was" half is readable, not just "now"`
+            : '')
         : null,
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
@@ -838,6 +935,40 @@ async function main() {
   if (arms.includes('mycelium-timeline') && timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES) {
     runNamespaceSourceTypes[myceliumTimelineFactsNamespace(regime.retrieval.namespace)] = FACT_INDEX_SOURCE_TYPE;
   }
+  // task 216: the routes layer's fact ROWS live in the auto-memory table (the
+  // <ns>-amfacts namespace) — purgeNamespaces cannot reach them, it drains the
+  // INDEX half only. The rows purge through task 211's DELETE
+  // /auto-memory/facts?namespace=<ns>, and ONLY this namespace: the episodic
+  // layer never has fact rows and never touches the facts route.
+  const factsPurgeNamespace =
+    platform && arms.includes('mycelium-timeline') && timelineFactsLayer === TIMELINE_FACTS_LAYERS.ROUTES
+      ? myceliumTimelineFactsNamespace(regime.retrieval.namespace)
+      : null;
+  // the verify reads' search query is production-shaped: the first question's
+  // own text — exactly what a stranded fact row would match on (a leftover row
+  // cannot hide from it; a drained namespace answers 0 to anything)
+  const factsVerifyReads = () => ({
+    query: String(items[0]?.question ?? 'bench').slice(0, 200),
+    sourceTypes: [FACT_INDEX_SOURCE_TYPE],
+    limit: 5,
+  });
+  // task 216: the regime's facts_routes block replaced its stale known_gap with
+  // the cleanup contract (nulls until measured) — this fills the measured
+  // numbers before summary.json is written. The failure path purges the same
+  // way but logs its numbers (no summary write follows a dead run).
+  const stampFactsCleanupMeasured = (cleanupResult) => {
+    const fc = cleanupResult?.facts_cleanup;
+    const block = regime?.mycelium_timeline?.facts_routes;
+    if (!factsPurgeNamespace || !block || !fc) return;
+    block.facts_cleanup = {
+      ...block.facts_cleanup,
+      measured: true,
+      facts_deleted: fc.facts_deleted,
+      facts_rows_remaining_after: fc.facts_rows_remaining_after,
+      search_hits_after: fc.search_hits_after,
+      verify_search: fc.search ?? null,
+    };
+  };
   let platformCleanupDone = !platform || Boolean(args.keep);
   try {
     const namespace = regime.retrieval.namespace;
@@ -883,7 +1014,7 @@ async function main() {
         // per-arm view: the shared ctx gets the arm's OWN log label (task 182
         // runs several arms in one process — a hardcoded prefix mislabels
         // which arm's write/extract lines these are)
-        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' || name === 'mycelium-timeline' ? { factsStore } : {}) }),
+        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' || name === 'mycelium-timeline' ? { factsStore } : {}), ...(name === 'mycelium-timeline' ? { readPolicy: timelineReadPolicy } : {}) }),
       })),
       armContext: {
         answerChat,
@@ -938,14 +1069,27 @@ async function main() {
         // per-fact rows need the embedder too, or its answers run keyword-fallback
         if ((arm === 'mycelium' || arm === 'mycelium-extract' || arm === 'mycelium-timeline') && platform) {
           const expected = writeInfo.rows;
-          // the Jetson's ollama embedder is sequential (~0.3-0.5s/row): scale the
-          // wait with the write size instead of failing into keyword-fallback
-          const timeoutMs = Math.max(8 * 60 * 1000, expected * 500);
-          console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for embedding coverage (cap ${Math.round(timeoutMs / 60000)} min)...`);
-          const wait = await waitForEmbeddings(platform, { beforeStats: statsBefore, timeoutMs, log: (m) => console.error(`[run] ${m}`) });
+          // task 214: the wait waits on THIS run's namespaces (every namespace
+          // the run indexes — base, the extract suffix, the timeline layer),
+          // not on the lab's global coverage; a 404 (older platform) demotes
+          // to the global poll and the stamp says which scope decided. The
+          // Jetson's ollama embedder is sequential (~0.3-0.5s/row): the cap
+          // still scales with the write size instead of failing into
+          // keyword-fallback.
+          console.error(`[run] ${arm}: wrote ${writeInfo.docs} docs / ${expected} rows; waiting for coverage of ${runNamespaces.join(', ')} (cap ${Math.round(armWaitTimeoutMs(expected) / 60000)} min)...`);
+          const wait = await waitForArmEmbeddings(platform, { expected, namespaces: runNamespaces, beforeStats: statsBefore, log: (m) => console.error(`[run] ${m}`) });
           console.error(`[run] embedding wait: ${JSON.stringify(wait)}`);
           writeInfoByArm[arm].embed_wait = wait;
         }
+      },
+      beforeJudge: ({ summary: writeSummary }) => {
+        // task 223: the write phase's evidence lands BEFORE the first judge
+        // call. A judge that dies now leaves a summary that is TRUE — it says
+        // what the write phase did (cost stamps, ingestion stats, the timeline
+        // candidates ledger), stamped phase "write" — instead of no summary at
+        // all. The judge phase rewrites this same path below, phase "judged".
+        fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(writeSummary, null, 2));
+        console.error(`[run] write-phase summary stamped (judge pending): ${path.join(outDir, 'summary.json')}`);
       },
       onRow: (row) => fs.writeSync(rowFiles[row.arm], JSON.stringify(row) + '\n'),
       onJudged: (row) => fs.writeSync(judgedFile, JSON.stringify(row) + '\n'),
@@ -961,12 +1105,29 @@ async function main() {
       const sourceType = regime.retrieval.source_type;
       if (args.keep) {
         cleanup = { deleted: 0, kept: true, namespace };
+        // task 216: --keep also keeps the fact rows — say so in the regime stamp
+        if (factsPurgeNamespace && regime?.mycelium_timeline?.facts_routes) {
+          regime.mycelium_timeline.facts_routes.facts_cleanup = {
+            ...regime.mycelium_timeline.facts_routes.facts_cleanup,
+            kept: true,
+          };
+        }
       } else {
         // every namespace the run indexed: the extract control arm writes to a
         // suffixed namespace of its own — leaving it behind would leak rows
-        // into the next run's substring-scoped lists
-        cleanup = await purgeNamespaces(platform, { sourceType, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] ${m}`) });
+        // into the next run's substring-scoped lists. In routes mode the fact
+        // ROWS purge first (task 211's route), then the index, then the verify
+        // reads — the order the cleanup receipt states.
+        cleanup = await purgeRunWithFacts(platform, {
+          sourceType,
+          namespaces: runNamespaces,
+          sourceTypesByNamespace: runNamespaceSourceTypes,
+          factsNamespace: factsPurgeNamespace,
+          verify: factsPurgeNamespace ? factsVerifyReads() : null,
+          log: (m) => console.error(`[run] ${m}`),
+        });
         platformCleanupDone = true;
+        stampFactsCleanupMeasured(cleanup);
       }
     }
 
@@ -1018,12 +1179,24 @@ async function main() {
     if (slotLock) slotLock.release();
     // a run that died before its own cleanup still purges what it wrote —
     // thousands of orphan bench rows would otherwise sit in the embedder's
-    // queue and in every later substring-scoped list
+    // queue and in every later substring-scoped list. Same routes-mode leg as
+    // the success path: fact ROWS first, then the index, then the verify reads.
     if (!platformCleanupDone && platform) {
       try {
-        const c = await purgeNamespaces(platform, { sourceType: regime.retrieval.source_type, namespaces: runNamespaces, sourceTypesByNamespace: runNamespaceSourceTypes, log: (m) => console.error(`[run] cleanup after failure — ${m}`) });
+        const c = await purgeRunWithFacts(platform, {
+          sourceType: regime.retrieval.source_type,
+          namespaces: runNamespaces,
+          sourceTypesByNamespace: runNamespaceSourceTypes,
+          factsNamespace: factsPurgeNamespace,
+          verify: factsPurgeNamespace ? factsVerifyReads() : null,
+          log: (m) => console.error(`[run] cleanup after failure — ${m}`),
+        });
         platformCleanupDone = true;
-        console.error(`[run] cleanup after failure: ${c.deleted} rows deleted, ${c.rows_remaining_after} remaining`);
+        const fc = c.facts_cleanup;
+        console.error(
+          `[run] cleanup after failure: ${c.deleted} index rows deleted, ${c.rows_remaining_after} remaining` +
+            (fc ? `, facts ${fc.facts_deleted} purged, verify ${fc.facts_rows_remaining_after} rows / ${fc.search_hits_after} hits after` : ''),
+        );
       } catch (e) {
         console.error(`[run] cleanup after failure FAILED (orphan rows remain in ${runNamespaces.join(', ')}): ${e.message}`);
       }

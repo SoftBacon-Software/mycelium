@@ -1,0 +1,111 @@
+{
+  "hand_scorer": "m5Max (director), 2026-09-18 01:50 CDT \u2014 seeded sample (random.seed 20260918, 20 of 50) of run 2026-09-17-p1-224225, arm mycelium-timeline; labelled from question/gold/answer before reading the judge column; rule for _abs golds: a correct abstention that does not invent the missing fact is EXACT",
+  "run_id": "2026-09-17-p1-224225",
+  "sample": {
+    "seed": 20260918,
+    "n": 20,
+    "of": 50
+  },
+  "items": [
+    {
+      "question_id": "09ba9854",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "07741c44",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "129d1232",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "01493427",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "1192316e",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "0db4c65d",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "0a34ad58",
+      "arm": "mycelium-timeline",
+      "label": "partial"
+    },
+    {
+      "question_id": "1568498a",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "09ba9854_abs",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "07741c45",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "157a136e",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "06db6396",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "10d9b85a",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "0a995998",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "184da446",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "06878be2",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "0862e8bf",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "07b6f563",
+      "arm": "mycelium-timeline",
+      "label": "wrong"
+    },
+    {
+      "question_id": "0100672e",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    },
+    {
+      "question_id": "15745da0_abs",
+      "arm": "mycelium-timeline",
+      "label": "exact"
+    }
+  ]
+}

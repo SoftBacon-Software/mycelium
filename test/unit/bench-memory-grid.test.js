@@ -101,7 +101,7 @@ function deepMerge(base, patch) {
 }
 
 // One fixture run dir. questionIds: judged rows for every arm × question.
-function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, regime = {}, topCap = null, cleanup = null, summaryPatch = null }) {
+function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, questionType = 'single-session-user', regime = {}, topCap = null, cleanup = null, summaryPatch = null }) {
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
   const fullRegime = deepMerge(
@@ -123,7 +123,7 @@ function writeFixtureRun(name, { runId, arms, writeInfo, questionIds, regime = {
   const rows = [];
   for (const [arm] of Object.entries(arms)) {
     for (const qid of questionIds) {
-      rows.push({ question_id: qid, arm, question_type: 'single-session-user', gold: 'a year', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false });
+      rows.push({ question_id: qid, arm, question_type: questionType, gold: 'a year', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false });
     }
   }
   fs.writeFileSync(path.join(dir, 'judged.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -156,6 +156,23 @@ function writeMatchingPair({ regimeA = {}, regimeB = {}, cleanupA = null, cleanu
 
 function receiptsDir() {
   return path.join(root, 'receipts');
+}
+
+// The task-225 run shape (the real 09-17 runs): each run carries ONLY the
+// timeline arm, its regime stamping facts_layer to name the store it measured
+// (results/2026-09-17-p1-203802 = memory-rows, 2026-09-17-p1-204603 = am_facts).
+// factsLayer null = an old-regime run (predates the 206 stamp, bare name).
+function writeTimelineRun(name, { runId, factsLayer = null, questionIds = ['q1', 'q2', 'q3', 'q4', 'q5'] } = {}) {
+  return writeFixtureRun(name, {
+    runId,
+    arms: { 'mycelium-timeline': armEntry(questionIds.length, 0, 0, questionIds.length) },
+    writeInfo: { 'mycelium-timeline': { docs: 100, rows: 900, extract_ms: 50_000, reconcile_ms: 900_000 } },
+    questionIds,
+    questionType: 'knowledge-update',
+    regime: factsLayer
+      ? { mycelium_timeline: { facts_layer: factsLayer, reconciled: { namespace: `bench-p1-${runId}-timeline` } } }
+      : {},
+  });
 }
 
 // ---- the matching pair -------------------------------------------------------
@@ -628,5 +645,409 @@ describe('the timeline write-cost line — cost ×N of extract; bound ≤ 2×', 
     expect(renderGridReceipt({ runs: runs2, generatedAt: 'g' })).toContain(
       'Seconds per add (stamped extract_ms 80000 ms / 4 docs): 20.00 s/session.'
     );
+  });
+});
+
+// ---- task 224: the grid admits a REJUDGED run --------------------------------
+//
+// Every judge-prompt bump leaves FINISHED runs holding summary.rejudge.json +
+// judged.rejudge.jsonl — and the 2026-09-18 r2 (2026-09-17-p1-224225) holds
+// them with NO summary.json at all (the run died after judging; rejudge.mjs
+// reconstructed what the evidence could prove). The grid's input contract
+// predates that shape and calls a finished, rejudged run "not finished". These
+// tests pin the admission: the pair loads, the header names the rejudge with
+// its judge-agreement leg, and every downstream check operates unchanged.
+
+// A rejudge fixture dir in the shape rejudge.mjs writes: summary.rejudge.json +
+// judged.rejudge.jsonl, NO summary.json. counts per arm must sum to the
+// question count; questionTypes maps question_id -> question_type (optional).
+function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTypes = null, regime = {}, summaryPatch = null }) {
+  const dir = path.join(root, name);
+  fs.mkdirSync(dir, { recursive: true });
+  const fullRegime = deepMerge(
+    deepMerge(BASE_REGIME, {
+      retrieval: { namespace: `bench-p1-${ofRunId}` },
+      n: questionIds.length,
+      judge: {
+        judge_prompt_version: jpv,
+        rejudge: {
+          of_run_id: ofRunId,
+          date_utc: '2026-09-18T06:00:00Z',
+          answers_modified: false,
+          note: 'labels re-computed from the saved answers (judged.rejudge.jsonl); no answerer or platform calls',
+        },
+      },
+    }),
+    regime
+  );
+  const judged = [];
+  const armsOut = {};
+  for (const [arm, counts] of Object.entries(arms)) {
+    const score = {
+      n: questionIds.length,
+      counts,
+      unparsed: 0,
+      p1_score: (counts.exact + 0.5 * counts.partial) / questionIds.length,
+    };
+    armsOut[arm] = { n: questionIds.length, score };
+    const labels = [
+      ...Array(counts.exact).fill('exact'),
+      ...Array(counts.partial).fill('partial'),
+      ...Array(counts.wrong).fill('wrong'),
+    ];
+    questionIds.forEach((qid, i) => {
+      judged.push({
+        question_id: qid,
+        arm,
+        question_type: questionTypes?.[qid] ?? 'single-session-user',
+        gold: 'a year',
+        answer: 'I do not know.',
+        label: labels[i],
+        judge_raw: labels[i].toUpperCase(),
+        judge_had_think: false,
+      });
+    });
+  }
+  const summary = {
+    run_id: `${ofRunId}-rejudge`,
+    rejudged_from: ofRunId,
+    judge_prompt_version: jpv,
+    generated_at_utc: '2026-09-18T06:00:00Z',
+    n: judged.length,
+    regime: fullRegime,
+    arms: armsOut,
+    original: {
+      run_id: ofRunId,
+      judge: fullRegime.judge,
+      arms: Object.fromEntries(Object.keys(armsOut).map((a) => [a, { n: questionIds.length }])),
+    },
+    ...(summaryPatch ?? {}),
+  };
+  fs.writeFileSync(path.join(dir, 'summary.rejudge.json'), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(dir, 'judged.rejudge.jsonl'), judged.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return dir;
+}
+
+function handlabelsDir() {
+  return path.join(root, 'handlabels');
+}
+
+describe('task 224: the grid admits a rejudged run', () => {
+  it('loadRun admits a rejudge pair (summary.json absent) and marks the run from the stamp', () => {
+    const dir = writeRejudgeFixture('rej-load', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    expect(fs.existsSync(path.join(dir, 'summary.json'))).toBe(false);
+    const run = loadRun(dir, { handlabelsDir: handlabelsDir() });
+    expect(run.runId).toBe('2026-09-17-p1-224225-rejudge');
+    expect(run.rejudge).toEqual({
+      of_run_id: '2026-09-17-p1-224225',
+      judge_prompt_version: 'judge-prompt.2',
+      agreement: null,
+    });
+    // the judged rows ARE the rejudge pair's rows
+    expect(run.judged).toHaveLength(2);
+    expect([...run.judgedIds].sort()).toEqual(['q1', 'q2']);
+    expect(run.judgedIdsByArm['mycelium-timeline'].size).toBe(2);
+  });
+
+  it('loadRun keeps a dir with summary.json PRIMARY even when a rejudge pair sits beside it', () => {
+    const dir = writeFixtureRun('primary-with-rejudge', {
+      runId: 'prim-run',
+      arms: { mem0: armEntry(2, 1, 0, 1) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2'],
+    });
+    // the 2026-09-09/09-10 shape: the rejudge pair lands BESIDE a live summary.json
+    writeRejudgeFixture('primary-with-rejudge', {
+      ofRunId: 'prim-run',
+      jpv: 'judge-prompt.3',
+      arms: { mem0: { exact: 0, partial: 0, wrong: 2 } },
+      questionIds: ['q1', 'q2'],
+    });
+    // marker answer written ONLY into the primary's judged.jsonl — if loadRun
+    // read the rejudge pair instead, the answers would be the fixture default
+    const lines = fs.readFileSync(path.join(dir, 'judged.jsonl'), 'utf8').trim().split('\n');
+    fs.writeFileSync(
+      path.join(dir, 'judged.jsonl'),
+      lines.map((l) => JSON.stringify({ ...JSON.parse(l), answer: 'primary-original-answer' })).join('\n') + '\n'
+    );
+    const run = loadRun(dir, { handlabelsDir: handlabelsDir() });
+    expect(run.runId).toBe('prim-run');
+    expect(run.rejudge).toBeNull();
+    expect(run.judged.every((r) => r.answer === 'primary-original-answer')).toBe(true); // judged.jsonl, not the pair
+  });
+
+  it('a rejudged run + a sibling rejudged run under the SAME judge_prompt_version compose green into ONE grid, header stamped', () => {
+    const dirA = writeRejudgeFixture('rej-a', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirB = writeRejudgeFixture('rej-b', {
+      ofRunId: '2026-09-09-p1-195034',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    expect(out.runIds).toEqual(['2026-09-17-p1-224225-rejudge', '2026-09-09-p1-195034-rejudge']);
+    expect(fs.existsSync(out.file)).toBe(true);
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('**CONTAINS REJUDGED RUN(S):');
+    expect(md).toContain(
+      '2026-09-17-p1-224225-rejudge is a REJUDGE of 2026-09-17-p1-224225 — labels re-computed under judge-prompt.2'
+    );
+    expect(md).toContain('2026-09-09-p1-195034-rejudge is a REJUDGE of 2026-09-09-p1-195034');
+    // the stamp sits at the TOP — before the scores section, beside the bold stamps
+    expect(md.indexOf('CONTAINS REJUDGED RUN(S)')).toBeLessThan(md.indexOf('## Scores'));
+    // downstream operates unchanged: every arm of every run gets its scores row
+    expect(md).toContain('| mycelium-timeline | 2026-09-17-p1-224225-rejudge | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).toContain('| mem0-raw | 2026-09-09-p1-195034-rejudge | 2 | 0 | 1 | 1 | 0.250 |');
+    // the artifacts line names the pair the run actually is
+    expect(md).toContain('(summary.rejudge.json, judged.rejudge.jsonl, <arm>.rows.jsonl)');
+  });
+
+  it('a judge-prompt.1 rejudge beside a judge-prompt.2 rejudge refuses, naming judge.judge_prompt_version', () => {
+    const dirA = writeRejudgeFixture('rej-v1', {
+      ofRunId: 'run-old-prompt',
+      jpv: 'judge-prompt.1',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirB = writeRejudgeFixture('rej-v2', {
+      ofRunId: 'run-new-prompt',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}judge\.judge_prompt_version: /m);
+    expect(err.message).toContain('run-old-prompt-rejudge=judge-prompt.1');
+    expect(err.message).toContain('run-new-prompt-rejudge=judge-prompt.2');
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a dir with NEITHER summary refuses with the existing message (nothing at all)', () => {
+    const dirA = writeFixtureRun('run-ok3', { runId: 'run-ok3', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'run-empty');
+    fs.mkdirSync(dirB, { recursive: true });
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json — a run without its summary is not finished \(in flight, crashed, or not a run dir\)/
+    );
+  });
+
+  it('judged.rejudge.jsonl without summary.rejudge.json refuses NAMING the missing file', () => {
+    const dirA = writeFixtureRun('run-ok4', { runId: 'run-ok4', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'rej-half-a');
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirB, 'judged.rejudge.jsonl'), '');
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json and the rejudge pair is incomplete — summary\.rejudge\.json is missing/
+    );
+  });
+
+  it('summary.rejudge.json without judged.rejudge.jsonl refuses NAMING the missing file', () => {
+    const dirA = writeFixtureRun('run-ok5', { runId: 'run-ok5', arms: { mem0: armEntry(2, 1, 0, 1) }, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = path.join(root, 'rej-half-b');
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirB, 'summary.rejudge.json'), JSON.stringify({ run_id: 'x', arms: {} }));
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() })).toThrow(
+      /no summary\.json and the rejudge pair is incomplete — judged\.rejudge\.jsonl is missing/
+    );
+  });
+
+  it('the judge-agreement leg renders from the run’s handlabels file; its absence is stated, never silent', () => {
+    const questionIds = ['q1', 'q2', 'q3', 'q4'];
+    const dirA = writeRejudgeFixture('rej-agree', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 1, wrong: 2 } },
+      questionIds,
+      questionTypes: Object.fromEntries(questionIds.map((q) => [q, 'knowledge-update'])),
+      // judged labels: q1 exact, q2 partial, q3 wrong, q4 wrong
+    });
+    // hand labels: 3 of the 4 agree (q4 disagrees: hand exact, judge wrong)
+    fs.mkdirSync(handlabelsDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(handlabelsDir(), '2026-09-17-p1-224225.json'),
+      JSON.stringify({
+        hand_scorer: 'director',
+        run_id: '2026-09-17-p1-224225',
+        sample: [],
+        items: [
+          { question_id: 'q1', arm: 'mycelium-timeline', label: 'exact' },
+          { question_id: 'q2', arm: 'mycelium-timeline', label: 'partial' },
+          { question_id: 'q3', arm: 'mycelium-timeline', label: 'wrong' },
+          { question_id: 'q4', arm: 'mycelium-timeline', label: 'exact' },
+        ],
+      })
+    );
+    const run = loadRun(dirA, { handlabelsDir: handlabelsDir() });
+    expect(run.rejudge.agreement.agree).toBe(3);
+    expect(run.rejudge.agreement.n).toBe(4);
+    expect(run.rejudge.agreement.rate).toBeCloseTo(0.75);
+
+    const dirB = writeRejudgeFixture('rej-nohand', {
+      ofRunId: 'run-no-handlabels',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 1, partial: 1, wrong: 2 } },
+      questionIds,
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain(
+      'hand-vs-judge agreement 0.750 (n=4, 2026-09-17-p1-224225.json)'
+    );
+    expect(md).toContain(
+      'no handlabels file for run-no-handlabels — the judge-agreement leg is NOT rendered'
+    );
+  });
+});
+
+// ---- task 225: the facts layer is part of a timeline arm's grid identity -----
+//
+// Both the rows-path n=50 and the flag-path n=50 name their arm
+// `mycelium-timeline` (the flag switches the STORE — regime.mycelium_timeline
+// .facts_layer — not the arm key), so grid.mjs's duplicate-arm rule refused the
+// exact §3 comparison the program exists to quote. The layer is part of the
+// arm's identity: differently-layered runs compose as two DISTINCTLY labeled
+// columns, the same layer twice still refuses, and unstamped regimes render —
+// and refuse — exactly as before.
+
+describe('task 225 — rows-path and flag-path timeline runs compose as labeled columns', () => {
+  it('a memory-rows run and an am_facts run compose, with two DISTINCTLY labeled timeline rows in the scores table', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    expect(out.file).toBe(path.join(receiptsDir(), 'run-rows+run-am-grid.md'));
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline [memory-rows] | run-rows | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+  });
+
+  it('the per-question-type tables label each timeline arm from its run\'s own regime', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('#### mycelium-timeline [memory-rows]');
+    expect(md).toContain('#### mycelium-timeline [am_facts]');
+  });
+
+  it('the win condition renders one labeled block per timeline run — one knowledge-update cell each, same bars', () => {
+    const dirRows = writeTimelineRun('run-rows', { runId: 'run-rows', factsLayer: 'memory-rows' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirRows, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| cell | bar | mycelium-timeline [memory-rows] | mem0 | mycelium-extract | verdict |');
+    expect(md).toContain('| cell | bar | mycelium-timeline [am_facts] | mem0 | mycelium-extract | verdict |');
+    // one judged KU cell per run at the SAME pre-committed bar (n=5 → judged, all wrong → FAIL)
+    expect(md.match(/\| knowledge-update \| ≥ 0\.60 \| 0\.000 \(n=5\)/g)?.length).toBe(2);
+    expect(md.match(/^VERDICT: /gm)?.length).toBe(2);
+  });
+
+  it('two runs with the SAME layer still refuse as duplicates — naming the layer', () => {
+    const dirA = writeTimelineRun('run-r1', { runId: 'run-r1', factsLayer: 'memory-rows' });
+    const dirB = writeTimelineRun('run-r2', { runId: 'run-r2', factsLayer: 'memory-rows' });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(
+      /duplicate_arm[\s\S]*run-r1='mycelium-timeline' \[memory-rows\] \| run-r2='mycelium-timeline' \[memory-rows\]/
+    );
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a composite where the SAME layer appears twice refuses, naming the layer', () => {
+    const dirs = [
+      writeTimelineRun('run-a', { runId: 'run-a', factsLayer: 'memory-rows' }),
+      writeTimelineRun('run-b', { runId: 'run-b', factsLayer: 'am_facts' }),
+      writeTimelineRun('run-c', { runId: 'run-c', factsLayer: 'memory-rows' }),
+    ];
+    expect(() => composeGrid({ dirs, generatedAt: 'x', receiptsDir: receiptsDir() })).toThrow(
+      /duplicate_arm[\s\S]*run-a='mycelium-timeline' \[memory-rows\][\s\S]*run-c='mycelium-timeline' \[memory-rows\]/
+    );
+  });
+
+  it('an old-regime run (no facts_layer stamp) composes and renders the bare name', () => {
+    const dirOld = writeTimelineRun('run-old', { runId: 'run-old' });
+    const dirMem0 = writeFixtureRun('run-mem0', {
+      runId: 'run-mem0',
+      arms: { mem0: armEntry(5, 3, 1, 1) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2', 'q3', 'q4', 'q5'],
+    });
+    const out = composeGrid({ dirs: [dirOld, dirMem0], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).not.toContain('mycelium-timeline [');
+  });
+
+  it('an old-regime timeline run composes beside a stamped one — bare beside labeled (the layers are distinct measurements)', () => {
+    const dirOld = writeTimelineRun('run-old', { runId: 'run-old' });
+    const dirAm = writeTimelineRun('run-am', { runId: 'run-am', factsLayer: 'am_facts' });
+    const out = composeGrid({ dirs: [dirOld, dirAm], generatedAt: 'x', receiptsDir: receiptsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('| mycelium-timeline | run-old | 5 | 0 | 0 | 5 | 0.000 |');
+    expect(md).toContain('| mycelium-timeline [am_facts] | run-am | 5 | 0 | 0 | 5 | 0.000 |');
+  });
+
+  it('two old-regime timeline runs still refuse exactly as today (bare names, no brackets)', () => {
+    const dirA = writeTimelineRun('run-o1', { runId: 'run-o1' });
+    const dirB = writeTimelineRun('run-o2', { runId: 'run-o2' });
+    expect(() => composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir() })).toThrow(
+      /duplicate_arm[\s\S]*run-o1='mycelium-timeline' \| run-o2='mycelium-timeline'/
+    );
+  });
+});
+
+describe('task 225 — the single-run receipt is self-identifying', () => {
+  const baseSummary = (regime) => ({
+    run_id: 'r',
+    regime,
+    arms: { 'mycelium-timeline': { n: 2, score: { counts: { exact: 1, partial: 0, wrong: 1 }, p1_score: 0.5 } } },
+    write_info: {},
+  });
+  const judgedRows = (arm) =>
+    ['q1', 'q2'].map((qid) => ({ question_id: qid, arm, question_type: 'knowledge-update', label: 'wrong' }));
+
+  it('the scores table renders [am_facts] beside the arm name when the run stamps it', () => {
+    const md = renderReceipt({
+      runId: 'r',
+      summary: baseSummary({ mycelium_timeline: { facts_layer: 'am_facts' } }),
+      generatedAt: 'g',
+    });
+    expect(md).toContain('| mycelium-timeline [am_facts] | 2 | 1 | 0 | 1 | 0.500 |');
+  });
+
+  it('the per-question-type table labels the arm the same way', () => {
+    const md = renderReceipt({
+      runId: 'r',
+      summary: baseSummary({ mycelium_timeline: { facts_layer: 'am_facts' } }),
+      judged: judgedRows('mycelium-timeline'),
+      generatedAt: 'g',
+    });
+    expect(md).toContain('#### mycelium-timeline [am_facts]');
+  });
+
+  it('an old regime (no facts_layer key) renders the bare arm name', () => {
+    const md = renderReceipt({ runId: 'r', summary: baseSummary({ notes: [] }), generatedAt: 'g' });
+    expect(md).toContain('| mycelium-timeline | 2 | 1 | 0 | 1 | 0.500 |');
+    expect(md).not.toContain('mycelium-timeline [');
   });
 });

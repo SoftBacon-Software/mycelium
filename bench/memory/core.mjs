@@ -14,6 +14,9 @@ export async function runBench({
   regime,           // the regime stamp (regime.mjs); required — rows refuse to exist without it
   runId,
   afterWrite,       // async ({arm, writeInfo}) => void — e.g. wait for embedding coverage
+  beforeJudge,      // ({summary}) => void — task 223: fires with the WRITE-PHASE summary after every
+                    //   arm is done and before the first judge call; the CLI persists it, so a judge
+                    //   that dies leaves a summary that is true instead of no summary at all
   onRow,            // (row) => void — incremental persistence hook
   onJudged,         // (row) => void
   requestDelayMs = 0, // pacing between model calls
@@ -79,9 +82,11 @@ export async function runBench({
           // receipt quotes and the miss autopsy's per-question evidence
           if (w.timeline && typeof w.timeline === 'object') {
             writeInfo.timeline = writeInfo.timeline ?? {
-              candidates: 0, adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, fastpath_adds: 0, per_question: [],
+              candidates: 0, adds: 0, supersedes: 0, keeps: 0, auto_adds: 0, decision_calls: 0, decision_failures: 0, fastpath_adds: 0, fastpath_skips_unembedded: 0, per_question: [],
             };
-            for (const k of ['candidates', 'adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures', 'fastpath_adds']) {
+            // fastpath_skips_unembedded (task 213) summed like its siblings; the
+            // guard does NOT ride WRITE_DECISION_FIELDS (the answer-row meta)
+            for (const k of ['candidates', 'adds', 'supersedes', 'keeps', 'auto_adds', 'decision_calls', 'decision_failures', 'fastpath_adds', 'fastpath_skips_unembedded']) {
               if (typeof w.timeline[k] === 'number') writeInfo.timeline[k] += w.timeline[k];
             }
             writeInfo.timeline.per_question.push(w.timeline);
@@ -126,12 +131,48 @@ export async function runBench({
     if (typeof arm.dispose === 'function') await arm.dispose();
   }
 
+  // -- write-phase summary (task 223) ----------------------------------------
+  // The per-arm skeleton, computed ONCE: the write-phase summary carries it
+  // without scores, the judged summary adds the tallies on top. Every key the
+  // write-phase stamp promises survives the judged rewrite with the same value.
+  const armEntries = {};
+  for (const { name } of armFactories) {
+    const rows = armsOut[name].rows;
+    const modes = {};
+    for (const r of rows) {
+      const m = r.meta?.retrieval_mode;
+      if (m) modes[m] = (modes[m] || 0) + 1;
+    }
+    armEntries[name] = {
+      n: rows.length,
+      write: armsOut[name].write,
+      elapsed_ms: armsOut[name].elapsed_ms,
+      ...(Object.keys(modes).length ? { retrieval_modes: modes } : {}),
+    };
+  }
+  // Everything the write phase produced — regime, n, the arms skeleton and the
+  // write_info (cost stamps, ingestion stats, the timeline per-candidate
+  // ledger) — stamped before the FIRST judge call. When the judge phase dies
+  // (the 2026-09-18 r2 lost its summary to exactly this), this object is what
+  // summary.json carries: true to the write phase instead of absent.
+  const writeSummary = {
+    run_id: runId,
+    n: items.length,
+    regime,
+    arms: armEntries,
+    write_info: Object.fromEntries(armFactories.map(({ name }) => [name, armsOut[name].write])),
+    phase: 'write',
+  };
+  if (beforeJudge) await beforeJudge({ summary: writeSummary });
+
   // -- judge phase -----------------------------------------------------------
   let judged = null;
   if (judgeFn) {
     judged = [];
     for (const row of allRows) {
-      const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer });
+      // task 226: the question_id rides along — the _abs marker is stage A's
+      // source of truth — and every row is stamped with the class it was judged under
+      const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer, questionId: row.question_id });
       const jr = {
         question_id: row.question_id,
         arm: row.arm,
@@ -141,6 +182,10 @@ export async function runBench({
         label: j.label,
         judge_raw: j.raw,
         judge_had_think: !!j.had_think,
+        gold_class: j.gold_class ?? null,
+        gold_class_source: j.gold_class_source ?? null,
+        ...(j.gold_class_parsed !== undefined ? { gold_class_parsed: j.gold_class_parsed } : {}),
+        prompt_kind: j.prompt_kind ?? null,
       };
       judged.push(jr);
       if (onJudged) onJudged(jr);
@@ -149,30 +194,23 @@ export async function runBench({
   }
 
   // -- summary ----------------------------------------------------------------
+  // The judged rewrite of the write-phase summary: same schema, scores added,
+  // phase flipped. run.mjs writes this over the same summary.json path.
   const summary = {
     run_id: runId,
     n: items.length,
     regime,
     arms: {},
+    write_info: writeSummary.write_info,
+    phase: 'judged',
   };
   for (const { name } of armFactories) {
     const rows = armsOut[name].rows;
     const t = tally(judged ? judged.filter((j) => j.arm === name).map((j) => j.label) : rows.map(() => null));
-    summary.arms[name] = {
-      n: rows.length,
-      write: armsOut[name].write,
-      elapsed_ms: armsOut[name].elapsed_ms,
-      score: t,
-    };
-    const modes = {};
-    for (const r of rows) {
-      const m = r.meta?.retrieval_mode;
-      if (m) modes[m] = (modes[m] || 0) + 1;
-    }
-    if (Object.keys(modes).length) summary.arms[name].retrieval_modes = modes;
+    summary.arms[name] = { ...armEntries[name], score: t };
   }
 
-  return { summary, rows: allRows, judged };
+  return { summary, rows: allRows, judged, writeSummary };
 }
 
 // Rebuild summary + tally from a results dir (the --from-results mode): the

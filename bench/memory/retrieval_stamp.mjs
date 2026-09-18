@@ -242,8 +242,11 @@ const EMPTY_CELL = () => ({
 /**
  * Per question_type × arm retrieval stats over the runs' STAMPED rows.
  *
- * runs: [{runId, summary, rowsByArm}] — rowsByArm[arm] = the run's
- *   <arm>.rows.jsonl rows (each carries question_id, question_type, meta).
+ * runs: [{runId, summary, rowsByArm, labelByArm?}] — rowsByArm[arm] = the run's
+ *   <arm>.rows.jsonl rows (each carries question_id, question_type, meta);
+ *   labelByArm[arm] (task 225) = the arm's labeled identity from that run's own
+ *   regime, so two same-named arms from differently-stamped runs pool as
+ *   separate cells instead of silently merging their stores.
  * goldIndex: buildGoldIndex's result over the SAME split selection the runs used.
  * budget:    the regime retrieval budget (comparability guarantees one value).
  * writeCap:  the runs' stamped write cap, or null (grid.mjs writeCap()).
@@ -258,10 +261,14 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
   const ranks = new Map(); // same key → rank list for the median
   for (const run of runs ?? []) {
     for (const [arm, rows] of Object.entries(run.rowsByArm ?? {})) {
+      // task 225: key the cell by the arm's LABELED identity (the run's own
+      // regime) — two `mycelium-timeline` runs on different facts layers are
+      // different measurements and must never pool into one cell
+      const armKey = run.labelByArm?.[arm] ?? arm;
       for (const row of rows ?? []) {
         const qtype = row.question_type ?? 'unknown';
-        const cell = touch(arm, qtype);
-        const key = `${arm} ${qtype}`;
+        const cell = touch(armKey, qtype);
+        const key = `${armKey} ${qtype}`;
         ranks.set(key, ranks.get(key) ?? []);
         cell.rows += 1;
         const mapping = goldIndex?.byQuestion?.get(row.question_id) ?? null;

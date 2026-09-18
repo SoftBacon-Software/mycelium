@@ -231,6 +231,14 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
     },
     async stats() { return call('GET', '/memory/stats'); },
     async config() { return call('GET', '/memory/config'); },
+    // task 214: per-namespace coverage (the bench wait's scoped seam). No
+    // namespace → the global indexHealth shape. A platform older than the
+    // route answers 404 — the caller (embedding_wait) demotes to the global
+    // poll on exactly that signal.
+    async coverage(namespace) {
+      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      return call('GET', `/memory/coverage${q}`);
+    },
     // auto-memory fact routes (task 206) — the reconciled layer's seam in
     // MYCELIUM_TIMELINE_FACTS=am_facts mode. factsCreate carries the full
     // metadata contract (episode/valid_from/supersedes/...); the server
@@ -249,6 +257,20 @@ export function createPlatform({ baseUrl, headers = {}, fetchImpl = fetch, maxRe
       if (limit) q.set('limit', String(limit));
       const qs = q.toString();
       return call('GET', `/auto-memory/facts${qs ? `?${qs}` : ''}`);
+    },
+    // task 216: the bench cleanup's ROWS half. DELETE /auto-memory/facts
+    // ?namespace=<ns> (task 211) purges a namespace's fact rows — current AND
+    // superseded — and takes their index rows out through the same seam every
+    // other removal path uses, so the namespace stops answering /memory/search
+    // in the same request. The admin-key header rides every call (the route is
+    // admin-only). Refuses locally on an empty/missing namespace —
+    // purgeRunRows's convention mirrored: bench cleanup is always scoped, and
+    // the route itself 400s an unscoped call rather than guess.
+    async factsPurgeByNamespace(namespace) {
+      if (!namespace || !String(namespace).trim()) {
+        throw new Error('factsPurgeByNamespace requires an explicit namespace — refusing an unscoped fact purge');
+      }
+      return call('DELETE', `/auto-memory/facts?namespace=${encodeURIComponent(namespace)}`);
     },
     async health() {
       // /health is served at the server ROOT, not under /api/mycelium

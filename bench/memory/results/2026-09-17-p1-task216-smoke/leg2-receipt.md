@@ -1,0 +1,346 @@
+# Receipt — memory benchmark P1 skeleton (2026-09-18-p1-021600)
+
+Generated: 2026-09-18T02:16:15Z
+
+## Scores
+
+| arm | n | exact | partial | wrong | p1_score |
+|---|---|---|---|---|---|
+| mycelium-timeline | 1 | 1 | 0 | 0 | 1.000 |
+
+`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.
+## Knowledge-update miss autopsy (mycelium-timeline)
+
+0 wrong knowledge-update row(s)
+
+| class | n |
+|---|---|
+| never-extracted | 0 |
+| kept-wrong | 0 |
+| added-blind | 0 |
+| superseded-but-unranked | 0 |
+| ranked-but-answered-wrong | 0 |
+
+Flags across classified rows: fastpath adds: 0 · fail-open decisions: 0 · retrieval-error reads: 0
+Stamps: 1/1 rows carry meta.read_hits (null on retrieval error: 0); 1/1 carry meta.write_decisions.
+
+The reconcile prompt is UNCHANGED this round — quoted verbatim in the regime block above.
+
+
+Retrieval modes observed (mycelium-timeline arm, per query): {"hybrid":1}
+
+Embedding wait (mycelium-timeline arm): scope=namespace namespaces=["bench-p1-2026-09-18-p1-021600","bench-p1-2026-09-18-p1-021600-amfacts"] waited_ms=15010 settled=true poll_failures=0 coverage_after=100
+
+Write cost (mycelium-timeline): 0.01 s/session — cost ×0.00 of extract; bound ≤ 2×
+
+## Per-question-type scores
+
+#### mycelium-timeline
+
+| question_type | n | exact | partial | wrong | p1_score |
+|---|---|---|---|---|---|
+| single-session-user | 1 | 1 | 0 | 0 | 1.000 |
+| single-session-assistant | 0 | 0 | 0 | 0 | n/a |
+| single-session-preference | 0 | 0 | 0 | 0 | n/a |
+| multi-session | 0 | 0 | 0 | 0 | n/a |
+| temporal-reasoning | 0 | 0 | 0 | 0 | n/a |
+| knowledge-update | 0 | 0 | 0 | 0 | n/a |
+
+## Timeline arm win condition (pre-committed, brief §3)
+
+Bars pre-committed in BRIEF-lab-alive-memory-program §3: knowledge-update ≥ 0.60; single-session-assistant ≥ 1.00; temporal-reasoning ≥ 0.40 (knowledge-update is Mem0's cell; the other two are the cells extraction loses). Cell score = p1_score over the cell's rows; the n is that arm's cell n; a cell with n < 5 gets no verdict.
+
+Verdict rule (pre-committed): any cell FAIL, or a judged cost bound FAIL (≤ 2× the extract arm's seconds per session), → MISS; else any cell with n < 5 → UNDECIDED (smallest such n); else WIN. An unjudged cost bound never decides. Ingestion loss (≤ Mem0's 1.1%) is rendered in the ingestion stats above.
+
+| cell | bar | mycelium-timeline | mem0 | mycelium-extract | verdict |
+|---|---|---|---|---|---|
+| knowledge-update | ≥ 0.60 | n/a | not in this run | not in this run | n too small (n=0) |
+| single-session-assistant | ≥ 1.00 | n/a | not in this run | not in this run | n too small (n=0) |
+| temporal-reasoning | ≥ 0.40 | n/a | not in this run | not in this run | n too small (n=0) |
+
+Cost bound (timeline write cost ≤ 2× extract): NOT JUDGED — mycelium-extract seconds-per-session not stamped in this run.
+
+VERDICT: UNDECIDED (n=0)
+
+## Judge validation
+
+NOT RECORDED in this receipt — no hand-labels file was supplied. A receipt without a judge-agreement number is provisional.
+
+## Regime
+
+```json
+{
+  "date_utc": "2026-09-18T02:16:00Z",
+  "git_sha": "75f411c3cb6a5d99cca0fbe615026cdfaa0072ce",
+  "git_dirty": true,
+  "harness": "p1-skeleton.1",
+  "dataset": {
+    "name": "LongMemEval-S (cleaned)",
+    "file": "longmemeval_s_cleaned.json",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "licence": "MIT",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "items_available": 500,
+    "citation": "Wu et al., \"LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory\", ICLR 2025"
+  },
+  "answerer": {
+    "model": "scripted-smoke",
+    "url_host": "127.0.0.1:3995",
+    "temperature": 0,
+    "max_tokens": 4096
+  },
+  "judge": {
+    "model": "scripted-smoke",
+    "url_host": "127.0.0.1:3995",
+    "judge_prompt_version": "judge-prompt.2"
+  },
+  "retrieval": {
+    "budget": 5,
+    "chunking": "one memory row per haystack session (server-side chunk-aware split for oversized rows)",
+    "source_type": "bench_longmemeval",
+    "namespace": "bench-p1-2026-09-18-p1-021600",
+    "server_mode": "hybrid (server-side; per-query observed mode recorded in rows)"
+  },
+  "platform": {
+    "url_host": "127.0.0.1:3994",
+    "transport": "fetch",
+    "version": "0.1.0",
+    "embedding_provider": "ollama",
+    "embedding_model": "fake-embed",
+    "chunk_size": null
+  },
+  "n": 1,
+  "selection_rule": "sort by question_id ascending, take first n (deterministic, stable across runs)",
+  "notes": [
+    "arms this run: mycelium-timeline; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold 0.35 (default), else ADD with no call, scripted-smoke temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance",
+    "SMOKE: write phase capped at 5 sessions per question (regime.write) — NOT a full-run number",
+    "judge is a local model; validated against a hand-scored set — see receipt judge-validation section",
+    "3090 slot lock DISABLED (--no-slot-lock): another client may have shared the answerer/extractor slot during this run"
+  ],
+  "mycelium_timeline": {
+    "ingestion": "timeline",
+    "extraction_model": "scripted-smoke",
+    "extraction_url_host": "127.0.0.1:3995",
+    "extraction_temperature": 0,
+    "extraction_max_tokens": 4096,
+    "extraction_thinking": "off",
+    "extraction_request": "chat_template_kwargs {\"enable_thinking\": false} (llama.cpp honours it)",
+    "extraction_prompt": "bench/memory/arms/arm_mycelium_extract.mjs EXTRACTION_SYSTEM — the SAME extractor call as the extract arm",
+    "decision_model": "scripted-smoke",
+    "decision_url_host": "127.0.0.1:3995",
+    "decision_temperature": 0,
+    "decision_max_tokens": 4096,
+    "decision_thinking": "off",
+    "decision_shape": "ONE decision call per candidate fact, only when the reconcile search surfaced >=1 current same-question fact AND that best hit scores at/above the fastpath threshold (below it: ADD with NO call, counted fastpath_adds)",
+    "reconcile_prompt": "You maintain the long-term memory file of one person. A NEW candidate fact was just extracted from a conversation on a given date. Compare it against the EXISTING facts already in the file (each shown with its id, its date, and its status).\n\nDecide exactly one of:\n- ADD — the candidate is new information; nothing existing covers it.\n- SUPERSEDE <id> — the candidate updates or contradicts existing fact <id>: the thing itself changed (a plan, a preference, a status, a relationship). The old fact stops being current as of the session date and the candidate takes its place.\n- KEEP — the candidate repeats an existing fact with the same meaning and no update. Nothing is written.\n\nOutput contract — your ENTIRE reply is one line:\nADD\nor: SUPERSEDE <id>\nor: KEEP\n\nRules:\n- Prefer ADD when unsure: SUPERSEDE requires the same specific subject whose state changed, not merely extra detail.\n- KEEP is only for true duplicates; a changed detail is SUPERSEDE.\n- Never invent an id that was not shown to you.",
+    "reconcile_prompt_changed": "UNCHANGED this round (task 205): the fastpath lever only decides WHEN this prompt runs — the prompt text is byte-identical, quoted here verbatim as the receipt",
+    "reconcile_policy": {
+      "top_k": 3,
+      "search_overfetch": 25,
+      "scope": "CURRENT same-question facts only (metadata.question_id match, valid_to null) — the server has no metadata filter, so the search overfetches and the arm filters client-side",
+      "auto_add_on_no_match": true,
+      "fastpath": {
+        "enabled": true,
+        "threshold": 0.35,
+        "threshold_source": "default",
+        "threshold_env": "BENCH_RECONCILE_FASTPATH_THRESHOLD",
+        "rule": "top qualifying current-fact score < threshold ⇒ ADD with NO decision LLM call (counted fastpath_adds); the prompt is unchanged"
+      },
+      "fastpath_guard": "skip_unembedded_top_hit",
+      "fastpath_guard_rule": "the best current hit stamped embedded:false by the server pays the decision call (counted fastpath_skips_unembedded, ledger source fastpath_skipped_unembedded) regardless of its score; a hit with NO embedded stamp (legacy platform / the golden fixture) keeps the pre-213 path",
+      "fail_open_on_malformed_decision": "ADD, counted in decision_failures (never a silent drop)",
+      "supersede": "the old fact KEEPS its row: valid_to = this session date, superseded_by + superseded_by_text pointers; never deleted",
+      "in_session_window": "facts decided earlier in the SAME session are shown to later candidates before the bulk flush lands"
+    },
+    "layers": {
+      "episodic": {
+        "namespace": "bench-p1-2026-09-18-p1-021600",
+        "row_shape": "arm_mycelium's verbatim session row (same source_id shape, same `role: content` rendering) + metadata.layer=episode + metadata.session_date (dataset haystack_dates, verbatim)"
+      },
+      "reconciled": {
+        "namespace": "bench-p1-2026-09-18-p1-021600-amfacts",
+        "row_shape": "one row per surviving fact; metadata carries episode (the episodic row's source_id), session_date, valid_from, valid_to (null while current), supersedes / superseded_by / superseded_by_text"
+      }
+    },
+    "facts_layer": "am_facts",
+    "facts_routes": {
+      "store": "am_facts (POST /auto-memory/facts + POST .../supersede; per-run namespace <ns>-amfacts; semantic index source_type am_fact)",
+      "read": "searchHybrid over the am_fact index rows in the run namespace (superseded facts stay indexed with their valid_to + supersede line)",
+      "scope_why": "task 206 gave the routes a nullable namespace column — bench rows stay OUT of the lab's live (unscoped) fact store",
+      "facts_cleanup": {
+        "route": "DELETE /auto-memory/facts?namespace=<ns> (task 211; bench wiring task 216 — rows first, then the index purge, then the verify reads)",
+        "measured": true,
+        "kept": false,
+        "facts_deleted": 5,
+        "facts_rows_remaining_after": 0,
+        "search_hits_after": 0,
+        "verify_search": {
+          "query": "How long did I wait for the decision on my asylum application?",
+          "namespace": "bench-p1-2026-09-18-p1-021600-amfacts",
+          "source_types": [
+            "am_fact"
+          ]
+        }
+      }
+    },
+    "read": {
+      "budget": 5,
+      "read_policy": "fact-episode-interleave",
+      "merge": "both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget",
+      "hit_rendering": "each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line \"superseded on <valid_to> by: <new fact>\"",
+      "read_stamp": "every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty",
+      "decision_stamp": "every answer row stamps meta.write_decisions = {candidates, adds, supersedes, keeps, decision_calls, decision_failures, fastpath_adds} for its own question (null when this process never wrote it, e.g. --reanswer); the per-candidate decision ledger (text, decision, source, shown_ids, top_score, source_id) lives in summary.json write_info.timeline.per_question[].candidates_ledger for the miss autopsy",
+      "rag_prompt": "arm_mycelium RAG_SYSTEM, unchanged"
+    },
+    "read_policy": "fact-episode-interleave",
+    "retrieval_budget": 5,
+    "facts_file": "bench/memory/results/2026-09-18-p1-021600/mycelium-extract.facts.jsonl",
+    "facts_reused_from": null,
+    "facts_extraction_regime": {
+      "model": "scripted-smoke",
+      "url_host": "127.0.0.1:3995",
+      "max_tokens": 4096,
+      "thinking": "off",
+      "prompt_sha256": "d8d34e4f2e254dccbf37e44aaec0bcf44d8a2cb8b3821c719c05dfabb5118cbc"
+    }
+  },
+  "write": {
+    "max_sessions_per_question": 5
+  }
+}
+```
+
+## Write phase
+
+```json
+{
+  "mycelium-timeline": {
+    "docs": 5,
+    "rows": 16,
+    "skipped": false,
+    "sessions_capped_at": 5,
+    "facts": 5,
+    "facts_counts": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "extract_ms": 12,
+    "reconcile_ms": 41,
+    "parse_failures": 0,
+    "timeline": {
+      "candidates": 5,
+      "adds": 1,
+      "supersedes": 4,
+      "keeps": 0,
+      "auto_adds": 1,
+      "decision_calls": 4,
+      "decision_failures": 0,
+      "fastpath_adds": 0,
+      "fastpath_skips_unembedded": 0,
+      "per_question": [
+        {
+          "question_id": "001be529",
+          "candidates": 5,
+          "adds": 1,
+          "supersedes": 4,
+          "keeps": 0,
+          "auto_adds": 1,
+          "decision_calls": 4,
+          "decision_failures": 0,
+          "fastpath_adds": 0,
+          "fastpath_skips_unembedded": 0,
+          "seconds_per_session": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "candidates_ledger": "<5 candidate records — see summary.json write_info.mycelium-timeline.timeline.per_question>"
+        }
+      ]
+    },
+    "write_ms": 87,
+    "embed_wait": {
+      "scope": "namespace",
+      "namespaces": [
+        "bench-p1-2026-09-18-p1-021600",
+        "bench-p1-2026-09-18-p1-021600-amfacts"
+      ],
+      "waited_ms": 15010,
+      "settled": true,
+      "poll_failures": 0,
+      "coverage_after": 100,
+      "coverage_by_namespace": {
+        "bench-p1-2026-09-18-p1-021600": 100,
+        "bench-p1-2026-09-18-p1-021600-amfacts": 100
+      }
+    }
+  }
+}
+```
+
+## Platform cleanup
+
+```json
+{
+  "namespaces": [
+    "bench-p1-2026-09-18-p1-021600",
+    "bench-p1-2026-09-18-p1-021600-amfacts"
+  ],
+  "deleted": 5,
+  "batches": 1,
+  "failed_deletes": [],
+  "rows_remaining_after": 0,
+  "kept": false,
+  "per_namespace": [
+    {
+      "namespace": "bench-p1-2026-09-18-p1-021600",
+      "source_type": "bench_longmemeval",
+      "batches": 1,
+      "deleted": 5,
+      "failed_deletes": [],
+      "rows_remaining_after": 0,
+      "kept": false
+    },
+    {
+      "namespace": "bench-p1-2026-09-18-p1-021600-amfacts",
+      "source_type": "am_fact",
+      "batches": 0,
+      "deleted": 0,
+      "failed_deletes": [],
+      "rows_remaining_after": 0,
+      "kept": false
+    }
+  ],
+  "facts_cleanup": {
+    "namespace": "bench-p1-2026-09-18-p1-021600-amfacts",
+    "route": "DELETE /auto-memory/facts?namespace=<ns>",
+    "facts_deleted": 5,
+    "facts_rows_remaining_after": 0,
+    "search_hits_after": 0,
+    "search": {
+      "query": "How long did I wait for the decision on my asylum application?",
+      "namespace": "bench-p1-2026-09-18-p1-021600-amfacts",
+      "source_types": [
+        "am_fact"
+      ]
+    }
+  }
+}
+```
+
+## Exact commands
+
+```bash
+node bench/memory/run.mjs --split longmemeval --arms mycelium-timeline --n 1 --max-sessions 5 --receipt
+```
+
+## Artifacts
+
+- rows: `bench/memory/results/2026-09-18-p1-021600/` (<arm>.rows.jsonl + judged.jsonl — the raw evidence for every number above)
+- summary: `bench/memory/results/2026-09-18-p1-021600/summary.json`
+- this receipt: `bench/memory/receipts/2026-09-18-p1-021600.md`

@@ -1,0 +1,114 @@
+{
+  "simulation": true,
+  "note": "scripted judge backend — NOT a live leg; fact golds replay the v2 pass, abstention golds take explicit scripted verdicts",
+  "run_id": "2026-09-17-p1-224225",
+  "suffix": "v4",
+  "judge_prompt_version": "judge-prompt.4",
+  "prompt_sha256": {
+    "fact": "4f701d1a781c319b2e09bf781aa9e6d360107976b147a8e99e95a29b71e7b160",
+    "abstention": "8b9b7105e70515d2484d1f8a8090c47adb741f8e45f6d0bc72ff0dbe6e64c514"
+  },
+  "gold_class": {
+    "counts": {
+      "fact": 45,
+      "abstention": 5
+    },
+    "sources": {
+      "dataset-marker": 5,
+      "judge": 45
+    },
+    "parse_failures": 0,
+    "unstamped": 0
+  },
+  "classify_calls": 45,
+  "abstention_verdicts": [
+    {
+      "question_id": "031748ae_abs",
+      "label": "exact",
+      "why": "clean decline (pre-committed EXACT or unpredicated abstention)"
+    },
+    {
+      "question_id": "0862e8bf_abs",
+      "label": "wrong",
+      "why": "answer asserts a pet record the gold contradicts (goat Ginger vs cat Luna) — inventing under the strict abstention reading"
+    },
+    {
+      "question_id": "09ba9854_abs",
+      "label": "exact",
+      "why": "clean decline (pre-committed EXACT or unpredicated abstention)"
+    },
+    {
+      "question_id": "0ddfec37_abs",
+      "label": "exact",
+      "why": "clean decline (pre-committed EXACT or unpredicated abstention)"
+    },
+    {
+      "question_id": "15745da0_abs",
+      "label": "exact",
+      "why": "clean decline (pre-committed EXACT or unpredicated abstention)"
+    }
+  ],
+  "arms": {
+    "mycelium-timeline": {
+      "n": 50,
+      "counts": {
+        "exact": 24,
+        "partial": 0,
+        "wrong": 26
+      },
+      "unparsed": 0,
+      "p1_score": 0.48
+    }
+  },
+  "knowledge_update": {
+    "n": 15,
+    "exact": 10,
+    "read": "10/15"
+  },
+  "moved_v2_to_v4": [
+    {
+      "question_id": "031748ae_abs",
+      "gold_class": "abstention",
+      "v2": "wrong",
+      "v4": "exact"
+    },
+    {
+      "question_id": "09ba9854_abs",
+      "gold_class": "abstention",
+      "v2": "wrong",
+      "v4": "exact"
+    },
+    {
+      "question_id": "0ddfec37_abs",
+      "gold_class": "abstention",
+      "v2": "wrong",
+      "v4": "exact"
+    },
+    {
+      "question_id": "15745da0_abs",
+      "gold_class": "abstention",
+      "v2": "wrong",
+      "v4": "exact"
+    }
+  ],
+  "adoption_check": "PASS — no non-abstention row moved relative to the v2 pass",
+  "agreement": {
+    "n": 20,
+    "agree": 19,
+    "rate": 0.95,
+    "disagree": [
+      {
+        "question_id": "0a34ad58",
+        "arm": "mycelium-timeline",
+        "hand": "partial",
+        "judge": "wrong"
+      }
+    ]
+  },
+  "handlabels": {
+    "path": "bench/memory/handlabels/2026-09-17-p1-224225.json",
+    "n": 20,
+    "hand_scorer": "m5Max (director), 2026-09-18 01:50 CDT — seeded sample (random.seed 20260918, 20 of 50) of run 2026-09-17-p1-224225, arm mycelium-timeline; labelled from question/gold/answer before reading the judge column; rule for _abs golds: a correct abstention that does not invent the missing fact is EXACT"
+  },
+  "sim_artifacts_dir": "/var/folders/6t/tn_xnb9x6tbfqzsh6txmx8mw0000gn/T/rejudge-sim-2026-09-17-p1-224225-VemCHF/2026-09-17-p1-224225 (removed — re-run with --keep to inspect)"
+}

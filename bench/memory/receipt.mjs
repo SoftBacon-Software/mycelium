@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { renderIngestionGrid } from './ingestion.mjs';
 import { renderAutopsySection } from './miss_autopsy.mjs';
-import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType } from './per_type.mjs';
+import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, timelineArmLabel } from './per_type.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -72,13 +72,18 @@ export function renderReceipt({
   writeInfo = null,
   autopsy = null, // computed autopsy (miss_autopsy.mjs) — rendered beside the cell table
   judged = null, // the run's per-question judged rows (bench/memory/results/<run>/judged.jsonl)
-  rejudge = null, // {ofRunId, judgePromptVersion} — present on a rejudge receipt
+  rejudge = null, // {ofRunId, judgePromptVersion, suffix?} — present on a rejudge receipt
+  previousJudges = null, // [{file, run_id, judge_prompt_version, arms}] — prior rejudge summaries (rejudgeOutputNames' siblings)
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
 }) {
-  const scoreRow = ([name, a]) => {
+  // The arm's rendered name comes from the run's own regime (task 225): a run
+  // that stamps facts_layer shows `mycelium-timeline [am_facts]`, so a lone
+  // receipt says which store it measured without its run dir. Old regimes
+  // render the bare arm name.
+  const scoreRow = ([name, a], regime = null) => {
     const c = a.score?.counts ?? { exact: 0, partial: 0, wrong: 0 };
-    return `| ${name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`;
+    return `| ${regime ? timelineArmLabel(regime, name) : name} | ${a.n} | ${c.exact} | ${c.partial} | ${c.wrong} | ${a.score?.p1_score?.toFixed(3) ?? 'n/a'} |`;
   };
   const L = [];
   L.push(`# Receipt — memory benchmark P1 skeleton (${runId})`);
@@ -86,7 +91,7 @@ export function renderReceipt({
   L.push(`Generated: ${generatedAt}`);
   if (rejudge) {
     L.push('');
-    L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`.`);
+    L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`${rejudge.suffix ? `, tagged \`${rejudge.suffix}\`` : ''}.`);
     L.push('The answers are the original run\'s own (no answerer calls, no platform calls) — only the');
     L.push('judge labels were re-computed. The original run\'s scores are rendered below the new ones.');
   }
@@ -102,7 +107,7 @@ export function renderReceipt({
   L.push('');
   L.push('| arm | n | exact | partial | wrong | p1_score |');
   L.push('|---|---|---|---|---|---|');
-  for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a]));
+  for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a], summary.regime));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
   // task 182: the ingestion-control 2×2 renders only when ALL FOUR grid arms
@@ -121,13 +126,28 @@ export function renderReceipt({
     L.push(renderAutopsySection(autopsy));
     L.push('');
   }
-  if ((rejudge || reanswer) && summary.original?.arms) {
+  if ((rejudge || reanswer) && summary.original?.summary_missing) {
+    L.push('');
+    L.push(`Original run \`${(rejudge ?? reanswer).ofRunId}\` wrote NO summary.json (it died before its judge finished); there are no pre-${rejudge ? 'rejudge' : 'reanswer'} scores — run_id, arms and regime above were reconstructed from the saved <arm>.rows.jsonl.`);
+  } else if ((rejudge || reanswer) && summary.original?.arms) {
     L.push('');
     L.push(`Original run \`${(rejudge ?? reanswer).ofRunId}\` scores (pre-${rejudge ? 'rejudge' : 'reanswer'}, from the run's own summary):`);
     L.push('');
     L.push('| arm | n | exact | partial | wrong | p1_score |');
     L.push('|---|---|---|---|---|---|');
-    for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a]));
+    for (const [name, a] of Object.entries(summary.original.arms)) L.push(scoreRow([name, a], summary.regime));
+  }
+  // a rejudge of a rejudge: the earlier pass's numbers render under "previous
+  // judge", read from its own summary — never retyped, never overwritten
+  if (rejudge && Array.isArray(previousJudges) && previousJudges.length) {
+    for (const p of previousJudges) {
+      L.push('');
+      L.push(`Previous judge \`${p.run_id}\` (prompt version \`${p.judge_prompt_version ?? 'unstamped'}\`, from \`${p.file}\`):`);
+      L.push('');
+      L.push('| arm | n | exact | partial | wrong | p1_score |');
+      L.push('|---|---|---|---|---|---|');
+      for (const [name, a] of Object.entries(p.arms)) L.push(scoreRow([name, a]));
+    }
   }
   L.push('');
   for (const [name, a] of Object.entries(summary.arms)) {
@@ -135,6 +155,23 @@ export function renderReceipt({
       L.push(`Retrieval modes observed (${name} arm, per query): ${JSON.stringify(a.retrieval_modes)}`);
       L.push('');
     }
+  }
+  // task 214: the per-arm embedding wait, honestly stamped — which scope the
+  // wait actually polled (this run's namespaces vs the global index), how long
+  // it held the run, whether it settled. An arm without a platform write has
+  // no wait; its absence renders as its absence.
+  for (const [name, w] of Object.entries(writeInfo ?? summary.write_info ?? {})) {
+    if (!w?.embed_wait) continue;
+    const ew = w.embed_wait;
+    const bits = [
+      `Embedding wait (${name} arm): scope=${ew.scope}`,
+      ew.namespaces ? ` namespaces=${JSON.stringify(ew.namespaces)}` : '',
+      ` waited_ms=${ew.waited_ms} settled=${ew.settled} poll_failures=${ew.poll_failures}`,
+      ew.coverage_after != null ? ` coverage_after=${ew.coverage_after}` : '',
+      ew.fallback_reason ? ` fallback=${ew.fallback_reason}` : '',
+    ];
+    L.push(bits.join(''));
+    L.push('');
   }
   // task 188: the timeline arm's write cost against the extract control —
   // computed from the run's own stamps, never hand-typed
@@ -152,7 +189,7 @@ export function renderReceipt({
     L.push('');
     for (const name of Object.keys(summary.arms)) {
       perType[name] = tallyByType(judged.filter((r) => r.arm === name));
-      for (const line of renderPerTypeTable(name, perType[name])) L.push(line);
+      for (const line of renderPerTypeTable(timelineArmLabel(summary.regime, name), perType[name])) L.push(line);
       L.push('');
     }
     if (summary.arms[WIN_CONDITION.arm]) {
@@ -162,6 +199,7 @@ export function renderReceipt({
         regimeByArm: { [WIN_CONDITION.arm]: summary.regime ?? {} },
         absentLabel: 'not in this run',
         notStampedPhrase: 'not stamped in this run',
+        armDisplay: timelineArmLabel(summary.regime, WIN_CONDITION.arm),
       })) {
         L.push(line);
       }
@@ -188,6 +226,26 @@ export function renderReceipt({
     L.push('## Judge validation');
     L.push('');
     L.push('NOT RECORDED in this receipt — no hand-labels file was supplied. A receipt without a judge-agreement number is provisional.');
+    L.push('');
+  }
+  // task 226: the judge's stage-A provenance — how the golds were classified
+  // and which prompt texts judged them — renders from the regime's judge block
+  // (rejudgeRun computes it from the pass's own rows). A pre-v4 summary carries
+  // neither field; its absence renders as its absence.
+  const judgeStamp = summary.regime?.judge ?? null;
+  if (judgeStamp?.prompt_sha256 || judgeStamp?.gold_class) {
+    L.push('## Judge prompt (classify the gold first)');
+    L.push('');
+    if (judgeStamp.gold_class) {
+      const gc = judgeStamp.gold_class;
+      L.push(`- Gold classes: ${gc.counts.fact} fact, ${gc.counts.abstention} abstention ` +
+        `(sources: dataset-marker=${gc.sources['dataset-marker']}, judge=${gc.sources.judge}, ` +
+        `unstamped=${gc.unstamped}, parse_failures=${gc.parse_failures})`);
+    }
+    if (judgeStamp.prompt_sha256) {
+      L.push(`- fact prompt sha256: \`${judgeStamp.prompt_sha256.fact}\``);
+      L.push(`- abstention prompt sha256: \`${judgeStamp.prompt_sha256.abstention}\``);
+    }
     L.push('');
   }
   L.push('## Regime');
@@ -221,10 +279,13 @@ export function renderReceipt({
   L.push('## Artifacts');
   L.push('');
   if (rejudge) {
+    const stem = rejudge.suffix ? `rejudge-${rejudge.suffix}` : 'rejudge';
     L.push(`- rows (the saved answers, unchanged): \`bench/memory/results/${rejudge.ofRunId}/\` (<arm>.rows.jsonl)`);
-    L.push(`- judged (rejudge): \`bench/memory/results/${rejudge.ofRunId}/judged.rejudge.jsonl\``);
-    L.push(`- summary (rejudge): \`bench/memory/results/${rejudge.ofRunId}/summary.rejudge.json\``);
-    L.push(`- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
+    L.push(`- judged (${stem}): \`bench/memory/results/${rejudge.ofRunId}/judged.${stem}.jsonl\``);
+    L.push(`- summary (${stem}): \`bench/memory/results/${rejudge.ofRunId}/summary.${stem}.json\``);
+    L.push(summary.original?.summary_missing
+      ? '- original receipt: none — the run died before writing summary.json or a receipt'
+      : `- original receipt: \`bench/memory/receipts/${rejudge.ofRunId}.md\``);
     L.push(`- this receipt: \`bench/memory/receipts/${runId}.md\``);
   } else if (reanswer) {
     L.push(`- rows (re-answer of the kept namespaces): \`bench/memory/results/${reanswer.ofRunId}/\` (<arm>.rows.reanswer-${reanswer.readPolicy}.jsonl)`);
