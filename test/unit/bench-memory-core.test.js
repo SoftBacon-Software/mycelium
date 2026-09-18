@@ -279,6 +279,42 @@ describe('write-phase summary — the run\'s evidence survives a judge death (ta
       expect(result.summary.arms[name].score).toBeDefined(); // the judged addition
     }
   });
+
+  it('task 230: the extract arm\'s per-question stamps are kept whole in write_info.extract.per_question — the extract mirror of timeline.per_question', async () => {
+    const extractArmFactory = () => (_ctx) => ({
+      name: 'mycelium-extract',
+      async write(_sessions, { questionId }) {
+        return {
+          docs: 2, rows: 2, extract_ms: 7, parse_failures: 1,
+          // the arm's per-question stamp block, the shape core pushes whole into
+          // write_info.extract.per_question (arm_mycelium_extract.mjs)
+          extract: { question_id: questionId, sessions: 2, seconds_per_session: [0.5, 0.5], parse_failures: 1 },
+        };
+      },
+      async answer() {
+        return { text: 'x', meta: {} };
+      },
+    });
+    let captured = null;
+    const result = await runBench({
+      items: ITEMS, runId: 'run-extract-stamps', regime: makeRegime(),
+      armFactories: [{ name: 'mycelium-extract', factory: extractArmFactory() }],
+      armContext: {},
+      judgeFn: () => ({ label: 'exact', raw: 'RAW' }),
+      afterWrite: async (info) => { captured = info; },
+    });
+    for (const info of [captured.writeInfo, result.summary.write_info['mycelium-extract']]) {
+      expect(info.extract.per_question).toHaveLength(2);
+      expect(info.extract.per_question[0]).toEqual({
+        question_id: 'q-1', sessions: 2, seconds_per_session: [0.5, 0.5], parse_failures: 1,
+      });
+      expect(info.extract.per_question[1].question_id).toBe('q-2');
+      // the scalar LLM-time stamp and the loss count are untouched beside it
+      expect(info.extract_ms).toBe(14);
+      expect(info.parse_failures).toBe(2);
+      expect(info.timeline).toBeUndefined(); // the reconcile ledger stays the timeline arm's channel
+    }
+  });
 });
 
 describe('receipt rendering — numbers only from the run output', () => {
