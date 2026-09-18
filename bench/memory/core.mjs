@@ -170,7 +170,9 @@ export async function runBench({
   if (judgeFn) {
     judged = [];
     for (const row of allRows) {
-      const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer });
+      // task 226: the question_id rides along — the _abs marker is stage A's
+      // source of truth — and every row is stamped with the class it was judged under
+      const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer, questionId: row.question_id });
       const jr = {
         question_id: row.question_id,
         arm: row.arm,
@@ -180,6 +182,10 @@ export async function runBench({
         label: j.label,
         judge_raw: j.raw,
         judge_had_think: !!j.had_think,
+        gold_class: j.gold_class ?? null,
+        gold_class_source: j.gold_class_source ?? null,
+        ...(j.gold_class_parsed !== undefined ? { gold_class_parsed: j.gold_class_parsed } : {}),
+        prompt_kind: j.prompt_kind ?? null,
       };
       judged.push(jr);
       if (onJudged) onJudged(jr);

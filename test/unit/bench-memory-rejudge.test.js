@@ -5,7 +5,7 @@ import path from 'node:path';
 import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from '../../bench/memory/rejudge.mjs';
 import { renderReceipt } from '../../bench/memory/receipt.mjs';
 import { computeAutopsy, DEFAULT_AUTOPSY_ARM } from '../../bench/memory/miss_autopsy.mjs';
-import { JUDGE_PROMPT_VERSION } from '../../bench/memory/judge.mjs';
+import { makeJudge, JUDGE_PROMPT_VERSION, JUDGE_PROMPT_SHA256 } from '../../bench/memory/judge.mjs';
 
 // Hermetic rejudge: a fake saved-run dir on disk + a fake judge. No network,
 // no platform, no dataset.
@@ -96,7 +96,11 @@ describe('rejudgeRun — re-judge a saved run\'s answers (hermetic)', () => {
     expect(summary.original.judge).toEqual({ model: 'old-judge', url_host: 'old:8780' });
     // regime: answers keep the original stamp; judge block + rejudge marker say what changed
     expect(summary.regime.dataset).toEqual({ name: 'fixture', sha256: 'deadbeef' });
-    expect(summary.regime.judge).toEqual({ model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: JUDGE_PROMPT_VERSION });
+    expect(summary.regime.judge).toEqual({
+      model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: JUDGE_PROMPT_VERSION,
+      prompt_sha256: JUDGE_PROMPT_SHA256,
+      gold_class: { counts: { fact: 0, abstention: 0 }, sources: { 'dataset-marker': 0, judge: 0 }, parse_failures: 0, unstamped: 3 },
+    });
     expect(summary.regime.rejudge).toMatchObject({ of_run_id: 'run-a', answers_modified: false });
   });
 
@@ -612,5 +616,182 @@ describe('rejudge prefers the run\'s own summary (task 223)', () => {
     expect(result.summary.original.summary_missing).toBe(true); // reconstruction, stamped as such
     expect(result.summary.regime.rejudge.original_summary).toMatch(/missing/);
     expect(result.summary.write_info).toBeUndefined(); // nothing to carry — nothing invented
+  });
+});
+
+// --- task 226: classify the GOLD first, then judge. Stage A runs INSIDE the
+// judge (makeJudge); rejudgeRun passes the question_id through, stamps every
+// row with the class, and tallies the stage-A source counts + both prompt
+// shas into the regime's judge block — the receipt reads them from there.
+
+describe('rejudge stage A/B (task 226) — the gold is classified, then the prompt follows it', () => {
+  let root;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-rejudge-226-')); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  function writeMixedRunDir() {
+    const dir = fs.mkdtempSync(path.join(root, 'run-'));
+    const regime = {
+      date_utc: '2026-09-17T22:42:25Z', git_sha: 'abc123', git_dirty: false, harness: 'test',
+      dataset: { name: 'fixture', sha256: 'deadbeef' },
+      answerer: { model: 'fake-answerer', url_host: 'fake' },
+      judge: { model: 'old-judge', url_host: 'old:8780', judge_prompt_version: 'judge-prompt.2' },
+      retrieval: { budget: 5, namespace: 'bench-p1-run-226' },
+      platform: { url_host: 'fake:3002' },
+      n: 3, selection_rule: 'test', notes: [],
+    };
+    const row = (o) => JSON.stringify({ regime, arm: 'mycelium-timeline', ...o });
+    fs.writeFileSync(path.join(dir, 'mycelium-timeline.rows.jsonl'), [
+      // dataset-MARKED abstention gold (marker wins — the classify call never fires)
+      row({ question_id: '0ddfec37_abs', question_type: 'knowledge-update', question: 'Do I collect autographed footballs?',
+        gold: 'The information provided is not enough. You mentioned collecting autographed baseball but not football.',
+        answer: 'I don\'t have any information about autographed footballs in your collection.' }),
+      // UNMARKED fact gold whose ANSWER reads like an abstention — the 00ca467f defect shape
+      row({ question_id: '00ca467f', question_type: 'multi-session', question: 'How many doctor\'s appointments in March?',
+        gold: 2, answer: 'I don\'t have any information … no record of actual visits in March' }),
+      // UNMARKED abstention gold — routes to the YES/NO call
+      row({ question_id: 'future1', question_type: 'knowledge-update', question: 'What is my bus fare?',
+        gold: 'The information provided is not enough. You did not mention the bus.', answer: 'I don\'t have that in my memory.' }),
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify({
+      run_id: 'run-226', n: 3, regime,
+      arms: { 'mycelium-timeline': { n: 3 } },
+    }, null, 2));
+    return dir;
+  }
+
+  // a scripted chat standing in for the served XS judge: YES/NO classify calls
+  // answer by gold; label calls answer by which prompt they were sent.
+  function scriptedChat() {
+    const calls = [];
+    const chat = async ({ system, user }) => {
+      calls.push({ system, user });
+      if (/YES or NO/.test(user)) {
+        // classify leg: the future1 gold says "not enough" -> YES; the bare "2" -> NO
+        return { text: /not mention the bus/.test(user) ? 'YES' : 'NO', hadThink: false };
+      }
+      if (/declines to assert the missing fact/.test(user)) return { text: 'EXACT', hadThink: false };
+      if (/not in my memory/.test(user)) return { text: user.includes('Gold reference answer: 2') ? 'WRONG' : 'EXACT', hadThink: false };
+      throw new Error(`scripted chat: unexpected prompt: ${user.slice(0, 120)}`);
+    };
+    return { calls, chat };
+  }
+
+  it('marked golds classify by marker (no call); unmarked route the YES/NO call; every row carries the class', async () => {
+    const dir = writeMixedRunDir();
+    const { calls, chat } = scriptedChat();
+    const judgeFn = makeJudge({ chat });
+    const result = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T08:00:00Z',
+    });
+    const byId = Object.fromEntries(result.judged.map((r) => [r.question_id, r]));
+    // the marked row went straight to its abstention prompt: its classify never fired
+    expect(calls.filter((c) => /YES or NO/.test(c.user) && /autographed footballs/.test(c.user))).toHaveLength(0);
+    expect(byId['0ddfec37_abs']).toMatchObject({
+      label: 'exact', gold_class: 'abstention', gold_class_source: 'dataset-marker', prompt_kind: 'abstention',
+    });
+    expect(byId['00ca467f']).toMatchObject({
+      label: 'wrong', gold_class: 'fact', gold_class_source: 'judge', gold_class_parsed: 'no', prompt_kind: 'fact',
+    });
+    expect(byId.future1).toMatchObject({
+      label: 'exact', gold_class: 'abstention', gold_class_source: 'judge', gold_class_parsed: 'yes', prompt_kind: 'abstention',
+    });
+    // label calls (not the YES/NO classify): abstention rows got the dedicated prompt,
+    // the fact row's prompt carries no abstention wording at all
+    const labelCalls = calls.filter((c) => !/YES or NO/.test(c.user));
+    expect(labelCalls.some((c) => /declines to assert the missing fact/.test(c.user))).toBe(true);
+    expect(labelCalls.every((c) => /declines to assert the missing fact/.test(c.user) || !/abstention/i.test(c.user))).toBe(true);
+  });
+
+  it('the summary regime carries the stage-A source counts + both prompt shas', async () => {
+    const dir = writeMixedRunDir();
+    const judgeFn = makeJudge({ chat: scriptedChat().chat });
+    const { summary } = await rejudgeRun({
+      dir, judgeFn,
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T08:00:00Z',
+    });
+    expect(summary.regime.judge.prompt_sha256).toEqual(JUDGE_PROMPT_SHA256);
+    expect(summary.regime.judge.gold_class).toEqual({
+      counts: { fact: 1, abstention: 2 },
+      sources: { 'dataset-marker': 1, judge: 2 },
+      parse_failures: 0,
+      unstamped: 0,
+    });
+  });
+
+  it('an unparsable YES/NO classify counts as fact (skeptical) and is reported as a parse failure', async () => {
+    const dir = writeMixedRunDir();
+    const chat = async ({ user }) => {
+      if (/YES or NO/.test(user)) return { text: 'I cannot tell.', hadThink: false }; // unparsable
+      return { text: 'WRONG', hadThink: false };
+    };
+    const { summary } = await rejudgeRun({
+      dir, judgeFn: makeJudge({ chat }),
+      judge: { model: 'fake-judge', url_host: 'localhost:8780' },
+      judgePromptVersion: JUDGE_PROMPT_VERSION,
+      generatedAtUtc: '2026-09-18T08:00:00Z',
+    });
+    expect(summary.regime.judge.gold_class).toEqual({
+      counts: { fact: 2, abstention: 1 }, // only the MARKED row is abstention
+      sources: { 'dataset-marker': 1, judge: 2 },
+      parse_failures: 2, // both unmarked rows' classify replies failed to parse
+      unstamped: 0,
+    });
+    expect(summary.arms['mycelium-timeline'].score.counts.exact).toBe(0); // nothing snuck through as EXACT
+  });
+});
+
+describe('receipt renders the v4 judge block (gold classes + both prompt shas)', () => {
+  const baseRegime = {
+    date_utc: '2026-09-18T00:00:00Z', git_sha: 'abc123', git_dirty: false, harness: 'test',
+    dataset: { sha256: 'deadbeef' }, answerer: {}, retrieval: {}, platform: {},
+    n: 3, selection_rule: 'test', notes: [],
+  };
+
+  it('renders gold_class counts and both shas from the regime — and stays silent on a v2-era summary', () => {
+    const v4Summary = {
+      run_id: 'run-226-rejudge-v4', rejudged_from: 'run-226',
+      judge_prompt_version: 'judge-prompt.4',
+      regime: {
+        ...baseRegime,
+        judge: {
+          model: 'fake-judge', url_host: 'localhost:8780', judge_prompt_version: 'judge-prompt.4',
+          prompt_sha256: { fact: 'aaa-fact-sha', abstention: 'bbb-abstention-sha' },
+          gold_class: { counts: { fact: 45, abstention: 5 }, sources: { 'dataset-marker': 5, judge: 0 }, parse_failures: 0, unstamped: 0 },
+        },
+        rejudge: { of_run_id: 'run-226', date_utc: '2026-09-18T08:00:00Z', answers_modified: false, suffix: 'v4' },
+      },
+      arms: { 'mycelium-timeline': { n: 3, score: { n: 3, counts: { exact: 2, partial: 0, wrong: 1 }, unparsed: 0, p1_score: 2 / 3 } } },
+      original: { run_id: 'run-226' },
+    };
+    const md = renderReceipt({
+      runId: 'run-226-rejudge-v4', summary: v4Summary,
+      rejudge: { ofRunId: 'run-226', judgePromptVersion: 'judge-prompt.4', suffix: 'v4' },
+      generatedAt: '2026-09-18T08:00:00Z',
+    });
+    expect(md).toContain('Gold classes: 45 fact, 5 abstention');
+    expect(md).toContain('sources: dataset-marker=5, judge=0, unstamped=0, parse_failures=0');
+    expect(md).toContain('fact prompt sha256: `aaa-fact-sha`');
+    expect(md).toContain('abstention prompt sha256: `bbb-abstention-sha`');
+
+    const v2Summary = {
+      run_id: 'run-226-rejudge', rejudged_from: 'run-226', judge_prompt_version: 'judge-prompt.2',
+      regime: { ...baseRegime, judge: { model: 'old', url_host: 'h', judge_prompt_version: 'judge-prompt.2' },
+        rejudge: { of_run_id: 'run-226', date_utc: '2026-09-18T00:00:00Z', answers_modified: false } },
+      arms: { none: { n: 1, score: { n: 1, counts: { exact: 1, partial: 0, wrong: 0 }, unparsed: 0, p1_score: 1 } } },
+      original: { run_id: 'run-226' },
+    };
+    const mdV2 = renderReceipt({
+      runId: 'run-226-rejudge', summary: v2Summary,
+      rejudge: { ofRunId: 'run-226', judgePromptVersion: 'judge-prompt.2' },
+      generatedAt: '2026-09-18T00:00:00Z',
+    });
+    expect(mdV2).not.toContain('Gold classes:');
+    expect(mdV2).not.toContain('prompt sha256');
   });
 });

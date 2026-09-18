@@ -12,7 +12,7 @@ import path from 'node:path';
 import { loadSplit, selectItems, BENCH_DIR } from './split.mjs';
 import { resolvePlatformEnv, resolveAdminKey, createPlatform } from './platform.mjs';
 import { makeOpenAIChat } from './answer.mjs';
-import { makeJudge, agreement, JUDGE_PROMPT_VERSION } from './judge.mjs';
+import { makeJudge, agreement, JUDGE_PROMPT_VERSION, JUDGE_PROMPT_SHA256 } from './judge.mjs';
 import { rejudgeRun, rejudgeOutputNames, assertRejudgeOutputsFree, loadPreviousRejudges } from './rejudge.mjs';
 import { reanswerRun } from './reanswer.mjs';
 import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
@@ -95,7 +95,9 @@ async function main() {
     const judgeUrl = args['judge-url'] ?? 'http://localhost:8780/v1';
     const judgeModel = args['judge-model'] ?? 'Laguna-XS-2.1-mlx-oq4e-agentic-ours';
     const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-    const judgeFn = makeJudge({ chat: judgeChat });
+    // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+    const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+    const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
     let fd = null;
     try {
@@ -231,7 +233,9 @@ async function main() {
       extraBody: { chat_template_kwargs: { enable_thinking: false } },
     });
     const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-    const judgeFn = makeJudge({ chat: judgeChat });
+    // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+    const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+    const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
     // the answer phase dials the 3090 — the same one-run-one-slot discipline
     // as a fresh run (the box serves ONE 64k slot outside a benchmark window)
@@ -642,7 +646,9 @@ async function main() {
   const ANSWER_MAX_TOKENS = parseInt(args['answer-max-tokens'] ?? '4096', 10);
   const answerChat = makeOpenAIChat({ url: answerUrl, model: answerModel, maxTokens: ANSWER_MAX_TOKENS });
   const judgeChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 12 });
-  const judgeFn = makeJudge({ chat: judgeChat });
+  // task 226 stage A: the gold-classify call gets its own 3-token budget — it answers YES/NO, nothing else
+  const judgeClassifyChat = makeOpenAIChat({ url: judgeUrl, model: judgeModel, maxTokens: 3 });
+  const judgeFn = makeJudge({ chat: judgeChat, classifyChat: judgeClassifyChat });
 
   const git = await gitState(REPO_ROOT);
   // the cost lever's resolution is stamped with its source — the arm factory
@@ -662,7 +668,7 @@ async function main() {
       citation: split.spec.citation,
     },
     answerer: { model: answerModel, url_host: new URL(answerUrl).host, temperature: 0, max_tokens: ANSWER_MAX_TOKENS },
-    judge: { model: judgeModel, url_host: new URL(judgeUrl).host, judge_prompt_version: JUDGE_PROMPT_VERSION },
+    judge: { model: judgeModel, url_host: new URL(judgeUrl).host, judge_prompt_version: JUDGE_PROMPT_VERSION, prompt_sha256: JUDGE_PROMPT_SHA256 },
     retrieval: {
       budget,
       chunking: 'one memory row per haystack session (server-side chunk-aware split for oversized rows)',

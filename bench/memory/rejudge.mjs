@@ -15,7 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { tally } from './judge.mjs';
+import { tally, JUDGE_PROMPT_SHA256 } from './judge.mjs';
 
 function readJsonlFile(file) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -160,7 +160,10 @@ export async function rejudgeRun({
     if (typeof row.answer !== 'string' || !row.question_id || !('gold' in row)) {
       throw new Error(`rejudge: saved row ${i} (${row.arm}/${row.question_id ?? '?'}) is missing question_id/gold/answer`);
     }
-    const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer });
+    // task 226: the question_id rides along — the _abs marker is stage A's
+    // source of truth, and the judge classifies the GOLD before choosing the
+    // prompt. Every row is stamped with the class it was judged under.
+    const j = await judgeFn({ question: row.question, gold: row.gold, answer: row.answer, questionId: row.question_id });
     const jr = {
       question_id: row.question_id,
       arm: row.arm,
@@ -170,10 +173,35 @@ export async function rejudgeRun({
       label: j.label,
       judge_raw: j.raw,
       judge_had_think: !!j.hadThink,
+      gold_class: j.gold_class ?? null,
+      gold_class_source: j.gold_class_source ?? null,
+      ...(j.gold_class_parsed !== undefined ? { gold_class_parsed: j.gold_class_parsed } : {}),
+      prompt_kind: j.prompt_kind ?? null,
     };
     judged.push(jr);
     log(`[${judged.length}/${rows.length}] ${jr.arm}/${jr.question_id} -> ${jr.label}`);
     if (onJudged) onJudged(jr);
+  }
+
+  // Stage A provenance (task 226): how this pass's golds were classified, and
+  // which prompt texts judged them — computed from THIS pass's own rows, never
+  // hand-typed. `unstamped` counts rows from a judge that did not stamp a
+  // class (an older judge.mjs); `parse_failures` counts YES/NO classify calls
+  // whose reply did not parse (each was treated as fact — the skeptical prior).
+  const goldClass = {
+    counts: { fact: 0, abstention: 0 },
+    sources: { 'dataset-marker': 0, judge: 0 },
+    parse_failures: 0,
+    unstamped: 0,
+  };
+  for (const j of judged) {
+    if (j.gold_class === 'fact' || j.gold_class === 'abstention') {
+      goldClass.counts[j.gold_class]++;
+      if (j.gold_class_source === 'dataset-marker' || j.gold_class_source === 'judge') goldClass.sources[j.gold_class_source]++;
+      if (j.gold_class_parsed === null) goldClass.parse_failures++;
+    } else {
+      goldClass.unstamped++;
+    }
   }
 
   // The answers keep the original run's regime (same split, same answerer, same
@@ -181,7 +209,13 @@ export async function rejudgeRun({
   // actually changed: the labels were re-computed under a new rubric version.
   const regime = {
     ...original.regime,
-    judge: { ...original.regime.judge, ...judge, judge_prompt_version: judgePromptVersion },
+    judge: {
+      ...original.regime.judge,
+      ...judge,
+      judge_prompt_version: judgePromptVersion,
+      prompt_sha256: JUDGE_PROMPT_SHA256,
+      gold_class: goldClass,
+    },
     rejudge: {
       of_run_id: rejudgedFrom,
       date_utc: generatedAtUtc,

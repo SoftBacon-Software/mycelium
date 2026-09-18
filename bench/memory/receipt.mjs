@@ -223,6 +223,26 @@ export function renderReceipt({
     L.push('NOT RECORDED in this receipt — no hand-labels file was supplied. A receipt without a judge-agreement number is provisional.');
     L.push('');
   }
+  // task 226: the judge's stage-A provenance — how the golds were classified
+  // and which prompt texts judged them — renders from the regime's judge block
+  // (rejudgeRun computes it from the pass's own rows). A pre-v4 summary carries
+  // neither field; its absence renders as its absence.
+  const judgeStamp = summary.regime?.judge ?? null;
+  if (judgeStamp?.prompt_sha256 || judgeStamp?.gold_class) {
+    L.push('## Judge prompt (classify the gold first)');
+    L.push('');
+    if (judgeStamp.gold_class) {
+      const gc = judgeStamp.gold_class;
+      L.push(`- Gold classes: ${gc.counts.fact} fact, ${gc.counts.abstention} abstention ` +
+        `(sources: dataset-marker=${gc.sources['dataset-marker']}, judge=${gc.sources.judge}, ` +
+        `unstamped=${gc.unstamped}, parse_failures=${gc.parse_failures})`);
+    }
+    if (judgeStamp.prompt_sha256) {
+      L.push(`- fact prompt sha256: \`${judgeStamp.prompt_sha256.fact}\``);
+      L.push(`- abstention prompt sha256: \`${judgeStamp.prompt_sha256.abstention}\``);
+    }
+    L.push('');
+  }
   L.push('## Regime');
   L.push('');
   L.push('```json');
