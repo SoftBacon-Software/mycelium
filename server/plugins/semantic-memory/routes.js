@@ -206,6 +206,19 @@ export default function (core) {
     return (typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
   }
 
+  // Embed only what lacks a vector (task 227): the row-state check, not the
+  // caller's churn, decides. An unchanged doc keeps its stored embedding, so
+  // a half-hourly re-post costs the embedder nothing — the same churn the
+  // bulk route's `!r.unchanged` filter stops, at the single-doc seam.
+  // `row` is an optional pre-read (the chunked path already has it); a row
+  // that cannot be read back fails soft — the drains key on embedding IS NULL
+  // and will find it.
+  function autoEmbedUnembedded(sourceType, sourceId, chunkIndex, row) {
+    row = row || db.getDoc(sourceType, sourceId, chunkIndex);
+    if (!row || row.embedding != null) return;
+    autoEmbed(sourceType, sourceId, row.content_text, chunkIndex);
+  }
+
   // POST /memory/index — index content
   router.post('/index', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
@@ -223,7 +236,7 @@ export default function (core) {
         chunk_index: chunk_index,
         metadata: metadata
       });
-      autoEmbed(source_type, source_id, content_text, chunk_index);
+      autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
       // Chunk-aware: oversized content splits into chunk rows, and stale
       // chunks from a previous (larger) version of the doc are removed
@@ -232,8 +245,11 @@ export default function (core) {
         metadata: metadata
       });
       chunkCount = chunks.length;
+      // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
+      // 0..N-1 in place, so the rows align with the chunk texts.
+      var stored = db.getDocChunks(source_type, source_id);
       for (var ci = 0; ci < chunks.length; ci++) {
-        autoEmbed(source_type, source_id, chunks[ci], ci);
+        autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
       }
     }
     core.emitEvent('memory_indexed', who, null,
@@ -262,9 +278,13 @@ export default function (core) {
     // it returns the rows actually written so each one embeds separately.
     var rows = db.bulkIndex(items);
 
-    // Fire-and-forget embed for rows that didn't bring their own embedding.
-    // generateEmbeddingBatch is sequential for ollama, so this won't stampede.
-    var toEmbed = rows.filter(function (r) { return !r.embedding; });
+    // Fire-and-forget embed for rows that didn't bring their own embedding —
+    // EXCEPT unchanged rows (task 227): a byte-identical re-index kept its
+    // stored vector (or, never-embedded, belongs to the boot drain / fastpath,
+    // which key on embedding IS NULL), so re-embedding it is the churn that
+    // wedged the Jetson on 2026-09-18. generateEmbeddingBatch is sequential
+    // for ollama, so this won't stampede.
+    var toEmbed = rows.filter(function (r) { return !r.embedding && !r.unchanged; });
     if (toEmbed.length > 0) {
       var config = db.getAllConfig();
       if (config.embedding_provider && config.embedding_provider !== 'none') {
@@ -285,7 +305,12 @@ export default function (core) {
       }
     }
 
-    res.json({ ok: true, indexed: items.length, rows: rows.length });
+    res.json({
+      ok: true,
+      indexed: items.length,
+      rows: rows.length,
+      unchanged: rows.unchangedCount || 0
+    });
   });
 
   // DELETE /memory/index/:sourceType/:sourceId — remove from index

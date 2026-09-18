@@ -186,6 +186,7 @@ export default function createMemoryDB(db, opts) {
       opts = opts || {};
       var chunks = chunkText(contentText, this.getChunkSize());
       var self = this;
+      var unchangedCount = 0;
       var txn = db.transaction(function () {
         for (var i = 0; i < chunks.length; i++) {
           var chunkOpts = Object.assign({}, opts, { chunk_index: i });
@@ -194,11 +195,16 @@ export default function createMemoryDB(db, opts) {
             delete chunkOpts.embedding;
             delete chunkOpts.embedding_model;
           }
-          self.index(sourceType, sourceId, chunks[i], chunkOpts);
+          var res = self.index(sourceType, sourceId, chunks[i], chunkOpts);
+          if (res && res.unchanged) unchangedCount++;
         }
         self.removeChunksFrom(sourceType, sourceId, chunks.length);
       });
       txn();
+      // Task 227: how many chunks were byte-identical no-ops, riding the
+      // established array return (callers read .length and the texts). A
+      // count equal to chunks.length means the doc wrote nothing at all.
+      chunks.unchangedCount = unchangedCount;
       return chunks;
     },
 
@@ -216,6 +222,18 @@ export default function createMemoryDB(db, opts) {
     },
 
     // -- Index --
+    // 2026-09-18 (task 227): re-indexing IDENTICAL content with no embedding in
+    // the request used to run `embedding = excluded.embedding` — resetting the
+    // stored vector to NULL and re-queueing the row — so the Mac's half-hourly
+    // memory backfill cost the Jetson ~2k re-embeds per tick and helped wedge
+    // the platform that night (node R at 100% CPU, 811s down). Two guards now:
+    // a read-before-write that SKIPS the write entirely when content, namespace
+    // and metadata all match and the request carries no embedding (no FTS
+    // rewrite, no cache touch, no embed — the row is byte-identical), and a
+    // CASE on the upsert itself so a metadata-only or namespace-only change
+    // keeps the stored vector while CHANGED content still resets it (stale
+    // vectors are worse than missing ones). Returns { unchanged } so callers
+    // (indexDoc → bulkIndex → the route) can skip the embed queue for no-ops.
     index(sourceType, sourceId, contentText, opts) {
       opts = opts || {};
       var namespace = opts.namespace || null;
@@ -224,37 +242,63 @@ export default function createMemoryDB(db, opts) {
       var embedding = opts.embedding || null;
       var embeddingModel = opts.embedding_model || null;
 
+      var prior = db.prepare(
+        'SELECT content_text, namespace, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
+      ).get(sourceType, sourceId, chunkIndex);
+      if (prior && embedding == null &&
+          prior.content_text === contentText &&
+          (prior.namespace || null) === namespace &&
+          (prior.metadata || '{}') === metadata) {
+        return { unchanged: true }; // a genuinely empty write — touch nothing
+      }
+
       db.prepare(`
         INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_type, source_id, chunk_index)
         DO UPDATE SET content_text = excluded.content_text, namespace = excluded.namespace,
-          metadata = excluded.metadata, embedding = excluded.embedding,
-          embedding_model = excluded.embedding_model, updated_at = datetime('now')
+          metadata = excluded.metadata,
+          embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.embedding ELSE excluded.embedding END,
+          embedding_model = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.embedding_model ELSE excluded.embedding_model END,
+          updated_at = CASE WHEN sm_embeddings.content_text = excluded.content_text
+            AND sm_embeddings.namespace = excluded.namespace
+            AND sm_embeddings.metadata = excluded.metadata
+            THEN sm_embeddings.updated_at ELSE datetime('now') END
       `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel);
       vectorCache.onUpsert(sourceType, sourceId, chunkIndex);
+      return { unchanged: false };
     },
 
     // Chunk-aware bulk index. Items carrying an explicit chunk_index are
     // stored as single rows (caller-managed chunking); everything else goes
     // through indexDoc so oversized content splits and stale chunks are
     // cleaned up. Returns the rows actually written (post-chunking) so the
-    // caller can embed each one.
+    // caller can embed each one; each row also carries `unchanged` (this row
+    // was a byte-identical no-op and needs no embed), and the array carries
+    // `unchangedCount` — the number of INPUT ITEMS that churned nothing — so
+    // the bulk route can answer the {ok, indexed, rows, unchanged} split
+    // (task 227).
     bulkIndex(items) {
       var self = this;
       var rows = [];
+      var unchangedItems = 0;
       var txn = db.transaction(function (items) {
         for (var item of items) {
           if (item.chunk_index !== undefined && item.chunk_index !== null) {
-            self.index(item.source_type, item.source_id, item.content_text, {
+            var one = self.index(item.source_type, item.source_id, item.content_text, {
               namespace: item.namespace, chunk_index: item.chunk_index,
               metadata: item.metadata, embedding: item.embedding,
               embedding_model: item.embedding_model
             });
+            var oneUnchanged = !!(one && one.unchanged);
+            if (oneUnchanged) unchangedItems++;
             rows.push({
               source_type: item.source_type, source_id: item.source_id,
               chunk_index: item.chunk_index, content_text: item.content_text,
-              embedding: item.embedding || null
+              embedding: item.embedding || null,
+              unchanged: oneUnchanged
             });
             continue;
           }
@@ -262,16 +306,23 @@ export default function createMemoryDB(db, opts) {
             namespace: item.namespace, metadata: item.metadata,
             embedding: item.embedding, embedding_model: item.embedding_model
           });
+          // Content that is unchanged is unchanged for every chunk of the doc
+          // (the split is deterministic), so the doc-level flag rides each row;
+          // a changed doc's rows are NULL-embedded and embed regardless.
+          var docUnchanged = chunks.unchangedCount === chunks.length;
+          if (docUnchanged) unchangedItems++;
           for (var i = 0; i < chunks.length; i++) {
             rows.push({
               source_type: item.source_type, source_id: item.source_id,
               chunk_index: i, content_text: chunks[i],
-              embedding: chunks.length === 1 ? (item.embedding || null) : null
+              embedding: chunks.length === 1 ? (item.embedding || null) : null,
+              unchanged: docUnchanged
             });
           }
         }
       });
       txn(items);
+      rows.unchangedCount = unchangedItems;
       return rows;
     },
 
