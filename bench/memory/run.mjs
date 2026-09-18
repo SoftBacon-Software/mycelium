@@ -32,6 +32,7 @@ import { buildRegime, gitState } from './regime.mjs';
 import { runBench } from './core.mjs';
 import { renderReceipt, writeReceipt } from './receipt.mjs';
 import { composeGrid } from './grid.mjs';
+import { adoptionGate, gateAppliesToRun } from './adoption.mjs';
 import { purgeRunWithFacts } from './cleanup.mjs';
 import { waitForArmEmbeddings, armWaitTimeoutMs } from './embedding_wait.mjs';
 import { acquireSlotLock, probeTotalSlots, DEFAULT_LOCK_DIR } from './slot_lock.mjs';
@@ -119,11 +120,20 @@ async function main() {
 
       let judgeAgreement = null;
       let handlabelsMeta = null;
+      let handlabelsItems = null;
       if (args.handlabels) {
         const hl = JSON.parse(fs.readFileSync(args.handlabels, 'utf8'));
         judgeAgreement = agreement(result.judged, hl.items);
         handlabelsMeta = { hand_scorer: hl.hand_scorer, path: args.handlabels, n: hl.items.length };
+        handlabelsItems = hl.items;
       }
+      // task 229: the pre-committed adoption gate, decided at rejudge time when
+      // this pass is the one it binds to (run 2026-09-17-p1-224225, judge-prompt.4)
+      const adoptionGateOut = gateAppliesToRun({
+        rejudge: { of_run_id: result.summary.rejudged_from, judge_prompt_version: JUDGE_PROMPT_VERSION },
+      })
+        ? adoptionGate({ judged: result.judged, handItems: handlabelsItems })
+        : null;
       const previousJudges = loadPreviousRejudges(dir, { exclude: [names.summaryFile] });
 
       let receiptFile = null;
@@ -151,6 +161,7 @@ async function main() {
           summary: result.summary,
           agreement: judgeAgreement,
           handlabels: handlabelsMeta,
+          handlabelsItems,
           autopsy,
           judged: result.judged,
           previousJudges,
@@ -175,6 +186,18 @@ async function main() {
         agreement: judgeAgreement
           ? { n: judgeAgreement.n, agree: judgeAgreement.agree, rate: judgeAgreement.rate }
           : null,
+        ...(adoptionGateOut
+          ? {
+              adoption_gate: {
+                evaluable: adoptionGateOut.evaluable,
+                verdict: adoptionGateOut.verdict,
+                agreement: adoptionGateOut.agreement
+                  ? { n: adoptionGateOut.agreement.n, agree: adoptionGateOut.agreement.agree, rate: adoptionGateOut.agreement.rate }
+                  : null,
+                ...(adoptionGateOut.unevaluable_reason ? { unevaluable_reason: adoptionGateOut.unevaluable_reason } : {}),
+              },
+            }
+          : {}),
         receipt: receiptFile ? path.relative(REPO_ROOT, receiptFile) : null,
       }, null, 2));
     } finally {
@@ -354,7 +377,10 @@ async function main() {
   // comparable (same dataset/judge/answerer/budget/n/question ids), and on a
   // match writes ONE receipt whose 2×2 is renderIngestionGrid over the union
   // of the runs' arms. Without --receipt this is a dry-run: the check runs,
-  // nothing is written.
+  // nothing is written. --rejudge-pass <tag> (task 229) reads every rejudged
+  // dir's SUFFIXED pass pair (summary.rejudge-<tag>.json + judged.rejudge-<tag>.jsonl)
+  // instead of the unsuffixed one — the judge-prompt.4 composition — and the
+  // receipt names the pass beside each rejudged column.
   if (args['grid-from-results']) {
     const dirs = String(args['grid-from-results'])
       .split(',')
@@ -363,7 +389,7 @@ async function main() {
     // --dataset <file>: only needed when a judged row lacks question_type — the
     // join is quoted in the receipt (never a silent guess)
     const datasetTypes = args.dataset ? await loadDatasetTypes(path.resolve(args.dataset)) : null;
-    const out = await composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy), audit: Boolean(args['retrieval-audit']), datasetTypes });
+    const out = await composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy), audit: Boolean(args['retrieval-audit']), datasetTypes, rejudgePass: args['rejudge-pass'] != null ? String(args['rejudge-pass']) : null });
     console.log(
       JSON.stringify(
         {

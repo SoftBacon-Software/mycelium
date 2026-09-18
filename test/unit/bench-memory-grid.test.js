@@ -20,11 +20,15 @@ import {
   assertComparable,
   buildUnion,
   composeGrid,
+  effectiveJudgePromptVersion,
+  effectiveN,
+  findDifferences,
   flattenRegime,
   loadRun,
   renderGridReceipt,
   unionArms,
   writeCap,
+  HANDLABELS_DIR,
 } from '../../bench/memory/grid.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -659,11 +663,15 @@ describe('the timeline write-cost line — cost ×N of extract; bound ≤ 2×', 
 // its judge-agreement leg, and every downstream check operates unchanged.
 
 // A rejudge fixture dir in the shape rejudge.mjs writes: summary.rejudge.json +
-// judged.rejudge.jsonl, NO summary.json. counts per arm must sum to the
-// question count; questionTypes maps question_id -> question_type (optional).
-function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTypes = null, regime = {}, summaryPatch = null }) {
+// judged.rejudge.jsonl, NO summary.json — or, with a suffix, the SUFFIXED pair
+// (summary.rejudge-<tag>.json + judged.rejudge-<tag>.jsonl) beside whatever the
+// dir already holds, exactly what rejudge.mjs --rejudge-suffix <tag> leaves
+// (task 229). counts per arm must sum to the question count; questionTypes maps
+// question_id -> question_type (optional).
+function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTypes = null, regime = {}, summaryPatch = null, suffix = null, answer = 'I do not know.' }) {
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
+  const stem = suffix ? `rejudge-${suffix}` : 'rejudge';
   const fullRegime = deepMerge(
     deepMerge(BASE_REGIME, {
       retrieval: { namespace: `bench-p1-${ofRunId}` },
@@ -674,7 +682,8 @@ function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTy
           of_run_id: ofRunId,
           date_utc: '2026-09-18T06:00:00Z',
           answers_modified: false,
-          note: 'labels re-computed from the saved answers (judged.rejudge.jsonl); no answerer or platform calls',
+          note: `labels re-computed from the saved answers (judged.${stem}.jsonl); no answerer or platform calls`,
+          ...(suffix ? { suffix } : {}),
         },
       },
     }),
@@ -701,7 +710,7 @@ function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTy
         arm,
         question_type: questionTypes?.[qid] ?? 'single-session-user',
         gold: 'a year',
-        answer: 'I do not know.',
+        answer,
         label: labels[i],
         judge_raw: labels[i].toUpperCase(),
         judge_had_think: false,
@@ -709,7 +718,7 @@ function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTy
     });
   }
   const summary = {
-    run_id: `${ofRunId}-rejudge`,
+    run_id: `${ofRunId}-rejudge${suffix ? `-${suffix}` : ''}`,
     rejudged_from: ofRunId,
     judge_prompt_version: jpv,
     generated_at_utc: '2026-09-18T06:00:00Z',
@@ -723,8 +732,8 @@ function writeRejudgeFixture(name, { ofRunId, jpv, arms, questionIds, questionTy
     },
     ...(summaryPatch ?? {}),
   };
-  fs.writeFileSync(path.join(dir, 'summary.rejudge.json'), JSON.stringify(summary, null, 2));
-  fs.writeFileSync(path.join(dir, 'judged.rejudge.jsonl'), judged.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  fs.writeFileSync(path.join(dir, `summary.${stem}.json`), JSON.stringify(summary, null, 2));
+  fs.writeFileSync(path.join(dir, `judged.${stem}.jsonl`), judged.map((r) => JSON.stringify(r)).join('\n') + '\n');
   return dir;
 }
 
@@ -743,9 +752,13 @@ describe('task 224: the grid admits a rejudged run', () => {
     expect(fs.existsSync(path.join(dir, 'summary.json'))).toBe(false);
     const run = loadRun(dir, { handlabelsDir: handlabelsDir() });
     expect(run.runId).toBe('2026-09-17-p1-224225-rejudge');
-    expect(run.rejudge).toEqual({
+    // task 229: the rejudge marker carries its pass (null = the unsuffixed
+    // default pair) and stem, so renders and the gate can name the pass
+    expect(run.rejudge).toMatchObject({
       of_run_id: '2026-09-17-p1-224225',
       judge_prompt_version: 'judge-prompt.2',
+      pass: null,
+      stem: 'rejudge',
       agreement: null,
     });
     // the judged rows ARE the rejudge pair's rows
@@ -1049,5 +1062,451 @@ describe('task 225 — the single-run receipt is self-identifying', () => {
     const md = renderReceipt({ runId: 'r', summary: baseSummary({ notes: [] }), generatedAt: 'g' });
     expect(md).toContain('| mycelium-timeline | 2 | 1 | 0 | 1 | 0.500 |');
     expect(md).not.toContain('mycelium-timeline [');
+  });
+});
+
+// ---- task 229: the grid admits a SUFFIXED rejudge pair (--rejudge-pass) -------
+//
+// judge-prompt.4 is live for new primary runs while every banked comparator run
+// labels under judge-prompt.2 — the grid is frozen at the fork until the banked
+// runs carry v4 labels. The director's leg is `--rejudge --rejudge-suffix v4`
+// over the banked dirs, which writes summary.rejudge-v4.json +
+// judged.rejudge-v4.jsonl BESIDE the primary summary and the earlier passes.
+// These tests pin that the grid can load and compose a NAMED pass: the caller
+// names the pass, the pair loads, and the default path is untouched.
+
+describe('task 229: the grid admits a suffixed rejudge pair (--rejudge-pass)', () => {
+  it('loadRun({rejudgePass}) loads the suffixed pair and marks the run with the pass', () => {
+    const dir = writeRejudgeFixture('v4-load', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+      answer: 'v4-column-answer',
+    });
+    const run = loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() });
+    expect(run.runId).toBe('2026-09-17-p1-224225-rejudge-v4');
+    expect(run.rejudge.of_run_id).toBe('2026-09-17-p1-224225');
+    expect(run.rejudge.judge_prompt_version).toBe('judge-prompt.4');
+    expect(run.rejudge.pass).toBe('v4');
+    expect(run.rejudge.stem).toBe('rejudge-v4');
+    // the judged rows ARE the v4 pair's rows
+    expect(run.judged.every((r) => r.answer === 'v4-column-answer')).toBe(true);
+    expect([...run.judgedIds].sort()).toEqual(['q1', 'q2']);
+  });
+
+  it('the named pass loads the pair even when the dir still carries its primary summary.json (the 195034/185920 shape)', () => {
+    const dir = writeFixtureRun('primary-with-v4', {
+      runId: '2026-09-09-p1-195034',
+      arms: { mem0: armEntry(2, 1, 0, 1), 'mem0-raw': armEntry(2, 1, 1, 0) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2'],
+    });
+    writeRejudgeFixture('primary-with-v4', {
+      ofRunId: '2026-09-09-p1-195034',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 0, partial: 0, wrong: 2 }, 'mem0-raw': { exact: 2, partial: 0, wrong: 0 } },
+      questionIds: ['q1', 'q2'],
+      answer: 'v4-pair-answer',
+    });
+    const run = loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() });
+    expect(run.rejudge).not.toBeNull();
+    expect(run.runId).toBe('2026-09-09-p1-195034-rejudge-v4');
+    expect(run.judged.every((r) => r.answer === 'v4-pair-answer')).toBe(true);
+    // the DEFAULT load of the same dir is untouched: primary wins
+    const primary = loadRun(dir, { handlabelsDir: handlabelsDir() });
+    expect(primary.rejudge).toBeNull();
+    expect(primary.runId).toBe('2026-09-09-p1-195034');
+  });
+
+  it('an incomplete named pair refuses NAMING the missing file and the pass', () => {
+    const dir = path.join(root, 'v4-half');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'judged.rejudge-v4.jsonl'), '');
+    expect(() => loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() })).toThrow(
+      /rejudge pass 'v4' is incomplete — summary\.rejudge-v4\.json is missing/
+    );
+  });
+
+  it('a dir carrying neither the named pair nor any summary refuses naming the pass', () => {
+    const dir = path.join(root, 'v4-absent');
+    fs.mkdirSync(dir, { recursive: true });
+    expect(() => loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() })).toThrow(
+      /rejudge pass 'v4' not found in .* — no summary\.rejudge-v4\.json/
+    );
+  });
+
+  it('an invalid pass tag refuses (a tag becomes part of three artifact names)', () => {
+    const dir = writeRejudgeFixture('v4-tagcheck', {
+      ofRunId: 'r',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 2, partial: 0, wrong: 0 } },
+      questionIds: ['q1', 'q2'],
+    });
+    expect(() => loadRun(dir, { rejudgePass: '../evil', handlabelsDir: handlabelsDir() })).toThrow(
+      /invalid --rejudge-pass/
+    );
+  });
+
+  it('a pair FILE named for pass v4 whose own stamp says another suffix refuses (mislabeled evidence)', () => {
+    const dir = writeRejudgeFixture('v4-mislabeled', {
+      ofRunId: 'r-mislabeled',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 2, partial: 0, wrong: 0 } },
+      questionIds: ['q1', 'q2'],
+    });
+    // rewrite the summary with a v3 suffix stamp under the v4 filename
+    const s = JSON.parse(fs.readFileSync(path.join(dir, 'summary.rejudge-v4.json'), 'utf8'));
+    s.regime.judge.rejudge.suffix = 'v3';
+    fs.writeFileSync(path.join(dir, 'summary.rejudge-v4.json'), JSON.stringify(s, null, 2));
+    expect(() => loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() })).toThrow(
+      /summary\.rejudge-v4\.json is stamped suffix 'v3'/
+    );
+  });
+});
+
+// ---- task 229: the effective judge is the quoted judge ------------------------
+//
+// COMPARABILITY_KEYS read summary.regime.judge.judge_prompt_version — but a
+// rejudged run's EFFECTIVE judge is the pair's own stamp (what rejudge.mjs
+// wrote when it re-labelled). A v4-labelled column must compose and render
+// under judge-prompt.4 even if the regime mirror it inherited says v2; a grid
+// mixing two effective versions refuses naming both.
+
+describe('task 229: the effective judge is the quoted judge', () => {
+  it('a v4 pair whose regime mirror says v2 composes under judge-prompt.4 (the pair stamp wins)', () => {
+    const dir = writeRejudgeFixture('v4-stale-regime', {
+      ofRunId: 'r-stale-regime',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+      // the pair was reconstructed from rows whose regime carried the OLD stamp
+      regime: { judge: { judge_prompt_version: 'judge-prompt.2' } },
+    });
+    const run = loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() });
+    expect(run.summary.regime.judge.judge_prompt_version).toBe('judge-prompt.2'); // the stale mirror
+    expect(effectiveJudgePromptVersion(run)).toBe('judge-prompt.4'); // the quoted judge
+  });
+
+  it('a primary run still reads its regime stamp (fallback only for primaries)', () => {
+    const dir = writeFixtureRun('prim-jpv', {
+      runId: 'prim-jpv',
+      arms: { mem0: armEntry(2, 1, 0, 1) },
+      writeInfo: {},
+      questionIds: ['q1', 'q2'],
+    });
+    expect(effectiveJudgePromptVersion(loadRun(dir, { handlabelsDir: handlabelsDir() }))).toBe('judge-prompt.2');
+  });
+
+  it('a v2-labelled pair beside a v4-labelled pair refuses, naming BOTH versions', () => {
+    const dirV2 = writeRejudgeFixture('mix-v2', {
+      ofRunId: 'run-mixed-a',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirV4 = writeRejudgeFixture('mix-v4', {
+      ofRunId: 'run-mixed-b',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    let err = null;
+    try {
+      composeGrid({
+        dirs: [dirV2, dirV4],
+        generatedAt: 'x',
+        receiptsDir: receiptsDir(),
+        handlabelsDir: handlabelsDir(),
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}judge\.judge_prompt_version: /m);
+    expect(err.message).toContain('run-mixed-a-rejudge=judge-prompt.2');
+    expect(err.message).toContain('run-mixed-b-rejudge-v4=judge-prompt.4');
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('the two-arm rejudge pair (n=100 judged rows) composes beside one-arm runs — n reads the QUESTION count for pairs', () => {
+    // the real banked shape: 195034 (mem0 + mem0-raw) and 185920 (none + mycelium)
+    // judge 100 ROWS for the SAME 50 questions; a rejudge pair's summary.n is the
+    // row count. The comparability key must count questions for every shape or
+    // the single-judge trio refuses on n (50 | 100 | 100).
+    const dirTimeline = writeRejudgeFixture('trio-timeline', {
+      ofRunId: 'trio-run-a',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mycelium-timeline': { exact: 3, partial: 0, wrong: 2 } },
+      questionIds: ['q1', 'q2', 'q3', 'q4', 'q5'],
+      questionTypes: Object.fromEntries(['q1', 'q2', 'q3', 'q4', 'q5'].map((q) => [q, 'knowledge-update'])),
+    });
+    const dirMem0 = writeRejudgeFixture('trio-mem0', {
+      ofRunId: 'trio-run-b',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 2, partial: 1, wrong: 2 }, 'mem0-raw': { exact: 1, partial: 0, wrong: 4 } },
+      questionIds: ['q1', 'q2', 'q3', 'q4', 'q5'],
+    });
+    const dirNone = writeRejudgeFixture('trio-none', {
+      ofRunId: 'trio-run-c',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { none: { exact: 0, partial: 0, wrong: 5 }, mycelium: { exact: 3, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2', 'q3', 'q4', 'q5'],
+    });
+    const runs = [
+      loadRun(dirTimeline, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() }),
+      loadRun(dirMem0, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() }),
+      loadRun(dirNone, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() }),
+    ];
+    expect(runs.map((r) => r.summary.n)).toEqual([5, 10, 10]); // row counts differ by arms
+    expect(runs.map((r) => effectiveN(r))).toEqual([5, 5, 5]); // the question count agrees
+    expect(findDifferences(runs).map((d) => d.key)).not.toContain('n');
+    const out = composeGrid({
+      dirs: [dirTimeline, dirMem0, dirNone],
+      generatedAt: 'x',
+      receiptsDir: receiptsDir(),
+      handlabelsDir: handlabelsDir(),
+      rejudgePass: 'v4',
+    });
+    expect(fs.existsSync(out.file)).toBe(true);
+  });
+
+  it('the same run judged twice (two passes of one of_run_id) refuses, naming the run and the colliding passes', () => {
+    const dirV2 = writeRejudgeFixture('twice-v2', {
+      ofRunId: 'run-scored-twice',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirV4 = writeRejudgeFixture('twice-v4', {
+      ofRunId: 'run-scored-twice',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mycelium-timeline': { exact: 2, partial: 0, wrong: 0 } },
+      questionIds: ['q1', 'q2'],
+      // a different facts layer would dodge the duplicate-arm rule — the
+      // same-run rule must fire regardless
+      regime: { mycelium_timeline: { facts_layer: 'am_facts' } },
+    });
+    const runs = [
+      loadRun(dirV2, { handlabelsDir: handlabelsDir() }),
+      loadRun(dirV4, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() }),
+    ];
+    let err = null;
+    try {
+      assertComparable(runs);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toContain('same_run_twice');
+    expect(err.message).toContain('run-scored-twice');
+    expect(err.message).toContain("run-scored-twice-rejudge (pass 'default')");
+    expect(err.message).toContain("run-scored-twice-rejudge-v4 (pass 'v4')");
+  });
+});
+
+// ---- task 229: the adoption gate renders in the composed receipt --------------
+
+describe('task 229: the judge adoption gate renders in the grid receipt', () => {
+  // A 224225-v4 fixture whose timeline labels satisfy the gate: the four
+  // pre-committed _abs rows EXACT, the three protected rows wrong, 19/20
+  // agreement with the director's handlabels file, KU 10/15, SSA 5/5, TR 2/5.
+  // Layout: KU = 4 abs + 3 protected + h01..h05 + kf1..kf3; SSA = h06..h10;
+  // TR = h11..h15; the rest MS fillers h16..h20 + mf*. The ONE disagreement is
+  // h20 (hand exact, judge wrong) — the sim's 0a34ad58 slot.
+  const GATE_ABS = ['031748ae_abs', '09ba9854_abs', '0ddfec37_abs', '15745da0_abs'];
+  const GATE_PROTECTED = ['00ca467f', '078150f1', '1192316e'];
+  const GATE_HAND = Array.from({ length: 20 }, (_, i) => `h${String(i + 1).padStart(2, '0')}`);
+  const GATE_KU = [...GATE_ABS, ...GATE_PROTECTED, 'h01', 'h02', 'h03', 'h04', 'h05', 'kf1', 'kf2', 'kf3'];
+  const GATE_SSA = ['h06', 'h07', 'h08', 'h09', 'h10'];
+  const GATE_TR = ['h11', 'h12', 'h13', 'h14', 'h15'];
+  const GATE_MS = ['h16', 'h17', 'h18', 'h19', 'h20', ...Array.from({ length: 20 }, (_, i) => `mf${String(i + 1).padStart(2, '0')}`)];
+  const GATE_ALL = [...GATE_KU, ...GATE_SSA, ...GATE_TR, ...GATE_MS]; // 15 + 5 + 5 + 25 = 50
+  const gateTypeOf = (q) =>
+    GATE_KU.includes(q) ? 'knowledge-update' : GATE_SSA.includes(q) ? 'single-session-assistant' : GATE_TR.includes(q) ? 'temporal-reasoning' : 'multi-session';
+
+  function writeGatedV4({ protectedLabel = 'wrong', disagreeId = 'h20' } = {}) {
+    const labelOf = (q) => {
+      if (GATE_ABS.includes(q)) return 'exact';
+      if (GATE_PROTECTED.includes(q)) return protectedLabel;
+      if (q === 'kf2' || q === 'kf3') return 'wrong'; // KU filler wrongs → KU exact = 4+5+1 = 10
+      if (q === 'h13' || q === 'h14' || q === 'h15') return 'wrong'; // TR 2/5
+      if (q === disagreeId) return 'wrong'; // the one hand disagreement
+      return 'exact';
+    };
+    const dir = writeRejudgeFixture('gated-v4', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { 'mycelium-timeline': { exact: GATE_ALL.length, partial: 0, wrong: 0 } }, // skeleton; rows rewritten below
+      questionIds: GATE_ALL,
+      questionTypes: Object.fromEntries(GATE_ALL.map((q) => [q, gateTypeOf(q)])),
+    });
+    // rewrite the pair's rows with the gate-scenario labels (the helper's own
+    // counts only shape the skeleton)
+    const rows = GATE_ALL.map((qid) => ({
+      question_id: qid,
+      arm: 'mycelium-timeline',
+      question_type: gateTypeOf(qid),
+      gold: 'a year',
+      answer: 'gated-v4-answer',
+      label: labelOf(qid),
+      judge_raw: labelOf(qid).toUpperCase(),
+      judge_had_think: false,
+    }));
+    fs.writeFileSync(path.join(dir, 'judged.rejudge-v4.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const s = JSON.parse(fs.readFileSync(path.join(dir, 'summary.rejudge-v4.json'), 'utf8'));
+    const counts = { exact: 0, partial: 0, wrong: 0 };
+    for (const r of rows) counts[r.label]++;
+    s.n = rows.length;
+    s.arms['mycelium-timeline'] = { n: rows.length, score: { n: rows.length, counts, unparsed: 0, p1_score: (counts.exact + 0.5 * counts.partial) / rows.length } };
+    fs.writeFileSync(path.join(dir, 'summary.rejudge-v4.json'), JSON.stringify(s, null, 2));
+    // the director's 20 hand labels — mirroring the judge EXCEPT the one
+    // disagreement slot (h20: hand exact, judge wrong) → agreement 19/20
+    fs.mkdirSync(handlabelsDir(), { recursive: true });
+    fs.writeFileSync(
+      path.join(handlabelsDir(), '2026-09-17-p1-224225.json'),
+      JSON.stringify({
+        hand_scorer: 'director',
+        run_id: '2026-09-17-p1-224225',
+        items: GATE_HAND.map((h) => ({
+          question_id: h,
+          arm: 'mycelium-timeline',
+          label: h === 'h20' ? 'exact' : labelOf(h),
+        })),
+      })
+    );
+    return dir;
+  }
+
+  const writeGateMem0 = (name) =>
+    writeRejudgeFixture(name, {
+      ofRunId: `of-${name}`,
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 30, partial: 10, wrong: 10 }, 'mem0-raw': { exact: 10, partial: 10, wrong: 30 } },
+      questionIds: GATE_ALL,
+    });
+
+  it('a gate-satisfying v4 timeline run renders VERDICT: ADOPTED, the pass tag, and the §3 cells under v4', () => {
+    const dirT = writeGatedV4();
+    const dirM = writeGateMem0('gate-mem0');
+    const out = composeGrid({
+      dirs: [dirT, dirM],
+      generatedAt: 'x',
+      receiptsDir: receiptsDir(),
+      handlabelsDir: handlabelsDir(),
+      rejudgePass: 'v4',
+    });
+    const md = fs.readFileSync(out.file, 'utf8');
+    // the gate section sits at the TOP — before the scores it governs
+    expect(md).toContain('## Judge adoption gate (pre-committed, task 226)');
+    expect(md.indexOf('## Judge adoption gate')).toBeLessThan(md.indexOf('## Scores'));
+    expect(md).toContain('**VERDICT: ADOPTED**');
+    expect(md).toContain('4/4 pre-committed _abs rows read EXACT');
+    expect(md).toContain('00ca467f, 078150f1, 1192316e all wrong');
+    expect(md).toContain('19/20');
+    // the header names the pass
+    expect(md).toContain('labels re-computed under judge-prompt.4 (pass `rejudge-v4`: summary.rejudge-v4.json + judged.rejudge-v4.jsonl)');
+    // the artifacts line names the pair the run actually is
+    expect(md).toContain('(summary.rejudge-v4.json, judged.rejudge-v4.jsonl, <arm>.rows.jsonl)');
+    // §3 under the adopted judge: KU 10/15 = 0.667 PASS, SSA 5/5, TR 2/5, VERDICT: WIN
+    expect(md).toContain('| knowledge-update | ≥ 0.60 | 0.667 (n=15) |');
+    expect(md).toContain('| single-session-assistant | ≥ 1.00 | 1.000 (n=5) |');
+    expect(md).toContain('| temporal-reasoning | ≥ 0.40 | 0.400 (n=5) |');
+    expect(md).toContain('VERDICT: WIN');
+  });
+
+  it('a refused gate renders NOT ADOPTED verbatim, naming the failing row and the v2 cell that stays quoted', () => {
+    const dirT = writeGatedV4({ protectedLabel: 'exact' }); // the v3 defect, re-created
+    const dirM = writeGateMem0('gate-ref-mem0');
+    const out = composeGrid({
+      dirs: [dirT, dirM],
+      generatedAt: 'x',
+      receiptsDir: receiptsDir(),
+      handlabelsDir: handlabelsDir(),
+      rejudgePass: 'v4',
+    });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('**VERDICT: NOT ADOPTED**');
+    expect(md).toContain('1192316e reads exact, pre-committed WRONG');
+    expect(md).toContain("judge-prompt.2's knowledge-update 8/15 = 0.533 remains the arm's quoted cell");
+    expect(md).toContain('no downstream artifact may quote a judge-prompt.4 number as the arm number');
+  });
+
+  it('the gate does not render for a v2-labelled composition (the banked receipts keep their shape)', () => {
+    const dirA = writeRejudgeFixture('gateless-v2', {
+      ofRunId: '2026-09-17-p1-224225',
+      jpv: 'judge-prompt.2',
+      arms: { 'mycelium-timeline': { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const dirB = writeRejudgeFixture('gateless-v2-b', {
+      ofRunId: 'gateless-run-b',
+      jpv: 'judge-prompt.2',
+      arms: { 'mem0-raw': { exact: 0, partial: 1, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: 'x', receiptsDir: receiptsDir(), handlabelsDir: handlabelsDir() });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).not.toContain('## Judge adoption gate');
+    // and the unsuffixed header keeps its exact banked shape
+    expect(md).toContain('labels re-computed under judge-prompt.2;');
+    expect(md).not.toContain('pass `rejudge');
+  });
+
+  it('the agreement leg falls back to an in-dir handlabels.json (the 195034 shape)', () => {
+    const dir = writeRejudgeFixture('indir-hand', {
+      ofRunId: '2026-09-09-p1-195034',
+      jpv: 'judge-prompt.4',
+      suffix: 'v4',
+      arms: { mem0: { exact: 1, partial: 0, wrong: 1 } },
+      questionIds: ['q1', 'q2'],
+    });
+    fs.writeFileSync(
+      path.join(dir, 'handlabels.json'),
+      JSON.stringify({
+        hand_scorer: 'director',
+        run_id: '2026-09-09-p1-195034',
+        items: [
+          { question_id: 'q1', arm: 'mem0', label: 'exact' },
+          { question_id: 'q2', arm: 'mem0', label: 'wrong' },
+        ],
+      })
+    );
+    const run = loadRun(dir, { rejudgePass: 'v4', handlabelsDir: handlabelsDir() });
+    expect(run.rejudge.agreement.agree).toBe(2);
+    expect(run.rejudge.agreement.n).toBe(2);
+    expect(path.basename(run.rejudge.agreement.file)).toBe('handlabels.json');
+  });
+
+  it('the default pass re-renders the banked 224-composed receipt BYTE-IDENTICAL', () => {
+    // the tracked receipt was composed by the director over these two dirs at
+    // this timestamp; the default path must reproduce it exactly after the
+    // pass/effective-judge/gate changes (the no-regression contract)
+    const dirs = ['bench/memory/results/2026-09-17-p1-224225', 'bench/memory/results/2026-09-09-p1-195034'];
+    for (const d of dirs) expect(fs.existsSync(d)).toBe(true); // relative to the repo root — vitest runs there
+    const banked = fs.readFileSync(
+      'bench/memory/receipts/2026-09-17-p1-224225-rejudge+2026-09-09-p1-195034-grid.md',
+      'utf8'
+    );
+    const out = composeGrid({
+      dirs,
+      generatedAt: '2026-09-18T12:16:25Z',
+      receiptsDir: path.join(root, 'receipts'),
+      handlabelsDir: HANDLABELS_DIR,
+    });
+    const fresh = fs.readFileSync(out.file, 'utf8');
+    expect(fresh).toBe(banked);
   });
 });

@@ -91,6 +91,14 @@ export async function runBench({
             }
             writeInfo.timeline.per_question.push(w.timeline);
           }
+          // task 230: the extract arm's per-question cost stamps — the same
+          // seconds_per_session shape the timeline arm keeps whole, under the
+          // extract arm's OWN key so the reconcile ledger's channel stays the
+          // timeline arm's. The §3 cost bound reads one stamp shape off both.
+          if (w.extract && typeof w.extract === 'object') {
+            writeInfo.extract = writeInfo.extract ?? { per_question: [] };
+            writeInfo.extract.per_question.push(w.extract);
+          }
         }
       }
       writeInfo.write_ms = nowFn() - tWrite;
