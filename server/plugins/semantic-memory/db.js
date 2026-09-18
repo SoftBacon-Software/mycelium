@@ -63,6 +63,38 @@ export function stampEmbedded(r) {
   return r;
 }
 
+// Keyword leg of hybrid search: the FTS5 MATCH is bounded. 2026-09-18 02:56,
+// 03:38 and 03:52 CDT the Jetson platform wedged three times — node's main
+// thread R at 100% for up to 30 CPU-min inside Statement.all → fts5FilterMethod
+// → fts5Bm25Function → fts5ApiInstCount (gdb on the live process). The query
+// builder quoted EVERY whitespace token of the caller's text and OR'd them, so a
+// 6 KB workflow brief (the runner's and the lanes' "prior work" retrieval sends
+// the brief itself) became a ~1,000-term MATCH that every row satisfies, ranked
+// by bm25 over every instance in every 40 KB episode row — and the client's
+// timeout + retry re-wedged the process seconds after each restart. Terms are
+// now distinct, lowercased, ≥ 3 chars, not stopwords, at most FTS_MAX_TERMS,
+// taken from the first FTS_MAX_QUERY_CHARS of the text.
+export var FTS_MAX_TERMS = 24;
+export var FTS_MAX_QUERY_CHARS = 2000;
+var FTS_STOPWORDS = new Set(('the and for are but not you all any can had her was one our out day get has him his how '
+  + 'its let may new now old see two way who did that this with from they have been will what when your than then '
+  + 'them into over such also more most some only very just like each other about after before under while where '
+  + 'which there their would could should does doing done being were because these those').split(' '));
+
+export function buildFtsQuery(query) {
+  var text = String(query || '').slice(0, FTS_MAX_QUERY_CHARS).replace(/['"*()]/g, ' ');
+  var seen = {};
+  var terms = [];
+  var toks = text.split(/\s+/);
+  for (var i = 0; i < toks.length && terms.length < FTS_MAX_TERMS; i++) {
+    var w = toks[i].toLowerCase();
+    if (w.length < 3 || FTS_STOPWORDS.has(w) || seen[w]) continue;
+    seen[w] = true;
+    terms.push('"' + w + '"');
+  }
+  return terms.join(' OR ');
+}
+
 export default function createMemoryDB(db, opts) {
   // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
   // row's vector is JSON.parse'd ONCE, not on every query. Write paths below
@@ -296,10 +328,10 @@ export default function createMemoryDB(db, opts) {
       var where = [];
       var params = [];
 
-      // FTS5 match
+      // FTS5 match — bounded (see buildFtsQuery); a query with no usable term has no keyword leg
+      var ftsQuery = buildFtsQuery(query);
+      if (!ftsQuery) return [];
       where.push("sm_embeddings_fts MATCH ?");
-      // Escape special FTS5 chars and convert to prefix search
-      var ftsQuery = query.replace(/['"*()]/g, '').split(/\s+/).filter(Boolean).map(function (w) { return '"' + w + '"'; }).join(' OR ');
       params.push(ftsQuery);
 
       if (opts.source_types && opts.source_types.length > 0) {
