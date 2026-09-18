@@ -584,6 +584,70 @@ export default function createMemoryDB(db, opts) {
       });
     },
 
+    // -- Episodes: the §3 EVENT half (2026-09-18, F-mycelium/218) ------------------
+    // An EPISODE is one squad session transcript stored VERBATIM as a memory row
+    // (source_type 'episode') so every reconciled fact can cite the session that
+    // established it — "the lab has the fact half and no episode half". Same index
+    // path, same plugin, no new organ; the provenance gate is 186's scoped to what
+    // an episode must carry: WHO (agent) and WHEN (session_date). session_id (the
+    // transcript's content hash) and origin (workflow_id or file path) are the
+    // documented contract but are not the gate — a fact cites the episode by
+    // agent+date+hash, so those two are the ones a writer cannot guess.
+    EPISODE_SOURCE_TYPES: { episode: true },
+    REQUIRED_EPISODE_PROVENANCE: ['agent', 'session_date'],
+    missingEpisodeFields(metadata) {
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        return this.REQUIRED_EPISODE_PROVENANCE.slice();
+      }
+      return this.REQUIRED_EPISODE_PROVENANCE.filter(function (f) {
+        var v = metadata[f];
+        return typeof v !== 'string' || v.trim().length === 0;
+      });
+    },
+
+    // GET /memory/episodes' query layer — the dated enumeration: "the indexed
+    // episodes of one agent/day" (the reconcile dry-run's input; tomorrow, the
+    // wake/boot blocks' dated-episode line). Metadata parsed; newest first by
+    // the episode's OWN session_date (falling back to created_at), not
+    // insertion order — a backfilled week must read as the week it was, not as
+    // the night it was indexed. An episode spans chunk rows 0..N (chunking.js
+    // is lossless: chunks.join('') === the original text), and the row out is
+    // the WHOLE text — its chunks concatenated in index order. Returning
+    // chunk 0 alone was the defect the 2026-09-18 live receipt caught: a
+    // 4000-char fragment whose first JSON line dies mid-string — nothing
+    // downstream could parse the transcript the row claims to carry.
+    listEpisodes(opts) {
+      opts = opts || {};
+      var limit = Math.min(parseInt(opts.limit, 10) || 20, 500);
+      var where = ["source_type = 'episode'", 'chunk_index = 0'];
+      var args = [];
+      if (opts.agent) { where.push("json_extract(metadata, '$.agent') = ?"); args.push(opts.agent); }
+      if (opts.session_date) { where.push("json_extract(metadata, '$.session_date') = ?"); args.push(opts.session_date); }
+      if (opts.namespace) { where.push('namespace = ?'); args.push(opts.namespace); }
+      // Pass 1: the episode heads (chunk 0 exists for every row — the chunker
+      // always emits at least one chunk), so LIMIT counts EPISODES, not chunks.
+      var sql = 'SELECT source_type, source_id, namespace, metadata, created_at, updated_at '
+              + 'FROM sm_embeddings WHERE ' + where.join(' AND ')
+              + " ORDER BY COALESCE(json_extract(metadata, '$.session_date'), created_at) DESC, created_at DESC LIMIT ?";
+      args.push(limit);
+      var heads = db.prepare(sql).all(...args);
+      if (heads.length === 0) return [];
+      // Pass 2: every chunk of those episodes, in index order, joined back.
+      var marks = heads.map(function () { return '?'; }).join(',');
+      var chunks = db.prepare("SELECT source_id, content_text FROM sm_embeddings "
+          + "WHERE source_type = 'episode' AND source_id IN (" + marks + ") "
+          + 'ORDER BY source_id, chunk_index').all(heads.map(function (h) { return h.source_id; }));
+      var byId = {};
+      for (var c of chunks) {
+        (byId[c.source_id] = byId[c.source_id] || []).push(c.content_text);
+      }
+      for (var h of heads) {
+        h.content_text = (byId[h.source_id] || []).join('');
+        try { h.metadata = JSON.parse(h.metadata); } catch (e) { h.metadata = {}; }
+      }
+      return heads;
+    },
+
     // Lightweight health snapshot for the search response — the four numbers a
     // caller needs to judge whether a result set is complete + healthy (total,
     // embedded, coverage %, vector-scan cap), WITHOUT the two GROUP BYs stats()

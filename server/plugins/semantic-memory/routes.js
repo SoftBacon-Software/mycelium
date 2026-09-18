@@ -185,6 +185,13 @@ export default function (core) {
   // verdict without provenance is the same failure. The 400 NAMES the missing
   // field(s) so the harness writer's first red run says what to fix.
   function refuseIfUnprovenanced(sourceType, metadata, res, label) {
+    if (db.EPISODE_SOURCE_TYPES[sourceType]) {
+      var missingEpisode = db.missingEpisodeFields(metadata);
+      if (missingEpisode.length === 0) return false;
+      apiError(res, 400, (label ? label + ': ' : '') + "source_type '" + sourceType +
+        "' requires episode provenance metadata — missing: " + missingEpisode.join(', '));
+      return true;
+    }
     if (!db.LESSON_SOURCE_TYPES[sourceType]) return false;
     var missing = db.missingProvenanceFields(metadata);
     if (missing.length === 0) return false;
@@ -339,6 +346,30 @@ export default function (core) {
       limit: req.query.limit
     });
     res.json({ results: rows, source_type: sourceType, count: rows.length });
+  });
+
+  // GET /memory/episodes?agent=&session_date=&namespace=&limit= — the §3 read
+  // side (2026-09-18, F-mycelium/218): the dated enumeration of EPISODE rows —
+  // "the indexed episodes of one agent/day". The reconcile dry-run reads this
+  // to extract candidate facts; every reconciled fact cites an episode by
+  // agent + session_date + session_id, so this is the pointer's other end.
+  // Newest first by the episode's own session_date. (Meaning recall over
+  // episodes needs no new route — POST /search with source_types:['episode']
+  // already reaches them; this route exists because "all of Tuesday" is a
+  // filter, not a query.)
+  router.get('/episodes', function (req, res) {
+    var who = checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var rows = db.listEpisodes({
+      agent: nonEmptyQuery(req.query.agent),
+      session_date: nonEmptyQuery(req.query.session_date),
+      namespace: nonEmptyQuery(req.query.namespace),
+      limit: Math.min(parseInt(req.query.limit) || 20, 500)
+    });
+    res.json({
+      source_type: 'episode', count: rows.length, results: rows,
+      filters: { agent: nonEmptyQuery(req.query.agent), session_date: nonEmptyQuery(req.query.session_date) }
+    });
   });
 
   // GET /memory/lessons?task_class=&repo=&since=&limit=[&q=] — the §2 read side
