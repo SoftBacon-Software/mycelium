@@ -19,6 +19,7 @@ import createMemoryDB from './db.js';
 import { registerHooks } from './handlers.js';
 import { chunkText } from './chunking.js';
 import { generateEmbedding, generateEmbeddingBatch, EMBEDDING_OLLAMA_BATCH_MAX } from './embeddings.js';
+import { startBootDrain, stopBootDrain, selfDrainTick, resolveSelfDrainIntervalS, lastDrainPromise } from './boot-drain.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -188,6 +189,12 @@ before(function () {
   mem.setConfig('embedding_provider', 'ollama');
   mem.setConfig('embedding_url', 'http://localhost:11434');
   mem.setConfig('embedding_model', 'nomic-embed-text');
+  // Task 219: registerHooks now starts the boot embed drain + a 60s self-check
+  // ticker. The shared fixture must not have its NULL rows swept out from
+  // under tests that seed them and assert they stay NULL — disable the
+  // self-check here; the boot-drain tests below drive it explicitly on fresh
+  // instances with their own interval config.
+  mem.setConfig('embedding_self_drain_interval_s', '0');
 
   var app = express();
   app.use(express.json({ limit: '10mb' }));
@@ -1637,5 +1644,307 @@ test('ollama batch: a high-priority query embed arriving between two chunks stil
     assert.equal(order[2].n, EMBEDDING_OLLAMA_BATCH_MAX, 'chunk 2 is the second half');
   } finally {
     global.fetch = prevFetch;
+  }
+});
+
+// -- Boot drain + self-check (2026-09-18, task 219) ----------------------------
+//
+// The embed scheduler's queue (embedLanes in embeddings.js) is IN-MEMORY, so a
+// platform restart forgets every row it had not yet embedded, and nothing on
+// the platform re-discovers them — the only thing that did was the Mac's
+// launchd job com.gilbert.memory-embed-backfill (StartInterval 1800), i.e. up
+// to 30 minutes of a dead embedder per restart. Measured on jetson01
+// 2026-09-18 00:05-00:09 CDT: after the director's deploy, GET /memory/stats
+// read embed_backlog 32,282 with embed_queue {in_flight 0, queued_high 0,
+// queued_low 0} and the embedded count frozen for four minutes while a bench
+// sat in its embedding wait. Fix: on boot the plugin re-enqueues every
+// sm_embeddings row with embedding IS NULL at LOW priority in
+// EMBEDDING_OLLAMA_BATCH_MAX chunks (query embeds keep their high-priority
+// jump), and a periodic self-check (embedding_self_drain_interval_s, default
+// 300, 0 disables) re-enqueues stragglers when the queue is empty. The drain
+// mirrors the Mac job's contract (bounded rounds, {embedded, failed,
+// remaining}); the Mac job stays as the belt-and-braces outer loop.
+
+// Recording fake with the same serial-array contract as the file-level fake,
+// plus a record of every call — the boot-drain tests assert on BATCH SHAPES
+// (input lengths, arrival order), which the plain fake does not expose.
+function installRecordingEmbedFake(record) {
+  var prev = global.fetch;
+  global.fetch = function (url, opts) {
+    var body;
+    try { body = JSON.parse((opts && opts.body) || '{}'); } catch (e) { body = {}; }
+    var inputs = Array.isArray(body.input) ? body.input : [body.input];
+    record.push({ url: String(url), model: body.model, inputs: inputs });
+    embedCalls++;
+    embedsPending++;
+    var job = embedChain.then(function () {
+      if (embedDelayMs <= 0) return;
+      return new Promise(function (done) { setTimeout(done, embedDelayMs); });
+    });
+    embedChain = job.then(function () { embedsPending--; }, function () { embedsPending--; });
+    return job.then(function () {
+      return {
+        ok: true, status: 200,
+        json: function () { return Promise.resolve({ embeddings: inputs.map(function () { return FAKE_VECTOR; }) }); }
+      };
+    });
+  };
+  return function () { global.fetch = prev; };
+}
+
+// A provider that answers HTTP 500 to everything: a batch failure degrades to
+// the sequential loop (embeddings.js), whose calls fail too — every row stays
+// NULL, which is the "dropped batch" the self-check exists to retry.
+function installFailingEmbedFake() {
+  var prev = global.fetch;
+  global.fetch = function (url, opts) {
+    if (String(url).indexOf('11434') !== -1) {
+      return Promise.resolve({ ok: false, status: 500, json: function () { return Promise.resolve({}); } });
+    }
+    return prev(url, opts);
+  };
+  return function () { global.fetch = prev; };
+}
+
+test('boot drain: N NULL rows enqueue as ceil(N/64) low-priority batch calls and land embedded, with a stats receipt', async function () {
+  var f = await freshInstance();
+  f.mem.setConfig('embedding_provider', 'ollama');
+  f.mem.setConfig('embedding_url', 'http://localhost:11434');
+  f.mem.setConfig('embedding_model', 'nomic-embed-text');
+  var N = 100; // ceil(100/64) = 2 batches
+  for (var i = 0; i < N; i++) {
+    f.mem.index('drain_probe', 'row-' + i, 'boot drain probe row ' + i);
+  }
+  assert.equal(f.mem.countUnembedded(), N, 'fixture starts with N NULL rows');
+  var receiptBefore = f.mem.stats().embed_queue;
+  var record = [];
+  var restore = installRecordingEmbedFake(record);
+  try {
+    var r = await startBootDrain(f.mem);
+    assert.equal(r.cause, 'boot');
+    assert.equal(r.enqueued, N, 'every NULL row was enqueued');
+    assert.equal(r.embedded, N, 'every enqueued row embedded');
+    assert.equal(r.failed, 0);
+    assert.equal(r.remaining, 0);
+
+    // The batch contract: 2 calls, array input, 64 + 36 — one scheduler unit
+    // per EMBEDDING_OLLAMA_BATCH_MAX chunk, same as 217's bulk path.
+    assert.equal(record.length, 2, 'ceil(N/64) batch calls, got ' + record.length);
+    assert.deepEqual(record.map(function (c) { return c.inputs.length; }).sort(function (a, b) { return b - a; }), [64, 36]);
+
+    // The rows are actually embedded now.
+    assert.equal(f.mem.countUnembedded(), 0);
+
+    // The receipt: /memory/stats can prove the boot drain happened.
+    var eq = f.mem.stats().embed_queue;
+    assert.equal(eq.rows_enqueued_at_boot - receiptBefore.rows_enqueued_at_boot, N,
+      'rows_enqueued_at_boot counts the boot pass rows');
+    assert.ok(eq.last_drain_at, 'last_drain_at is stamped');
+    assert.ok(!isNaN(Date.parse(eq.last_drain_at)), 'last_drain_at parses as a timestamp');
+  } finally {
+    stopBootDrain();
+    restore();
+  }
+  f.close();
+});
+
+test('boot drain: a query embed submitted mid-drain runs before the next chunk (the high lane still jumps)', async function () {
+  var f = await freshInstance();
+  f.mem.setConfig('embedding_provider', 'ollama');
+  f.mem.setConfig('embedding_url', 'http://localhost:11434');
+  f.mem.setConfig('embedding_model', 'nomic-embed-text');
+  var N = 192; // 3 full chunks of 64
+  for (var i = 0; i < N; i++) {
+    f.mem.index('drain_race', 'row-' + i, 'boot drain race row ' + i);
+  }
+  var SERVICE = 15;
+  setEmbedFakeDelay(SERVICE);
+  var record = [];
+  var restore = installRecordingEmbedFake(record);
+  try {
+    var p = startBootDrain(f.mem);
+    // Wait until the first chunk is being served, then fire a query embed —
+    // it must enter the HIGH lane and be served before the next LOW chunk.
+    var gotFirst = await waitFor(function () { return record.length >= 1; }, 5000);
+    assert.ok(gotFirst, 'the first drain chunk was dispatched');
+    assert.equal(record[0].inputs.length, EMBEDDING_OLLAMA_BATCH_MAX);
+    var queryP = generateEmbedding(f.mem.getAllConfig(), 'mid-drain query', { priority: 'high' });
+    await p;
+    var qv = await queryP;
+    assert.ok(qv, 'the query embed resolved');
+    assert.equal(record.length, 4, '3 drain chunks + 1 query call');
+    assert.equal(record[1].inputs.length, 1, 'the query embed is the single-input call');
+    assert.equal(record[1].inputs[0], 'mid-drain query');
+    assert.equal(record[2].inputs.length, EMBEDDING_OLLAMA_BATCH_MAX,
+      'the next drain chunk waited behind the query — the high lane jumped the low lane');
+    assert.equal(f.mem.countUnembedded(), 0, 'drain completed despite the interleave');
+  } finally {
+    resetEmbedFake();
+    stopBootDrain();
+    restore();
+    await waitFor(function () { return embedsPending === 0; }, 30000);
+  }
+  f.close();
+});
+
+test('boot drain: registerHooks starts it fire-and-forget, oversized rows chunk-split like backfill, stats carries the receipt', async function () {
+  // This is the loader's real boot path (plugins.js calls registerHooks at
+  // boot). The drain must start WITHOUT anyone calling it, must not block
+  // registration, and must handle an oversized row the way /backfill does
+  // (chunk-split, then embed the pieces) instead of failing it forever.
+  var iso = new Database(':memory:');
+  iso.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  iso.exec(PLATFORM_TABLES);
+  var m = createMemoryDB(iso);
+  m.setConfig('embedding_provider', 'ollama');
+  m.setConfig('embedding_url', 'http://localhost:11434');
+  m.setConfig('embedding_model', 'nomic-embed-text');
+  var chunkSize = m.getChunkSize();
+  m.index('drain_boot', 'small-1', 'small boot row one');
+  m.index('drain_boot', 'small-2', 'small boot row two');
+  m.index('drain_boot', 'big-1', 'X'.repeat(chunkSize * 2 + 11)); // oversized → re-chunked
+  var bigDocBefore = m.getDocChunks('drain_boot', 'big-1').length;
+  var core = makeCore(iso);
+  var record = [];
+  var restore = installRecordingEmbedFake(record);
+  try {
+    registerHooks(core);            // must return without blocking on the drain
+    var p = lastDrainPromise();     // the boot pass it started
+    assert.ok(p && typeof p.then === 'function', 'registerHooks started a boot drain pass');
+    var r = await p;
+    assert.equal(r.cause, 'boot');
+    assert.equal(r.failed, 0, 'no silent failures (response: ' + JSON.stringify(r) + ')');
+    assert.equal(m.countUnembedded(), 0, 'everything embedded, including the oversized row');
+    // The oversized doc was re-chunked at the current threshold and each
+    // piece embedded (the pieces carry the vectors, so recall can rank it).
+    var bigDoc = m.getDocChunks('drain_boot', 'big-1');
+    assert.ok(bigDoc.length > 1 || bigDocBefore > 1, 'the oversized row was chunk-split');
+    assert.ok(bigDoc.every(function (c) { return c.embedding; }), 'every chunk of the oversized doc has a vector');
+    var eq = m.stats().embed_queue;
+    assert.ok(typeof eq.rows_enqueued_at_boot === 'number', 'stats embed_queue carries rows_enqueued_at_boot');
+    assert.ok(typeof eq.last_drain_at === 'string', 'stats embed_queue carries last_drain_at');
+  } finally {
+    stopBootDrain();
+    restore();
+    iso.close();
+  }
+});
+
+test('boot drain: no provider configured is an honest skip, and the self-check picks the rows up once one exists', async function () {
+  var f = await freshInstance();
+  f.mem.index('drain_noprovider', 'row-1', 'no provider row');
+  var record = [];
+  var restore = installRecordingEmbedFake(record);
+  try {
+    var r = await startBootDrain(f.mem);
+    assert.equal(r.skipped, 'no_provider', 'the skip is named');
+    assert.equal(r.enqueued, 0);
+    assert.equal(f.mem.countUnembedded(), 1, 'the row stays NULL for the next configured pass');
+    assert.equal(record.length, 0, 'no embed call was made');
+    // Fresh-install-then-configure: once a provider EXISTS, the self-check
+    // (interval 1s for the test) drains the rows no boot pass ever saw.
+    stopBootDrain(); // reset the interval gate an earlier fixture's pass armed
+    f.mem.setConfig('embedding_provider', 'ollama');
+    f.mem.setConfig('embedding_self_drain_interval_s', '1');
+    var r2 = await selfDrainTick(f.mem);
+    assert.equal(r2.skipped, undefined, 'tick ran a pass once a provider exists');
+    assert.equal(r2.embedded, 1);
+    assert.equal(f.mem.countUnembedded(), 0);
+  } finally {
+    stopBootDrain();
+    restore();
+    f.close();
+  }
+});
+
+test('self-check: re-enqueues NULL rows after a dropped batch once the queue is empty, honoring the interval', async function () {
+  var f = await freshInstance();
+  try {
+    f.mem.setConfig('embedding_provider', 'ollama');
+    f.mem.setConfig('embedding_url', 'http://localhost:11434');
+    f.mem.setConfig('embedding_model', 'nomic-embed-text');
+    f.mem.setConfig('embedding_self_drain_interval_s', '1');
+    for (var i = 0; i < 3; i++) {
+      f.mem.index('drain_retry', 'row-' + i, 'dropped batch row ' + i);
+    }
+    var failRestore = installFailingEmbedFake();
+    var r1;
+    try {
+      r1 = await selfDrainTick(f.mem); // provider up, provider failing — the dropped batch
+    } finally {
+      failRestore();
+    }
+    assert.equal(r1.enqueued, 3, 'the pass attempted every NULL row');
+    assert.equal(r1.embedded, 0);
+    assert.equal(r1.failed, 3, 'the failure is counted, not swallowed');
+    assert.equal(f.mem.countUnembedded(), 3, 'rows stay NULL — exactly the post-restart state');
+    var t1 = f.mem.stats().embed_queue.last_drain_at;
+
+    // Too soon: the interval gate holds (a tick just ran).
+    var soon = await selfDrainTick(f.mem);
+    assert.equal(soon.skipped, 'before_interval', 'the interval gate spaces retries');
+
+    // After the interval, with the provider healthy again, the same rows embed.
+    await new Promise(function (r) { setTimeout(r, 1100); });
+    var r2 = await selfDrainTick(f.mem);
+    assert.equal(r2.embedded, 3, 'the dropped batch was retried and landed');
+    assert.equal(f.mem.countUnembedded(), 0);
+    var t2 = f.mem.stats().embed_queue.last_drain_at;
+    assert.ok(new Date(t2) >= new Date(t1), 'last_drain_at advanced');
+
+    // The queue-busy gate: while the scheduler has work, the self-check stands
+    // down instead of piling a second drain onto the lane.
+    setEmbedFakeDelay(60);
+    var record = [];
+    var restore = installRecordingEmbedFake(record);
+    try {
+      f.mem.index('drain_retry', 'row-busy', 'queued-busy probe row');
+      var occupy = generateEmbedding(f.mem.getAllConfig(), 'occupy the lane', { priority: 'low' });
+      var gotInFlight = await waitFor(function () { return embedsPending > 0; }, 5000);
+      assert.ok(gotInFlight, 'the occupying embed is in flight');
+      var busy = await selfDrainTick(f.mem);
+      assert.equal(busy.skipped, 'queue_busy', 'a busy queue defers the self-check');
+      await occupy;
+      await new Promise(function (r) { setTimeout(r, 1100); }); // clear the interval gate the busy tick skipped
+      var idle = await selfDrainTick(f.mem);
+      assert.equal(idle.embedded, 1, 'once the queue empties, the straggler drains');
+    } finally {
+      resetEmbedFake();
+      restore();
+      await waitFor(function () { return embedsPending === 0; }, 30000);
+    }
+  } finally {
+    stopBootDrain();
+    f.close();
+  }
+});
+
+test('self-check: embedding_self_drain_interval_s=0 disables it; absent config defaults to 300s', async function () {
+  // The resolver: absent → 300 (the pinned default), '0' → 0 (off), junk →
+  // default, real value → itself.
+  var f = await freshInstance();
+  try {
+    assert.equal(resolveSelfDrainIntervalS(f.mem), 300, 'absent config defaults to 300s');
+    f.mem.setConfig('embedding_self_drain_interval_s', 'junk');
+    assert.equal(resolveSelfDrainIntervalS(f.mem), 300, 'unparseable config falls back to the default');
+    f.mem.setConfig('embedding_self_drain_interval_s', '42');
+    assert.equal(resolveSelfDrainIntervalS(f.mem), 42);
+    f.mem.setConfig('embedding_self_drain_interval_s', '0');
+    assert.equal(resolveSelfDrainIntervalS(f.mem), 0, '0 reads as 0 — the disabled sentinel');
+
+    // And the tick honours it: rows stay NULL, nothing is attempted, and
+    // last_drain_at does NOT move (the drain receipt is process-global, so
+    // "no pass ran" is asserted as UNCHANGED, not as null).
+    f.mem.setConfig('embedding_provider', 'ollama');
+    f.mem.setConfig('embedding_url', 'http://localhost:11434');
+    f.mem.index('drain_disabled', 'row-1', 'disabled tick row');
+    var before = f.mem.stats().embed_queue.last_drain_at;
+    var r = await selfDrainTick(f.mem);
+    assert.equal(r.skipped, 'disabled', 'interval 0 disables the self-check');
+    assert.equal(f.mem.countUnembedded(), 1, 'the row was not swept behind the test');
+    assert.equal(f.mem.stats().embed_queue.last_drain_at, before, 'no pass ran, so the receipt did not move');
+  } finally {
+    stopBootDrain();
+    f.close();
   }
 });

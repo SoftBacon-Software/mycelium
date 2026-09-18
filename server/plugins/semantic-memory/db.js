@@ -1,6 +1,6 @@
 // Semantic Memory DB helpers
 
-import { cosineSimilarity, embedQueueDepth } from './embeddings.js';
+import { cosineSimilarity, embedQueueDepth, embedDrainSnapshot } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import { createVectorCache } from './vector-cache.js';
 
@@ -464,6 +464,42 @@ export default function createMemoryDB(db, opts) {
       return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
     },
 
+    // Oversized NULL-embedding rows can never embed whole — the provider
+    // rejects them. Moved here from routes.js (task 219) so the boot drain
+    // (boot-drain.js) reuses the EXACT treatment /reindex and
+    // /backfill-embeddings give them instead of growing a second copy.
+    // Covers both legacy un-chunked docs AND docs whose chunks were cut at a
+    // larger (since-lowered) threshold. The full doc is rebuilt from ALL its
+    // chunk rows (chunking is lossless, so the join IS the original) and
+    // re-chunked at the current threshold — re-chunking from a single chunk's
+    // slice would drop sibling chunk content. Returns the expanded work list
+    // of rows to embed.
+    expandOversizedRows(rows) {
+      var work = [];
+      var rechunked = {}; // source_type:source_id — re-chunk each doc once
+      var chunkSize = this.getChunkSize(); // hoisted — static per request, not per row (N+1)
+      for (var row of rows) {
+        var key = row.source_type + ':' + row.source_id;
+        if (rechunked[key]) continue;
+        if (row.content_text.length > chunkSize) {
+          rechunked[key] = true;
+          var docRows = this.getDocChunks(row.source_type, row.source_id);
+          var fullText = docRows.map(function (c) { return c.content_text; }).join('');
+          var meta; // assigned on both paths below
+          try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
+          var chunks = this.indexDoc(row.source_type, row.source_id, fullText, {
+            namespace: docRows[0].namespace, metadata: meta
+          });
+          for (var ci = 0; ci < chunks.length; ci++) {
+            work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });
+          }
+        } else {
+          work.push(row);
+        }
+      }
+      return work;
+    },
+
     // Async since 196: the vector arm may wait on an in-flight cache build.
     async searchHybrid(query, opts, queryEmbedding) {
       opts = opts || {};
@@ -697,7 +733,10 @@ export default function createMemoryDB(db, opts) {
         // watching a bulk index can see the embed pipeline drain here
         // instead of diagnosing it from search timeouts. (2026-09-09)
         embed_backlog: this.countUnembedded(),
-        embed_queue: embedQueueDepth(),
+        // + the drain receipt (task 219): last_drain_at / rows_enqueued_at_boot —
+        // how a client proves the boot drain ran and the self-check is alive,
+        // instead of diagnosing a frozen embedded count from the outside.
+        embed_queue: Object.assign(embedQueueDepth(), embedDrainSnapshot()),
         by_source_type: byType,
         by_namespace: byNamespace,
         vector_scan_capped: withEmbedding > VECTOR_SCAN_CAP,

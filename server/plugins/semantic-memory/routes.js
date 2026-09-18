@@ -586,38 +586,8 @@ export default function (core) {
     res.json({ ok: true, config: config });
   });
 
-  // Oversized NULL-embedding rows can never embed whole — the provider
-  // rejects them. Covers both legacy un-chunked docs AND docs whose chunks
-  // were cut at a larger (since-lowered) threshold. The full doc is rebuilt
-  // from ALL its chunk rows (chunking is lossless, so the join IS the
-  // original) and re-chunked at the current threshold — re-chunking from a
-  // single chunk's slice would drop sibling chunk content. Returns the
-  // expanded work list of rows to embed.
-  function expandOversizedRows(rows) {
-    var work = [];
-    var rechunked = {}; // source_type:source_id — re-chunk each doc once
-    var chunkSize = db.getChunkSize(); // hoisted — static per request, not per row (N+1)
-    for (var row of rows) {
-      var key = row.source_type + ':' + row.source_id;
-      if (rechunked[key]) continue;
-      if (row.content_text.length > chunkSize) {
-        rechunked[key] = true;
-        var docRows = db.getDocChunks(row.source_type, row.source_id);
-        var fullText = docRows.map(function (c) { return c.content_text; }).join('');
-        var meta; // assigned on both paths below
-        try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
-        var chunks = db.indexDoc(row.source_type, row.source_id, fullText, {
-          namespace: docRows[0].namespace, metadata: meta
-        });
-        for (var ci = 0; ci < chunks.length; ci++) {
-          work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });
-        }
-      } else {
-        work.push(row);
-      }
-    }
-    return work;
-  }
+  // expandOversizedRows lives on the db wrapper now (db.js, task 219) — the
+  // boot drain reuses it, and a second copy here was the wrong seam.
 
   // POST /memory/reindex — batch-embed all unembedded content (admin, async)
   router.post('/reindex', asyncHandler(async function (req, res) {
@@ -637,7 +607,7 @@ export default function (core) {
     }
 
     // Chunk-split oversized rows so each piece fits the embedding window
-    unembedded = expandOversizedRows(unembedded);
+    unembedded = db.expandOversizedRows(unembedded);
 
     // Drone provider: queue async jobs instead of embedding synchronously
     if (config.embedding_provider === 'drone') {
@@ -712,7 +682,7 @@ export default function (core) {
     // inside the loop would spin on them forever. Oversized rows (the
     // persistently-failing legacy docs) are chunk-split before embedding,
     // so processed/embedded count post-chunking rows.
-    var rows = expandOversizedRows(db.getUnembedded(limit));
+    var rows = db.expandOversizedRows(db.getUnembedded(limit));
     var processed = 0;
     var embedded = 0;
     var failed = 0;

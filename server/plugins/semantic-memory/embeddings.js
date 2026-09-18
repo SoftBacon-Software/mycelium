@@ -64,6 +64,30 @@ export function embedQueueDepth() {
   };
 }
 
+// -- Boot drain / self-check receipt (2026-09-18, task 219) --------------------
+// A restart forgets embedLanes above: rows written with a NULL embedding but
+// not yet embedded when the process died stayed NULL forever unless the Mac's
+// launchd job happened to POST /backfill-embeddings within its 30-min cadence.
+// The drain itself lives in boot-drain.js; the RECEIPT lives here with the
+// queue it talks about, so db.stats() can surface it next to embed_queue
+// without a new import edge. last_drain_at stamps every completed pass
+// (including a 0-row sweep — a receipt that moves is what proves the
+// self-check is alive); rows_enqueued_at_boot counts rows the BOOT pass
+// enqueued, because the field says what it counts.
+var drainReceipt = { last_drain_at: null, rows_enqueued_at_boot: 0 };
+
+export function embedDrainSnapshot() {
+  return {
+    last_drain_at: drainReceipt.last_drain_at,
+    rows_enqueued_at_boot: drainReceipt.rows_enqueued_at_boot
+  };
+}
+
+export function recordDrainPass(cause, enqueued) {
+  drainReceipt.last_drain_at = new Date().toISOString();
+  if (cause === 'boot' && enqueued > 0) drainReceipt.rows_enqueued_at_boot += enqueued;
+}
+
 // Queue a drone job to embed content asynchronously.
 // The drone worker calls local Ollama, then PUTs the vector back via callback endpoint.
 export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model) {
