@@ -18,6 +18,9 @@
 // at most `embedding_max_concurrency` in-flight embeds, never behind the
 // queued backlog. Backfill still drains at one embed per service time — the
 // scheduler merges the concurrent chains into one queue at the same rate.
+// (Since 2026-09-18 an ollama BATCH call is one scheduler unit — see
+// generateEmbeddingBatch — so a bulk drain moves up to
+// EMBEDDING_OLLAMA_BATCH_MAX rows per embedder service time.)
 var embedLanes = { high: [], low: [] };
 var embedInFlight = 0;
 var embedMaxInFlight = 1; // last config seen; every embed call passes config, so this applies live
@@ -119,6 +122,14 @@ export async function generateEmbedding(config, text, opts) {
   return null;
 }
 
+// Max texts per ollama batch call (embedding_ollama_batch_max). /api/embed
+// accepts the whole list, but an unbounded body on a huge bulk (a timeline
+// n=50 writes ~20k rows of episodes + facts) risks the embedder's request
+// limits and one very long HTTP round-trip; 64 keeps each call bounded while
+// collapsing the Jetson's serial embed wall from N calls to ceil(N / 64).
+// Cited by the batch tests in plugins/semantic-memory/test.js.
+export var EMBEDDING_OLLAMA_BATCH_MAX = 64;
+
 // opts (optional): { db, items: [{ source_type, source_id, chunk_index }], priority } —
 // db/items for the drone provider; priority as in generateEmbedding (bulk callers
 // leave it low; only the search's query embed rides high).
@@ -143,18 +154,45 @@ export async function generateEmbeddingBatch(config, texts, opts) {
   }
 
   if (provider === 'ollama') {
-    // Ollama doesn't have a batch endpoint, call sequentially (each call
-    // scheduled — one lane entry per text, so a query embed between batches
-    // still jumps ahead of the remainder)
+    // /api/embed takes `input` as a string OR an array and answers
+    // { embeddings: [[...]] } in input order (embedOllama below already POSTs
+    // it — the old "Ollama doesn't have a batch endpoint" comment here was
+    // stale), so like the OpenAI path the batch is ONE scheduler unit per
+    // chunk: N rows collapse from N embedder calls to ceil(N /
+    // EMBEDDING_OLLAMA_BATCH_MAX), and a high-priority query embed arriving
+    // between two chunks still jumps ahead of the remainder — it waits behind
+    // at most one chunk in flight, never the whole list.
+    //
+    // Degrade is STRICTLY-NO-WORSE: a batch-shaped failure (HTTP >= 400,
+    // unexpected shape, timeout) falls back to the sequential per-item loop —
+    // one notch better than the OpenAI path's per-item nulls, because the rows
+    // still embed (one call at a time is what every pre-array ollama served
+    // anyway). A per-item failure inside that fallback stays null, exactly
+    // like the old loop.
     var results = [];
-    for (var t of texts) {
+    for (var c = 0; c < texts.length; c += EMBEDDING_OLLAMA_BATCH_MAX) {
+      var chunk = texts.slice(c, c + EMBEDDING_OLLAMA_BATCH_MAX);
+      var vectors = null;
       try {
-        results.push(await scheduleEmbedCall(priority, config, function () {
-          return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', t);
-        }));
-      } catch (e) {
-        console.error('[semantic-memory] Batch embed failed for item:', e.message);
-        results.push(null);
+        vectors = await scheduleEmbedCall(priority, config, function () {
+          return embedOllamaBatch(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', chunk);
+        });
+      } catch (batchErr) {
+        console.error('[semantic-memory] Ollama batch embed failed, falling back to sequential:', batchErr.message);
+      }
+      if (vectors) {
+        for (var v of vectors) results.push(v);
+      } else {
+        for (var t of chunk) {
+          try {
+            results.push(await scheduleEmbedCall(priority, config, function () {
+              return embedOllama(config.embedding_url || 'http://localhost:11434', config.embedding_model || 'nomic-embed-text', t);
+            }));
+          } catch (e) {
+            console.error('[semantic-memory] Batch embed failed for item:', e.message);
+            results.push(null);
+          }
+        }
       }
     }
     return results;
@@ -206,6 +244,27 @@ async function embedOllama(baseUrl, model, text) {
   // Fallback for older API
   if (data.embedding) return data.embedding;
   throw new Error('Ollama embed: unexpected response format');
+}
+
+// Batch variant of embedOllama: one POST for the whole chunk, `input` as an
+// array, one vector per input text in input order. 60s timeout, mirroring
+// embedOpenAIBatch — a chunk is up to EMBEDDING_OLLAMA_BATCH_MAX texts, not
+// one. A response whose row count doesn't match the request is a FAILED batch
+// (the caller falls back to the sequential loop) rather than silently zipping
+// misaligned vectors into the index.
+async function embedOllamaBatch(baseUrl, model, texts) {
+  var response = await fetch(baseUrl + '/api/embed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: model, input: texts }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!response.ok) throw new Error('Ollama batch embed error: HTTP ' + response.status);
+  var data = await response.json();
+  if (data.embeddings && Array.isArray(data.embeddings) && data.embeddings.length === texts.length) {
+    return data.embeddings;
+  }
+  throw new Error('Ollama batch embed: unexpected response format');
 }
 
 // -- OpenAI --

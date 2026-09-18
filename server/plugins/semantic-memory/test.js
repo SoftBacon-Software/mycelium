@@ -18,7 +18,7 @@ import createRoutes from './routes.js';
 import createMemoryDB from './db.js';
 import { registerHooks } from './handlers.js';
 import { chunkText } from './chunking.js';
-import { generateEmbedding } from './embeddings.js';
+import { generateEmbedding, generateEmbeddingBatch, EMBEDDING_OLLAMA_BATCH_MAX } from './embeddings.js';
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -158,10 +158,20 @@ before(function () {
       });
       embedChain = job.then(function () { embedsPending--; }, function () { embedsPending--; });
       return job.then(function () {
+        // Array input = the /api/embed batch contract (2026-09-18): one vector
+        // per input row, in order. Answering a 64-row batch with one row would
+        // be a server shape that cannot exist — the batch path correctly
+        // treats the mismatch as a batch failure and falls back, which is the
+        // SLOW path; model the real embedder instead.
+        var inputs = [];
+        try {
+          var body = JSON.parse((opts && opts.body) || '{}');
+          inputs = Array.isArray(body.input) ? body.input : [body.input];
+        } catch (e) { inputs = ['']; }
         return {
           ok: true,
           status: 200,
-          json: function () { return Promise.resolve({ embeddings: [FAKE_VECTOR] }); }
+          json: function () { return Promise.resolve({ embeddings: inputs.map(function () { return FAKE_VECTOR; }) }); }
         };
       });
     }
@@ -1395,4 +1405,237 @@ test('db: stats() exposes embed_backlog + embed_queue — the pipeline is visibl
   assert.equal(typeof s.embed_queue.in_flight, 'number', 'embed_queue.in_flight is a number');
   assert.equal(typeof s.embed_queue.queued_high, 'number', 'embed_queue.queued_high is a number');
   assert.equal(typeof s.embed_queue.queued_low, 'number', 'embed_queue.queued_low is a number');
+});
+
+// -- Ollama batch embed (2026-09-18, task 217) --------------------------------
+//
+// generateEmbeddingBatch's ollama branch used to loop texts ONE scheduled call
+// each under a stale "Ollama doesn't have a batch endpoint" comment — /api/embed
+// takes `input` as a string OR an array and answers { embeddings: [[...]] } in
+// input order (embedOllama already POSTs it). Measured cost of the loop: the
+// Jetson's ollama embedder is serial ~0.3–0.5 s/row, a timeline n=50 writes
+// ~20k rows (episodes + facts), run B4 died at answer 20/50 behind a 13,869-row
+// backlog, and the 09-17 smoke (receipts/2026-09-17-p1-225526.md) waited the
+// full 8-min floor on 58 rows. The fix: the batch is ONE scheduler unit per
+// chunk of EMBEDDING_OLLAMA_BATCH_MAX texts — same shape as the OpenAI path.
+// These tests pin four properties: the call-count collapse, the
+// STRICTLY-NO-WORSE degrade (batch-shaped failure → sequential fallback, zero
+// nulls from the batch itself; per-item failure inside the fallback → null),
+// the old-ollama degrade path, and the query-embed priority jump BETWEEN
+// chunks (the regression a whole-list-as-one-unit refactor would break).
+
+// Vector derived from the text's own index ('row t37' → [37, 38, 39]) so
+// ORDER preservation is asserted by value, not by position-in-argument luck.
+function tvec(s) {
+  var m = /t(\d+)\s*$/.exec(String(s));
+  var n = m ? parseInt(m[1], 10) : -1;
+  return [n, n + 1, n + 2];
+}
+
+function ollamaBatchConfig() {
+  return {
+    embedding_provider: 'ollama',
+    embedding_url: 'http://embed.test:9999',
+    embedding_model: 'nomic-embed-text'
+  };
+}
+
+test('ollama batch: 500 texts collapse to ceil(500/batch_max) array calls, order preserved, single-text path unchanged', async function () {
+  var seen = []; // { isArray, input } in arrival order at the embedder
+  var prevFetch = global.fetch;
+  global.fetch = function (url, opts) {
+    var body = JSON.parse((opts && opts.body) || '{}');
+    var isArray = Array.isArray(body.input);
+    seen.push({ isArray: isArray, input: body.input, model: body.model });
+    var inputs = isArray ? body.input : [body.input];
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embeddings: inputs.map(tvec) }); }
+    });
+  };
+  try {
+    var cfg = ollamaBatchConfig();
+
+    // The "1" in 1 + ceil(500/64): a single-text embed (the search-query path)
+    // against the same fake, proving the non-batch path is untouched.
+    var q = await generateEmbedding(cfg, 'query row t0');
+    assert.deepEqual(q, [0, 1, 2], 'single-text embed still resolves the vector');
+    assert.equal(seen[0].isArray, false, 'the single-text call still sends input as a string, not an array');
+
+    var texts = [];
+    for (var i = 0; i < 500; i++) texts.push('probe row t' + i);
+    var out = await generateEmbeddingBatch(cfg, texts);
+
+    var batches = seen.filter(function (s) { return s.isArray; });
+    var expectedBatches = Math.ceil(500 / EMBEDDING_OLLAMA_BATCH_MAX);
+    // THE pre-committed hermetic number: 500 sequential calls before, at most
+    // 1 + ceil(500/batch_max) after. Both counts are logged, not just asserted.
+    assert.equal(seen.length, 1 + expectedBatches,
+      'total /api/embed calls must be 1 (single-text probe) + ceil(500/' +
+      EMBEDDING_OLLAMA_BATCH_MAX + '), got ' + seen.length);
+    assert.equal(batches.length, expectedBatches, 'batch calls carry array-shaped bodies');
+    for (var b = 0; b < batches.length; b++) {
+      assert.ok(batches[b].input.length <= EMBEDDING_OLLAMA_BATCH_MAX,
+        'chunk ' + b + ' bounded by EMBEDDING_OLLAMA_BATCH_MAX=' + EMBEDDING_OLLAMA_BATCH_MAX);
+      assert.equal(batches[b].model, 'nomic-embed-text', 'the CONFIGURED model rides on batch calls');
+    }
+    assert.equal(out.length, 500, 'one vector per input text');
+    for (var j = 0; j < 500; j++) {
+      assert.deepEqual(out[j], [j, j + 1, j + 2],
+        'result ' + j + ' must be text ' + j + "'s vector — chunking must preserve order");
+    }
+    console.log('[ollama-batch] hermetic call counts: 500 texts -> ' + seen.length +
+      ' embedder calls (' + batches.length + ' array batch + 1 single-text); the pre-batch tree made ' + (1 + 500));
+  } finally {
+    global.fetch = prevFetch;
+  }
+});
+
+test('ollama batch: a batch-shaped failure (HTTP 400) fires the sequential fallback — the batch itself yields ZERO nulls', async function () {
+  var calls = [];
+  var prevFetch = global.fetch;
+  global.fetch = function (url, opts) {
+    var body = JSON.parse((opts && opts.body) || '{}');
+    var isArray = Array.isArray(body.input);
+    calls.push({ isArray: isArray, input: body.input });
+    if (isArray) {
+      // The old-ollama / rejected-shape case: the whole batch call fails.
+      return Promise.resolve({
+        ok: false, status: 400,
+        json: function () { return Promise.resolve({ error: 'unsupported input shape' }); }
+      });
+    }
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embeddings: [tvec(body.input)] }); }
+    });
+  };
+  try {
+    var texts = [];
+    for (var i = 0; i < 10; i++) texts.push('degrade row t' + i);
+    var out = await generateEmbeddingBatch(ollamaBatchConfig(), texts);
+    assert.equal(calls.length, 1 + 10,
+      'call count 1 + N (1 failed batch + 10 sequential) — the fallback re-embeds every row');
+    assert.equal(calls.filter(function (c) { return c.isArray; }).length, 1, 'exactly one batch attempt');
+    for (var j = 0; j < 10; j++) {
+      assert.ok(out[j], 'no null for item ' + j + ' — a batch-shaped failure must not become per-item nulls');
+      assert.deepEqual(out[j], [j, j + 1, j + 2], 'fallback preserves order and vector values');
+    }
+  } finally {
+    global.fetch = prevFetch;
+  }
+});
+
+test('ollama batch: a per-item failure INSIDE the sequential fallback stays null, like the pre-batch loop', async function () {
+  var prevFetch = global.fetch;
+  global.fetch = function (url, opts) {
+    var body = JSON.parse((opts && opts.body) || '{}');
+    if (Array.isArray(body.input)) {
+      return Promise.resolve({ ok: false, status: 400, json: function () { return Promise.resolve({ error: 'no' }); } });
+    }
+    if (/t4\s*$/.test(String(body.input))) {
+      return Promise.resolve({ ok: false, status: 500, json: function () { return Promise.resolve({ error: 'embedder hiccup' }); } });
+    }
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embeddings: [tvec(body.input)] }); }
+    });
+  };
+  try {
+    var texts = [];
+    for (var i = 0; i < 10; i++) texts.push('peritem row t' + i);
+    var out = await generateEmbeddingBatch(ollamaBatchConfig(), texts);
+    assert.equal(out.length, 10);
+    assert.equal(out[4], null, 'the per-item failure is null — the fallback degrades exactly like the old loop');
+    for (var j = 0; j < 10; j++) {
+      if (j === 4) continue;
+      assert.deepEqual(out[j], [j, j + 1, j + 2], 'item ' + j + ' embedded despite its sibling failing');
+    }
+  } finally {
+    global.fetch = prevFetch;
+  }
+});
+
+test('ollama batch: an old ollama without array /api/embed degrades on the first batch and answers the legacy shape', async function () {
+  var calls = [];
+  var prevFetch = global.fetch;
+  global.fetch = function (url, opts) {
+    var body = JSON.parse((opts && opts.body) || '{}');
+    var isArray = Array.isArray(body.input);
+    calls.push(isArray);
+    if (isArray) {
+      return Promise.resolve({ ok: false, status: 400, json: function () { return Promise.resolve({ error: 'old ollama' }); } });
+    }
+    // Pre-array ollamas answered /api/embed with the single-row shape.
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embedding: tvec(body.input) }); }
+    });
+  };
+  try {
+    var texts = [];
+    for (var i = 0; i < 5; i++) texts.push('legacy row t' + i);
+    var out = await generateEmbeddingBatch(ollamaBatchConfig(), texts);
+    assert.equal(calls.length, 1 + 5, 'one degraded batch, then the exact sequential traffic of the pre-batch tree');
+    for (var j = 0; j < 5; j++) {
+      assert.deepEqual(out[j], [j, j + 1, j + 2], 'old ollama behaves exactly as today: every row embedded, in order');
+    }
+    // The single-text path still reads the legacy shape too.
+    var q = await generateEmbedding(ollamaBatchConfig(), 'legacy row t9');
+    assert.deepEqual(q, [9, 10, 11], 'single-text path still handles the legacy { embedding } response');
+  } finally {
+    global.fetch = prevFetch;
+  }
+});
+
+test('ollama batch: a high-priority query embed arriving between two chunks still precedes the second chunk — one scheduler unit per batch', async function () {
+  var order = []; // { isArray, n } per request that REACHED the embedder
+  var releaseChunk1 = null;
+  var prevFetch = global.fetch;
+  global.fetch = function (url, opts) {
+    var body = JSON.parse((opts && opts.body) || '{}');
+    var isArray = Array.isArray(body.input);
+    if (isArray && order.filter(function (o) { return o.isArray; }).length === 0) {
+      // First chunk: hold it in flight so the test can queue the query embed
+      // while the slot is occupied (embed_max_concurrency defaults to 1).
+      order.push({ isArray: true, n: body.input.length });
+      return new Promise(function (resolve) {
+        releaseChunk1 = function () {
+          resolve({
+            ok: true, status: 200,
+            json: function () { return Promise.resolve({ embeddings: body.input.map(tvec) }); }
+          });
+        };
+      });
+    }
+    order.push({ isArray: isArray, n: isArray ? body.input.length : 1 });
+    var inputs = isArray ? body.input : [body.input];
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function () { return Promise.resolve({ embeddings: inputs.map(tvec) }); }
+    });
+  };
+  try {
+    var texts = [];
+    for (var i = 0; i < 2 * EMBEDDING_OLLAMA_BATCH_MAX; i++) texts.push('prio row t' + i); // exactly 2 chunks
+    var batchP = generateEmbeddingBatch(ollamaBatchConfig(), texts); // low lane, not awaited yet
+    var ok = await waitFor(function () { return !!releaseChunk1; }, 2000);
+    assert.ok(ok, 'chunk 1 must be in flight at the fake embedder');
+
+    // Query embed queued HIGH while chunk 1 holds the only slot.
+    var queryP = generateEmbedding(ollamaBatchConfig(), 'needle row t9999', { priority: 'high' });
+    assert.equal(order.length, 1,
+      'chunk 2 must not be dispatched while chunk 1 is in flight — a chunk is one scheduler unit, not 64 lane entries');
+    releaseChunk1();
+    await Promise.all([batchP, queryP]);
+
+    assert.equal(order.length, 3, 'exactly 2 batch calls + 1 query call for ' + texts.length + ' texts');
+    assert.equal(order[0].isArray, true);
+    assert.equal(order[0].n, EMBEDDING_OLLAMA_BATCH_MAX, 'chunk 1 is a full batch_max');
+    assert.equal(order[1].isArray, false, 'the high-priority query embed jumps between the two chunks');
+    assert.equal(order[2].isArray, true);
+    assert.equal(order[2].n, EMBEDDING_OLLAMA_BATCH_MAX, 'chunk 2 is the second half');
+  } finally {
+    global.fetch = prevFetch;
+  }
 });
