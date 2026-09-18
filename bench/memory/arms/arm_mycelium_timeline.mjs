@@ -29,6 +29,14 @@
 // expose (search + capped list only) and would spend budget on extractor-chosen
 // episodes instead of retriever-ranked ones.
 //
+// READ POLICY 2 — `fact-episode-interleave-history` (task 220): the measured
+// policy hides superseded history (context_superseded was 0 on all 15
+// knowledge-update rows of the first n=50). The history policy keeps THIS
+// interleave byte-identical and walks each contexted current fact's
+// metadata.supersedes chain over an OVERFETCHED fact page, placing the bounded
+// predecessor chain beside it with its validity window. See the task-220
+// block at TIMELINE_READ_POLICY_HISTORY below.
+//
 // WHY MEMORY ROWS AND NOT THE am_facts ROUTES: the bi-temporal am_facts table
 // and its supersede/reverify routes ARE deployed on the live platform (checked
 // 2026-09-10: GET /auto-memory/facts answers), but they do not fit the bench
@@ -127,6 +135,48 @@ export function resolveTimelineFactsLayer(factsLayer) {
 // merge is a different arm: the name is the receipt.
 export const TIMELINE_READ_POLICY = 'fact-episode-interleave';
 
+// task 220 — the SECOND read policy. The measured policy above answers the
+// "now" half of LongMemEval's knowledge-update class and hides the "was" half:
+// the fact-layer search asks for ONLY budget rows, and a superseded fact loses
+// that slot race to its own successor (near-identical text ranks together, the
+// current twin wins) — context_superseded was 0 on ALL 15 knowledge-update
+// rows of the first n=50 (results/2026-09-17-p1-224225; four of the seven
+// wrong rows were HISTORY questions whose gold answer is the superseded
+// predecessor of a current fact the reader DID hit). The history policy keeps
+// the measured interleave byte-identical and then walks each contexted current
+// fact's metadata.supersedes chain, placing its bounded predecessor chain
+// BESIDE it with its validity window, so "was" and "is" are both readable.
+// The MEASURED policy stays the default — the 0.400/0.533 stamp remains
+// reproducible without the flag.
+export const TIMELINE_READ_POLICY_HISTORY = 'fact-episode-interleave-history';
+
+export const TIMELINE_READ_POLICIES = [TIMELINE_READ_POLICY, TIMELINE_READ_POLICY_HISTORY];
+
+// Resolve --read-policy / the factory option ONCE (run.mjs stamps the SAME
+// resolution the arm factory uses). undefined = the MEASURED policy
+// (byte-for-byte today's shape); anything else must NAME one of
+// TIMELINE_READ_POLICIES — a typoed policy must throw, never fall back.
+export function resolveTimelineReadPolicy(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return TIMELINE_READ_POLICY;
+  const v = String(value).trim();
+  if (!TIMELINE_READ_POLICIES.includes(v)) {
+    throw new Error(`unknown timeline read_policy '${v}' (expected one of ${TIMELINE_READ_POLICIES.join(', ')})`);
+  }
+  return v;
+}
+
+// The history policy's fact-layer search limit: a predecessor is only
+// reachable if its row is IN the page, so the search overfetches (the same
+// scale as the reconcile window's overfetch). The budget contract is
+// untouched — the context still carries `retrievalBudget` live rows;
+// predecessors ride beside them and are counted separately in meta
+// (context_facts vs context_superseded).
+export const TIMELINE_HISTORY_OVERFETCH = 25;
+
+// The chain bound (pre-committed by the 220 brief): at most 2 predecessors per
+// current fact, oldest rendered LAST.
+export const TIMELINE_HISTORY_MAX_PREDECESSORS = 2;
+
 // ---- the cost lever (task 205, pre-committed) ------------------------------
 // The reconcile decision LLM call is the arm's dominant write cost (r4 n=50:
 // reconcile_ms 24,683,199 of the write; 69 decision calls for 71 candidates in
@@ -195,6 +245,14 @@ export function interleaveLayers({ current, episodes, superseded, budget }) {
 export function renderMergedHit(r) {
   const m = r.metadata ?? {};
   if (r._layer === 'fact') {
+    if (r._chain) {
+      // task 220: a chain predecessor renders ONE line carrying its validity
+      // window — "was" is legible at a glance and cannot be mistaken for the
+      // current value beside which it rides. The walk guard guarantees
+      // valid_to is set on every chain row.
+      const from = m.valid_from || 'unknown date';
+      return { line: `[fact | ${from} → superseded ${m.valid_to}] ${r.content_text}`, date: from, supersede_line: null };
+    }
     const date = m.valid_from || 'unknown date';
     const head = `[fact | ${date}] ${r.content_text}`;
     const supersede =
@@ -219,8 +277,48 @@ export function buildReadHits(merged) {
       score: typeof r.score === 'number' ? r.score : null,
       rendered_date: date,
       rendered_supersede_line: supersede_line,
+      // task 220: present on chain rows only — the measured policy's stamp
+      // bytes stay exactly the pre-220 shape
+      ...(r._chain ? { chain_depth: r._chain_depth } : {}),
     };
   });
+}
+
+// task 220 — walk each contexted current fact's metadata.supersedes chain over
+// the fact page and return the FINAL context: every merged row in order, and
+// directly BESIDE each current fact its predecessor chain (newest predecessor
+// first, oldest LAST), bounded by maxPredecessors. A chain row is the real hit
+// (same shape as a superseded tail hit) plus _chain/_chain_depth so the render
+// and the stamp can mark it. Honest bounds: a supersedes id the page does not
+// contain is a COUNTED miss (meta.history_chain_misses — the chain truncates
+// visibly, never silently); a link whose target has no valid_to is refused —
+// a "predecessor" that claims to be current would blur "was" from "is"; rows
+// already in the context never render twice. Pure — answer() renders and
+// counts what this returns.
+export function attachHistoryChains({ merged, factHits, maxPredecessors }) {
+  const byId = new Map(factHits.map((h) => [h.source_id, h]));
+  const placed = new Set(merged.map((h) => h.source_id));
+  const rows = [];
+  let misses = 0;
+  for (const row of merged) {
+    rows.push(row);
+    if (row._layer !== 'fact' || row.metadata?.valid_to != null) continue; // only CURRENT facts grow chains
+    let id = row.metadata?.supersedes;
+    for (let depth = 0; depth < maxPredecessors; depth++) {
+      if (!id) break;
+      const p = byId.get(id);
+      if (!p || p.source_id === row.source_id || p.metadata?.valid_to == null) {
+        misses += 1;
+        break;
+      }
+      if (!placed.has(p.source_id)) {
+        placed.add(p.source_id);
+        rows.push({ ...p, _chain: true, _chain_depth: depth });
+      }
+      id = p.metadata?.supersedes;
+    }
+  }
+  return { rows, misses };
 }
 
 // The pre-committed RECONCILE prompt (verbatim). Quote it in the receipt: the
@@ -329,6 +427,10 @@ export function createArmMyceliumTimeline({
   // Defaults to resolveReconcileFastpathThreshold() — the same resolution
   // run.mjs stamps into the regime — and an explicit value wins for tests.
   reconcileFastpathThreshold,
+  // task 220: WHICH read policy answers — resolveTimelineReadPolicy's names,
+  // default (undefined) the MEASURED policy. run.mjs passes --read-policy;
+  // the same resolution is stamped in the regime.
+  readPolicy,
 }) {
   if (typeof extractionChat !== 'function') {
     throw new Error(
@@ -351,6 +453,10 @@ export function createArmMyceliumTimeline({
   }
   const layer = resolveTimelineFactsLayer(factsLayer);
   const useFactRoutes = layer === TIMELINE_FACTS_LAYERS.ROUTES;
+  // task 220: the read policy, resolved once at factory time — an unknown
+  // name throws HERE, never mid-run
+  const policy = resolveTimelineReadPolicy(readPolicy);
+  const historyPolicy = policy === TIMELINE_READ_POLICY_HISTORY;
   if (useFactRoutes && (typeof platform.factsCreate !== 'function' || typeof platform.factsSupersede !== 'function')) {
     throw new Error(
       'arm_mycelium_timeline: factsLayer am_facts needs a platform client with factsCreate/factsSupersede (bench/memory/platform.mjs) — refusing to silently fall back to memory rows'
@@ -733,15 +839,18 @@ export function createArmMyceliumTimeline({
       // layer yields meta.read_hits == null + retrieval_error, and the healthy
       // layer's hits still answer — an empty array is stamped ONLY when both
       // searches truly returned nothing.
-      const searchLayer = async (layerName, ns, sourceTypes) => {
+      const searchLayer = async (layerName, ns, sourceTypes, limit = retrievalBudget) => {
         try {
-          return { ok: true, layer: layerName, res: await platform.search({ query: question, namespace: ns, sourceTypes, limit: retrievalBudget }) };
+          return { ok: true, layer: layerName, res: await platform.search({ query: question, namespace: ns, sourceTypes, limit }) };
         } catch (err) {
           return { ok: false, layer: layerName, error: `${layerName} search failed: ${String(err.message).slice(0, 200)}` };
         }
       };
       const [f, e] = await Promise.all([
-        searchLayer('fact', factsNs, useFactRoutes ? [FACT_INDEX_SOURCE_TYPE] : [sourceType]),
+        // task 220: under the history policy the fact layer OVERFETCHES so the
+        // superseded predecessors are IN the page the supersedes walk reads;
+        // the measured policy asks for exactly the budget, byte-identically.
+        searchLayer('fact', factsNs, useFactRoutes ? [FACT_INDEX_SOURCE_TYPE] : [sourceType], historyPolicy ? TIMELINE_HISTORY_OVERFETCH : retrievalBudget),
         searchLayer('episode', namespace, [sourceType]),
       ]);
       const retrievalErrors = [f, e].filter((x) => !x.ok).map((x) => x.error);
@@ -751,7 +860,18 @@ export function createArmMyceliumTimeline({
       const superseded = factHits.filter((r) => r.metadata?.valid_to != null);
       const merged = interleaveLayers({ current, episodes: episodeHits, superseded, budget: retrievalBudget });
 
-      const rendered = merged.map(renderMergedHit);
+      // task 220: the history policy extends the merged context with each
+      // contexted current fact's bounded predecessor chain. The measured
+      // policy's rows — and therefore its meta bytes — are untouched.
+      let contextRows = merged;
+      let chainMisses = null;
+      if (historyPolicy) {
+        const attached = attachHistoryChains({ merged, factHits, maxPredecessors: TIMELINE_HISTORY_MAX_PREDECESSORS });
+        contextRows = attached.rows;
+        chainMisses = attached.misses;
+      }
+
+      const rendered = contextRows.map(renderMergedHit);
       const context = rendered.map((x) => x.line).join('\n\n---\n\n');
 
       const r = await answerChat({
@@ -765,15 +885,15 @@ export function createArmMyceliumTimeline({
       return {
         text: r.text,
         meta: {
-          hits: merged.length,
+          hits: contextRows.length,
           facts_hits: f.ok ? factHits.length : null,
           episode_hits: e.ok ? episodeHits.length : null,
           current_facts: f.ok ? current.length : null,
           superseded_facts: f.ok ? superseded.length : null,
-          context_facts: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to == null).length,
-          context_episodes: merged.filter((h) => h._layer === 'episode').length,
-          context_superseded: merged.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
-          read_hits: retrievalErrors.length ? null : buildReadHits(merged),
+          context_facts: contextRows.filter((h) => h._layer === 'fact' && h.metadata?.valid_to == null).length,
+          context_episodes: contextRows.filter((h) => h._layer === 'episode').length,
+          context_superseded: contextRows.filter((h) => h._layer === 'fact' && h.metadata?.valid_to != null).length,
+          read_hits: retrievalErrors.length ? null : buildReadHits(contextRows),
           read_hits_available: true,
           retrieval_error: retrievalErrors.length ? retrievalErrors.join('; ') : null,
           // task 207: the shared budget stamp (every arm's rows carry it; the
@@ -781,7 +901,11 @@ export function createArmMyceliumTimeline({
           // above — the shape the shared seam generalizes.
           budget: retrievalBudget,
           write_decisions: wd,
-          read_policy: TIMELINE_READ_POLICY,
+          read_policy: policy,
+          // task 220: present under the history policy only — the measured
+          // policy's meta bytes stay exactly the pre-220 shape. misses counts
+          // supersedes chains the overfetch window could not close.
+          ...(historyPolicy ? { history_overfetch: TIMELINE_HISTORY_OVERFETCH, history_chain_misses: chainMisses } : {}),
           // task 206: WHICH store the reconciled layer used — stamped on the
           // routes path only; the default path's row bytes stay the pre-206
           // shape (the regime block carries facts_layer on BOTH paths)

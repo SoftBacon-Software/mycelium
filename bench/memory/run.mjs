@@ -19,7 +19,7 @@ import { ARM_FACTORIES, resolveArms } from './arms/index.mjs';
 import { startMem0Sidecar, removeMem0Store } from './arms/arm_mem0.mjs';
 import { mem0RawScope } from './arms/arm_mem0_raw.mjs';
 import { myceliumExtractNamespace, EXTRACTION_SYSTEM } from './arms/arm_mycelium_extract.mjs';
-import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, TIMELINE_READ_POLICY, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
+import { myceliumTimelineNamespace, myceliumTimelineFactsNamespace, resolveTimelineFactsLayer, TIMELINE_FACTS_LAYERS, FACT_INDEX_SOURCE_TYPE, RECONCILE_SYSTEM, resolveTimelineReadPolicy, TIMELINE_READ_POLICY_HISTORY, TIMELINE_HISTORY_OVERFETCH, TIMELINE_HISTORY_MAX_PREDECESSORS, resolveReconcileFastpathThreshold, FASTPATH_THRESHOLD_ENV } from './arms/arm_mycelium_timeline.mjs';
 import { autopsyRun, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import { recordHits } from './retrieval_stamp.mjs';
 import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
@@ -169,8 +169,10 @@ async function main() {
       ? resolveArms(String(args.arms).split(',').map((s) => s.trim()).filter(Boolean))
       : Object.keys(original.arms);
     // the read policy IN EFFECT NOW names the outputs: the same rows re-read
-    // under a different policy are different evidence
-    const readPolicy = selected.includes('mycelium-timeline') ? TIMELINE_READ_POLICY : 'asis';
+    // under a different policy are different evidence. --read-policy selects
+    // it (task 220); the default stays the MEASURED policy so a reanswer
+    // without the flag reproduces the original read byte-for-byte.
+    const readPolicy = selected.includes('mycelium-timeline') ? resolveTimelineReadPolicy(args['read-policy']) : 'asis';
 
     const platformEnv = resolvePlatformEnv();
     const adminKey = await resolveAdminKey({ keychainService: platformEnv.keychainService });
@@ -225,6 +227,8 @@ async function main() {
           extractionChat: thinkingOffChat,
           reconcileChat: thinkingOffChat,
           log: (m) => console.error(`[${ctx.arm}] ${m}`),
+          // task 220: the timeline arm answers under the selected read policy
+          ...(ctx.arm === 'mycelium-timeline' ? { readPolicy } : {}),
         }),
         judgeFn,
         judge: { model: judgeModel, url_host: new URL(judgeUrl).host },
@@ -363,6 +367,12 @@ async function main() {
   // routes (task 206) instead of memory rows. Resolved ONCE here so the regime
   // stamp, the purge list, and the arm all agree.
   const timelineFactsLayer = resolveTimelineFactsLayer();
+  // task 220: WHICH read policy the timeline arm answers under — --read-policy
+  // <name>, default the MEASURED policy (the 0.400/0.533 stamp stays
+  // reproducible without the flag). Resolved ONCE here so the flag, the regime
+  // stamp, and the arm cannot disagree; an unknown name throws before any
+  // platform call.
+  const timelineReadPolicy = resolveTimelineReadPolicy(args['read-policy']);
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
 
   const split = await loadSplit(splitName);
@@ -771,18 +781,43 @@ async function main() {
               }),
           read: {
             budget,
-            read_policy: TIMELINE_READ_POLICY,
-            merge: 'both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget',
+            read_policy: timelineReadPolicy,
+            ...(timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+              ? {
+                  // task 220: the history policy's own stamp — the measured
+                  // policy's regime bytes stay exactly the pre-220 shape
+                  history: {
+                    overfetch: TIMELINE_HISTORY_OVERFETCH,
+                    max_predecessors_per_current_fact: TIMELINE_HISTORY_MAX_PREDECESSORS,
+                    rule:
+                      'every CURRENT fact in the context also carries its superseded predecessor chain, walked through ' +
+                      'metadata.supersedes over the overfetch page (newest predecessor first, oldest LAST), each rendered ' +
+                      '`[fact | <valid_from> → superseded <valid_to>] <text>`; the budget stays ' + budget + ' CURRENT facts — ' +
+                      'predecessors ride beside them and are counted separately (meta.context_facts vs meta.context_superseded); ' +
+                      'a chain link the overfetch window cannot close is stamped meta.history_chain_misses, never silently dropped',
+                  },
+                }
+              : {}),
+            merge:
+              timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? 'both layers searched (facts overfetched to ' + TIMELINE_HISTORY_OVERFETCH + ' so predecessor chains are reachable, episodes at the budget); interleaved fact/episode INSIDE the budget (strongest current fact first, a dry layer yields); then each current fact in the context carries its bounded predecessor chain — superseded history no longer depends on winning a search slot'
+                : 'both layers searched at the budget; interleaved fact/episode/… (strongest current fact first, a dry layer yields, superseded facts the dated tail); capped at the budget',
             hit_rendering:
               'each hit carries its date: `[fact | <valid_from>]` / `[session | <session_date>]`; a superseded fact appends the line ' +
-              '"superseded on <valid_to> by: <new fact>"',
+              '"superseded on <valid_to> by: <new fact>"' +
+              (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? '; a chain predecessor renders one line `[fact | <valid_from> → superseded <valid_to>] <text>`'
+                : ''),
             read_stamp:
-              'every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty',
+              'every answer row stamps meta.read_hits = ordered [{layer, source_id, rank, score, rendered_date, rendered_supersede_line}] capped at the budget (rank 0 = first row the model read); a failed layer search stamps read_hits null + retrieval_error, never a fake empty' +
+              (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+                ? '; under the history policy the stamp lists EVERY rendered row (predecessor chains may exceed the budget) with chain_depth on chain rows'
+                : ''),
             decision_stamp:
               'every answer row stamps meta.write_decisions = {candidates, adds, supersedes, keeps, decision_calls, decision_failures, fastpath_adds} for its own question (null when this process never wrote it, e.g. --reanswer); the per-candidate decision ledger (text, decision, source, shown_ids, top_score, source_id) lives in summary.json write_info.timeline.per_question[].candidates_ledger for the miss autopsy',
             rag_prompt: 'arm_mycelium RAG_SYSTEM, unchanged',
           },
-          read_policy: TIMELINE_READ_POLICY, // also top-level: regime.timeline.read_policy
+          read_policy: timelineReadPolicy, // also top-level: regime.timeline.read_policy
           retrieval_budget: budget,
         }
       : null,
@@ -815,7 +850,10 @@ async function main() {
         ? `arms this run: ${arms.join(', ')}; mycelium-extract = the EXTRACTION control for the Mycelium column (task 182): the answerer model (${answerModel}, temperature 0, THINKING OFF via chat_template_kwargs) extracts a fact list per session, facts indexed ONE ROW PER FACT, namespace suffixed -extract; retrieval + answer identical to arm mycelium`
         : null,
       arms.includes('mycelium-timeline')
-        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold ${fastpath.threshold} (${fastpath.source}), else ADD with no call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance`
+        ? `arms this run: ${arms.join(', ')}; mycelium-timeline = the §3 TIMELINE arm (BRIEF-lab-alive-memory-program): episodic layer (arm_mycelium's verbatim session rows + the dataset's session dates) + reconciled layer (same extractor as mycelium-extract, then per candidate ONE reconcile search + ONE ADD/SUPERSEDE/KEEP decision call when the best current-fact score is at/above the fastpath threshold ${fastpath.threshold} (${fastpath.source}), else ADD with no call, ${answerModel} temp 0 thinking off; a superseded fact keeps its row with valid_to + superseded_by pointers); read = both layers at the same budget, current facts first, every hit rendered with its date and supersede lines; rows stamp read_hits + write_decisions provenance` +
+          (timelineReadPolicy === TIMELINE_READ_POLICY_HISTORY
+            ? `; READ POLICY ${TIMELINE_READ_POLICY_HISTORY} (task 220): each current fact in the context also carries its bounded superseded predecessor chain (metadata.supersedes walk, at most ${TIMELINE_HISTORY_MAX_PREDECESSORS} predecessors, oldest last), rendered with its validity window — the knowledge-update "was" half is readable, not just "now"`
+            : '')
         : null,
       arms.includes('mem0')
         ? `arms this run: ${arms.join(', ')}; mem0 = OSS mem0ai via its default local qdrant store, its LLM and embedder matched to the incumbent arms' answerer/embedder`
@@ -940,7 +978,7 @@ async function main() {
         // per-arm view: the shared ctx gets the arm's OWN log label (task 182
         // runs several arms in one process — a hardcoded prefix mislabels
         // which arm's write/extract lines these are)
-        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' || name === 'mycelium-timeline' ? { factsStore } : {}) }),
+        factory: (ctx) => ARM_FACTORIES[name]({ ...ctx, log: (m) => console.error(`[${name}] ${m}`), ...(name === 'mycelium-extract' || name === 'mycelium-timeline' ? { factsStore } : {}), ...(name === 'mycelium-timeline' ? { readPolicy: timelineReadPolicy } : {}) }),
       })),
       armContext: {
         answerChat,
