@@ -405,6 +405,20 @@ originals (originals are never touched; an existing rejudge output is refused,
 not overwritten) and, with `--receipt`, a `<runId>-rejudge` receipt carrying
 the new scores, the old scores, the judge-agreement number, and a regime block
 recording `judge_prompt_version` + which run was re-judged.
+`--rejudge-suffix <tag>` writes the pass beside a previous one as
+`summary.rejudge-<tag>.json` + `judged.rejudge-<tag>.jsonl` (never an
+overwrite). **Task 229:** the grid reads a suffixed pass by name —
+`--grid-from-results <dirs> --rejudge-pass <tag>` composes every rejudged dir
+from ITS `<tag>` pair (a dir whose primary summary.json still exists included;
+a dir carrying only that one pair loads it without the flag). The grid's
+comparability reads each run's EFFECTIVE judge (a rejudge pair's own stamp,
+not its stale regime mirror) and refuses a mixed-judge composition naming both
+versions. When the composed pass is run `2026-09-17-p1-224225` under
+`judge-prompt.4`, the receipt renders the **pre-committed adoption gate**
+(task 226: the 4 `_abs` rows EXACT, the 3 protected rows wrong, hand-vs-judge
+agreement ≥ 19/20) BEFORE the scores — `VERDICT: ADOPTED` lets the v4 numbers
+be quoted; any failure renders `VERDICT: NOT ADOPTED` and judge-prompt.2's
+knowledge-update 8/15 = 0.533 remains the arm's quoted cell.
 
 **Re-answering a kept run** (`--reanswer <run dir>`): runs ONLY the answer +
 judge phases against the run's KEPT namespaces — the run's regime names them

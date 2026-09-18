@@ -22,10 +22,13 @@ function readJsonlFile(file) {
 }
 
 // Output naming for a rejudge pass — the single source of truth shared by
-// rejudgeRun (which refuses on its own output) and run.mjs (which opens the
-// files). A tag must be filename-safe: it becomes part of three artifact names.
+// rejudgeRun (which refuses on its own output), run.mjs (which opens the
+// files), and grid.mjs loadRun (which names the pass it reads — task 229).
+// A tag must be filename-safe: it becomes part of three artifact names.
+export const REJUDGE_SUFFIX_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export function rejudgeOutputNames(dir, { suffix = null } = {}) {
-  if (suffix != null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(suffix)) {
+  if (suffix != null && !REJUDGE_SUFFIX_RE.test(suffix)) {
     throw new Error(`rejudge: invalid --rejudge-suffix '${suffix}' — letters, digits, dot, dash, underscore only`);
   }
   const stem = suffix ? `rejudge-${suffix}` : 'rejudge';

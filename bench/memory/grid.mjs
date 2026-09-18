@@ -32,6 +32,8 @@ import {
 import { SPLITS, loadSplit, selectItems } from './split.mjs';
 import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, factsLayerOf, timelineArmLabel } from './per_type.mjs';
 import { agreement } from './judge.mjs';
+import { rejudgeOutputNames, REJUDGE_SUFFIX_RE } from './rejudge.mjs';
+import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
 
 /** Where the director's hand-label files live, keyed by run id (<run_id>.json). */
 export const HANDLABELS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'handlabels');
@@ -55,6 +57,15 @@ export class GridInputError extends Error {}
 
 const defaultReadFile = (f) => fs.readFileSync(f, 'utf8');
 
+/** Directory listing that never throws (a missing dir simply has no passes). */
+function listDirSafe(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
 function fmtValue(v) {
   if (v === undefined) return '<absent>';
   if (typeof v === 'string') return v;
@@ -65,18 +76,43 @@ function truncate(s, max = 160) {
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+/**
+ * The judge a run's numbers were actually produced by — the QUOTED judge.
+ * A rejudged run's effective judge is its rejudge pair's own stamp (top-level
+ * judge_prompt_version, falling back to the pair's regime mirror); a primary
+ * run's is its regime stamp. The regime mirror on a rejudged run is stale by
+ * construction (it describes the ORIGINAL judge), so it is consulted only for
+ * primaries (task 229).
+ */
+export function effectiveJudgePromptVersion(run) {
+  if (run.rejudge) return run.rejudge.judge_prompt_version;
+  return run.summary.regime?.judge?.judge_prompt_version; // undefined stays <absent> in renderings
+}
+
+/**
+ * The question count a run's numbers are per — for a rejudge PAIR, summary.n
+ * is the judged-ROW count (arms × questions), so it reads the pair's regime.n
+ * (the question count the original run stamped); primaries read summary.n
+ * (task 229: a two-arm pair beside one-arm runs must not refuse on n).
+ */
+export function effectiveN(run) {
+  if (run.rejudge) return run.summary.regime?.n ?? run.summary.n;
+  return run.summary.n ?? run.summary.regime?.n;
+}
+
 // One entry per comparability key: [dotted key, reader]. All runs must agree
 // on every one of these or there is no grid — quoting numbers from runs that
 // answered different questions, or were judged by different prompts, is a rumour.
+// The judge + n keys read the EFFECTIVE values (see above), not the raw fields.
 export const COMPARABILITY_KEYS = [
   ['dataset.name', (r) => r.summary.regime?.dataset?.name],
   ['dataset.sha256', (r) => r.summary.regime?.dataset?.sha256],
   ['judge.model', (r) => r.summary.regime?.judge?.model],
-  ['judge.judge_prompt_version', (r) => r.summary.regime?.judge?.judge_prompt_version],
+  ['judge.judge_prompt_version', effectiveJudgePromptVersion],
   ['answerer.model', (r) => r.summary.regime?.answerer?.model],
   ['answerer.max_tokens', (r) => r.summary.regime?.answerer?.max_tokens],
   ['retrieval.budget', (r) => r.summary.regime?.retrieval?.budget],
-  ['n', (r) => r.summary.n ?? r.summary.regime?.n],
+  ['n', effectiveN],
 ];
 
 // regime.n mirrors summary.n — same check; keep it out of the allowed-differences list
@@ -87,22 +123,31 @@ export function writeCap(summary) {
   return summary.regime?.write?.max_sessions_per_question ?? summary.max_sessions_per_question ?? null;
 }
 
-/** Hand-vs-judge agreement for a rejudged run, from <handlabelsDir>/<of_run_id>.json when it exists; null when it doesn't. */
-function handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }) {
-  if (!ofRunId) return null;
-  const file = path.join(handlabelsDir, `${ofRunId}.json`);
-  if (!existsFn(file)) return null;
-  let hand;
-  try {
-    hand = JSON.parse(readFileFn(file));
-  } catch (e) {
-    throw new GridInputError(`${file}: handlabels file does not parse — ${e.message}`);
+/**
+ * The hand-label evidence for a rejudged run: an in-dir `handlabels.json` (the
+ * 195034 shape — the labels travelled with the run) first, then the director's
+ * `<handlabelsDir>/<of_run_id>.json`. Null when neither exists — the caller
+ * states the absence, never silently skips the agreement leg.
+ */
+function loadHandlabels(ofRunId, dir, { existsFn, readFileFn, handlabelsDir }) {
+  const candidates = [
+    path.join(dir, 'handlabels.json'),
+    ...(ofRunId ? [path.join(handlabelsDir, `${ofRunId}.json`)] : []),
+  ];
+  for (const file of candidates) {
+    if (!existsFn(file)) continue;
+    let hand;
+    try {
+      hand = JSON.parse(readFileFn(file));
+    } catch (e) {
+      throw new GridInputError(`${file}: handlabels file does not parse — ${e.message}`);
+    }
+    if (!Array.isArray(hand?.items)) {
+      throw new GridInputError(`${file}: handlabels file carries no items array — the agreement leg refuses to invent one`);
+    }
+    return { items: hand.items, file, hand_scorer: hand.hand_scorer ?? null };
   }
-  if (!Array.isArray(hand?.items)) {
-    throw new GridInputError(`${file}: handlabels file carries no items array — the agreement leg refuses to invent one`);
-  }
-  const a = agreement(judged, hand.items);
-  return { n: a.n, agree: a.agree, rate: a.rate, hand_scorer: hand.hand_scorer ?? null, file };
+  return null;
 }
 
 /**
@@ -115,8 +160,14 @@ function handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabels
  * dir with neither summary refuses exactly as before. When the rejudged run's
  * of_run_id has a handlabels file, the hand-vs-judge agreement of the rejudged
  * labels is computed at load (the quoting law's judge-agreement leg).
+ *
+ * `rejudgePass` (task 229) names a SUFFIXED rejudge pass: the caller asks for
+ * one specific scoring of the saved answers, so the named pair
+ * (summary.rejudge-<pass>.json + judged.rejudge-<pass>.jsonl) is read even
+ * when the dir still carries its primary summary.json, and a primary is never
+ * silently substituted. The pair's own suffix stamp must match the pass.
  */
-export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null, handlabelsDir = HANDLABELS_DIR } = {}) {
+export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultReadFile, parseJsonlFn = null, handlabelsDir = HANDLABELS_DIR, rejudgePass = null } = {}) {
   const parseJsonl = parseJsonlFn ?? ((text) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l)));
   const buildIdSets = (rows) => {
     const judgedIds = new Set();
@@ -133,26 +184,50 @@ export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultRea
   // (memory-rows vs am_facts) stay separate measurements
   const armLabels = (summary) =>
     Object.fromEntries(Object.keys(summary.arms ?? {}).map((a) => [a, timelineArmLabel(summary.regime, a)]));
-  const summaryFile = path.join(dir, 'summary.json');
-  if (!existsFn(summaryFile)) {
-    const rejSummaryFile = path.join(dir, REJUDGE_SUMMARY_FILE);
-    const rejJudgedFile = path.join(dir, REJUDGE_JUDGED_FILE);
-    const hasRejSummary = existsFn(rejSummaryFile);
-    const hasRejJudged = existsFn(rejJudgedFile);
-    if (!hasRejSummary && !hasRejJudged) {
-      throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
-    }
-    if (!hasRejSummary || !hasRejJudged) {
-      const missing = hasRejSummary ? REJUDGE_JUDGED_FILE : REJUDGE_SUMMARY_FILE;
+
+  if (rejudgePass != null && !REJUDGE_SUFFIX_RE.test(rejudgePass)) {
+    throw new GridInputError(
+      `invalid --rejudge-pass '${rejudgePass}' — letters, digits, dot, dash, underscore only (the tag becomes part of the artifact names)`
+    );
+  }
+  // task 229: a NAMED pass reads exactly its suffixed pair — the pair must be
+  // complete and its own stamp must agree with the pass it was filed under.
+  let named = null;
+  if (rejudgePass != null) {
+    const { summaryFile: passSummary, judgedFile: passJudged } = rejudgeOutputNames(dir, { suffix: rejudgePass });
+    const hasSummary = existsFn(passSummary);
+    const hasJudged = existsFn(passJudged);
+    if (!hasSummary && !hasJudged) {
       throw new GridInputError(
-        `${dir}: no summary.json and the rejudge pair is incomplete — ${missing} is missing ` +
-          `(a rejudged run needs ${REJUDGE_SUMMARY_FILE} + ${REJUDGE_JUDGED_FILE})`
+        `${dir}: rejudge pass '${rejudgePass}' not found in ${dir} — no ${path.basename(passSummary)} ` +
+          `(rejudge.mjs --rejudge-suffix ${rejudgePass} writes it)`
       );
     }
+    if (!hasSummary || !hasJudged) {
+      const missing = hasSummary ? path.basename(passJudged) : path.basename(passSummary);
+      throw new GridInputError(
+        `${dir}: rejudge pass '${rejudgePass}' is incomplete — ${missing} is missing ` +
+          `(a rejudge pass needs ${path.basename(passSummary)} + ${path.basename(passJudged)})`
+      );
+    }
+    named = { summaryFile: passSummary, judgedFile: passJudged };
+  }
+
+  const loadRejudgeRun = (rejSummaryFile, rejJudgedFile, pass) => {
     const summary = JSON.parse(readFileFn(rejSummaryFile));
+    if (pass != null) {
+      const stamped = summary.regime?.rejudge?.suffix ?? summary.regime?.judge?.rejudge?.suffix ?? null;
+      if (stamped != null && stamped !== pass) {
+        throw new GridInputError(
+          `${dir}: ${path.basename(rejSummaryFile)} is stamped suffix '${stamped}' — asked for pass '${pass}' (mislabeled evidence)`
+        );
+      }
+    }
     const judged = parseJsonl(readFileFn(rejJudgedFile));
     const { judgedIds, judgedIdsByArm } = buildIdSets(judged);
-    const ofRunId = summary.regime?.judge?.rejudge?.of_run_id ?? summary.rejudged_from ?? null;
+    const ofRunId = summary.regime?.rejudge?.of_run_id ?? summary.regime?.judge?.rejudge?.of_run_id ?? summary.rejudged_from ?? null;
+    const hand = loadHandlabels(ofRunId, dir, { existsFn, readFileFn, handlabelsDir });
+    const ag = hand ? agreement(judged, hand.items) : null;
     return {
       dir,
       runId: summary.run_id ?? path.basename(dir),
@@ -164,9 +239,58 @@ export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultRea
       rejudge: {
         of_run_id: ofRunId,
         judge_prompt_version: summary.judge_prompt_version ?? summary.regime?.judge?.judge_prompt_version ?? null,
-        agreement: handlabelsAgreement(ofRunId, judged, { existsFn, readFileFn, handlabelsDir }),
+        pass,
+        stem: pass ? `rejudge-${pass}` : 'rejudge',
+        pair: [path.basename(rejSummaryFile), path.basename(rejJudgedFile)],
+        handItems: hand?.items ?? null,
+        agreement: ag ? { n: ag.n, agree: ag.agree, rate: ag.rate, hand_scorer: hand.hand_scorer, file: hand.file } : null,
       },
     };
+  };
+
+  const summaryFile = path.join(dir, 'summary.json');
+  if (!existsFn(summaryFile) || named) {
+    let pass = rejudgePass;
+    if (!named) {
+      const rejSummaryFile = path.join(dir, REJUDGE_SUMMARY_FILE);
+      const rejJudgedFile = path.join(dir, REJUDGE_JUDGED_FILE);
+      const hasRejSummary = existsFn(rejSummaryFile);
+      const hasRejJudged = existsFn(rejJudgedFile);
+      if (hasRejSummary && hasRejJudged) {
+        named = { summaryFile: rejSummaryFile, judgedFile: rejJudgedFile };
+      } else if (!hasRejSummary && !hasRejJudged && rejudgePass == null) {
+        // task 229: no unsuffixed pair — a dir may still carry SUFFIXED pass
+        // pairs (what --rejudge-suffix leaves behind). A LONE complete one is
+        // unambiguous and loads with its pass named; several are ambiguous and
+        // refused (the caller must say which pass); a lone HALF one is refused
+        // naming the missing file. Without any of these, the dir is not a
+        // finished run — exactly the old refusal.
+        const stems = [...new Set(
+          listDirSafe(dir)
+            .map((f) => (/^summary\.rejudge-(.+)\.json$/.exec(f)?.[1] ?? null))
+            .filter((t) => t && existsFn(path.join(dir, `judged.rejudge-${t}.jsonl`)))
+        )];
+        if (stems.length === 1) {
+          pass = stems[0];
+          named = { summaryFile: path.join(dir, `summary.rejudge-${pass}.json`), judgedFile: path.join(dir, `judged.rejudge-${pass}.jsonl`) };
+        } else if (stems.length > 1) {
+          throw new GridInputError(
+            `${dir}: carries ${stems.length} rejudge passes (${stems.map((t) => `rejudge-${t}`).join(', ')}) — name one with --rejudge-pass; a grid must say WHICH scoring of the saved answers it quotes`
+          );
+        } else {
+          throw new GridInputError(`${dir}: no summary.json — a run without its summary is not finished (in flight, crashed, or not a run dir)`);
+        }
+      } else {
+        // a half unsuffixed pair (or a named pass that fell through) — the
+        // incomplete refusal, naming the missing file
+        const missing = hasRejSummary ? REJUDGE_JUDGED_FILE : REJUDGE_SUMMARY_FILE;
+        throw new GridInputError(
+          `${dir}: no summary.json and the rejudge pair is incomplete — ${missing} is missing ` +
+            `(a rejudged run needs ${REJUDGE_SUMMARY_FILE} + ${REJUDGE_JUDGED_FILE})`
+        );
+      }
+    }
+    return loadRejudgeRun(named.summaryFile, named.judgedFile, pass);
   }
   const summary = JSON.parse(readFileFn(summaryFile));
   const judgedFile = path.join(dir, 'judged.jsonl');
@@ -228,6 +352,29 @@ export function findDifferences(runs) {
           ? `an arm may appear in at most one run per facts layer — '${arm}' [${layer}] is quoted twice`
           : 'an arm may appear in at most one run — the union would quote it twice',
         values: runIds.map((id) => ({ run: id, value: arm, display: layer ? `'${arm}' [${layer}]` : `'${arm}'` })),
+      });
+    }
+  }
+  // task 229: two rejudge passes of the SAME of-run are two scorings of one
+  // answers file — composing them would quote one run's arms twice under two
+  // judges. Name the run and the colliding passes.
+  const byOfRun = new Map();
+  for (const r of runs) {
+    if (!r.rejudge?.of_run_id) continue;
+    const key = r.rejudge.of_run_id;
+    if (!byOfRun.has(key)) byOfRun.set(key, []);
+    byOfRun.get(key).push(r);
+  }
+  for (const [ofId, group] of byOfRun) {
+    if (group.length > 1) {
+      differences.push({
+        key: 'same_run_twice',
+        note: `of-run '${ofId}' is scored by ${group.length} passes in this grid — two scorings of one answers file cannot both be quoted`,
+        values: group.map((r) => ({
+          run: r.runId,
+          value: r.rejudge.pass ?? 'default',
+          display: `${r.runId} (pass '${r.rejudge.pass ?? 'default'}')`,
+        })),
       });
     }
   }
@@ -588,19 +735,57 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     .filter((r) => r.rejudge)
     .map((r) => {
       const jpv = r.rejudge.judge_prompt_version ?? '<unstamped>';
+      // task 229: a NAMED pass is named in the header — the reader must know
+      // which scoring of the saved answers a column carries
+      const passClause = r.rejudge.pass
+        ? ` (pass \`${r.rejudge.stem}\`: ${r.rejudge.pair[0]} + ${r.rejudge.pair[1]})`
+        : '';
       const leg = r.rejudge.agreement
         ? `; hand-vs-judge agreement ${r.rejudge.agreement.rate.toFixed(3)} (n=${r.rejudge.agreement.n}, ${path.basename(r.rejudge.agreement.file)})`
         : r.rejudge.of_run_id
           ? `; no handlabels file for ${r.rejudge.of_run_id} — the judge-agreement leg is NOT rendered`
           : '; no of_run_id in the rejudge stamp — the judge-agreement leg is NOT rendered';
-      return `${r.runId} is a REJUDGE of ${r.rejudge.of_run_id ?? '<unknown>'} — labels re-computed under ${jpv}${leg}`;
+      return `${r.runId} is a REJUDGE of ${r.rejudge.of_run_id ?? '<unknown>'} — labels re-computed under ${jpv}${passClause}${leg}`;
     });
   if (rejudgedNotes.length) {
+    const firstRej = runs.find((r) => r.rejudge);
     L.push('');
     L.push(
       `**CONTAINS REJUDGED RUN(S): ${rejudgedNotes.join('; ')}.** ` +
-        'A rejudged run has no summary.json — its column is the rejudge pair (summary.rejudge.json + judged.rejudge.jsonl), its labels re-computed from the saved answers. It is not a primary run.'
+        `A rejudged run has no summary.json — its column is the rejudge pair (${firstRej.rejudge.pair[0]} + ${firstRej.rejudge.pair[1]}), its labels re-computed from the saved answers. It is not a primary run.`
     );
+  }
+
+  // task 229: the pre-committed adoption gate (task 226), mechanically decided
+  // from the loaded labels + the hand-label evidence. It renders ONLY for the
+  // run and judge version it was pre-committed on, BEFORE the scores — whether
+  // judge-prompt.4 becomes the quoted judge is the receipt's first fact.
+  const gatedRun = runs.find((r) => gateAppliesToRun(r));
+  if (gatedRun) {
+    const gate = adoptionGate({ judged: gatedRun.judged, handItems: gatedRun.rejudge.handItems });
+    L.push('');
+    L.push('## Judge adoption gate (pre-committed, task 226)');
+    L.push('');
+    L.push(
+      `Run ${gatedRun.rejudge.of_run_id} rejudged under ${ADOPTION_GATE.judge_prompt_version}` +
+        `${gatedRun.rejudge.pass ? ` (pass \`${gatedRun.rejudge.stem}\`)` : ''} — the pre-committed gate decides whether ` +
+        `${ADOPTION_GATE.judge_prompt_version} becomes the quoted judge:`
+    );
+    L.push('');
+    for (const c of gate.conditions) L.push(`- [${c.ok ? 'x' : ' '}] ${c.detail}`);
+    if (gate.unpredicated_abs_rows.length) {
+      L.push(`- unpredicated abstention row(s) — decided by the live leg, never gated: ${gate.unpredicated_abs_rows.join(', ')}`);
+    }
+    L.push('');
+    L.push(`**VERDICT: ${gate.verdict}**`);
+    if (gate.verdict !== 'ADOPTED') {
+      L.push('');
+      if (!gate.evaluable) L.push(`NOT EVALUABLE — ${gate.unevaluable_reason}`);
+      L.push(
+        `${ADOPTION_GATE.judge_prompt_version} is NOT the quoted judge: judge-prompt.2's knowledge-update ${ADOPTION_GATE.v2_quoted_ku} remains the arm's quoted cell; ` +
+          'no downstream artifact may quote a judge-prompt.4 number as the arm number.'
+      );
+    }
   }
 
   // scores: every arm of every run, one row each — the arm named from ITS OWN
@@ -825,7 +1010,7 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
   L.push('## Artifacts');
   L.push('');
   for (const r of runs) {
-    const pair = r.rejudge ? 'summary.rejudge.json, judged.rejudge.jsonl' : 'summary.json, judged.jsonl';
+    const pair = r.rejudge ? `${r.rejudge.pair[0]}, ${r.rejudge.pair[1]}` : 'summary.json, judged.jsonl';
     L.push(`- rows + summary: \`${r.dir}\` (${pair}, <arm>.rows.jsonl)`);
   }
   L.push('');
@@ -847,6 +1032,7 @@ export function composeGrid({
   existsFn = fs.existsSync,
   readFileFn = defaultReadFile,
   handlabelsDir = HANDLABELS_DIR, // where a rejudged run's hand-label file is looked up
+  rejudgePass = null, // task 229: name a suffixed rejudge pass (--rejudge-pass <tag>) for every rejudged dir
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
@@ -857,13 +1043,16 @@ export function composeGrid({
   if (!Array.isArray(dirs) || dirs.length < 2) {
     throw new GridInputError(`--grid-from-results needs at least two run dirs (got ${dirs?.length ?? 0})`);
   }
-  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn, handlabelsDir }));
+  const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn, handlabelsDir, rejudgePass }));
   assertComparable(runs);
   const runIds = runs.map((r) => r.runId);
   const commands =
     commandLine != null
       ? [commandLine]
-      : [`node bench/memory/run.mjs --grid-from-results ${dirs.join(',')} --receipt${autopsy ? ' --autopsy' : ''}${audit ? ' --retrieval-audit' : ''}`];
+      : [
+          `node bench/memory/run.mjs --grid-from-results ${dirs.join(',')}` +
+            `${rejudgePass ? ` --rejudge-pass ${rejudgePass}` : ''} --receipt${autopsy ? ' --autopsy' : ''}${audit ? ' --retrieval-audit' : ''}`,
+        ];
   const { armsUnion } = buildUnion(runs);
   const gridRendered = GRID_ROWS.flatMap((r) => [r.raw, r.extract]).every((n) => armsUnion[n]);
   if (!write) return { file: null, runIds, gridRendered, receipt: null };

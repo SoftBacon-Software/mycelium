@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { renderIngestionGrid } from './ingestion.mjs';
 import { renderAutopsySection } from './miss_autopsy.mjs';
 import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, timelineArmLabel } from './per_type.mjs';
+import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
@@ -73,6 +74,7 @@ export function renderReceipt({
   autopsy = null, // computed autopsy (miss_autopsy.mjs) — rendered beside the cell table
   judged = null, // the run's per-question judged rows (bench/memory/results/<run>/judged.jsonl)
   rejudge = null, // {ofRunId, judgePromptVersion, suffix?} — present on a rejudge receipt
+  handlabelsItems = null, // the handlabels file's items — the adoption gate's second leg (task 229)
   previousJudges = null, // [{file, run_id, judge_prompt_version, arms}] — prior rejudge summaries (rejudgeOutputNames' siblings)
   reanswer = null, // {ofRunId, readPolicy} — present on a re-answer receipt
   generatedAt,
@@ -94,6 +96,33 @@ export function renderReceipt({
     L.push(`Re-judge of run \`${rejudge.ofRunId}\` with judge prompt version \`${rejudge.judgePromptVersion}\`${rejudge.suffix ? `, tagged \`${rejudge.suffix}\`` : ''}.`);
     L.push('The answers are the original run\'s own (no answerer calls, no platform calls) — only the');
     L.push('judge labels were re-computed. The original run\'s scores are rendered below the new ones.');
+    // task 229: when THIS pass is the one the adoption gate was pre-committed
+    // on, its verdict renders here — before the scores — whatever it says.
+    const gateRun = { rejudge: { of_run_id: rejudge.ofRunId, judge_prompt_version: rejudge.judgePromptVersion } };
+    if (gateAppliesToRun(gateRun) && judged) {
+      const gate = adoptionGate({ judged, handItems: handlabelsItems });
+      L.push('');
+      L.push('## Judge adoption gate (pre-committed, task 226)');
+      L.push('');
+      L.push(
+        `The pre-committed gate decides whether ${ADOPTION_GATE.judge_prompt_version} becomes the quoted judge:`
+      );
+      L.push('');
+      for (const c of gate.conditions) L.push(`- [${c.ok ? 'x' : ' '}] ${c.detail}`);
+      if (gate.unpredicated_abs_rows.length) {
+        L.push(`- unpredicated abstention row(s) — decided by the live leg, never gated: ${gate.unpredicated_abs_rows.join(', ')}`);
+      }
+      L.push('');
+      L.push(`**VERDICT: ${gate.verdict}**`);
+      if (gate.verdict !== 'ADOPTED') {
+        L.push('');
+        if (!gate.evaluable) L.push(`NOT EVALUABLE — ${gate.unevaluable_reason}`);
+        L.push(
+          `${ADOPTION_GATE.judge_prompt_version} is NOT the quoted judge: judge-prompt.2's knowledge-update ${ADOPTION_GATE.v2_quoted_ku} remains the arm's quoted cell; ` +
+            'no downstream artifact may quote a judge-prompt.4 number as the arm number.'
+        );
+      }
+    }
   }
   if (reanswer) {
     L.push('');
