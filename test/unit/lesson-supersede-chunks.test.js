@@ -164,3 +164,36 @@ describe('F1: supersede of a multi-chunk lesson retires EVERY chunk (chunk size 
     expect(res.body.lessons_superseded.latest).toBeTruthy();
   });
 });
+
+describe('F2: a DEAD lesson is refused as a by_id successor', () => {
+  it('supersede A by_id a dead B → 409 naming the live replacement (supersede the replacement, not the history); a LIVE successor still works', async () => {
+    const ctx = await makeApp();
+    await postRow(ctx.app, lessonRow({ source_id: 'cc2-a' }));
+    await postRow(ctx.app, lessonRow({ source_id: 'cc2-b', content_text: 'the first replacement' }));
+    await postRow(ctx.app, lessonRow({ source_id: 'cc2-d', content_text: 'a live candidate' }));
+
+    // B dies first (its correction is C)
+    const first = await supersede(ctx.app, 'cc2-b', {
+      by_text: 'the second replacement', new_source_id: 'cc2-c', reason: 'r', actor: 'a', evidence: 'e',
+    });
+    expect(first.status).toBe(200);
+
+    // the finding: pointing A at dead B used to 200 — A's pointer landed on
+    // hidden history, one hop from its own cure
+    const second = await supersede(ctx.app, 'cc2-a', {
+      by_id: 'cc2-b', reason: 'r2', actor: 'a2', evidence: 'e2',
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatch(/not the history/);
+    expect(second.body.superseded_by).toBe('cc2-c'); // the body names the LIVE replacement
+    expect(second.body.valid_to).toBeTruthy();
+
+    // the refusal is precise, not a blanket: a LIVE successor is still legal
+    const live = await supersede(ctx.app, 'cc2-a', {
+      by_id: 'cc2-d', reason: 'r3', actor: 'a3', evidence: 'e3',
+    });
+    expect(live.status).toBe(200);
+    expect(live.body.superseded.superseded_by).toBe('cc2-d');
+    ctx.db.close();
+  });
+});

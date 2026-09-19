@@ -575,6 +575,18 @@ export default function (core) {
       newId = byId;
       newText = succRow.content_text;
       try { newMeta = JSON.parse(succRow.metadata || '{}'); } catch (e) { newMeta = {}; }
+      // 241/F2 (review 239a): the successor must be LIVE. Pointing at an
+      // already-superseded row landed the new pointer on hidden history, one
+      // hop from the cure it names — the same rule the already-superseded-row
+      // refusal above states, applied to the OTHER side of the edge.
+      if (newMeta.superseded_by) {
+        return apiError(res, 409, "supersede refused: 'by_id' '" + byId + "' was itself superseded on " +
+          (newMeta.valid_to || '?') + " by '" + newMeta.superseded_by +
+          "' — supersede by the replacement, not the history", {
+          superseded_by: newMeta.superseded_by,
+          valid_to: newMeta.valid_to || null
+        });
+      }
     } else {
       // The 186 gate runs on the ASSEMBLED new-row metadata — an
       // under-provenanced correction is refused exactly like a first lesson.
