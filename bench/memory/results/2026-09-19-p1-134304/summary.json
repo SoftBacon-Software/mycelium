@@ -1,0 +1,173 @@
+{
+  "run_id": "2026-09-19-p1-134304",
+  "n": 1,
+  "regime": {
+    "date_utc": "2026-09-19T13:43:04Z",
+    "git_sha": "fb8f4f539a185f3fd378ea3cde4206ffb7ad84c7",
+    "git_dirty": false,
+    "harness": "p1-skeleton.1",
+    "dataset": {
+      "name": "LongMemEval-S (cleaned)",
+      "file": "longmemeval_s_cleaned.json",
+      "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "licence": "MIT",
+      "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+      "items_available": 500,
+      "citation": "Wu et al., \"LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory\", ICLR 2025"
+    },
+    "answerer": {
+      "model": "qwen3.8:27b",
+      "url_host": "desktop-1uiqnip:11434",
+      "temperature": 0,
+      "max_tokens": 4096
+    },
+    "judge": {
+      "model": "Laguna-XS-2.1-mlx-oq4e-agentic-ours",
+      "url_host": "localhost:8780",
+      "judge_prompt_version": "judge-prompt.4",
+      "prompt_sha256": {
+        "fact": "4f701d1a781c319b2e09bf781aa9e6d360107976b147a8e99e95a29b71e7b160",
+        "abstention": "8b9b7105e70515d2484d1f8a8090c47adb741f8e45f6d0bc72ff0dbe6e64c514"
+      }
+    },
+    "retrieval": {
+      "budget": 5,
+      "chunking": "one memory row per haystack session (server-side chunk-aware split for oversized rows)",
+      "source_type": "bench_longmemeval",
+      "namespace": "bench-p1-2026-09-19-p1-134304",
+      "server_mode": "hybrid (server-side; per-query observed mode recorded in rows)"
+    },
+    "platform": {
+      "url_host": "jetson01.local:3002",
+      "transport": "curl",
+      "version": "0.1.0",
+      "embedding_provider": "ollama",
+      "embedding_model": "nomic-embed-text",
+      "chunk_size": null
+    },
+    "n": 1,
+    "selection_rule": "sort by question_id ascending, take first n (deterministic, stable across runs)",
+    "notes": [
+      "two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+",
+      "SMOKE: write phase capped at 5 sessions per question (regime.write) — NOT a full-run number",
+      "judge is a local model; validated against a hand-scored set — see receipt judge-validation section",
+      "3090 slot lock held: 1/1 served slots (served_slots 1); a run never shares a slot with another client"
+    ],
+    "write": {
+      "max_sessions_per_question": 5
+    }
+  },
+  "arms": {
+    "none": {
+      "n": 1,
+      "write": {
+        "docs": 0,
+        "rows": 0,
+        "skipped": false,
+        "sessions_capped_at": 5,
+        "write_ms": 0
+      },
+      "elapsed_ms": 2035,
+      "fallback_share": {
+        "fallback": 0,
+        "answered": 0,
+        "unstamped": 1
+      },
+      "score": {
+        "n": 1,
+        "counts": {
+          "exact": 0,
+          "partial": 0,
+          "wrong": 1
+        },
+        "unparsed": 0,
+        "p1_score": 0
+      }
+    },
+    "mycelium": {
+      "n": 1,
+      "write": {
+        "docs": 5,
+        "rows": 16,
+        "skipped": false,
+        "sessions_capped_at": 5,
+        "write_ms": 68,
+        "embed_wait": {
+          "scope": "namespace",
+          "namespaces": [
+            "bench-p1-2026-09-19-p1-134304"
+          ],
+          "waited_ms": 15018,
+          "settled": true,
+          "poll_failures": 0,
+          "coverage_after": 100,
+          "coverage_by_namespace": {
+            "bench-p1-2026-09-19-p1-134304": 100
+          }
+        }
+      },
+      "elapsed_ms": 22581,
+      "retrieval_modes": {
+        "hybrid": 1
+      },
+      "fallback_share": {
+        "fallback": 0,
+        "answered": 1,
+        "unstamped": 0
+      },
+      "score": {
+        "n": 1,
+        "counts": {
+          "exact": 0,
+          "partial": 0,
+          "wrong": 1
+        },
+        "unparsed": 0,
+        "p1_score": 0
+      }
+    }
+  },
+  "write_info": {
+    "none": {
+      "docs": 0,
+      "rows": 0,
+      "skipped": false,
+      "sessions_capped_at": 5,
+      "write_ms": 0
+    },
+    "mycelium": {
+      "docs": 5,
+      "rows": 16,
+      "skipped": false,
+      "sessions_capped_at": 5,
+      "write_ms": 68,
+      "embed_wait": {
+        "scope": "namespace",
+        "namespaces": [
+          "bench-p1-2026-09-19-p1-134304"
+        ],
+        "waited_ms": 15018,
+        "settled": true,
+        "poll_failures": 0,
+        "coverage_after": 100,
+        "coverage_by_namespace": {
+          "bench-p1-2026-09-19-p1-134304": 100
+        }
+      }
+    }
+  },
+  "phase": "judged",
+  "cleanup": {
+    "namespace": "bench-p1-2026-09-19-p1-134304",
+    "source_type": "bench_longmemeval",
+    "batches": 1,
+    "deleted": 5,
+    "failed_deletes": [],
+    "rows_remaining_after": 0,
+    "kept": false
+  },
+  "max_sessions_per_question": 5,
+  "commands": [
+    "node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 1 --max-sessions 5 --receipt"
+  ]
+}
