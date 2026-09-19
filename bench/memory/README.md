@@ -9,6 +9,10 @@ client SDK).
 
 Program: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` §P1.
 
+**Pre-registrations:** `prereg/` — the three publishable claims (task
+F-mycelium 244), written before any run and cut once: the 30-night receipt,
+model-swap identity, supersede-with-history vs last-writer-wins.
+
 ## Run it
 
 ```bash
