@@ -3,6 +3,18 @@
 
 import crypto from 'crypto';
 
+// X ids (user, tweet, conversation) are decimal strings up to ~20 digits.
+// Validating them at every caller that interpolates one into a request kills
+// the js/request-forgery taint at the layer it enters (task 240, alert #267):
+// a value like '../../evil' or '123?x=' is refused before any URL is built.
+var X_ID_RE = /^[0-9]{1,20}$/;
+
+function assertXId(kind, id) {
+  if (typeof id !== 'string' || !X_ID_RE.test(id)) {
+    throw new Error('invalid X ' + kind + ': expected a decimal id string, got: ' + String(id).slice(0, 40));
+  }
+}
+
 export function oauthHeader(method, url, creds) {
   var oauthParams = {
     oauth_consumer_key: creds.api_key,
@@ -98,6 +110,14 @@ export function oauthHeaderForGet(baseUrl, query, creds, opts) {
 }
 
 export function apiGet(baseUrl, query, creds) {
+  // Host allowlist (task 240, alert #267): apiGet fetches the X API and nothing
+  // else, so the base URL is pinned before any fetch — a caller that ever
+  // interpolates a full or scheme-relative URL instead of an id fails here,
+  // whatever the callers' own validation does. Plain Error, not a fetch.
+  var parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'https:' || parsed.host !== 'api.twitter.com') {
+    throw new Error('apiGet refuses non-X host: ' + parsed.host + ' (protocol ' + parsed.protocol + ')');
+  }
   var qs = Object.keys(query || {}).sort().map(function (k) {
     return encodeURIComponent(k) + '=' + encodeURIComponent(String(query[k]));
   }).join('&');
@@ -118,17 +138,22 @@ export function getMe(creds) {
 }
 
 export function getMentions(userId, creds, sinceId) {
+  assertXId('user id', userId);
   var q = {
     'tweet.fields': 'author_id,created_at,conversation_id,in_reply_to_user_id',
     'expansions': 'author_id',
     'user.fields': 'username,name',
     'max_results': 25
   };
-  if (sinceId) q.since_id = sinceId;
+  if (sinceId) {
+    assertXId('since_id', sinceId);
+    q.since_id = sinceId;
+  }
   return apiGet('https://api.twitter.com/2/users/' + userId + '/mentions', q, creds);
 }
 
 export function getTweet(tweetId, creds) {
+  assertXId('tweet id', tweetId);
   return apiGet('https://api.twitter.com/2/tweets/' + tweetId, {
     'tweet.fields': 'author_id,created_at,conversation_id,public_metrics,referenced_tweets',
     'expansions': 'author_id,referenced_tweets.id',
@@ -137,6 +162,7 @@ export function getTweet(tweetId, creds) {
 }
 
 export function searchConversation(conversationId, creds) {
+  assertXId('conversation id', conversationId);
   // search/recent may be tier-gated: callers surface the API's own verdict
   return apiGet('https://api.twitter.com/2/tweets/search/recent', {
     'query': 'conversation_id:' + conversationId,

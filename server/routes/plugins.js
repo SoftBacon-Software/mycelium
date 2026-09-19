@@ -48,13 +48,17 @@ export { MARKETING_LEGACY_PREFIXES };
 export function marketingLegacyRedirect(req, res, next) {
   for (var legacy of MARKETING_LEGACY_PREFIXES) {
     if (req.path === legacy || req.path.startsWith(legacy + '/')) {
-      // originalUrl = <mount><routerPath><query>; the legacy prefix's FIRST
-      // occurrence in it is the mount-relative one (the mount prefix —
-      // /api/mycelium — cannot contain it).
+      // The target is built from the request's PARTS, never by string-editing
+      // originalUrl (task 240, alert #272 — js/server-side-unvalidated-url-
+      // redirection): baseUrl is the API mount Express matched (/api/mycelium)
+      // and path is the router-relative path this loop just prefix-matched, so
+      // their concatenation can only ever stay on-site; the query re-derives
+      // from the '?' suffix of originalUrl. A request whose originalUrl does
+      // not sit under a legacy prefix (e.g. '//evil.com/bip') never matches
+      // the guard above and falls through.
       var q = req.originalUrl.indexOf('?');
-      var pathPart = q === -1 ? req.originalUrl : req.originalUrl.slice(0, q);
       var query = q === -1 ? '' : req.originalUrl.slice(q);
-      return res.redirect(301, pathPart.replace(legacy, '/marketing' + legacy) + query);
+      return res.redirect(301, req.baseUrl + '/marketing' + req.path + query);
     }
   }
   next();
@@ -102,7 +106,7 @@ export function registerPluginRoutes(router, deps) {
         registryCache.fetched = now;
         res.json(data);
       })
-      .catch(function (err) {
+      .catch(function (_err) {
         if (registryCache.data) return res.json(registryCache.data);
         res.status(502).json({ error: 'Failed to fetch plugin registry' });
       });

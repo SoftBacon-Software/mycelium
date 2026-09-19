@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import createMemoryDB from './db.js';
+import { chunkText } from './chunking.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
 export default function (core) {
@@ -220,6 +221,21 @@ export default function (core) {
   }
 
   // POST /memory/index — index content
+  //
+  // Chunk-count bound (task 240, alert #279 — js/loop-bound-injection): the
+  // chunked path below loops once per chunk of caller-supplied content, so the
+  // bound is made explicit and enforced BEFORE any write. The arithmetic:
+  // express.json caps /memory bodies at 16 MB = 16,777,216 bytes (worst case
+  // 1-byte chars); chunkText never emits a chunk smaller than half the chunk
+  // size (its minCut floor), so at the DEFAULT_CHUNK_SIZE of 4000 the smallest
+  // possible chunk is ~2000 chars and a 16 MB body cannot exceed
+  // ceil(16777216 / 2000) = 8389 chunks. The constant also bounds the
+  // operator-tunable chunk_size config (floor 200), where the body cap alone
+  // would allow ~168k rows; a doc with more than 8389 embedding rows is
+  // operationally absurd, so it is refused at a named constant rather than
+  // discovered at loop time.
+  var MAX_CHUNKS_PER_DOC = 8389;
+
   router.post('/index', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
@@ -238,6 +254,14 @@ export default function (core) {
       });
       autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
+      // Enforce the chunk bound BEFORE writing: chunkText is pure slicing, so
+      // a cheap preview count refuses an over-bound doc without touching the
+      // index (413 names the field that caused it).
+      var chunkPreview = chunkText(String(content_text), db.getChunkSize());
+      if (chunkPreview.length > MAX_CHUNKS_PER_DOC) {
+        return apiError(res, 413, 'content_text exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC +
+          ' chunks at chunk_size ' + db.getChunkSize() + '); raise chunk_size or split the doc');
+      }
       // Chunk-aware: oversized content splits into chunk rows, and stale
       // chunks from a previous (larger) version of the doc are removed
       var chunks = db.indexDoc(source_type, source_id, content_text, {
