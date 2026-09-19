@@ -5,6 +5,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import createXDB from './db.js';
 import { sendTweet, getCredentials, getMe, getMentions, getTweet, searchConversation } from './twitter.js';
+import { rateLimited } from '../../../lib/rate-limit.js';
 // Note: crypto still needed for thread UUID generation
 
 export default function (core) {
@@ -164,7 +165,12 @@ export default function (core) {
   // ── Publishing ──
 
   // POST /x/posts/:id/publish — Send tweet to X
-  router.post('/posts/:id/publish', function (req, res) {
+  // Rate-limited (task 240): publishing hits a metered third-party API; the
+  // route has never been called on production (route_usage: zero rows), so
+  // the 120/min floor.
+  router.post('/posts/:id/publish',
+    rateLimited('marketing/x/publish', { windowMs: 60000, max: 120 }),
+    function (req, res) {
     var who = core.auth.checkAgentOrAdmin(req, res);
     if (!who) return;
     var post = db.getPost(parseIntParam(req.params.id));

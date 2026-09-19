@@ -3,8 +3,7 @@
 
 import { Router } from 'express';
 import createBipDB from './db.js';
-
-var DRAFT_STATUSES = ['pending', 'approved', 'rejected', 'published', 'skipped'];
+import { rateLimited } from '../../../lib/rate-limit.js';
 
 export default function (core) {
   var router = Router();
@@ -48,7 +47,11 @@ export default function (core) {
   });
 
   // POST /bip/drafts/:id/approve — approve draft (routes to social-posting for publishing)
-  router.post('/drafts/:id/approve', function (req, res) {
+  // Rate-limited (task 240): operator actions with zero production traffic —
+  // the 120/min floor.
+  router.post('/drafts/:id/approve',
+    rateLimited('marketing/bip/approve', { windowMs: 60000, max: 120 }),
+    function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
     var draft = db.getDraft(parseIntParam(req.params.id));
@@ -91,7 +94,10 @@ export default function (core) {
   });
 
   // POST /bip/drafts/:id/reject — reject draft
-  router.post('/drafts/:id/reject', function (req, res) {
+  // Rate-limited (task 240): operator action, zero production traffic — floor.
+  router.post('/drafts/:id/reject',
+    rateLimited('marketing/bip/reject', { windowMs: 60000, max: 120 }),
+    function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
     var draft = db.getDraft(parseIntParam(req.params.id));

@@ -3,6 +3,7 @@
 import { Router } from 'express';
 import createAutoMemoryDB from './db.js';
 import { callLLM } from './llm.js';
+import { rateLimited } from '../../lib/rate-limit.js';
 
 export default function (core) {
   var router = Router();
@@ -181,7 +182,13 @@ export default function (core) {
   });
 
   // POST /auto-memory/facts/:id/reverify — a ground-truth re-check CONFIRMED it (stamp verified_at)
-  router.post('/facts/:id/reverify', function (req, res) {
+  // Rate-limited (task 240): the production reverify sweep is one ~90-call
+  // burst per day (route_usage: 810 calls over 9 active days), so the ceiling
+  // is 10x that peak — the floor 120/min would leave only a 1.3x margin over
+  // the sweep the lab itself runs.
+  router.post('/facts/:id/reverify',
+    rateLimited('auto-memory/reverify', { windowMs: 60000, max: 900 }),
+    function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
@@ -200,7 +207,9 @@ export default function (core) {
   // timeline's "what did we believe on date X" keeps its history searchable. The
   // response carries both rows so the caller's ledger updates without a re-read;
   // the legacy (no-namespace) path returns {ok:true} exactly as before.
-  router.post('/facts/:id/supersede', async function (req, res) {
+  router.post('/facts/:id/supersede',
+    rateLimited('auto-memory/supersede', { windowMs: 60000, max: 120 }),
+    async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var oldId = parseIntParam(req.params.id);
@@ -328,7 +337,10 @@ export default function (core) {
   });
 
   // GET /auto-memory/stats — stats (includes decay info)
-  router.get('/stats', function (req, res) {
+  // Rate-limited (task 240): ~1 call/day on production — the 120/min floor.
+  router.get('/stats',
+    rateLimited('auto-memory/stats', { windowMs: 60000, max: 120 }),
+    function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var stats = db.stats();
