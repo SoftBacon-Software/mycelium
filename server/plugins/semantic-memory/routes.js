@@ -3,6 +3,7 @@
 import { Router } from 'express';
 import createMemoryDB from './db.js';
 import { chunkText } from './chunking.js';
+import { rateLimited } from '../../lib/rate-limit.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
 export default function (core) {
@@ -553,7 +554,11 @@ export default function (core) {
   // superseded → 409 naming the existing pointer; a new_source_id that already
   // belongs to another lesson → 409 (never an overwrite). Both writes run in
   // one transaction — a supersede is both rows or neither.
-  router.post('/lessons/:id/supersede', async function (req, res) {
+  // Rate-limited (CodeQL js/missing-rate-limiting on PR #182): a correction is a
+  // hand or lane action, never a machine loop — the 120/min floor.
+  router.post('/lessons/:id/supersede',
+    rateLimited('memory/lessons-supersede', { windowMs: 60000, max: 120 }),
+    async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var oldId = String(req.params.id || '');
