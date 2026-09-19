@@ -360,6 +360,44 @@ describe('write() under MYCELIUM_TIMELINE_RECONCILE_BATCH=1 — the calls batch,
     expect(ledger[2]).toMatchObject({ decision: 'ADD', ok: false, source: 'decision-batch' });
   });
 
+  it('cross-chunk double-supersede (task 241/F3): a later chunk SUPERSEDING an id an earlier chunk already closed fails open to a COUNTED ADD at apply time', async () => {
+    // All s1 searches ran before ANY s1 write, and parseDecisionBatch's
+    // first-wins claimed set is PER CHUNK: with cap 2, s1's third candidate
+    // (own chunk) can still name r1-q1-tl-f0 — chunk A superseded it and its
+    // shown set predates the writes. In non-routes mode the un-guarded
+    // supersedeInPlace silently re-pointed the history row.
+    const platform = fakePlatform();
+    const decision = fakeChat([
+      '1. ADD',                                   // s0's queue (1 candidate)
+      '1. SUPERSEDE r1-q1-tl-f0\n2. ADD',         // s1 chunk A: F0 dies here
+      '1. SUPERSEDE r1-q1-tl-f0',                 // s1 chunk B: names dead F0 — parse-legal, apply-dead
+    ]);
+    const arm = makeArm({ platform, decision, reconcileBatch: true, reconcileBatchSize: 2 });
+    const w = await arm.write(SESSIONS, { questionId: 'q1', sessionDates: DATES });
+
+    expect(decision.calls).toHaveLength(3);
+    expect(w.timeline).toMatchObject({
+      decision_calls: 3,
+      decisions_batched: 4,
+      supersedes: 1,            // only chunk A's flip
+      supersede_conflicts: 1,   // the apply-time re-check stamps the loser
+      adds: 4,                  // f0 auto + s0 c2 + s1 c2 + the fail-open ADD
+      decision_failures: 0,     // a conflict is not a parse failure
+    });
+
+    // the ledger records what actually WROTE: the loser is an ADD, ok:false
+    const ledger = w.timeline.candidates_ledger;
+    expect(ledger[2]).toMatchObject({ decision: 'SUPERSEDE', ok: true });
+    expect(ledger[4]).toMatchObject({ decision: 'ADD', ok: false, source: 'decision-batch' });
+
+    // F0 flipped ONCE, to the FIRST winner — the history row is not re-pointed
+    const old = platform.rows.get(`bench-p1-r1-timeline|bench_longmemeval|${F0}`);
+    expect(old.metadata.valid_to).toBe('2023/05/21 (Sun) 09:15');
+    const replacements = [...platform.rows.values()].filter((r) => r.metadata.supersedes === F0);
+    expect(replacements).toHaveLength(1);
+    expect(old.metadata.superseded_by).toBe(replacements[0].source_id);
+  });
+
   it('the fastpath and the task-213 guard still apply PER CANDIDATE, before the queue: below-threshold ADDs pay nothing; unembedded top hits still pay (through the batch)', async () => {
     // top hits BELOW the threshold: every call-bound candidate fastpaths — ZERO calls
     const below = makeArm({

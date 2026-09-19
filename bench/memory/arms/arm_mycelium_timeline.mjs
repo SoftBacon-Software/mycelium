@@ -980,7 +980,22 @@ export function createArmMyceliumTimeline({
             for (let k = 0; k < chunk.length; k++) {
               counts.decisions_batched += 1;
               const q = chunk[k];
-              const decision = parsed.decisions[k];
+              let decision = parsed.decisions[k];
+              // 241/F3 (review 239a): the claimed set in parseDecisionBatch is
+              // PER CHUNK, and every batch search ran before any batch write —
+              // so a later CHUNK can legally SUPERSEDE an id an earlier chunk
+              // already closed (its shown set predates the writes; routes mode
+              // would refuse loudly, non-routes supersedeInPlace would
+              // silently re-point the history row). Re-check the target at
+              // APPLY time: dead or missing fails open to a COUNTED ADD — the
+              // same first-wins outcome a within-chunk conflict gets.
+              if (decision.action === 'SUPERSEDE') {
+                const applyTarget = pending.get(decision.id);
+                if (!applyTarget || applyTarget.metadata.valid_to != null) {
+                  counts.supersede_conflicts += 1;
+                  decision = { action: 'ADD', id: null, ok: false };
+                }
+              }
               const ledgerEntry = {
                 index: q.ci,
                 session_index: idx,
