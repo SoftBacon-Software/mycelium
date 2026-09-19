@@ -9,32 +9,19 @@ import { renderIngestionGrid } from './ingestion.mjs';
 import { renderAutopsySection } from './miss_autopsy.mjs';
 import { WIN_CONDITION, renderPerTypeTable, renderWinCondition, tallyByType, timelineArmLabel } from './per_type.mjs';
 import { ADOPTION_GATE, adoptionGate, gateAppliesToRun } from './adoption.mjs';
+import { maxFallbackShare, renderFallbackBound } from './fallback_provisional.mjs';
 
 export const RECEIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'receipts');
 
-// The bound's denominator, provenance-stamped (task 188): the extract control's
-// n=50 run — extract_ms 11,370,052 over 2,355 docs = 4.83 s/session. The
-// timeline arm's write cost is quoted as a RATIO of this figure; if the extract
-// arm ever re-runs its n=50 write, re-stamp these three numbers from the new
-// summary.json (never retype the ratio — the line computes it).
-export const EXTRACT_ARM_STAMPED = {
-  run_id: '2026-09-10-p1-001549',
-  extract_ms: 11_370_052,
-  docs: 2355,
-};
-
-// The timeline arm's write cost INCLUDING its reconcile phase (extract_ms alone
-// understates it ~10×: the ADD/SUPERSEDE/KEEP decision calls dominate), as a
-// ratio of the extract arm's stamped figure — the brief's ≤2× bound. Returns
-// null when the run carries no timeline write stats (no line for other arms).
-export function timelineCostLine(writeInfo) {
-  const w = writeInfo?.['mycelium-timeline'];
-  if (!w || typeof w.extract_ms !== 'number' || !w.docs) return null;
-  const sPerSession = (w.extract_ms + (w.reconcile_ms ?? 0)) / w.docs / 1000;
-  const extractSPerSession = EXTRACT_ARM_STAMPED.extract_ms / EXTRACT_ARM_STAMPED.docs / 1000;
-  const ratio = sPerSession / extractSPerSession;
-  return `Write cost (mycelium-timeline): ${sPerSession.toFixed(2)} s/session — cost ×${ratio.toFixed(2)} of extract; bound ≤ 2×`;
-}
+// THE COST LINE (task 234): the timeline arm's write cost renders ONCE per
+// receipt — the win-condition block's `Cost bound (timeline write cost ≤ 2×
+// extract)` line (per_type.mjs renderCostBound), whose denominator is the
+// extract ARM'S OWN stamped seconds_per_session from the SAME run. A second
+// renderer here (the old task-188 `Write cost (…): cost ×N of extract` line,
+// LLM-time numerator over a hard-coded 2026-09-10 extract stamp) quoted a
+// DIFFERENT ratio in the same receipt (×1.45 beside the bound's ×5.71 —
+// receipts/2026-09-18-p1-154254.md lines 39 vs 77); it was deleted, and the
+// one-renderer contract is pinned by test/unit/bench-memory-reconcile-batch.test.js.
 
 // The per-candidate decision ledgers live in summary.json — in the receipt's
 // Write-phase block they render as a count only, or a 50-question receipt
@@ -139,6 +126,33 @@ export function renderReceipt({
   for (const [name, a] of Object.entries(summary.arms)) L.push(scoreRow([name, a], summary.regime));
   L.push('');
   L.push('`p1_score` = (exact + 0.5×partial) / n. Raw counts are the primary record; the score is the one-number comparison.');
+  // task 235: keyword-fallback reads mark a column PROVISIONAL — the number is
+  // quotable only when its reads actually ran hybrid. The receipt marks on ANY
+  // fallback read (the grid's pre-committed bound is what decides verdicts);
+  // unstamped rows render n/a with their count, never guessed into either side.
+  const fallbackBoundStamp = maxFallbackShare();
+  const armsWriteInfo = writeInfo ?? summary.write_info ?? {};
+  for (const [name, a] of Object.entries(summary.arms)) {
+    const share = a.fallback_share ?? null;
+    const unstamped = share
+      ? (share.unstamped ?? 0)
+      : a.retrieval_modes
+        ? (a.n ?? 0) - Object.values(a.retrieval_modes).reduce((s, c) => s + c, 0)
+        : 0;
+    if (share && (share.answered ?? 0) > 0 && (share.fallback ?? 0) > 0) {
+      const settled = armsWriteInfo[name]?.embed_wait?.settled;
+      L.push(
+        `PROVISIONAL — ${share.fallback}/${share.answered} reads ran keyword-fallback ` +
+          `(embed wait settled=${settled === undefined ? 'not stamped' : String(settled)})`
+      );
+      L.push('');
+    }
+    if (unstamped > 0) {
+      const total = share ? unstamped + (share.answered ?? 0) : (a.n ?? 0);
+      L.push(`Retrieval mode unstamped (pre-mode run) on ${unstamped} of ${total} rows — fallback share n/a`);
+      L.push('');
+    }
+  }
   // task 182: the ingestion-control 2×2 renders only when ALL FOUR grid arms
   // are in the run — a smoke carrying just the controls has no grid.
   const grid = renderIngestionGrid(summary.arms, writeInfo ?? summary.write_info ?? null);
@@ -202,13 +216,11 @@ export function renderReceipt({
     L.push(bits.join(''));
     L.push('');
   }
-  // task 188: the timeline arm's write cost against the extract control —
-  // computed from the run's own stamps, never hand-typed
-  const costLine = timelineCostLine(writeInfo ?? summary.write_info ?? null);
-  if (costLine) {
-    L.push(costLine);
-    L.push('');
-  }
+  // task 234: the timeline arm's write cost renders ONCE — inside the
+  // win-condition block below (renderWinCondition → renderCostBound), judged
+  // from the run's own seconds_per_session stamps on BOTH sides. No second
+  // cost line here: two renderers quoted two ratios in one receipt
+  // (receipts/2026-09-18-p1-154254.md), and a quotable artifact quotes one.
   // task 199: per-question-type scores + (when the timeline arm is in the run)
   // its pre-committed win-condition block. The table needs the run's judged
   // rows; their absence renders as its absence, never a number from nothing.
@@ -282,6 +294,10 @@ export function renderReceipt({
   L.push('```json');
   L.push(JSON.stringify(summary.regime, null, 2));
   L.push('```');
+  L.push('');
+  // task 235: the pre-committed fallback bound + its provenance — a bound
+  // tuned after seeing a run is not pre-committed, so the source is stamped
+  L.push(renderFallbackBound(fallbackBoundStamp));
   L.push('');
   if (writeInfo) {
     L.push('## Write phase');
