@@ -147,3 +147,126 @@ export function parseLimit(v, d) {
   if (!isFinite(n) || n <= 0) return d;
   return Math.min(n, 500);
 }
+
+// ---- task 90: receipt / engines / chat helpers (same honesty law) ----------
+
+/** A state.json section's items, or null — the caller renders "—", never a guess. */
+export function stateSectionItems(state, id) {
+  if (!state || !Array.isArray(state.sections)) return null;
+  var sec = null;
+  for (var i = 0; i < state.sections.length; i++) {
+    if (state.sections[i] && state.sections[i].id === id) { sec = state.sections[i]; break; }
+  }
+  return sec && Array.isArray(sec.items) ? sec.items : null;
+}
+
+/** Count items whose status maps to ok — the ENGINES strip's "up" numeral. */
+export function countHue(items, hue) {
+  if (!Array.isArray(items)) return null;
+  var n = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (hueOf(items[i] && items[i].status) === hue) n++;
+  }
+  return n;
+}
+
+/**
+ * The receipt feed's shape check — the console does NOT invent a schema.
+ * Whatever the director's endpoint serves is inspected for the fields the
+ * face needs; anything absent is NAMED, and the face renders "—" for it.
+ * Accepts the plausible envelopes: the json itself, {receipt:…}, {data:…}.
+ * Returns { ok, at, hero:{on,off}, pairs:[…], nights:[…], missing:[…] }.
+ */
+export function receiptShape(json) {
+  var missing = [];
+  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+    return { ok: false, missing: ['not a json object'] };
+  }
+  var r = (json.receipt && typeof json.receipt === 'object') ? json.receipt
+    : (json.data && typeof json.data === 'object') ? json.data
+      : json;
+  var on = num(r.on ?? (r.hero && r.hero.on) ?? r.pass_on);
+  var off = num(r.off ?? (r.hero && r.hero.off) ?? r.pass_off);
+  if (on === null) missing.push('on (ON pass rate)');
+  if (off === null) missing.push('off (OFF pass rate)');
+  var pairs = normalizePairs(r.pairs || r.per_pair);
+  if (!pairs) missing.push('pairs (per-pair table)');
+  var nights = normalizeNights(r.nights || r.nightly || r.history);
+  if (!nights) missing.push('nights (nightly strip)');
+  return {
+    ok: missing.length === 0,
+    missing: missing,
+    at: r.generated_at || r.at || json.generated_at || null,
+    hero: { on: on, off: off },
+    pairs: pairs || [],
+    nights: nights || [],
+  };
+}
+
+function num(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) return Number(v);
+  return null;
+}
+
+function normalizePairs(raw) {
+  if (!Array.isArray(raw)) return null;
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var p = raw[i] || {};
+    var name = p.task_class || p.class || p.pair || p.name || p.lane;
+    var on = num(p.on !== undefined ? p.on : p.pass_on);
+    var off = num(p.off !== undefined ? p.off : p.pass_off);
+    if (name === undefined || name === null) { name = '?'; }
+    var row = { name: String(name), on: on, off: off, verdict: p.verdict || null };
+    row.delta = (on !== null && off !== null) ? deltaChip(on, off) : { word: '—', hue: 'dim' };
+    out.push(row);
+  }
+  return out;
+}
+
+function normalizeNights(raw) {
+  if (!Array.isArray(raw)) return null;
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var n = raw[i] || {};
+    var date = n.date || n.night || n.day || null;
+    var on = num(n.on !== undefined ? n.on : n.pass_on);
+    var off = num(n.off !== undefined ? n.off : n.pass_off);
+    out.push({ date: date === null ? '?' : String(date), on: on, off: off });
+  }
+  return out;
+}
+
+/**
+ * The arithmetic verdict for a pair: ON minus OFF in percentage points.
+ * A delta is computation, not a judgment — the chip says exactly that much
+ * and no more; feed-stated verdicts outrank it and are rendered as-is.
+ */
+export function deltaChip(on, off) {
+  if (typeof on !== 'number' || typeof off !== 'number') return { word: '—', hue: 'dim' };
+  var d = Math.round((on - off) * 100) / 100;
+  if (d > 0) return { word: '+' + d + 'pp', hue: 'ok' };
+  if (d < 0) return { word: String(d) + 'pp', hue: 'crit' };
+  return { word: '±0', hue: 'dim' };
+}
+
+/** Nightly-strip bar height percent from an on-rate; clamped, absent → 0. */
+export function barPct(v) {
+  var n = num(v);
+  if (n === null) return 0;
+  if (n > 0 && n <= 1) n = n * 100; // a rate
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return Math.round(n);
+}
+
+/** Chat narration hue: urgent priority is crit, directives warn, else the sender's rail hue. */
+export function chatHue(row) {
+  var p = String((row && row.priority) || '').toLowerCase();
+  var t = String((row && row.msg_type) || '').toLowerCase();
+  if (p === 'urgent') return 'crit';
+  if (t === 'directive') return 'warn';
+  if (t === 'request') return 'info';
+  return nameHue(row && (row.from_agent || row.from));
+}

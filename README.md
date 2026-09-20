@@ -38,6 +38,10 @@ These are implemented and exercised by the running system, not a roadmap:
 
 A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT). The public demo face — `GET /stats/public` (anonymized aggregate stats) and `GET /public/activity` (sanitized live activity feed), both no-auth — is mounted to feed the static site export; it is demo surface, not product (see [Surface levels](docs/surface-levels.md)).
 
+### Operator console
+
+`public/console/` is a dependency-free operator UI (plain HTML/CSS/JS, no build step) served by the platform: sign in through the studio login, then read the lab — rounds, agents, memory, the live event stream, logs, gated-run evidence — and post to the message channel as yourself. It is built clean-room against a documented design study; the per-task receipts (what landed, what is honestly not wired yet) are [docs/console/RECEIPT-89.md](docs/console/RECEIPT-89.md) and [docs/console/RECEIPT-90.md](docs/console/RECEIPT-90.md).
+
 ### Maturity — read this before you rely on something
 
 The core (agents, work, plans, tasks, messages, approvals, context, spend, drones, plugins) is what runs in production daily and is covered by the test suite. Some of the edges are thinner, and this README would rather tell you than let you find out:

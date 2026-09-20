@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Seed a SCRATCH mycelium instance for console development shots (task 89).
+"""Seed a SCRATCH mycelium instance for console development shots (tasks 89/90).
 
 Replays REAL rows from the live lab platform into a scratch db through the
 platform's own write APIs — the console bakes nothing, and these fixtures are
 documented, reproducible, and disposable. NEVER point this at a platform you
-cannot wipe: it writes agents, workflows, lessons and events.
+cannot wipe: it writes agents, workflows, lessons, events, messages, projects.
 
 Usage:
   python3 tools/console-fixture-seed.py <live-url> <live-admin-key> \
-         <scratch-url> <scratch-admin-key>
+         <scratch-url> <scratch-admin-key> [section,section]
 
 The scratch instance must be booted with its own DATA_DIR (e.g.
-DATA_DIR=/tmp/k89-scratch-db) so the real store is never touched.
+DATA_DIR=/tmp/k90-scratch-db) so the real store is never touched.
 """
 
 import json
@@ -19,11 +19,14 @@ import subprocess
 import sys
 
 
-def call(base, key, path, body=None, method=None):
+def call(base, key, path, body=None, method=None, acting_as=None):
     """curl transport — bare Homebrew python3 cannot reach the LAN on this Mac;
-    curl can (lane lesson, 2026-09-17)."""
+    curl can (lane lesson, 2026-09-17). acting_as sets X-Acting-As so a replayed
+    row keeps its real sender."""
     cmd = ['curl', '-s', '-m', '20', '-w', '\\n%{http_code}',
            '-H', 'X-Admin-Key: ' + key, '-H', 'Content-Type: application/json']
+    if acting_as:
+        cmd += ['-H', 'X-Acting-As: ' + acting_as]
     if method:
         cmd += ['-X', method]
     if body is not None:
@@ -42,7 +45,7 @@ def main():
     # optional 5th arg: comma list of sections to (re)run, e.g. "agents" —
     # lets a re-seed top up one section without duplicating the others
     wanted = set((sys.argv[5] if len(sys.argv) > 5 else
-                  'studio,agents,workflows,lessons,events').split(','))
+                  'studio,agents,workflows,lessons,events,messages,projects').split(','))
     ok = True
 
     # 1. a studio operator to sign in as
@@ -129,13 +132,68 @@ def main():
         n += st == 200
     print('events replayed:', n)
 
-    # 6. verify every route the console uses, on the scratch instance
+    # 6. messages — real channel rows, each replayed AS ITS REAL SENDER via
+    #    X-Acting-As (from_agent is server-derived, never client-supplied).
+    #    Directives are skipped: they page every operator inbox on the scratch
+    #    instance, which is noise in a fixture db.
+    if 'messages' in wanted:
+        st, msgs = call(live_url, live_key, '/messages?limit=60')
+        rows = (msgs or [])
+        if isinstance(msgs, dict):
+            rows = msgs.get('items') or msgs.get('messages') or []
+        n = 0
+        for m in rows[-14:]:
+            if str(m.get('msg_type') or '').lower() == 'directive':
+                continue
+            st, r = call(scratch_url, scratch_key, '/messages', {
+                'content': m.get('content'),
+                'to': m.get('to_agent') or None,
+                'msg_type': m.get('msg_type') or 'message',
+                'priority': m.get('priority') or 'normal',
+                'thread_id': m.get('thread_id') or None,
+                'project_id': m.get('project_id') or None,
+            }, acting_as=m.get('from_agent') or None)
+            if st != 200:
+                print('  message replay refused (', st, ') from', m.get('from_agent'), '— skipping')
+            n += st == 200
+        # one row through the OPERATOR path (studio token, not acting-as) —
+        # this is the exact authority the console composer posts with
+        st, login = call(scratch_url, scratch_key, '/studio/login',
+                         {'username': 'operator', 'password': 'console-fixtures-2026'})
+        tok = login.get('token', '')
+        cmd = ['curl', '-s', '-m', '20', '-o', '/dev/null', '-w', '%{http_code}',
+               '-X', 'POST', '-H', 'Authorization: Bearer ' + tok,
+               '-H', 'Content-Type: application/json',
+               '-d', json.dumps({'content': 'composer check — posted by the operator session the console itself uses (task 90 fixture)'})]
+        code = subprocess.run(cmd + [scratch_url.rstrip('/') + '/api/mycelium/messages'],
+                              capture_output=True, text=True).stdout.strip()
+        print('messages replayed:', n, '· operator-composer POST ->', code)
+        ok &= code == '200'
+
+    # 7. projects — registered repos, verbatim rows
+    if 'projects' in wanted:
+        st, projs = call(live_url, live_key, '/projects')
+        rows = projs if isinstance(projs, list) else []
+        n = 0
+        for p in rows:
+            st, _ = call(scratch_url, scratch_key, '/projects', {
+                'id': p.get('id'), 'name': p.get('name'),
+                'description': p.get('description') or '',
+                'repo_url': p.get('repo_url') or '',
+                'org_id': p.get('org_id') or '',
+                'type': p.get('type') or 'software'})
+            n += st in (200, 409)
+            if st not in (200, 409):
+                print('  project replay refused (', st, '):', p.get('id'))
+        print('projects replayed:', n, 'of', len(rows))
+
+    # 8. verify every route the console uses, on the scratch instance
     st, login = call(scratch_url, scratch_key, '/studio/login',
                      {'username': 'operator', 'password': 'console-fixtures-2026'})
     tok = login.get('token', '')
     print('login:', st)
     checks = ['/agents', '/workflows?limit=1', '/memory/lessons?limit=1',
-              '/messages?limit=1', '/events?limit=1']
+              '/messages?limit=1', '/events?limit=1', '/projects']
     for path in checks:
         st, _ = call(scratch_url, scratch_key, path)
         print('GET', path, '->', st)

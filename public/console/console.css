@@ -766,3 +766,246 @@ textarea.input { resize: vertical; min-height: 64px; }
   .sidebar { flex-basis: 200px; width: 200px; }
   .page-content { padding: 18px; }
 }
+
+/* =================================================== task 90 — the chrome */
+
+.head-chrome { display: flex; align-items: center; gap: 8px; margin-left: 10px; flex: none; }
+
+.head-actions + .head-chrome { margin-left: 0; }
+
+.chrome-btn {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 4px 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.chrome-btn:hover { color: var(--ink); border-color: var(--mint-dim); }
+.chrome-btn.on { color: var(--mint); border-color: rgba(47, 255, 210, 0.4); }
+
+.chrome-q { width: 26px; height: 26px; padding: 0; text-align: center; font-size: 12px; }
+
+/* ------------------------------------------------------------ chat face */
+
+.chat-wrap { display: flex; flex-direction: column; }
+
+.chat-feed {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: calc(100vh - var(--head-h) - 210px);
+  overflow-y: auto;
+}
+
+.chat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  font-size: 12.5px;
+}
+
+.chat-row:last-child { border-bottom: none; }
+
+.chat-glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--hair-soft);
+  color: var(--ink-2);
+  text-transform: uppercase;
+}
+
+.chat-glyph[data-hue='ok'] { color: var(--ok); border-color: rgba(0, 255, 136, 0.35); }
+.chat-glyph[data-hue='info'] { color: #4db8ff; border-color: rgba(0, 136, 255, 0.4); }
+.chat-glyph[data-hue='warn'] { color: var(--warn); border-color: rgba(255, 170, 0, 0.4); }
+.chat-glyph[data-hue='crit'] { color: var(--crit); border-color: rgba(255, 68, 68, 0.45); }
+.chat-glyph[data-hue='accent'] { color: var(--mint); border-color: rgba(47, 255, 210, 0.4); }
+
+.chat-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chat-main .from { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink); }
+.chat-main .to { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+.chat-body { color: var(--ink-2); }
+
+.chat-stamp { font-family: var(--mono); font-size: 10px; color: var(--ink-3); flex: none; }
+
+.chat-composer {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: stretch;
+}
+
+.chat-composer .input { flex: 1; }
+
+.chat-note { margin-top: 8px; }
+
+/* --------------------------------------------------- the dense table */
+
+.dtable { width: 100%; border-collapse: collapse; }
+
+.dtable th {
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.6px;
+  color: var(--ink-3);
+  font-weight: 600;
+  text-align: left;
+  padding: 4px 10px 6px 2px;
+  border-bottom: 1px solid var(--hair-soft);
+  white-space: nowrap;
+}
+
+.dtable td {
+  font-size: 12px;
+  padding: 6px 10px 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  vertical-align: baseline;
+}
+
+.dtable tr:last-child td { border-bottom: none; }
+
+.dtable .subj { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.dtable .num { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.dtable .dim-cell { color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; }
+
+/* ------------------------------------------------- the nightly strip */
+
+.nights {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 2px 2px;
+  min-height: 120px;
+}
+
+.night { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 0 0 auto; }
+
+.night-bar-track {
+  width: 26px;
+  height: 84px;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--hair-soft);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.night-bar { width: 100%; background: var(--ok); opacity: 0.75; }
+
+.night-bar[data-hue='warn'] { background: var(--warn); }
+.night-bar[data-hue='crit'] { background: var(--crit); }
+.night-bar[data-hue='dim'] { background: var(--ink-3); }
+
+.night-date { font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
+
+/* ------------------------------------------------------- the guided tour */
+
+.tour-layer { position: fixed; inset: 0; z-index: 80; }
+
+.tour-hole {
+  position: fixed;
+  z-index: 81;
+  border: 1.5px solid var(--mint);
+  border-radius: 10px;
+  box-shadow: 0 0 0 100000px rgba(2, 8, 12, 0.72), 0 0 24px rgba(47, 255, 210, 0.25);
+  pointer-events: none;
+  transition: top 0.25s ease, left 0.25s ease, width 0.25s ease, height 0.25s ease;
+}
+
+.tour-tip {
+  position: fixed;
+  z-index: 82;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--well);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  padding: 16px 16px 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+  transition: top 0.25s ease, left 0.25s ease;
+}
+
+.tour-step-label { margin-bottom: 6px; }
+
+.tour-title { font-size: 14px; font-weight: 600; margin: 0 0 5px; }
+
+.tour-body { font-size: 12px; color: var(--ink-2); line-height: 1.5; margin: 0 0 12px; }
+
+.tour-src { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin: -6px 0 12px; }
+
+.tour-foot { display: flex; align-items: center; gap: 8px; }
+
+.tour-dots { display: flex; gap: 5px; flex: 1; }
+
+.tour-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--hair);
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tour-dot.done { border-color: var(--mint-dim); }
+.tour-dot.cur { background: var(--mint); border-color: var(--mint); }
+
+.tour-arrow {
+  position: fixed;
+  z-index: 82;
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-right: 9px solid var(--mint);
+  transition: top 0.25s ease;
+}
+
+/* ------------------------------------------------- comfortable density */
+/* Compact (the default) is the working rhythm; Comfortable gives rows room. */
+
+body[data-density='comfortable'] { --pad-well: 22px; --gap-well: 22px; }
+
+body[data-density='comfortable'] .page-content { padding: 30px; }
+
+body[data-density='comfortable'] .narr-row,
+body[data-density='comfortable'] .chat-row { padding: 10px 2px; font-size: 13px; }
+
+body[data-density='comfortable'] .rail-body { font-size: 12px; line-height: 1.7; }
+
+body[data-density='comfortable'] .ledger-row { padding: 11px 14px 11px 15px; }
+
+body[data-density='comfortable'] .stat-well { padding: 16px 18px 15px; }
+
+body[data-density='comfortable'] .dtable td { padding: 10px 10px 10px 2px; font-size: 12.5px; }
+
+/* ---------------------------------------------------- Reduce Motion law */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

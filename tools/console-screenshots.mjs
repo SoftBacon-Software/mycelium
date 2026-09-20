@@ -1,9 +1,10 @@
-// K-kira 89 — screenshot every face of the clean-room operator console.
+// K-kira 90 — screenshot every face of the clean-room operator console.
 // Zero-dep CDP driver adapted from velum-web/tools/screenshot-pages.mjs (ours).
 // Signs in as the fixture operator by planting the JWT the app itself would
 // store, then shoots each hash route at two viewports against the platform
-// running from THIS worktree. Chrome is THIS process's child and is killed
-// before exit (lane rule 0).
+// running from THIS worktree — plus the guided tour mid-step and the
+// comfortable density. Chrome is THIS process's child and is killed before
+// exit (lane rule 0).
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -13,7 +14,7 @@ const PORT = 9229;
 const BASE = 'http://127.0.0.1:3002/console/';
 const OUT = new URL('../docs/console/shots/', import.meta.url).pathname;
 const LOGIN = { username: 'operator', password: 'console-fixtures-2026' };
-const ROUTES = ['rounds', 'agents', 'memory', 'lab'];
+const ROUTES = ['rounds', 'receipt', 'chat', 'agents', 'memory', 'lab', 'logs', 'maintainer', 'engines', 'about'];
 const VIEWPORTS = [[1600, 1000], [1280, 800]];
 
 // 1. operator sign-in through the same endpoint the page uses
@@ -27,7 +28,7 @@ const { token } = await loginRes.json();
 
 const chrome = spawn(CHROME, [
   '--headless=new', `--remote-debugging-port=${PORT}`,
-  `--user-data-dir=/tmp/k89-chrome-profile-${process.pid}`,
+  `--user-data-dir=/tmp/k90-chrome-profile-${process.pid}`,
   '--window-size=1600,1000', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
   'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -74,11 +75,22 @@ const failures = [];
 
 async function plantJwtAndReload() {
   await send('Runtime.evaluate', {
-    expression: `localStorage.setItem('mycelium-studio-jwt', ${JSON.stringify(token)}); 'planted'`,
+    expression: `localStorage.setItem('mycelium-studio-jwt', ${JSON.stringify(token)});` +
+      `localStorage.setItem('mycelium_console_tour_done','1');` +
+      `localStorage.setItem('mycelium_console_density','compact'); 'planted'`,
     returnByValue: true,
   });
   await send('Page.navigate', { url: BASE });
   await sleep(3500); // boot: me() verify, first fetches, SSE open
+}
+
+async function shoot(name, minBytes = 50000) {
+  const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+  const file = OUT + name;
+  writeFileSync(file, Buffer.from(shot.data, 'base64'));
+  const bytes = statSync(file).size;
+  if (bytes < minBytes) failures.push(`${name} only ${bytes}B`);
+  console.log(`${name}: ${bytes}B`);
 }
 
 // sign-in well first (fail-closed proof): no JWT in the page
@@ -87,12 +99,7 @@ await sleep(2500);
 await send('Runtime.evaluate', { expression: `localStorage.clear(); 'cleared'`, returnByValue: true });
 await send('Page.navigate', { url: BASE });
 await sleep(2000);
-{
-  const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-  const file = OUT + '89-signin-1600.png';
-  writeFileSync(file, Buffer.from(shot.data, 'base64'));
-  console.log('signin:', statSync(file).size, 'B');
-}
+await shoot('90-signin-1600.png');
 
 for (const [w, hgt] of VIEWPORTS) {
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: hgt, deviceScaleFactor: 1, mobile: false });
@@ -100,14 +107,28 @@ for (const [w, hgt] of VIEWPORTS) {
   for (const route of ROUTES) {
     await send('Runtime.evaluate', { expression: `location.hash = '#/${route}'; 'ok'`, returnByValue: true });
     await sleep(3000); // fetches + a render tick; SSE lines accumulate
-    const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-    const file = `${OUT}89-${route}-${w}.png`;
-    writeFileSync(file, Buffer.from(shot.data, 'base64'));
-    const bytes = statSync(file).size;
-    if (bytes < 50000) failures.push(`${route}@${w} only ${bytes}B`);
-    console.log(`${route}@${w}: ${bytes}B`);
+    await shoot(`90-${route}-${w}.png`);
   }
 }
+
+// the guided tour, mid-step (step 2 — the Receipt), at 1600
+await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+await send('Runtime.evaluate', { expression: `localStorage.removeItem('mycelium_console_tour_done'); location.hash = '#/rounds'; 'ok'`, returnByValue: true });
+await send('Page.navigate', { url: BASE });
+await sleep(4000); // boot runs maybeFirstRunTour → step 1; advance one step
+await send('Runtime.evaluate', { expression: `document.querySelector('.tour-tip .btn-primary') && document.querySelector('.tour-tip .btn-primary').click(); 'next'`, returnByValue: true });
+await sleep(900);
+await shoot('90-tour-step2-1600.png');
+// leave the page clean for the density shot
+await send('Runtime.evaluate', { expression: `localStorage.setItem('mycelium_console_tour_done','1'); location.hash = '#/rounds'; location.reload(); 'ok'`, returnByValue: true });
+await sleep(3000);
+
+// comfortable density at 1600 (the toggle's visible effect, memory face has the densest rows)
+await send('Runtime.evaluate', { expression: `localStorage.setItem('mycelium_console_density','comfortable'); location.hash = '#/memory'; 'ok'`, returnByValue: true });
+await sleep(1200);
+await send('Runtime.evaluate', { expression: `document.getElementById('density-btn') && document.getElementById('density-btn').click(); 'toggled'`, returnByValue: true });
+await sleep(1500);
+await shoot('90-comfortable-memory-1600.png');
 
 try { ws.close(); } catch {}
 if (failures.length) cleanup(1, 'undersized shots: ' + failures.join('; '));

@@ -18,6 +18,7 @@ import {
   parseStamp, fmtClock, fmtAge, ageAgo, valueOrDash,
   hueOf, wfVerdict, lessonHue, provenanceChip,
   truncate, firstLine, stripPrefix, nameHue, pick, parseLimit,
+  stateSectionItems, countHue, receiptShape, deltaChip, barPct, chatHue,
 } from './lib.js';
 
 // ------------------------------------------------------------------ config
@@ -25,6 +26,10 @@ import {
 const JWT_KEY = 'mycelium-studio-jwt';          // same key Velum stores
 const STATE_URL_DEFAULT = 'http://100.80.183.95:8890/state.json';
 const STATE_URL_KEY = 'mycelium_console_state_url';
+const RECEIPT_URL_DEFAULT = 'http://100.80.183.95:8890/receipts/';
+const RECEIPT_URL_KEY = 'mycelium_console_receipt_url';
+const DENSITY_KEY = 'mycelium_console_density'; // 'compact' (default) | 'comfortable'
+const TOUR_KEY = 'mycelium_console_tour_done';  // first-run auto-start flag
 const POLL_MS = 30000;                            // data faces refresh
 const LAB_POLL_MS = 15000;                        // polled fallback cadence
 const RAIL_BUFFER_MAX = 300;                      // lab rail line cap
@@ -53,7 +58,12 @@ const S = {
   events: [], labMode: 'linking', labPaused: false, labHeldBack: 0,
   eventsSeen: 0,
   sse: null, labTimer: 0,
-  railPaused: { rounds: false },
+  railPaused: { rounds: false, maintainer: false },
+  // task 90 faces
+  receipt: null, receiptRaw: null, receiptAt: 0, receiptErr: null,
+  msgs: [], msgsAt: 0, msgsErr: null, chatBusy: false, chatNote: null,
+  logs: [], logsAt: 0, logsErr: null, logsPaused: false, logsHeldBack: 0,
+  projects: [], projectsAt: 0, projectsErr: null,
 };
 
 // ------------------------------------------------------------- dom helpers
@@ -162,6 +172,8 @@ async function boot() {
   $('#signin-form').addEventListener('submit', onSignIn);
   $('#reconnect-btn').addEventListener('click', reconnect);
   $('#signout-btn').addEventListener('click', () => failClosed());
+  $('#tour-btn').addEventListener('click', () => startTour(true));
+  $('#density-btn').addEventListener('click', toggleDensity);
   window.addEventListener('hashchange', applyRoute);
   document.querySelectorAll('.nav-item[data-route]').forEach(btn => {
     btn.addEventListener('click', () => { location.hash = '#/' + btn.dataset.route; });
@@ -170,7 +182,9 @@ async function boot() {
     btn.addEventListener('click', () => { /* a dim row: present, not clickable */ });
   });
 
-  buildRounds(); buildAgents(); buildMemory(); buildLab();
+  buildRounds(); buildReceipt(); buildChat(); buildAgents(); buildMemory(); buildLab();
+  buildLogs(); buildMaintainer(); buildEngines(); buildAbout();
+  applyDensity();
 
   if (!getJwt()) { showSignIn(); return; }
   const me = await api('/studio/me');
@@ -224,7 +238,9 @@ function enter(user) {
   if (!location.hash) location.hash = '#/rounds';
   applyRoute();
   refreshAgents();       // nav badge on every face
-  refreshWorkflows();    // rounds + its badge
+  refreshRounds();       // rounds + its badge
+  fetchState().then(updateBadges);   // engines badge + rounds seats
+  maybeFirstRunTour();
 }
 
 async function reconnect() {
@@ -241,9 +257,15 @@ async function reconnect() {
 
 const ROUTES = {
   rounds: { title: 'Rounds', page: 'page-rounds', nav: 'nav-rounds', pollMs: POLL_MS, refresh: refreshRounds },
+  receipt: { title: 'Receipt', page: 'page-receipt', nav: 'nav-receipt', pollMs: POLL_MS, refresh: refreshReceipt },
+  chat: { title: 'Chat', page: 'page-chat', nav: 'nav-chat', pollMs: POLL_MS, refresh: refreshChat },
   agents: { title: 'Agents', page: 'page-agents', nav: 'nav-agents', pollMs: POLL_MS, refresh: refreshAgents },
   memory: { title: 'Memory', page: 'page-memory', nav: 'nav-memory', pollMs: POLL_MS, refresh: refreshLessons },
   lab: { title: 'Lab Alive', page: 'page-lab', nav: 'nav-lab', pollMs: 0, refresh: null },
+  logs: { title: 'Logs', page: 'page-logs', nav: 'nav-logs', pollMs: LAB_POLL_MS, refresh: refreshLogs },
+  maintainer: { title: 'Maintainer', page: 'page-maintainer', nav: 'nav-maintainer', pollMs: POLL_MS, refresh: refreshMaintainer },
+  engines: { title: 'Engines', page: 'page-engines', nav: 'nav-engines', pollMs: POLL_MS, refresh: refreshEngines },
+  about: { title: 'About', page: 'page-about', nav: 'nav-about', pollMs: 0, refresh: null },
 };
 
 function applyRoute() {
@@ -259,9 +281,14 @@ function applyRoute() {
   buildHeadActions(S.route);
   routePolled[S.route] = Date.now(); // reset the cadence on entry
   if (S.route === 'rounds') refreshRounds();
+  if (S.route === 'receipt') refreshReceipt();
+  if (S.route === 'chat') refreshChat();
   if (S.route === 'agents') refreshAgents();
   if (S.route === 'memory') { refreshLessons(); }
   if (S.route === 'lab') { labConnect(); }
+  if (S.route === 'logs') refreshLogs();
+  if (S.route === 'maintainer') refreshMaintainer();
+  if (S.route === 'engines') refreshEngines();
 }
 
 let routePolled = {};
@@ -293,12 +320,22 @@ function buildHeadActions(route) {
   clear(box);
   if (route === 'rounds') {
     box.append(headBtn('head-refresh', '↻ REFRESH', 'btn-primary', () => { refreshRounds(); }));
+  } else if (route === 'receipt') {
+    box.append(headBtn('head-refresh', '↻ REFRESH', '', () => { refreshReceipt(); }));
+  } else if (route === 'chat') {
+    box.append(headBtn('head-refresh', '↻ REFRESH', '', () => { refreshChat(); }));
   } else if (route === 'agents') {
     box.append(headBtn('head-refresh', '↻ REFRESH', 'btn-primary', () => { refreshAgents(); }));
   } else if (route === 'memory') {
     box.append(headBtn('head-refresh', '↻ REFRESH', '', () => { refreshLessons(); }));
   } else if (route === 'lab') {
     box.append(headBtn('head-pause', S.labPaused ? '▶ RESUME' : '❚❚ PAUSE', 'btn-primary', toggleLabPause));
+  } else if (route === 'logs') {
+    box.append(headBtn('head-pause', S.logsPaused ? '▶ RESUME' : '❚❚ PAUSE', 'btn-primary', toggleLogsPause));
+  } else if (route === 'maintainer') {
+    box.append(headBtn('head-refresh', '↻ REFRESH', 'btn-primary', () => { refreshMaintainer(); }));
+  } else if (route === 'engines') {
+    box.append(headBtn('head-refresh', '↻ REFRESH', 'btn-primary', () => { refreshEngines(); }));
   }
 }
 
@@ -320,6 +357,13 @@ function updateBadges() {
   setBadge('nav-badge-agents', S.agents.length ? online : null, online ? 'ok' : 'crit');
   setBadge('nav-badge-memory', S.lessonsAt ? S.lessons.length : null, 'dim');
   setBadge('nav-badge-lab', S.eventsSeen ? S.eventsSeen : null, 'dim');
+  setBadge('nav-badge-chat', S.msgsAt ? S.msgs.length : null, 'dim');
+  setBadge('nav-badge-logs', S.logsAt ? S.logs.length : null, 'dim');
+  const done = S.workflows.filter(w => !['pending', 'claimed', 'running'].includes(String(w.status).toLowerCase())).length;
+  setBadge('nav-badge-maintainer', S.workflows.length ? done : null, 'dim');
+  const eng = stateSectionItems(S.state, 'engines');
+  const up = countHue(eng, 'ok');
+  setBadge('nav-badge-engines', eng ? (up + '/' + eng.length) : null, eng ? (up === eng.length ? 'ok' : 'warn') : 'dim');
 }
 
 // ================================================================== ROUNDS
@@ -384,10 +428,11 @@ function buildRounds() {
   ));
 }
 
-function toggleRailPause(btn) {
-  S.railPaused.rounds = !S.railPaused.rounds;
-  btn.classList.toggle('on', S.railPaused.rounds);
-  btn.textContent = S.railPaused.rounds ? 'RESUME' : 'PAUSE';
+function toggleRailPause(btn, route) {
+  const r = route || 'rounds';
+  S.railPaused[r] = !S.railPaused[r];
+  btn.classList.toggle('on', S.railPaused[r]);
+  btn.textContent = S.railPaused[r] ? 'RESUME' : 'PAUSE';
 }
 
 function statWell(label, num, note, hue, small) {
@@ -536,7 +581,12 @@ function wfColor(wf) {
 
 function wfAge(wf, now) {
   const t = parseStamp(wf.started_at || wf.created_at);
-  return t ? fmtAge(t, now) + (['pending'].includes(String(wf.status).toLowerCase()) ? ' queued' : ' in') : '';
+  if (!t) return '';
+  const s = String(wf.status || '').toLowerCase();
+  const age = fmtAge(t, now);
+  if (s === 'pending') return age + ' queued';
+  if (['completed', 'failed', 'cancelled'].includes(s)) return 'done in ' + age;
+  return age + ' in';
 }
 
 function clockOf(stamp) {
@@ -837,11 +887,32 @@ async function backfillLab() {
     labPoll();
     return;
   }
+  // Merge, don't clear: a live SSE row that arrived while this fetch was in
+  // flight must survive the backfill render (the task-89 wrinkle). Fetched
+  // rows are the older window; anything already in the buffer that the fetch
+  // did NOT return is newer live rows — they keep their place after it.
   const rows = r.data.slice(0, 60).reverse(); // oldest of the window first
-  clear(L.rail);
-  S.events = [];
-  for (const row of rows) labLine(row, false);
+  const fetchedIds = new Set(rows.map(row => String(row.id)));
+  const liveOlderFirst = S.events.filter(e => !fetchedIds.has(String(e.id)));
+  S.events = rows.concat(liveOlderFirst).slice(-RAIL_BUFFER_MAX);
+  renderRailFromEvents();
   renderLabCount();
+  updateBadges();
+}
+
+/** Rebuild the lab rail from the buffer — one render path for backfill + live. */
+function renderRailFromEvents() {
+  clear(L.rail);
+  for (const row of S.events) {
+    const hue = /heartbeat/i.test(String(row.type)) ? 'dim' : nameHue(row.agent);
+    L.rail.append(h('li', { class: 'rail-line' },
+      h('span', { class: 't', text: clockOf(row.created_at || Date.now()) }),
+      ' ',
+      h('span', { class: 'src', 'data-hue': hue, text: String(row.agent || '?').slice(0, 18) }),
+      ' · ' + truncate(String(row.summary || row.type || ''), 150)));
+  }
+  while (L.rail.children.length > RAIL_BUFFER_MAX) L.rail.removeChild(L.rail.firstChild);
+  if (S.route === 'lab') L.rail.scrollTop = L.rail.scrollHeight;
 }
 
 function labPoll() {
@@ -922,6 +993,770 @@ function clearLab() {
   S.labHeldBack = 0;
   renderHeldBack();
   renderLabCount();
+}
+
+// ================================================================= RECEIPT
+
+let RC = {};
+
+function buildReceipt() {
+  const page = $('#page-receipt');
+  clear(page);
+  RC.heroOn = h('div', { class: 'stat-num', text: '—' });
+  RC.heroOff = h('div', { class: 'stat-num', text: '—' });
+  RC.stripFresh = h('span', { class: 'cmd-value', text: '—' });
+  RC.feedChip = h('span', { class: 'hidden' });
+  page.append(h('div', { class: 'cmd-strip' },
+    h('div', { class: 'cmd-cell' }, micro('RECEIPT'), RC.feedChip),
+    h('div', { class: 'cmd-cell' }, micro('ON-OFF DELTA'), h('span', { class: 'cmd-value big mono', text: '—' })),
+    h('div', { class: 'cmd-cell' }, micro('REFRESHED'), RC.stripFresh),
+    RC.feedChip,
+    h('span', { class: 'spacer' })));
+
+  RC.heroOnWell = h('div', { class: 'stat-well', 'data-hue': 'ok' }, micro('WITH YESTERDAY’S LESSONS — ON'), RC.heroOn,
+    h('div', { class: 'stat-note', text: 'repeat-task pass rate, lessons on' }));
+  RC.heroOffWell = h('div', { class: 'stat-well' }, micro('WITHOUT — OFF'), RC.heroOff,
+    h('div', { class: 'stat-note', text: 'the control arm' }));
+  RC.heroRow = h('div', { class: 'stat-row' }, RC.heroOnWell, RC.heroOffWell);
+  RC.heroNote = h('div', { class: 'empty-line', text: '' });
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'THE HERO PAIR', micro('THE RECEIPT — measured, never estimated')),
+    RC.heroRow, RC.heroNote));
+
+  RC.pairBody = h('div', {});
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'PER-PAIR — LEADER + SPECIALIST BY TASK CLASS', micro('verdict chips: feed-stated, else the arithmetic delta')),
+    RC.pairBody));
+
+  RC.nights = h('div', { class: 'nights' });
+  RC.nightsNote = h('div', { class: 'cap-note', text: '' });
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'THE NIGHTLY STRIP', micro('bars + chips — no charts')),
+    RC.nights, RC.nightsNote));
+}
+
+function receiptUrl() {
+  try { return localStorage.getItem(RECEIPT_URL_KEY) || RECEIPT_URL_DEFAULT; }
+  catch (e) { return RECEIPT_URL_DEFAULT; }
+}
+
+async function refreshReceipt() {
+  if (document.hidden) return;
+  S.receiptAt = Date.now();
+  let json = null;
+  try {
+    const res = await fetch(receiptUrl(), { mode: 'cors', cache: 'no-store' });
+    if (!res.ok) throw new Error('http ' + res.status);
+    json = await res.json();
+    S.receiptErr = null;
+  } catch (e) {
+    json = null;
+    S.receiptErr = 'receipt feed not wired (' + e.message + ')';
+  }
+  S.receiptRaw = json;
+  renderReceipt();
+  updateBadges();
+}
+
+function renderReceipt() {
+  const now = Date.now();
+  RC.stripFresh.textContent = ageAgo(S.receiptAt, now);
+
+  // the honest headline: the feed the brief names is not there yet
+  if (S.receiptErr || S.receiptRaw === null) {
+    RC.feedChip.className = 'chip unreach-chip';
+    RC.feedChip.dataset.hue = 'warn';
+    RC.feedChip.textContent = 'RECEIPT FEED NOT WIRED';
+    RC.feedChip.title = receiptUrl() + ' refused — the director exposes it read-only; last tried ' +
+      new Date(S.receiptAt).toLocaleTimeString();
+    RC.heroOn.textContent = '—'; RC.heroOff.textContent = '—';
+    RC.heroOnWell.dataset.hue = 'dim';
+    RC.heroNote.textContent = '—  receipt feed not wired — ' + receiptUrl() +
+      ' answers nothing yet. Nothing is estimated here; the face renders the moment the feed exists.';
+    clear(RC.pairBody);
+    RC.pairBody.append(h('div', { class: 'empty-line', text: 'no pairs shown — the feed carries none' }));
+    clear(RC.nights);
+    RC.nightsNote.textContent = 'the strip draws from the feed’s nights; none are wired yet';
+    return;
+  }
+
+  const shape = receiptShape(S.receiptRaw);
+  if (!shape.ok) {
+    RC.feedChip.className = 'chip unreach-chip';
+    RC.feedChip.dataset.hue = 'warn';
+    RC.feedChip.textContent = 'SHAPE UNREADABLE';
+    RC.feedChip.title = 'the feed answered but is missing: ' + shape.missing.join('; ');
+    RC.heroNote.textContent = 'the receipt feed answered, but the face cannot read it yet. Missing fields: ' +
+      shape.missing.join(' · ') + '. Named, not guessed — the director reshapes the feed or the face learns it.';
+    RC.heroOn.textContent = '—'; RC.heroOff.textContent = '—';
+    clear(RC.pairBody);
+    RC.pairBody.append(h('div', { class: 'empty-line', text: 'pairs unreadable — ' + shape.missing.join('; ') }));
+    clear(RC.nights);
+    RC.nightsNote.textContent = 'nights unreadable';
+    return;
+  }
+
+  RC.feedChip.className = 'chip';
+  RC.feedChip.dataset.hue = 'ok';
+  RC.feedChip.textContent = 'FEED LIVE';
+  RC.heroOn.textContent = shape.hero.on === null ? '—' : String(shape.hero.on);
+  RC.heroOff.textContent = shape.hero.off === null ? '—' : String(shape.hero.off);
+  RC.heroOnWell.dataset.hue = shape.hero.on === null ? 'dim' : 'ok';
+  const heroDelta = deltaChip(shape.hero.on, shape.hero.off);
+  RC.heroNote.textContent = 'hero delta ' + heroDelta.word +
+    (shape.at ? ' · feed stamped ' + String(shape.at) : '');
+
+  clear(RC.pairBody);
+  if (!shape.pairs.length) {
+    RC.pairBody.append(h('div', { class: 'empty-line', text: 'the feed carries no pairs' }));
+  } else {
+    const tbl = h('table', { class: 'dtable' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'PAIR' }), h('th', { text: 'ON' }), h('th', { text: 'OFF' }),
+        h('th', { text: 'VERDICT' }))));
+    const tb = h('tbody', {});
+    for (const p of shape.pairs.slice(0, 14)) {
+      tb.append(h('tr', {},
+        h('td', { class: 'subj', text: p.name }),
+        h('td', { class: 'num', text: p.on === null ? '—' : String(p.on) }),
+        h('td', { class: 'num', text: p.off === null ? '—' : String(p.off) }),
+        h('td', {}, p.verdict ? chip(String(p.verdict), hueOf(String(p.verdict))) : chip(p.delta.word, p.delta.hue))));
+    }
+    tbl.append(tb);
+    RC.pairBody.append(tbl);
+    if (shape.pairs.length > 14) RC.pairBody.append(h('div', { class: 'cap-note', text: '+' + (shape.pairs.length - 14) + ' more pairs in the feed' }));
+  }
+
+  clear(RC.nights);
+  if (!shape.nights.length) {
+    RC.nights.append(h('div', { class: 'empty-line', text: 'the feed carries no nights' }));
+  } else {
+    for (const n of shape.nights.slice(-14)) {
+      const pct = barPct(n.on);
+      RC.nights.append(h('div', { class: 'night' },
+        h('div', { class: 'night-bar-track' },
+          h('div', { class: 'night-bar', 'data-hue': pct >= 60 ? 'ok' : pct > 0 ? 'warn' : 'dim', style: 'height:' + pct + '%;' })),
+        chip(pct ? pct + '%' : '—', pct >= 60 ? 'ok' : pct > 0 ? 'warn' : 'dim'),
+        h('div', { class: 'night-date', text: n.date })));
+    }
+  }
+  RC.nightsNote.textContent = 'bar = ON pass rate for that night · chip = the same, as the strip reads it' +
+    (shape.nights.length > 14 ? ' · showing the last 14 of ' + shape.nights.length : '');
+}
+
+// ==================================================================== CHAT
+
+let CH = {};
+
+function buildChat() {
+  const page = $('#page-chat');
+  clear(page);
+  CH.stripMode = chip('…', 'dim');
+  CH.stripCount = h('span', { class: 'cmd-value big mono', text: '—' });
+  CH.stripFresh = h('span', { class: 'cmd-value', text: '—' });
+  page.append(h('div', { class: 'cmd-strip' },
+    h('div', { class: 'cmd-cell' }, micro('CHANNEL'), CH.stripMode),
+    h('div', { class: 'cmd-cell' }, micro('MESSAGES IN WINDOW'), CH.stripCount),
+    h('div', { class: 'cmd-cell' }, micro('REFRESHED'), CH.stripFresh),
+    h('span', { class: 'spacer' })));
+
+  CH.feed = h('ul', { class: 'chat-feed' });
+  CH.note = h('div', { class: 'cap-note chat-note', text: 'no bubbles: the channel reads as narration — glyph · sentence · mono stamp, newest first' });
+  CH.composerInput = h('input', {
+    class: 'input mono', type: 'text', id: 'chat-input',
+    placeholder: 'post to the channel as yourself — an operator session, never a pseudo-agent',
+  });
+  CH.send = h('button', { class: 'btn btn-primary', id: 'chat-send', text: 'SEND', onclick: () => sendChat() });
+  CH.composerNote = h('div', { class: 'cap-note chat-note', text: '' });
+  page.append(h('div', { class: 'well chat-wrap' },
+    h('div', { class: 'well-title' }, 'THE CHANNEL', micro('GET /messages · POST /messages as the operator')),
+    CH.feed,
+    CH.note,
+    h('div', { class: 'chat-composer' }, CH.composerInput, CH.send),
+    CH.composerNote));
+  CH.composerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+}
+
+async function refreshChat() {
+  if (document.hidden) return;
+  const r = await api('/messages?limit=60');
+  if (r.ok && Array.isArray(r.data)) {
+    S.msgs = r.data;
+    S.msgsAt = Date.now();
+    S.msgsErr = null;
+    CH.stripMode.textContent = 'LINKED';
+    CH.stripMode.dataset.hue = 'ok';
+  } else {
+    S.msgsErr = r.error || ('http ' + r.status);
+    CH.stripMode.textContent = 'UNREACHABLE';
+    CH.stripMode.dataset.hue = 'crit';
+  }
+  renderChat();
+  updateBadges();
+}
+
+function renderChat() {
+  const now = Date.now();
+  CH.stripCount.textContent = S.msgsErr ? '—' : String(S.msgs.length);
+  CH.stripFresh.textContent = ageAgo(S.msgsAt, now);
+  clear(CH.feed);
+  if (S.msgsErr) {
+    CH.feed.append(h('li', { class: 'empty-line', text: 'channel unreachable — ' + S.msgsErr }));
+    return;
+  }
+  if (!S.msgs.length) {
+    CH.feed.append(h('li', { class: 'empty-line', text: 'no messages in the window — the channel is quiet' }));
+    return;
+  }
+  for (const m of S.msgs.slice(0, 60)) {
+    const from = String(m.from_agent || '?');
+    const to = m.to_agent ? String(m.to_agent) : null;
+    const hue = chatHue(m);
+    CH.feed.append(h('li', { class: 'chat-row' },
+      h('span', { class: 'chat-glyph', 'data-hue': hue, text: from.slice(0, 2) }),
+      h('span', { class: 'chat-main' },
+        h('span', { class: 'from', text: from }, to ? h('span', { class: 'to', text: ' → ' + to }) : null),
+        '  ',
+        h('span', { class: 'chat-body', text: truncate(firstLine(stripPrefix(m.content || '')), 110) })),
+      h('span', { class: 'chat-stamp', text: clockOf(m.created_at) })));
+  }
+  CH.note.textContent = 'showing ' + Math.min(60, S.msgs.length) + ' · newest first · system-to-system telemetry is filtered by the platform itself';
+}
+
+async function sendChat() {
+  if (S.chatBusy) return;
+  const text = CH.composerInput.value.trim();
+  if (!text) { CH.composerNote.textContent = 'nothing to send — type a line first'; return; }
+  S.chatBusy = true;
+  CH.send.disabled = true;
+  CH.send.textContent = '…';
+  const r = await api('/messages', { method: 'POST', body: { content: text } });
+  S.chatBusy = false;
+  CH.send.disabled = false;
+  CH.send.textContent = 'SEND';
+  if (!r.ok) {
+    CH.composerNote.textContent = 'post refused — ' + (r.error || 'http ' + r.status) + ' · nothing was sent';
+    return;
+  }
+  CH.composerInput.value = '';
+  CH.composerNote.textContent = 'posted as you (the operator session) · ' + fmtClock(Date.now());
+  refreshChat();
+}
+
+// ==================================================================== LOGS
+
+let LG = {};
+
+function buildLogs() {
+  const page = $('#page-logs');
+  clear(page);
+  LG.stripMode = chip('POLLED', 'info');
+  LG.stripCount = h('span', { class: 'cmd-value big mono', text: '—' });
+  LG.stripFresh = h('span', { class: 'cmd-value', text: '—' });
+  page.append(h('div', { class: 'cmd-strip' },
+    h('div', { class: 'cmd-cell' }, micro('STREAM'), LG.stripMode),
+    h('div', { class: 'cmd-cell' }, micro('LINES'), LG.stripCount),
+    h('div', { class: 'cmd-cell' }, micro('REFRESHED'), LG.stripFresh),
+    h('span', { class: 'spacer' })));
+
+  LG.rail = h('ul', { class: 'rail-body tall', style: 'max-height: calc(100vh - var(--head-h) - 190px);' });
+  LG.count = h('span', { class: 'rail-count', text: '0' });
+  LG.pauseBtn = h('button', { class: 'rail-btn', text: 'PAUSE', onclick: toggleLogsPause });
+  LG.copyBtn = h('button', { class: 'rail-btn', text: 'COPY', onclick: copyLogs });
+  page.append(h('div', { class: 'well rail' },
+    h('div', { class: 'rail-head' },
+      h('span', { class: 'rail-title', 'data-hue': 'accent', text: 'LAB LOG — EVENTS, FULL PAGE' }),
+      LG.count,
+      h('span', { class: 'rail-mode', text: 'polled every 15s' }),
+      h('span', { class: 'rail-btns' }, LG.pauseBtn, h('button', { class: 'rail-btn', text: 'CLR', onclick: clearLogs }), LG.copyBtn)),
+    LG.rail,
+    h('div', { style: 'padding:6px 14px 10px;' },
+      h('div', { class: 'cap-note', id: 'logs-note', text: 'the platform event log, source hue-coded · the same stream Lab Alive streams live, read here at poll cadence' }))));
+}
+
+async function refreshLogs() {
+  if (document.hidden) return;
+  const r = await api('/events?limit=200');
+  if (r.ok && Array.isArray(r.data)) {
+    S.logsAt = Date.now();
+    S.logsErr = null;
+    const rows = r.data.slice(0, 200).reverse(); // oldest first
+    if (S.logsPaused) {
+      S.logsHeldBack += rows.filter(row => !S.logs.some(e => String(e.id) === String(row.id))).length;
+      renderLogsNote();
+      return;
+    }
+    S.logs = rows.slice(-RAIL_BUFFER_MAX);
+    renderLogs();
+  } else {
+    S.logsErr = r.error || ('http ' + r.status);
+    renderLogs();
+  }
+  updateBadges();
+}
+
+function renderLogs() {
+  const now = Date.now();
+  LG.stripCount.textContent = S.logsErr ? '—' : String(S.logs.length);
+  LG.stripFresh.textContent = ageAgo(S.logsAt, now);
+  LG.count.textContent = String(S.logs.length);
+  clear(LG.rail);
+  if (S.logsErr) {
+    LG.rail.append(h('li', { class: 'rail-line' },
+      h('span', { class: 'src', 'data-hue': 'crit', text: 'logs' }),
+      ' · unreachable — ' + S.logsErr));
+    return;
+  }
+  if (!S.logs.length) {
+    LG.rail.append(h('li', { class: 'rail-line' },
+      h('span', { class: 'src', 'data-hue': 'dim', text: 'logs' }),
+      ' · no events in the window'));
+    return;
+  }
+  for (const row of S.logs) logsLine(row);
+  if (S.route === 'logs') LG.rail.scrollTop = LG.rail.scrollHeight;
+}
+
+function logsLine(row) {
+  const hue = /heartbeat/i.test(String(row.type)) ? 'dim' : nameHue(row.agent);
+  LG.rail.append(h('li', { class: 'rail-line' },
+    h('span', { class: 't', text: clockOf(row.created_at) }),
+    ' ',
+    h('span', { class: 'src', 'data-hue': hue, text: String(row.agent || '?').slice(0, 18) }),
+    ' · ' + truncate(String(row.summary || row.type || ''), 190)));
+  while (LG.rail.children.length > RAIL_BUFFER_MAX) LG.rail.removeChild(LG.rail.firstChild);
+}
+
+function renderLogsNote() {
+  const note = $('#logs-note');
+  if (note) note.textContent = 'paused — ' + S.logsHeldBack + ' line' + (S.logsHeldBack === 1 ? '' : 's') +
+    ' passed while paused; resume to let them in. The record kept them.';
+}
+
+function toggleLogsPause() {
+  S.logsPaused = !S.logsPaused;
+  LG.pauseBtn.classList.toggle('on', S.logsPaused);
+  LG.pauseBtn.textContent = S.logsPaused ? 'RESUME' : 'PAUSE';
+  const head = $('#head-pause');
+  if (head) head.textContent = S.logsPaused ? '▶ RESUME' : '❚❚ PAUSE';
+  LG.stripMode.textContent = S.logsPaused ? 'PAUSED' : 'POLLED';
+  LG.stripMode.dataset.hue = S.logsPaused ? 'warn' : 'info';
+  if (!S.logsPaused) {
+    if (S.logsHeldBack) {
+      LG.rail.append(h('li', { class: 'rail-line' },
+        h('span', { class: 't', text: '--:--:--' }),
+        ' ',
+        h('span', { class: 'src', 'data-hue': 'warn', text: 'pause' }),
+        ' · ' + S.logsHeldBack + ' line' + (S.logsHeldBack === 1 ? '' : 's') + ' passed while paused — the record kept them'));
+      S.logsHeldBack = 0;
+    }
+    renderLogsNote();
+    refreshLogs();
+  } else {
+    renderLogsNote();
+  }
+}
+
+function clearLogs() {
+  clear(LG.rail);
+  S.logs = [];
+  S.logsHeldBack = 0;
+  LG.count.textContent = '0';
+  LG.stripCount.textContent = '0';
+  renderLogsNote();
+}
+
+async function copyLogs() {
+  const lines = S.logs.map(row =>
+    fmtClock(parseStamp(row.created_at) || Date.now()) + ' ' + String(row.agent || '?') + ' · ' + String(row.summary || row.type || ''));
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'));
+    LG.copyBtn.textContent = 'COPIED';
+    setTimeout(() => { LG.copyBtn.textContent = 'COPY'; }, 1500);
+  } catch (e) {
+    LG.copyBtn.textContent = 'DENIED';
+    setTimeout(() => { LG.copyBtn.textContent = 'COPY'; }, 1500);
+  }
+}
+
+// ============================================================== MAINTAINER
+
+let MT = {};
+
+function buildMaintainer() {
+  const page = $('#page-maintainer');
+  clear(page);
+  MT.stripStatus = chip('…', 'dim');
+  MT.stripRepos = h('span', { class: 'cmd-value big mono', text: '—' });
+  MT.stripDone = h('span', { class: 'cmd-value big mono', text: '—' });
+  MT.stripFresh = h('span', { class: 'cmd-value', text: '—' });
+  page.append(h('div', { class: 'cmd-strip' },
+    h('div', { class: 'cmd-cell' }, micro('EVIDENCE'), MT.stripStatus),
+    h('div', { class: 'cmd-cell' }, micro('ADOPTED REPOS'), MT.stripRepos),
+    h('div', { class: 'cmd-cell' }, micro('GATED RUNS IN WINDOW'), MT.stripDone),
+    h('div', { class: 'cmd-cell' }, micro('REFRESHED'), MT.stripFresh),
+    h('span', { class: 'spacer' })));
+
+  MT.findings = h('div', {});
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'FINDINGS — GATED RUNS', micro('GET /workflows · the gate verdict is the evidence')),
+    MT.findings));
+
+  MT.rail = h('ul', { class: 'rail-body' });
+  MT.railCount = h('span', { class: 'rail-count', text: '0' });
+  page.append(h('div', { class: 'well rail' },
+    h('div', { class: 'rail-head' },
+      h('span', { class: 'rail-title', 'data-hue': 'ok', text: 'GATE OUTPUT' }),
+      MT.railCount,
+      h('span', { class: 'rail-mode', text: 'polled' }),
+      h('span', { class: 'rail-btns' },
+        h('button', { class: 'rail-btn', text: 'PAUSE', onclick: (e) => toggleRailPause(e.target, 'maintainer') }),
+        h('button', { class: 'rail-btn', text: 'CLR', onclick: (e) => { clear(MT.rail); MT.railCount.textContent = '0'; } }))),
+    MT.rail,
+    h('div', { style: 'padding:6px 14px 10px;' },
+      h('div', { class: 'cap-note', text: 'verified = a real gate produced it — provenance is the point, per the honesty rule' }))));
+
+  MT.repos = h('div', {});
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'ADOPTED REPOS', micro('GET /projects')),
+    MT.repos));
+}
+
+async function refreshMaintainer() {
+  if (document.hidden) return;
+  fetchState().then(() => { if (S.route === 'maintainer') renderMaintainerRepos(); });
+  const w = await api('/workflows?limit=50&order=desc');
+  if (w.ok) {
+    S.workflows = (w.data && w.data.items) || [];
+    S.wfAt = Date.now();
+    S.wfErr = null;
+  } else {
+    S.wfErr = w.error;
+  }
+  const p = await api('/projects');
+  if (p.ok && Array.isArray(p.data)) {
+    S.projects = p.data;
+    S.projectsAt = Date.now();
+    S.projectsErr = null;
+  } else {
+    S.projectsErr = p.error || ('http ' + p.status);
+  }
+  renderMaintainer();
+  updateBadges();
+}
+
+function renderMaintainer() {
+  const now = Date.now();
+  const up = S.platformOk !== false && S.wfErr === null;
+  const done = S.workflows.filter(w => !['pending', 'claimed', 'running'].includes(String(w.status).toLowerCase()));
+  MT.stripStatus.textContent = up ? 'EVIDENCE OK' : 'UNREACHABLE';
+  MT.stripStatus.dataset.hue = up ? 'ok' : 'crit';
+  MT.stripRepos.textContent = S.projectsErr ? '—' : String(S.projects.length);
+  MT.stripDone.textContent = up ? String(done.length) : '—';
+  MT.stripFresh.textContent = ageAgo(S.wfAt, now);
+
+  clear(MT.findings);
+  if (!up) {
+    MT.findings.append(h('div', { class: 'empty-line', text: 'workflows unreachable — ' + (S.wfErr || 'no data') }));
+  } else if (!S.workflows.length) {
+    MT.findings.append(h('div', { class: 'empty-line', text: 'no gated runs in the window — nothing to file' }));
+  } else {
+    const tbl = h('table', { class: 'dtable' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'SUBJECT' }), h('th', { text: 'GATE' }), h('th', { text: 'PROVENANCE' }), h('th', { text: 'AGE' }))));
+    const tb = h('tbody', {});
+    for (const wf of S.workflows.slice(0, 12)) {
+      const v = wfVerdict(wf);
+      const who = String(wf.claimed_by || wf.requested_by || '—');
+      tb.append(h('tr', {},
+        h('td', { class: 'subj', text: truncate(wf.name || ('wf#' + wf.id), 58) }),
+        h('td', {}, chip(v.word, v.hue)),
+        h('td', { class: 'dim-cell', text: 'runner ' + who + ' · wf#' + wf.id }),
+        h('td', { class: 'dim-cell', text: wfAge(wf, now) })));
+    }
+    tbl.append(tb);
+    MT.findings.append(tbl);
+    if (S.workflows.length > 12) MT.findings.append(h('div', { class: 'cap-note', text: '+' + (S.workflows.length - 12) + ' more in the window' }));
+  }
+
+  if (!S.railPaused.maintainer && up) {
+    clear(MT.rail);
+    for (const wf of S.workflows.slice(0, 30)) {
+      const v = wfVerdict(wf);
+      MT.rail.append(h('li', { class: 'rail-line' },
+        h('span', { class: 't', text: clockOf(wf.started_at || wf.created_at) }),
+        ' ',
+        h('span', { class: 'src', 'data-hue': v.hue === 'dim' ? 'accent' : v.hue, text: 'WF#' + wf.id }),
+        ' · ' + v.word + ' · ' + truncate(wf.name || '', 80)));
+    }
+    MT.railCount.textContent = String(Math.min(30, S.workflows.length));
+  }
+
+  renderMaintainerRepos();
+}
+
+function renderMaintainerRepos() {
+  clear(MT.repos);
+  if (S.projectsErr) {
+    MT.repos.append(h('div', { class: 'empty-line', text: 'projects unreachable — ' + S.projectsErr }));
+    return;
+  }
+  if (!S.projects.length) {
+    MT.repos.append(h('div', { class: 'empty-line', text: 'no projects registered on this platform yet' }));
+    return;
+  }
+  const tbl = h('table', { class: 'dtable' },
+    h('thead', {}, h('tr', {},
+      h('th', { text: 'REPO' }), h('th', { text: 'TYPE' }), h('th', { text: 'STATUS' }), h('th', { text: 'PATH' }))));
+  const tb = h('tbody', {});
+  for (const p of S.projects.slice(0, 12)) {
+    tb.append(h('tr', {},
+      h('td', { class: 'subj', text: truncate(p.name || p.id, 40) }),
+      h('td', { class: 'dim-cell', text: String(p.type || '—') }),
+      h('td', {}, chip(String(p.status || '—'), hueOf(p.status))),
+      h('td', { class: 'dim-cell', text: truncate(String(p.repo_path || p.repo_url || '—'), 46) })));
+  }
+  tbl.append(tb);
+  MT.repos.append(tbl);
+}
+
+// ================================================================= ENGINES
+
+let EN = {};
+
+function buildEngines() {
+  const page = $('#page-engines');
+  clear(page);
+  EN.stripStatus = chip('…', 'dim');
+  EN.stripUp = h('span', { class: 'cmd-value big mono', text: '—' });
+  EN.stripFresh = h('span', { class: 'cmd-value', text: '—' });
+  EN.stateChip = h('span', { class: 'hidden' });
+  page.append(h('div', { class: 'cmd-strip' },
+    h('div', { class: 'cmd-cell' }, micro('SEATS'), EN.stripStatus),
+    h('div', { class: 'cmd-cell' }, micro('UP / TOTAL'), EN.stripUp),
+    h('div', { class: 'cmd-cell' }, micro('REFRESHED'), EN.stripFresh),
+    EN.stateChip,
+    h('span', { class: 'spacer' })));
+
+  EN.seatRow = h('div', { class: 'stat-row' });
+  page.append(h('div', { class: 'well' },
+    h('div', { class: 'well-title' }, 'THE SEATS', micro('the director’s state source only — the browser probes no LAN port')),
+    EN.seatRow,
+    h('div', { class: 'cap-note', text: 'a seat is whatever the state source says it is — oMLX, ds4, the 3090, the GLM proxy appear when the source carries them' })));
+}
+
+async function refreshEngines() {
+  if (document.hidden) return;
+  await fetchState();
+  renderEngines();
+  updateBadges();
+}
+
+function renderEngines() {
+  const now = Date.now();
+  const items = stateSectionItems(S.state, 'engines');
+  const up = countHue(items, 'ok');
+  EN.stripUp.textContent = items ? (up + ' / ' + items.length) : '—';
+  EN.stripFresh.textContent = ageAgo(S.stateOkAt || S.stateAt, now);
+
+  if (S.stateErr) {
+    EN.stripStatus.textContent = 'STATE UNREACHABLE';
+    EN.stripStatus.dataset.hue = 'warn';
+    EN.stateChip.className = 'chip unreach-chip';
+    EN.stateChip.dataset.hue = 'warn';
+    EN.stateChip.textContent = 'STATE SOURCE BLOCKED';
+    EN.stateChip.title = S.stateErr + ' · last ok: ' + (S.stateOkAt ? new Date(S.stateOkAt).toLocaleTimeString() : 'never');
+  } else {
+    EN.stripStatus.textContent = items ? 'SEATS READ' : 'NO SECTION';
+    EN.stripStatus.dataset.hue = items ? 'ok' : 'dim';
+    EN.stateChip.className = 'hidden';
+  }
+
+  clear(EN.seatRow);
+  if (items && items.length) {
+    for (const it of items) {
+      EN.seatRow.append(statWell(it.k || 'seat', String(it.v || '—'), it.note ? truncate(it.note, 64) : null, hueOf(it.status)));
+    }
+  } else {
+    const lastOk = S.stateOkAt ? 'last ok ' + ageAgo(S.stateOkAt, now) : 'never answered';
+    EN.seatRow.append(statWell('SEATS', '—', S.stateErr ? 'state source unreachable — the face stays honest until it answers' : lastOk,
+      S.stateErr ? 'warn' : 'dim', true));
+  }
+}
+
+// =================================================================== ABOUT
+
+function buildAbout() {
+  const page = $('#page-about');
+  clear(page);
+  const about = h('div', { class: 'well', style: 'max-width: 720px;' },
+    h('div', { style: 'font-size: 40px; line-height: 1; margin-bottom: 10px;', text: '🍄' }),
+    h('div', { class: 'signin-word', style: 'font-size: 22px;', text: 'Mycelium' }),
+    h('div', { class: 'hint', style: 'margin: 2px 0 14px;', text: 'operator console · clean-room build, task 90' }),
+    h('div', { class: 'a-rows', style: 'display:grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: baseline;' },
+      micro('CONSOLE'), h('span', { class: 'v mono', style: 'font-size: 12px;', text: 'c0.1 · plain HTML/CSS/JS, no build step' }),
+      micro('PLATFORM'), h('span', { class: 'v mono', id: 'about-platform', style: 'font-size: 12px;', text: '—' }),
+      micro('LICENSE'), h('span', { class: 'v', style: 'font-size: 12px;', text: 'this console is Mycelium’s own code, Apache-2.0' })),
+    h('div', { style: 'height: 14px;' }),
+    h('p', { class: 'hint', style: 'margin: 0; line-height: 1.6;' },
+      'NOTICE — this console is Mycelium’s own code. The command-console presentation it follows is a ',
+      h('span', { class: 'mono', text: 'design study' }),
+      ', documented in ', h('span', { class: 'mono', text: 'SPEC-t3mp3st-presentation.md' }),
+      ' (jarvis/runs/fable-specs/); no dashboard source was opened while building it — ',
+      h('span', { class: 'mono', text: 'tools/cleanroom_check.py' }), ' is the gate, and it must read 0.'),
+    h('p', { class: 'hint', style: 'margin: 12px 0 0; line-height: 1.6;' },
+      'The honesty rule is the interface: an unmeasured value renders “—”, an unreachable source says why, and nothing is ever estimated.'));
+  page.append(about);
+  refreshAbout();
+}
+
+async function refreshAbout() {
+  try {
+    const res = await fetch('/health', { cache: 'no-store' });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const j = await res.json();
+    const el = $('#about-platform');
+    if (el) el.textContent = 'v' + (j.version || '?') + ' · ' + String(j.commit_sha || '').slice(0, 7) +
+      ' · up ' + fmtAge(Date.now() - (j.uptime_seconds || 0) * 1000, Date.now());
+  } catch (e) {
+    const el = $('#about-platform');
+    if (el) el.textContent = '— health unreadable (' + e.message + ')';
+  }
+}
+
+// ================================================================= DENSITY
+
+function applyDensity() {
+  let d = 'compact';
+  try { d = localStorage.getItem(DENSITY_KEY) === 'comfortable' ? 'comfortable' : 'compact'; } catch (e) { /* default */ }
+  document.body.dataset.density = d;
+  const btn = $('#density-btn');
+  if (btn) {
+    btn.textContent = d === 'comfortable' ? 'COMFORTABLE' : 'COMPACT';
+    btn.classList.toggle('on', d === 'comfortable');
+    btn.title = 'density: ' + d + ' — click for ' + (d === 'comfortable' ? 'compact' : 'comfortable');
+  }
+}
+
+function toggleDensity() {
+  const next = document.body.dataset.density === 'comfortable' ? 'compact' : 'comfortable';
+  try { localStorage.setItem(DENSITY_KEY, next); } catch (e) { /* session-only */ }
+  applyDensity();
+}
+
+// ==================================================================== TOUR
+
+const TOUR_STEPS = [
+  { nav: 'nav-rounds', title: 'Rounds', body: 'The lab working: command strip, seat wells, the box ledger, lanes in flight and last outcomes, the runner log.', src: 'GET /workflows + the state source' },
+  { nav: 'nav-receipt', title: 'Receipt', body: 'THE number: repeat-task pass rate with yesterday’s lessons ON vs OFF — hero pair, per-pair table, the nightly strip. Until the feed is wired it says so, honestly.', src: 'the director’s receipt feed' },
+  { nav: 'nav-chat', title: 'Chat', body: 'The platform’s message channel as narration — no bubbles. The composer posts as you: an operator session, never a pseudo-agent.', src: 'GET/POST /messages' },
+  { nav: 'nav-agents', title: 'Agents', body: 'The roster as presence truth: who is online, on which brain and seat, heartbeat age.', src: 'GET /agents' },
+  { nav: 'nav-memory', title: 'Memory', body: 'Lessons as a ledger with outcome edges; recall by meaning with provenance chips.', src: 'GET /memory/lessons · POST /memory/search' },
+  { nav: 'nav-lab', title: 'Lab Alive', body: 'The event stream as it happens — SSE when it can, poll fallback that labels itself.', src: 'GET /events/stream' },
+  { nav: 'nav-logs', title: 'Logs', body: 'The same event log full page, source hue-coded, with pause, clear and copy.', src: 'GET /events, polled' },
+  { nav: 'nav-maintainer', title: 'Maintainer', body: 'The evidence vault: gated runs as findings with gate chips, provenance lines, gate output in a terminal rail, adopted repos.', src: 'GET /workflows · GET /projects' },
+  { nav: 'nav-engines', title: 'Engines', body: 'The seats as wells — read only from the director’s state source; the browser never probes a LAN port.', src: 'state.json, engines section' },
+  { nav: 'nav-about', title: 'About', body: 'The version, the license, and the notice that the presentation is a documented design study.', src: 'GET /health' },
+];
+
+let tour = null;
+
+function maybeFirstRunTour() {
+  let done = false;
+  try { done = localStorage.getItem(TOUR_KEY) === '1'; } catch (e) { /* fresh profile */ }
+  if (!done) startTour(false);
+}
+
+function startTour(fromButton) {
+  stopTour();
+  const layer = h('div', { class: 'tour-layer' });
+  const hole = h('div', { class: 'tour-hole' });
+  const arrow = h('div', { class: 'tour-arrow' });
+  const tip = h('div', { class: 'tour-tip' });
+  layer.append(hole);
+  document.body.append(layer, hole, arrow, tip);
+  tour = { layer, hole, arrow, tip, step: 0, dots: [], fromButton: !!fromButton };
+  document.addEventListener('keydown', tourKeys, true);
+  window.addEventListener('resize', tourPlace);
+  tourShow(0);
+}
+
+function tourShow(i) {
+  if (!tour) return;
+  tour.step = i;
+  const def = TOUR_STEPS[i];
+  const nav = $('#' + def.nav);
+  if (!nav) { tourNext(); return; }
+  nav.scrollIntoView({ block: 'nearest' });
+  const r = nav.getBoundingClientRect();
+  tour.hole.style.top = (r.top - 5) + 'px';
+  tour.hole.style.left = (r.left - 5) + 'px';
+  tour.hole.style.width = (r.width + 10) + 'px';
+  tour.hole.style.height = (r.height + 10) + 'px';
+  const tip = tour.tip;
+  clear(tip);
+  tip.append(
+    h('div', { class: 'micro tour-step-label', text: 'the tour · step ' + (i + 1) + ' of ' + TOUR_STEPS.length }),
+    h('div', { class: 'tour-title', text: def.title }),
+    h('div', { class: 'tour-body', text: def.body }),
+    h('div', { class: 'tour-src mono', text: def.src }),
+    h('div', { class: 'tour-foot' },
+      (() => {
+        const dots = h('div', { class: 'tour-dots' });
+        tour.dots = TOUR_STEPS.map((_, di) => {
+          const d = h('button', {
+            class: 'tour-dot' + (di < i ? ' done' : di === i ? ' cur' : ''),
+            title: TOUR_STEPS[di].title,
+            onclick: () => tourShow(di),
+          });
+          dots.append(d);
+          return d;
+        });
+        return dots;
+      })(),
+      i > 0 ? h('button', { class: 'btn', text: 'BACK', onclick: tourPrev }) : null,
+      h('button', { class: 'btn btn-primary', text: i === TOUR_STEPS.length - 1 ? 'DONE' : 'NEXT', onclick: tourNext }),
+      h('button', { class: 'btn btn-ghost', text: 'SKIP', onclick: stopTour })));
+  // tooltip rides to the right of the sidebar nav, arrow bridging the gap
+  const tipX = r.right + 22;
+  const tipY = Math.max(12, Math.min(window.innerHeight - 300, r.top - 40));
+  tip.style.left = tipX + 'px';
+  tip.style.top = tipY + 'px';
+  tour.arrow.style.left = (r.right + 8) + 'px';
+  tour.arrow.style.top = (r.top + r.height / 2 - 8) + 'px';
+}
+
+function tourNext() {
+  if (!tour) return;
+  if (tour.step >= TOUR_STEPS.length - 1) { stopTour(); return; }
+  tourShow(tour.step + 1);
+}
+
+function tourPrev() {
+  if (!tour || tour.step === 0) return;
+  tourShow(tour.step - 1);
+}
+
+function tourKeys(e) {
+  if (!tour) return;
+  if (e.key === 'Escape') { stopTour(); }
+  else if (e.key === 'ArrowRight' || e.key === 'Enter') { tourNext(); }
+  else if (e.key === 'ArrowLeft') { tourPrev(); }
+}
+
+function tourPlace() {
+  if (tour) tourShow(tour.step);
+}
+
+function stopTour() {
+  if (!tour) return;
+  document.removeEventListener('keydown', tourKeys, true);
+  window.removeEventListener('resize', tourPlace);
+  for (const n of [tour.layer, tour.hole, tour.arrow, tour.tip]) {
+    try { n.remove(); } catch (e) { /* already gone */ }
+  }
+  tour = null;
+  try { localStorage.setItem(TOUR_KEY, '1'); } catch (e) { /* private mode re-tours */ }
 }
 
 // ------------------------------------------------------------------- start

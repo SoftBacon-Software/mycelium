@@ -100,7 +100,7 @@ in the seeder are fixture-only. The live platform was never written to.
 
 **CSP blocks the rounds state source.** `server/lib/security-headers.js`
 sends `default-src 'self'` with no `connect-src`, so a page served from
-`:3002` cannot fetch `http://100.80.183.95:8890/state.json` even though the
+`:3002` cannot fetch `http://<host>:8890/state.json` even though the
 :8890 server's CORS allowlists us. The console renders this honestly
 (STATE UNREACHABLE chip, "—" seats, last-ok age), but the Rounds face's
 state half needs one of: (a) a same-origin proxy route on the platform,

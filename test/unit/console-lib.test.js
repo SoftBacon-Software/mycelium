@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseStamp, fmtAge, ageAgo, valueOrDash, hueOf, wfVerdict, lessonHue,
   provenanceChip, truncate, firstLine, stripPrefix, nameHue, pick, parseLimit,
+  stateSectionItems, countHue, receiptShape, deltaChip, barPct, chatHue,
 } from '../../public/console/lib.js';
 
 const NOW = Date.parse('2026-09-20T20:00:00Z');
@@ -136,5 +137,81 @@ describe('pick / parseLimit', () => {
     expect(parseLimit('7', 50)).toBe(7);
     expect(parseLimit('x', 50)).toBe(50);
     expect(parseLimit('-3', 50)).toBe(50);
+  });
+});
+
+describe('task 90 — stateSectionItems / countHue', () => {
+  const state = {
+    sections: [
+      { id: 'engines', items: [{ k: 'oMLX :8780', status: 'ok' }, { k: 'ds4 :8000', status: 'ok' }, { k: 'mlx-serve', status: 'warn' }] },
+      { id: 'box', items: [{ k: 'disk free', status: 'ok' }] },
+    ],
+  };
+  it('reads a section by id, null when absent (the caller renders —)', () => {
+    expect(stateSectionItems(state, 'engines')).toHaveLength(3);
+    expect(stateSectionItems(state, 'nope')).toBeNull();
+    expect(stateSectionItems(null, 'engines')).toBeNull();
+    expect(stateSectionItems({}, 'engines')).toBeNull();
+  });
+  it('countHue counts only the given bucket, null on absent input', () => {
+    expect(countHue(stateSectionItems(state, 'engines'), 'ok')).toBe(2);
+    expect(countHue(stateSectionItems(state, 'engines'), 'warn')).toBe(1);
+    expect(countHue(null, 'ok')).toBeNull();
+  });
+});
+
+describe('task 90 — receiptShape names what a feed is missing, invents nothing', () => {
+  it('a complete feed normalizes: hero, pairs with delta chips, nights', () => {
+    const s = receiptShape({
+      generated_at: '2026-09-20 02:00:00',
+      on: 0.62, off: 0.5,
+      pairs: [{ task_class: 'repair', on: 0.8, off: 0.6, verdict: 'PASS' }],
+      nights: [{ date: '2026-09-19', on: 0.62, off: 0.5 }],
+    });
+    expect(s.ok).toBe(true);
+    expect(s.missing).toEqual([]);
+    expect(s.hero).toEqual({ on: 0.62, off: 0.5 });
+    expect(s.pairs[0].delta).toEqual({ word: '+0.2pp', hue: 'ok' });
+    expect(s.nights[0].date).toBe('2026-09-19');
+  });
+  it('an envelope-wrapped feed is unwrapped once', () => {
+    const s = receiptShape({ receipt: { on: 1, off: 0, pairs: [], nights: [] } });
+    expect(s.hero).toEqual({ on: 1, off: 0 });
+  });
+  it('a non-object or empty object names its missing fields', () => {
+    expect(receiptShape(null).ok).toBe(false);
+    expect(receiptShape('nope').missing).toEqual(['not a json object']);
+    const s = receiptShape({});
+    expect(s.ok).toBe(false);
+    expect(s.missing).toEqual(['on (ON pass rate)', 'off (OFF pass rate)', 'pairs (per-pair table)', 'nights (nightly strip)']);
+  });
+  it('numeric strings are read, junk is a dash row', () => {
+    const s = receiptShape({ on: '0.7', off: 'x', pairs: [{ name: 'plan' }], nights: [] });
+    expect(s.hero.on).toBe(0.7);
+    expect(s.hero.off).toBeNull();
+    expect(s.pairs[0].delta).toEqual({ word: '—', hue: 'dim' });
+  });
+});
+
+describe('task 90 — deltaChip / barPct / chatHue', () => {
+  it('deltaChip is arithmetic: up green, down red, flat dim, absent a dash', () => {
+    expect(deltaChip(0.8, 0.6)).toEqual({ word: '+0.2pp', hue: 'ok' });
+    expect(deltaChip(0.5, 0.58)).toEqual({ word: '-0.08pp', hue: 'crit' });
+    expect(deltaChip(0.5, 0.5)).toEqual({ word: '±0', hue: 'dim' });
+    expect(deltaChip(null, 0.5).word).toBe('—');
+  });
+  it('barPct clamps and reads rates, absent → 0', () => {
+    expect(barPct(0.62)).toBe(62);
+    expect(barPct(62)).toBe(62);
+    expect(barPct(140)).toBe(100);
+    expect(barPct(-1)).toBe(0);
+    expect(barPct(null)).toBe(0);
+  });
+  it('chatHue: urgent first, then type, else the sender rail hue', () => {
+    expect(chatHue({ priority: 'urgent' })).toBe('crit');
+    expect(chatHue({ msg_type: 'directive' })).toBe('warn');
+    expect(chatHue({ msg_type: 'request' })).toBe('info');
+    expect(chatHue({ from_agent: 'kira' })).toBe(nameHue('kira'));
+    expect(chatHue({})).toBe(nameHue(undefined));
   });
 });
