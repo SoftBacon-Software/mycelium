@@ -184,6 +184,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `JWT_SECRET` | yes | — | operator-auth signing secret |
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
+| `CONSOLE_STATE_ORIGINS` | no | — | comma-separated origins the operator console may fetch lab state from (added to CSP connect-src) |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 | `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
