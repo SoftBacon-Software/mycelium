@@ -24,9 +24,11 @@ import {
 // ------------------------------------------------------------------ config
 
 const JWT_KEY = 'mycelium-studio-jwt';          // same key Velum stores
-const STATE_URL_DEFAULT = 'http://100.80.183.95:8890/state.json';
+// Lab state / receipt sources are deployment-specific: configured in the browser
+// (localStorage keys below), never shipped as literals. Empty = not configured.
+const STATE_URL_DEFAULT = '';
 const STATE_URL_KEY = 'mycelium_console_state_url';
-const RECEIPT_URL_DEFAULT = 'http://100.80.183.95:8890/receipts/';
+const RECEIPT_URL_DEFAULT = '';
 const RECEIPT_URL_KEY = 'mycelium_console_receipt_url';
 const DENSITY_KEY = 'mycelium_console_density'; // 'compact' (default) | 'comfortable'
 const TOUR_KEY = 'mycelium_console_tour_done';  // first-run auto-start flag
@@ -459,6 +461,7 @@ async function refreshRounds() {
 async function fetchState() {
   S.stateAt = Date.now();
   try {
+    if (!stateUrl()) throw new Error('state source not configured');
     const res = await fetch(stateUrl(), { mode: 'cors', cache: 'no-store' });
     if (!res.ok) throw new Error('http ' + res.status);
     S.state = await res.json();
@@ -1010,7 +1013,6 @@ function buildReceipt() {
     h('div', { class: 'cmd-cell' }, micro('RECEIPT'), RC.feedChip),
     h('div', { class: 'cmd-cell' }, micro('ON-OFF DELTA'), h('span', { class: 'cmd-value big mono', text: '—' })),
     h('div', { class: 'cmd-cell' }, micro('REFRESHED'), RC.stripFresh),
-    RC.feedChip,
     h('span', { class: 'spacer' })));
 
   RC.heroOnWell = h('div', { class: 'stat-well', 'data-hue': 'ok' }, micro('WITH YESTERDAY’S LESSONS — ON'), RC.heroOn,
@@ -1045,6 +1047,7 @@ async function refreshReceipt() {
   S.receiptAt = Date.now();
   let json = null;
   try {
+    if (!receiptUrl()) throw new Error('receipt feed not configured');
     const res = await fetch(receiptUrl(), { mode: 'cors', cache: 'no-store' });
     if (!res.ok) throw new Error('http ' + res.status);
     json = await res.json();
