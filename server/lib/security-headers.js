@@ -27,8 +27,17 @@ export const HSTS_VALUE = 'max-age=63072000; includeSubDomains';
 
 // Locked down: no 'unsafe-eval', no wildcard hosts, no plugins, no external
 // framing. Mirrors the site repo's serve.json CSP exactly.
+// Operator-console state sources (2026-09-21): the console at /console reads the
+// lab's state.json / mesh.json from a separate read-only host. That host is
+// deployment-specific, so it is configured, never written here:
+//   CONSOLE_STATE_ORIGINS="http://box.example:8890,https://other"
+// Unset (the default, and every public deployment): connect-src stays 'self'.
+const CONSOLE_STATE_ORIGINS = (process.env.CONSOLE_STATE_ORIGINS || '')
+  .split(',').map((o) => o.trim()).filter((o) => /^https?:\/\/[^\s/]+$/.test(o));
+
 export const CSP_VALUE = [
   "default-src 'self'",
+  ["connect-src 'self'", ...CONSOLE_STATE_ORIGINS].join(' '),
   "img-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline'",
