@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mycelium — Operator Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23081621'/%3E%3Ccircle cx='9' cy='11' r='2.4' fill='%232fffd2'/%3E%3Ccircle cx='22' cy='9' r='2' fill='%2300ff88'/%3E%3Ccircle cx='24' cy='22' r='2.2' fill='%232fffd2'/%3E%3Ccircle cx='10' cy='23' r='1.8' fill='%230088ff'/%3E%3Cpath d='M9 11L22 9M22 9L24 22M24 22L10 23M9 11L10 23' stroke='%231e4053' stroke-width='1.1'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="console.css">
+</head>
+<body>
+
+<!-- fail-closed: the sign-in well is what a 401 shows, never an empty face -->
+<div id="signin" class="signin-layer hidden">
+  <form class="signin-card" id="signin-form" autocomplete="off">
+    <div class="signin-mark" aria-hidden="true">
+      <svg width="34" height="34" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#081621"/><circle cx="9" cy="11" r="2.4" fill="#2fffd2"/><circle cx="22" cy="9" r="2" fill="#00ff88"/><circle cx="24" cy="22" r="2.2" fill="#2fffd2"/><circle cx="10" cy="23" r="1.8" fill="#0088ff"/><path d="M9 11L22 9M22 9L24 22M24 22L10 23M9 11L10 23" stroke="#1e4053" stroke-width="1.1"/></svg>
+    </div>
+    <div class="signin-word">Mycelium</div>
+    <div class="signin-sub">operator console</div>
+    <label class="field-label" for="signin-user">operator</label>
+    <input id="signin-user" class="input mono" type="text" name="username" spellcheck="false" autocapitalize="none">
+    <label class="field-label" for="signin-pass">passphrase</label>
+    <input id="signin-pass" class="input mono" type="password" name="password">
+    <div id="signin-error" class="signin-error hidden" role="alert"></div>
+    <button type="submit" class="btn btn-primary btn-wide" id="signin-go">SIGN IN</button>
+    <p class="signin-hint">The console speaks to the platform as you — an operator
+    session from <span class="mono">/studio/login</span>. No keys live in this page.</p>
+  </form>
+</div>
+
+<div class="app hidden" id="app">
+  <aside class="sidebar">
+    <div class="logo-row">
+      <span class="logo-mark" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0c1b25" stroke="#1e4053"/><circle cx="9" cy="11" r="2.4" fill="#2fffd2"/><circle cx="22" cy="9" r="2" fill="#00ff88"/><circle cx="24" cy="22" r="2.2" fill="#2fffd2"/><circle cx="10" cy="23" r="1.8" fill="#0088ff"/><path d="M9 11L22 9M22 9L24 22M24 22L10 23M9 11L10 23" stroke="#1e4053" stroke-width="1.1"/></svg>
+      </span>
+      <span class="wordmark">Mycelium</span>
+      <span class="version-pill mono" title="console, not platform version">c0.1</span>
+    </div>
+
+    <div class="conn-strip" id="conn-strip">
+      <span class="dot dot-ok" id="conn-dot"></span>
+      <span class="conn-text" id="conn-text">linking…</span>
+      <button class="icon-btn" id="reconnect-btn" title="reconnect now">↻</button>
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-group-label">Operations</div>
+      <button class="nav-item" data-route="rounds" id="nav-rounds">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.6V8l2.4 1.8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
+        <span class="nav-label">Rounds</span>
+        <span class="count-badge" id="nav-badge-rounds" hidden></span>
+      </button>
+      <button class="nav-item" data-route="receipt" id="nav-receipt">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="3" y="2.6" width="10" height="10.8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.4 5.6h5.2M5.4 8h5.2M5.4 10.4h3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></span>
+        <span class="nav-label">Receipt</span>
+        <span class="count-badge" id="nav-badge-receipt" hidden></span>
+      </button>
+      <button class="nav-item soon" data-soon="Dispatch">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.6 8.4l10.8-5.4-3 10.8-2.6-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+        <span class="nav-label">Dispatch</span><span class="soon-chip">soon</span>
+      </button>
+      <button class="nav-item" data-route="chat" id="nav-chat">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.6 3.6h10.8v7.2H6.4l-3.2 2.6V3.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg></span>
+        <span class="nav-label">Chat</span>
+        <span class="count-badge" id="nav-badge-chat" hidden></span>
+      </button>
+
+      <div class="nav-group-label">Lab</div>
+      <button class="nav-item" data-route="agents" id="nav-agents">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="6" cy="6" r="2.6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11.4" cy="10.8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8.2 7.6l1.4 1.6" stroke="currentColor" stroke-width="1.1"/></svg></span>
+        <span class="nav-label">Agents</span>
+        <span class="count-badge" id="nav-badge-agents" hidden></span>
+      </button>
+      <button class="nav-item" data-route="memory" id="nav-memory">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 12.6V6.2l3.4-2.8 3.2 2.4L13 3.6v9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M3 9.4l3.4-1.2 3.2 1.6 3.4-1.6" fill="none" stroke="currentColor" stroke-width="1.1"/></svg></span>
+        <span class="nav-label">Memory</span>
+        <span class="count-badge" id="nav-badge-memory" hidden></span>
+      </button>
+      <button class="nav-item" data-route="lab" id="nav-lab">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3.4h10M5.2 3.4v4L3 12a1.4 1.4 0 0 0 1.3 1.9h7.4A1.4 1.4 0 0 0 13 12l-2.2-4.6v-4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M4.6 10.6h6.8" stroke="currentColor" stroke-width="1.1"/></svg></span>
+        <span class="nav-label">Lab Alive</span>
+        <span class="count-badge" id="nav-badge-lab" hidden></span>
+      </button>
+      <button class="nav-item" data-route="logs" id="nav-logs">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 3.8h10M3 6.6h10M3 9.4h6.6M3 12.2h4.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
+        <span class="nav-label">Logs</span>
+        <span class="count-badge" id="nav-badge-logs" hidden></span>
+      </button>
+      <button class="nav-item" data-route="maintainer" id="nav-maintainer">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="2.8" y="2.8" width="4.4" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="8.8" y="2.8" width="4.4" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="2.8" y="8.8" width="4.4" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/><rect x="8.8" y="8.8" width="4.4" height="4.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"/></svg></span>
+        <span class="nav-label">Maintainer</span>
+        <span class="count-badge" id="nav-badge-maintainer" hidden></span>
+      </button>
+
+      <div class="nav-group-label">System</div>
+      <button class="nav-item" data-route="engines" id="nav-engines">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="2.6" y="5" width="10.8" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.4 5V3.4h5.2V5M5.6 8.4h.01M8 8.4h.01M10.4 8.4h.01M5.6 10.4h4.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
+        <span class="nav-label">Engines</span>
+        <span class="count-badge" id="nav-badge-engines" hidden></span>
+      </button>
+      <button class="nav-item soon" data-soon="Settings">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 2.4v1.8M8 11.8v1.8M2.4 8h1.8M11.8 8h1.8M4 4l1.3 1.3M10.7 10.7L12 12M12 4l-1.3 1.3M5.3 10.7L4 12" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></span>
+        <span class="nav-label">Settings</span><span class="soon-chip">soon</span>
+      </button>
+      <button class="nav-item" data-route="about" id="nav-about">
+        <span class="nav-glyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 7.2v3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="5" r="0.9" fill="currentColor"/></svg></span>
+        <span class="nav-label">About</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <span class="dot dot-ok" id="foot-dot"></span>
+      <span class="foot-text" id="foot-conn">linked</span>
+      <span class="foot-spacer"></span>
+      <span class="foot-operator mono" id="operator-name"></span>
+      <button class="icon-btn" id="signout-btn" title="sign out">⏻</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="pagehead">
+      <h1 class="page-title" id="page-title">Rounds</h1>
+      <div class="head-actions" id="head-actions"></div>
+      <div class="head-chrome">
+        <button class="chrome-btn mono" id="density-btn" title="density — Compact is the working rhythm; Comfortable gives rows room">COMPACT</button>
+        <button class="chrome-btn chrome-q" id="tour-btn" title="re-run the guided tour">?</button>
+      </div>
+    </header>
+    <div class="page-content" id="page-content">
+      <section class="page" id="page-rounds"></section>
+      <section class="page" id="page-receipt"></section>
+      <section class="page" id="page-chat"></section>
+      <section class="page" id="page-agents"></section>
+      <section class="page" id="page-memory"></section>
+      <section class="page" id="page-lab"></section>
+      <section class="page" id="page-logs"></section>
+      <section class="page" id="page-maintainer"></section>
+      <section class="page" id="page-engines"></section>
+      <section class="page" id="page-about"></section>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="console.js"></script>
+</body>
+</html>
