@@ -91,6 +91,18 @@ export function recordDrainPass(cause, enqueued) {
 // Queue a drone job to embed content asynchronously.
 // The drone worker calls local Ollama, then PUTs the vector back via callback endpoint.
 export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model) {
+  if (sourceType === 'companion') {
+    // Companion rows are per-user private (F-mycelium/246, review A r2 MAJOR):
+    // a drone embed job stores the row's FULL TEXT in drone_jobs.input_data,
+    // and agent keys can read drone jobs (claim/list). Queuing one would leak
+    // a person's memory to the agent surface — the exact leak the companion
+    // privacy guards exist to prevent. Refuse the QUEUE, not the row: the row
+    // stays keyword-searchable with the honest embedded:false stamp, and the
+    // companion search response already reports keyword-fallback mode.
+    // (Spelled inline — embeddings.js sits below db.js in the import graph.)
+    console.warn('[semantic-memory] companion row NOT drone-embedded: its text would enter the agent-readable drone job queue (docs/companion-memory-api.md, isolation guarantee 4)');
+    return null;
+  }
   var callbackPath = '/api/mycelium/memory/embeddings/' + encodeURIComponent(sourceType) + '/' + encodeURIComponent(sourceId);
   var inputData = JSON.stringify({
     text: text,

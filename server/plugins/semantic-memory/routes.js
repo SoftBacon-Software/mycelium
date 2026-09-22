@@ -421,8 +421,13 @@ export default function (core) {
   // offline client can replay its outbox forever: same three → same id → the
   // write path finds the row and answers without writing.
   function companionRowId(userId, key, text) {
+    // Components are LENGTH-PREFIXED, not just \0-joined (review A r2 NIT 4):
+    // a JSON body can carry U+0000, and a bare \0 join is ambiguous — key
+    // 'a\0b' with text 'c' would hash the same as key 'a' with text 'b\0c'.
+    var k = key || '';
+    function comp(s) { return s.length + ':' + s; }
     return crypto.createHash('sha256')
-      .update('companion\u0000' + userId + '\u0000' + (key || '') + '\u0000' + text)
+      .update('companion\u0000' + userId + '\u0000' + comp(k) + '\u0000' + comp(text))
       .digest('hex');
   }
 
@@ -581,10 +586,18 @@ export default function (core) {
       // VERBATIM (review A finding 2): Date.parse reads that shape as
       // HOST-LOCAL time, so normalizing it shifted the cursor by the host's
       // UTC offset — and east of UTC that SKIPS a window of memories forever
-      // while the client believes sync is complete. Anything else goes through
-      // Date.parse (an ISO-8601 string with an offset, or a Date-serializable
-      // value) and lands on the store clock's format.
-      if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) {
+      // while the client believes sync is complete. Offset-LESS ISO
+      // (`2026-09-21T20:00:00`) hits the same Date.parse trap, so it is read
+      // deliberately as UTC (review A r2 finding 3) — the store clock's own
+      // frame. Anything else goes through Date.parse and lands on the store
+      // format; the store-format shape itself is date-checked so a garbage
+      // cursor 400s instead of reading as "sync complete" (r2 finding 6).
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) {
+        if (isNaN(Date.parse(since.replace(' ', 'T') + 'Z'))) {
+          return apiError(res, 400, "since is not a real timestamp: '" + since + "'");
+        }
+      } else {
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(since)) since += 'Z';
         var t = Date.parse(since);
         if (isNaN(t)) {
           return apiError(res, 400, "since must be a created_at exactly as this API returned it (YYYY-MM-DD HH:MM:SS) or an ISO-8601 timestamp; got: '" + since + "'");
@@ -674,6 +687,7 @@ export default function (core) {
       if (!includeSuperseded && r.superseded_by) return false;
       return true;
     });
+    var afterFilter = results.length; // measured BEFORE the page slice (review A r2 NIT 7): slicing is the caller's own limit at work, not a filter cull — attributing it to the filter lies about the corpus
     var response = {
       results: results.map(function (r) { return companionView(r, { score: r.score, embedded: r.embedded }); }).slice(0, limit),
       query: query,
@@ -688,8 +702,8 @@ export default function (core) {
         note: 'vector search unavailable; results are lexical (FTS5/LIKE) only'
       };
     }
-    if (beforeFilter > response.results.length) {
-      response.filter = { results_before_filter: beforeFilter, results_after_filter: response.results.length };
+    if (beforeFilter > afterFilter) {
+      response.filter = { results_before_filter: beforeFilter, results_after_filter: afterFilter };
     }
     res.json(response);
   }));
@@ -1134,6 +1148,7 @@ export default function (core) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var sourceType = req.params.sourceType;
+    if (refuseCompanionScoped(sourceType, null, res)) return; // review A r2: the last unguarded agent write into the class
     var sourceId = decodeURIComponent(req.params.sourceId);
     var { embedding, model, chunk_index } = req.body;
     if (!embedding || !Array.isArray(embedding)) return apiError(res, 400, 'embedding array is required');

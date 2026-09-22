@@ -592,3 +592,61 @@ describe('sync cursor: store-clock format verbatim, inclusive, sane limits (revi
     expect('embedded' in l.body.results[0]).toBe(false);
   });
 });
+
+describe('review A round 2: the drone queue, the last write path, cursor traps, id joins', () => {
+  let ctx;
+
+  beforeAll(async () => { ctx = await makeApp({ agentAuth: true }); });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('createDroneEmbedJob refuses a companion row BEFORE any SQL — the text never enters the agent-readable job queue (r2 MAJOR)', async () => {
+    const { createDroneEmbedJob } = await import(join(PLUGIN_DIR, 'embeddings.js'));
+    const bomb = { prepare: () => { throw new Error('drone_jobs reached'); } };
+    expect(createDroneEmbedJob(bomb, 'companion', 'x', 0, 'Their dog is named Pickles.', 'm')).toBeNull();
+    // control: proves the guard, not the missing table, stopped the companion write
+    expect(() => createDroneEmbedJob(bomb, 'note', 'x', 0, 'harmless', 'm')).toThrow('drone_jobs reached');
+  });
+
+  it('agent PUT /memory/embeddings/companion/:id is refused — the last unguarded write into the class (r2 MINOR)', async () => {
+    const res = await request(ctx.app)
+      .put('/memory/embeddings/companion/198eb8e4edec7c53d3badcd8f73460d9397b876f381cc4f25aaa3f05bccd102c')
+      .send({ embedding: [0.1, 0.2] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('companion-private');
+  });
+
+  it('an offset-less ISO cursor is read as UTC, never host-local (r2 finding 3)', async () => {
+    const w = await writeMemory(ctx.app, tokenA, { text: 'Their dog is named Pickles.', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou' });
+    const ts = ctx.mem.companionRow(w.body.row.id).created_at; // 'YYYY-MM-DD HH:MM:SS', store clock (UTC)
+    const cursor = ts.replace(' ', 'T'); // the SAME instant, stated without an offset
+    const res = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent(cursor));
+    expect(res.status).toBe(200);
+    // regression pin: Date.parse reads the offset-less shape as HOST-LOCAL —
+    // on this UTC-5 host the old normalization pushed the cursor 5h into the
+    // store's future and the newest row vanished from sync
+    expect(res.body.results.some((r) => r.created_at === ts)).toBe(true);
+  });
+
+  it('a store-format cursor that is not a real timestamp 400s instead of reading as "sync complete" (r2 finding 6)', async () => {
+    const res = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent('9999-99-99 99:99:99'));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('not a real timestamp');
+  });
+
+  it('ids are unambiguous even when key/text carry U+0000 (r2 finding 4)', async () => {
+    const a = await writeMemory(ctx.app, tokenA, { text: 'c', source: 'probe', at: '2026-09-21T20:00:00Z', kind: 'aboutYou', key: 'a\u0000b' });
+    const b = await writeMemory(ctx.app, tokenA, { text: 'b\u0000c', source: 'probe', at: '2026-09-21T20:00:00Z', kind: 'aboutYou', key: 'a' });
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(b.body.row.id).not.toBe(a.body.row.id);
+  });
+
+  it('search does not blame the page slice on the metadata filter (r2 finding 7)', async () => {
+    await writeMemory(ctx.app, tokenA, { text: 'the dog loves the lake', source: 'probe', at: '2026-09-21T20:00:00Z', kind: 'aboutYou' });
+    await writeMemory(ctx.app, tokenA, { text: 'a dog barked at the mail carrier', source: 'probe', at: '2026-09-21T20:00:00Z', kind: 'aboutYou' });
+    const res = await searchMemory(ctx.app, tokenA, { query: 'dog', limit: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.results.length).toBe(1); // the LIMIT culled; the filter culled nothing
+    expect(res.body.filter).toBeUndefined();
+  });
+});

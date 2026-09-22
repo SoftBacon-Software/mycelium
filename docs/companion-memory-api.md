@@ -111,7 +111,11 @@ with the same shape and `"replayed": true`.
 three, so replaying a write from the offline outbox returns the SAME row with
 `"replayed": true` and writes nothing — even if the row has since been
 superseded or forgotten-and-rewritten. A client that is unsure whether a write
-landed can simply send it again.
+landed can simply send it again. (A replay answers with the row **as it is
+now**; the `supersedes` validations — 404 unknown/cross-owner, 409
+already-superseded — apply only when a write actually creates a row, so the
+same body can answer 404 as a fresh write and 200 as a replay if the target
+row was forgotten in between.)
 
 **Supersede.** Passing `supersedes` marks the old row (`superseded_by` = the
 new row's id) and leaves it in place — recall excludes it, history keeps it.
@@ -129,11 +133,12 @@ GET $API/me/memory?kind=aboutYou&since=2026-09-21T20:00:00Z&limit=100
 - `kind` — optional filter, one persona kind.
 - `since` — optional sync cursor. Pass a `created_at` **exactly as this API
   returned it** (`YYYY-MM-DD HH:MM:SS`, the store clock, UTC) and it is used
-  verbatim; or any ISO-8601 timestamp with an explicit offset, which is
-  converted to the store clock. The cursor is **inclusive** — a row sharing
-  the cursor's store-second comes back — so the client dedups by `id`. This
-  is the sync call: pull with the newest `created_at` you have seen, store
-  rows by id, repeat until `count < limit`.
+  verbatim; an ISO-8601 timestamp WITH an explicit offset converts to the
+  store clock; an offset-less ISO timestamp (`2026-09-21T20:00:00`) is read
+  as UTC — never as the server's local wall clock. The cursor is
+  **inclusive** — a row sharing the cursor's store-second comes back — so
+  the client dedups by `id`. This is the sync call: pull with the newest
+  `created_at` you have seen, store rows by id, repeat until `count < limit`.
 - `limit` — default 100, cap 500. Non-positive or garbage values fall back to
   the default rather than removing the cap.
 
@@ -174,8 +179,13 @@ semantically; decide on such a score knowing that.
 `mode: "keyword-fallback"` with a `degraded: { reason, fell_back_to }` block
 means no embedding provider answered and results are lexical only — the
 result set is still the owner's own rows, the honesty is the point. When the
-platform has an embedder configured, phone rows embed automatically on write,
-like every other memory row.
+platform has a DIRECT embedder configured (ollama / openai), phone rows embed
+automatically on write, like every other memory row. When the configured
+embedder is the **async drone**, companion rows are deliberately NOT embedded:
+a drone embed job carries the row's full text in a queue that agent keys can
+read, which would break isolation guarantee 4. Such rows stay
+keyword-searchable and stamp `embedded: false` — configure a direct embedder
+for semantic recall.
 
 ## POST /me/memory/:id/forget — remove one memory
 
@@ -213,7 +223,8 @@ address shares one budget. (Operators can disable limiters instance-wide with
 
 ## Error shape
 
-All errors are `{ "error": "message" }`, naming the offending field on 400s:
+All errors are `{ "error": "message" }` — the `409` additionally carries
+`superseded_by` — and 400s name the offending field:
 
 | status | when |
 |---|---|
