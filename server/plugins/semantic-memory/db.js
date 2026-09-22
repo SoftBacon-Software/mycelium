@@ -38,6 +38,25 @@ var BENCH_HIDDEN_SQL =
   "NOT (substr(COALESCE(source_type,''),1," + BENCH_TYPE_PREFIX.length + ") = '" + BENCH_TYPE_PREFIX + "'" +
   " OR substr(COALESCE(namespace,''),1," + BENCH_NS_PREFIX.length + ") = '" + BENCH_NS_PREFIX + "')";
 
+// -- Companion rows are PRIVATE (task F-mycelium/246, review A finding 1) ------
+// A companion row — source_type 'companion' OR namespace starting 'companion:' —
+// is a person's memory, written through /me/memory with that person's studio
+// bearer. Unlike bench rows (fixtures, visible when a search names them), a
+// companion row is NEVER visible to the agent-facing search arms: the only
+// caller that may see one sets opts.companion_ok, and that flag is set by ROUTE
+// CODE (the companion API itself), never from request input — naming
+// source_types:['companion'] on an agent search opts into nothing. Enforced in
+// the query layer, same rule and same reason as the bench exclusion above: the
+// caller's limit is spent on rows it is allowed to see. The source_type leg is
+// an exact '=' (one type, not a prefix family); the namespace leg is substr()
+// for the same literal-'_'-vs-LIKE reason the bench SQL cites.
+export var COMPANION_TYPE = 'companion';
+export var COMPANION_NS_PREFIX = 'companion:';
+
+var COMPANION_HIDDEN_SQL =
+  "NOT (COALESCE(source_type,'') = '" + COMPANION_TYPE + "'" +
+  " OR substr(COALESCE(namespace,''),1," + COMPANION_NS_PREFIX.length + ") = '" + COMPANION_NS_PREFIX + "')";
+
 // DoS bound shared by BOTH vector arms: only the newest N candidate rows
 // among the filtered set are scored — what the old per-query SQL expressed as
 // `ORDER BY updated_at DESC LIMIT <cap>`, and what the decoded-vector cache
@@ -384,7 +403,12 @@ export default function createMemoryDB(db, opts) {
         params.kind = filters.kind;
       }
       if (filters.since) {
-        sql += ' AND created_at > @since';
+        // INCLUSIVE cursor (review A finding 3): created_at has 1-second
+        // resolution and this product writes in bursts, so `>` silently skips
+        // any row sharing the cursor's store-second — a sync loss the client
+        // cannot see. The client dedups by id (the doc says so); an extra
+        // already-known row is cheap, a lost one is forever.
+        sql += ' AND created_at >= @since';
         params.since = filters.since;
       }
       sql += ' ORDER BY created_at DESC, id DESC LIMIT @limit';
@@ -448,6 +472,7 @@ export default function createMemoryDB(db, opts) {
         params.push(opts.namespace);
       }
       if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
+      if (!opts.companion_ok) where.push(COMPANION_HIDDEN_SQL);
 
       params.push(fetchLimit);
 
@@ -479,6 +504,7 @@ export default function createMemoryDB(db, opts) {
           likeParams.push(opts.namespace);
         }
         if (!benchOptIn(opts)) likeWhere.push(BENCH_HIDDEN_SQL);
+        if (!opts.companion_ok) likeWhere.push(COMPANION_HIDDEN_SQL);
         likeParams.push(fetchLimit);
         var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
@@ -554,6 +580,7 @@ export default function createMemoryDB(db, opts) {
         params.push(opts.namespace);
       }
       if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
+      if (!opts.companion_ok) where.push(COMPANION_HIDDEN_SQL);
 
       // Cap rows loaded for JS-side cosine sim to prevent DoS on large tables
       params.push(VECTOR_SCAN_CAP);

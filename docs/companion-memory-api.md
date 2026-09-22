@@ -83,7 +83,7 @@ A memory row, as the phone sees it:
 | `key` | optional stable fact-slot name chosen by the client (e.g. `dog.name`, `favorite.game`). Two rows may share a `key`; the newer one should say `supersedes`. |
 | `text` | the fact, in the companion's own words. ≤ 2000 chars. |
 | `source` | where it came from (`chat`, `trick`, `game`, …). ≤ 64 chars. |
-| `at` | when it was learned (client clock, ISO-8601). Stored verbatim — an offline write keeps the moment it happened. |
+| `at` | when it was learned (client clock). Stored verbatim — an offline write keeps the moment it happened. Any timestamp the platform can parse is accepted; ISO-8601 with an explicit offset is recommended. |
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
@@ -104,7 +104,8 @@ A memory row, as the phone sees it:
 `text`, `source`, `at`, `kind` are required; `key` and `supersedes` are
 optional. `kind` must be one of the three persona kinds.
 
-Returns `201` with `{ "ok": true, "row": { … } }`.
+Returns `201` with `{ "ok": true, "row": { … } }`. A replay answers `200`
+with the same shape and `"replayed": true`.
 
 **Idempotent by (owner, key, text).** The row id is a digest of exactly those
 three, so replaying a write from the offline outbox returns the SAME row with
@@ -126,10 +127,15 @@ GET $API/me/memory?kind=aboutYou&since=2026-09-21T20:00:00Z&limit=100
 ```
 
 - `kind` — optional filter, one persona kind.
-- `since` — optional ISO-8601 cursor; returns rows with `created_at` after it
-  (store clock). This is the sync call: pull with the newest `created_at` you
-  have seen, store rows, repeat until `count < limit`.
-- `limit` — default 100, cap 500.
+- `since` — optional sync cursor. Pass a `created_at` **exactly as this API
+  returned it** (`YYYY-MM-DD HH:MM:SS`, the store clock, UTC) and it is used
+  verbatim; or any ISO-8601 timestamp with an explicit offset, which is
+  converted to the store clock. The cursor is **inclusive** — a row sharing
+  the cursor's store-second comes back — so the client dedups by `id`. This
+  is the sync call: pull with the newest `created_at` you have seen, store
+  rows by id, repeat until `count < limit`.
+- `limit` — default 100, cap 500. Non-positive or garbage values fall back to
+  the default rather than removing the cap.
 
 Returns `{ "results": [ …rows… ], "count": n }`, newest first. **Superseded
 rows are included and carry `superseded_by`** — the client renders the live
@@ -154,12 +160,16 @@ scope in the query itself. The response reports its mode honestly:
 
 ```json
 {
-  "results": [ { "…row…": "", "score": 0.031 } ],
+  "results": [ { "…row…": "", "score": 0.031, "embedded": true } ],
   "query": "what does my dog like",
   "mode": "hybrid",
   "count": 1
 }
 ```
+
+Each result also carries `embedded` — whether THAT row's own vector exists.
+A keyword-found row with `embedded: false` ranked lexically, not
+semantically; decide on such a score knowing that.
 
 `mode: "keyword-fallback"` with a `degraded: { reason, fell_back_to }` block
 means no embedding provider answered and results are lexical only — the
@@ -189,12 +199,16 @@ should have been here".)
    search hit).
 3. A token for user A cannot read, recall, or forget user B's rows; cross-owner
    ids 404 like unknown ids.
+4. The companion row class is private to the person on the whole instance:
+   agent keys cannot read, search, write, or delete it (the next section names
+   exactly where that is enforced).
 
 ## Rate limit
 
 All four routes share **60 requests per minute per IP** — sized for a phone,
 not a machine. Exceeding it returns `429` with `RateLimit-*` headers and
-`Retry-After`. (Operators can disable limiters instance-wide with
+`Retry-After`. Per IP, not per device: a household whose phones share one NAT
+address shares one budget. (Operators can disable limiters instance-wide with
 `MYCELIUM_RATE_LIMIT=off`.)
 
 ## Error shape
@@ -206,6 +220,7 @@ All errors are `{ "error": "message" }`, naming the offending field on 400s:
 | 400 | missing/invalid field (`kind` outside the three persona kinds, oversized text, unparseable `at`/`since`, `supersedes` pointing at the new row itself) |
 | 401 | no/invalid bearer token, or admin-key-only auth (this surface never accepts admin keys) |
 | 404 | unknown row id — or another owner's row (indistinguishable by design) |
+| 403 | an agent key touching the companion row class from the agent-facing surface (list / index write / index delete) |
 | 409 | `supersedes` names a row that is already superseded |
 | 429 | rate limit exceeded |
 
@@ -213,9 +228,17 @@ All errors are `{ "error": "message" }`, naming the offending field on 400s:
 
 - No agent-shaped attribution: rows are attributed to a person, never to an
   agent; there is no `X-Acting-As` here.
-- No change to the agent-facing `/memory/*` routes — their behavior, auth, and
-  rows are untouched; `companion` rows appear to them only as ordinary
-  `source_type: companion` rows in the same index (admin-visible, as all rows
-  are).
+- No change to the agent-facing `/memory/*` routes' behavior for the row types
+  that were already there. What DID change — this surface's isolation rule,
+  found by review — is that `companion` rows are a **private row class**:
+  agent keys can neither read nor write them. Agent-facing search never
+  returns them (the exclusion sits in the query layer, alongside the
+  bench-hidden rule, and holds in every search arm including the vector
+  cache); `GET /memory/list?source_type=companion`, agent or bulk writes into
+  `source_type: companion` or a `companion:*` namespace, and agent deletes of
+  companion rows all answer `403`. The admin purge (`DELETE /memory/index`
+  with an exact filter, admin key only) remains the platform owner's power.
+  Aggregate endpoints (`/stats`, `/coverage`) count rows; they do not expose
+  contents.
 - No sharing between owners. A household with two phones is two owners; Duo
   sharing is a future contract, not this one.

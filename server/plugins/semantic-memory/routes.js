@@ -245,6 +245,7 @@ export default function (core) {
     if (!source_type || !source_id || !content_text) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
+    if (refuseCompanionScoped(source_type, namespace, res)) return;
     if (refuseIfUnprovenanced(source_type, metadata, res)) return;
     var chunkCount = 1;
     if (chunk_index) {
@@ -297,6 +298,7 @@ export default function (core) {
       if (!item.source_type || !item.source_id || !item.content_text) {
         return apiError(res, 400, 'Each item needs source_type, source_id, and content_text');
       }
+      if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
       if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
     }
 
@@ -343,6 +345,7 @@ export default function (core) {
   router.delete('/index/:sourceType/:sourceId', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
     db.remove(req.params.sourceType, req.params.sourceId);
     res.json({ ok: true });
   });
@@ -402,6 +405,10 @@ export default function (core) {
   var COMPANION_SOURCE_TYPE = 'companion';
   var COMPANION_KINDS = ['aboutYou', 'aboutMe', 'howWeTalk'];
   var COMPANION_TEXT_MAX = 2000;
+  // Keep in sync with db.js's COMPANION_NS_PREFIX — both must name the same
+  // private row class or the db-layer search exclusion and these route guards
+  // disagree about what is private.
+  var COMPANION_NS_PREFIX = 'companion:';
   // One shared limiter — 60/min is the SURFACE budget for a phone, not a
   // per-route allowance (four separate buckets would quietly make it 240).
   var companionLimiter = rateLimited('memory/companion', { windowMs: 60000, max: 60 });
@@ -415,7 +422,7 @@ export default function (core) {
   // write path finds the row and answers without writing.
   function companionRowId(userId, key, text) {
     return crypto.createHash('sha256')
-      .update('companion ' + userId + ' ' + (key || '') + ' ' + text)
+      .update('companion\u0000' + userId + '\u0000' + (key || '') + '\u0000' + text)
       .digest('hex');
   }
 
@@ -441,6 +448,10 @@ export default function (core) {
       supersedes: meta.supersedes || null
     };
     if (opts && opts.score !== undefined) view.score = opts.score;
+    // task 213's honest-embeddedness stamp, carried through from the search
+    // arms: a keyword-ranked row with embedded:false must not masquerade as a
+    // semantic hit. List reads have no stamp and omit the field.
+    if (opts && opts.embedded !== undefined) view.embedded = opts.embedded;
     return view;
   }
 
@@ -458,6 +469,22 @@ export default function (core) {
   function companionKindOr400(res, kind) {
     if (COMPANION_KINDS.indexOf(kind) !== -1) return true;
     apiError(res, 400, 'kind must be one of: ' + COMPANION_KINDS.join(', '));
+    return false;
+  }
+
+  // Companion rows are PER-USER PRIVATE (docs/companion-memory-api.md): the
+  // agent-facing surface never reads, lists, writes, or deletes them. The db
+  // layer's COMPANION_HIDDEN_SQL hides them from every search arm; this guard
+  // covers the rest of this router (list / index write / index delete). 403,
+  // always naming why — a silent empty result would be a silent failure.
+  // (Review A finding 1: before this guard an agent key could read, rewrite
+  // the record of, and delete a person's companion memory.)
+  function refuseCompanionScoped(sourceType, namespace, res) {
+    if (sourceType === COMPANION_SOURCE_TYPE ||
+        (typeof namespace === 'string' && namespace.indexOf(COMPANION_NS_PREFIX) === 0)) {
+      apiError(res, 403, "'" + (sourceType || namespace) + "' is companion-private memory — agent keys cannot read, write, or delete it; the companion surface (/me/memory) manages its own rows");
+      return true;
+    }
     return false;
   }
 
@@ -550,11 +577,26 @@ export default function (core) {
     if (kind && !companionKindOr400(res, kind)) return;
     var since = nonEmptyQuery(req.query.since);
     if (since) {
-      var t = Date.parse(since);
-      if (isNaN(t)) return apiError(res, 400, "since must be an ISO-8601 timestamp; got: '" + since + "'");
-      since = new Date(t).toISOString().replace('T', ' ').slice(0, 19); // the store clock's format
+      // The store clock's format (`YYYY-MM-DD HH:MM:SS`, UTC) passes through
+      // VERBATIM (review A finding 2): Date.parse reads that shape as
+      // HOST-LOCAL time, so normalizing it shifted the cursor by the host's
+      // UTC offset — and east of UTC that SKIPS a window of memories forever
+      // while the client believes sync is complete. Anything else goes through
+      // Date.parse (an ISO-8601 string with an offset, or a Date-serializable
+      // value) and lands on the store clock's format.
+      if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) {
+        var t = Date.parse(since);
+        if (isNaN(t)) {
+          return apiError(res, 400, "since must be a created_at exactly as this API returned it (YYYY-MM-DD HH:MM:SS) or an ISO-8601 timestamp; got: '" + since + "'");
+        }
+        since = new Date(t).toISOString().replace('T', ' ').slice(0, 19);
+      }
     }
-    var limit = Math.min(parseIntParam(req.query.limit) || 100, 500);
+    // Non-positive / garbage limits fall back to the default (review A
+    // finding 5: `LIMIT -1` in SQLite means UNBOUNDED — a negative limit must
+    // never remove the cap).
+    var qLimit = parseIntParam(req.query.limit);
+    var limit = qLimit && qLimit > 0 ? Math.min(qLimit, 500) : 100;
     var rows = db.companionList({
       namespace: companionNamespace(user.userId),
       kind: kind,
@@ -592,13 +634,18 @@ export default function (core) {
       }
       kinds = body.kinds;
     }
-    var limit = Math.min(parseIntParam(body.limit) || 5, 50);
+    var bLimit = parseIntParam(body.limit); // same floor rule as GET /me/memory
+    var limit = bLimit && bLimit > 0 ? Math.min(bLimit, 50) : 5;
     var includeSuperseded = req.query.include_superseded === '1' || req.query.include_superseded === 'true';
 
     var opts = {
       limit: Math.min(limit * 5, 100),
       source_types: [COMPANION_SOURCE_TYPE],
-      namespace: companionNamespace(user.userId)
+      namespace: companionNamespace(user.userId),
+      // The one legitimate carrier of this flag: route code, not request
+      // input. Without it the db layer's COMPANION_HIDDEN_SQL would exclude
+      // the very rows this route exists to search.
+      companion_ok: true
     };
 
     var embedFailReason = null;
@@ -628,7 +675,7 @@ export default function (core) {
       return true;
     });
     var response = {
-      results: results.map(function (r) { return companionView(r, { score: r.score }); }).slice(0, limit),
+      results: results.map(function (r) { return companionView(r, { score: r.score, embedded: r.embedded }); }).slice(0, limit),
       query: query,
       mode: queryEmbedding ? 'hybrid' : 'keyword-fallback',
       count: 0
@@ -674,6 +721,7 @@ export default function (core) {
     if (!sourceType || typeof sourceType !== 'string') {
       return apiError(res, 400, 'source_type is required');
     }
+    if (refuseCompanionScoped(sourceType, req.query.namespace, res)) return;
     var rows = db.listByType(sourceType, {
       namespace: req.query.namespace || null,
       limit: req.query.limit

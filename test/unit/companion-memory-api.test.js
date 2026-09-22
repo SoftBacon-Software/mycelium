@@ -40,7 +40,8 @@ const JWT_SECRET = 'companion-memory-test-secret';
 const tokenA = jwt.sign({ studioUser: true, userId: 1, username: 'gilbert', displayName: 'Gilbert', role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
 const tokenB = jwt.sign({ studioUser: true, userId: 2, username: 'jessica', displayName: 'Jessica', role: 'operator' }, JWT_SECRET, { expiresIn: '7d' });
 
-async function makeApp() {
+async function makeApp(opts) {
+  opts = opts || {};
   const db = new Database(':memory:');
   db.exec(readFileSync(join(PLUGIN_DIR, 'schema.sql'), 'utf8'));
 
@@ -58,7 +59,9 @@ async function makeApp() {
         } catch (e) { return null; }
       },
       checkAdmin: () => false,
-      checkAgentOrAdmin: () => null,
+      // opts.agentAuth simulates a VALID AGENT KEY on the agent-facing routes,
+      // so the privacy tests can prove companion rows stay hidden from one.
+      checkAgentOrAdmin: opts.agentAuth ? () => 'agent-test' : () => null,
       getAdminDisplayName: () => 'admin-test',
     },
     apiError: (res, code, msg, extra) => res.status(code).json(Object.assign({ error: msg }, extra || {})),
@@ -73,12 +76,14 @@ async function makeApp() {
   };
 
   const { default: createRoutes } = await import(join(PLUGIN_DIR, 'routes.js'));
+  const { default: createMemoryDB } = await import(join(PLUGIN_DIR, 'db.js'));
+  const mem = createMemoryDB(db); // the store wrapper the routes themselves use
 
   const app = express();
   app.use(express.json());
   app.use('/memory', createRoutes(core));
 
-  return { db, app };
+  return { db, mem, app };
 }
 
 function writeMemory(app, token, body) {
@@ -347,12 +352,17 @@ describe('GET /me/memory — kinds, since cursor, limits', () => {
     expect(res.status).toBe(400);
   });
 
-  it('honours the since cursor on the store clock', async () => {
+  it('honours the since cursor on the store clock — INCLUSIVE (review A finding 3: the client dedups by id; a lost row is forever, a repeated one is cheap)', async () => {
     const all = await listMemory(ctx.app, tokenA);
     expect(all.body.count).toBe(2);
     const newest = all.body.results[0].created_at; // store clock, 'YYYY-MM-DD HH:MM:SS'
+    // Both seeds may land in the same store-second (burst writes are the norm
+    // — that is the case that made `>` a silent sync loss): every row sharing
+    // the cursor's second must come back.
+    const sameSecond = all.body.results.filter((r) => r.created_at === newest).length;
     const after = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent(newest));
-    expect(after.body.count).toBe(0);
+    expect(after.body.count).toBe(sameSecond);
+    expect(after.body.results[0].created_at).toBe(newest);
     const before = await listMemory(ctx.app, tokenA, '?since=2020-01-01T00:00:00Z');
     expect(before.body.count).toBe(2);
   });
@@ -453,5 +463,132 @@ describe('rate limit: 60/min across the whole surface, one shared bucket', () =>
     // search, forget share ONE budget — four buckets would quietly make it 240)
     const list = await listMemory(ctx.app, tokenA);
     expect(list.status).toBe(429);
+  });
+});
+
+// --- Review A fixes (2026-09-22, re-review sha) ------------------------------
+// Finding 1: companion rows are a PRIVATE row class — agent keys can neither
+// read nor write them. Finding 2: the store-clock `since` cursor is used
+// verbatim (Date.parse read it as host-local and shifted it by the UTC
+// offset — east of UTC that skips rows forever). Finding 3: the cursor is
+// inclusive (1-second store resolution + burst writes made `>` a silent sync
+// loss). Finding 5: non-positive limits fall back to the caps, never
+// `LIMIT -1` = unbounded.
+
+describe('privacy: the companion row class is invisible to agent keys (review A finding 1)', () => {
+  let ctx;
+  let picklesId;
+
+  beforeAll(async () => {
+    ctx = await makeApp({ agentAuth: true }); // every agent-facing route now AUTHENTICATES
+    const w = await writeMemory(ctx.app, tokenA, {
+      text: 'Their dog is named Pickles.',
+      source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou', key: 'dog.name',
+    });
+    picklesId = w.body.row.id;
+    // one ordinary agent-shaped row in the same store
+    ctx.mem.index('preference', 'seed-1', 'the studio always has coffee', { metadata: { seeded: true } });
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('db.searchKeyword hides companion rows unless the caller sets companion_ok', () => {
+    const hidden = ctx.mem.searchKeyword('dog', { limit: 10 });
+    expect(hidden.some((r) => r.source_type === 'companion')).toBe(false);
+    const shown = ctx.mem.searchKeyword('dog', { limit: 10, companion_ok: true });
+    expect(shown.some((r) => r.source_type === 'companion' && r.source_id === picklesId)).toBe(true);
+  });
+
+  it('agent /search cannot recall companion rows even naming source_types:["companion"]', async () => {
+    const res = await request(ctx.app).post('/memory/search').send({ query: 'dog', source_types: ['companion'] });
+    expect(res.status).toBe(200);
+    expect(res.body.results.some((r) => r.source_type === 'companion')).toBe(false);
+  });
+
+  it('agent /list refuses source_type=companion with 403', async () => {
+    const res = await request(ctx.app).get('/memory/list?source_type=companion');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('companion-private');
+  });
+
+  it('agent /index refuses writing into the companion row class (type or namespace)', async () => {
+    const byType = await request(ctx.app).post('/memory/index').send({
+      source_type: 'companion', source_id: 'squat-1', content_text: 'planted', metadata: {},
+    });
+    expect(byType.status).toBe(403);
+    const byNamespace = await request(ctx.app).post('/memory/index').send({
+      source_type: 'note', source_id: 'squat-2', content_text: 'planted', namespace: 'companion:u1', metadata: {},
+    });
+    expect(byNamespace.status).toBe(403);
+  });
+
+  it('agent /index/bulk refuses an item scoped into the companion class', async () => {
+    const res = await request(ctx.app).post('/memory/index/bulk').send({
+      items: [{ source_type: 'companion', source_id: 'squat-3', content_text: 'planted' }],
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('agent DELETE of a companion row 403s and the row survives', async () => {
+    const res = await request(ctx.app).delete('/memory/index/companion/' + picklesId);
+    expect(res.status).toBe(403);
+    expect(ctx.mem.companionRow(picklesId)).toBeTruthy();
+  });
+});
+
+describe('sync cursor: store-clock format verbatim, inclusive, sane limits (review A findings 2+3+5)', () => {
+  let ctx;
+  let newestCreatedAt;
+
+  beforeAll(async () => {
+    ctx = await makeApp();
+    for (const t of ['Their dog is named Pickles.', 'Their other dog is named Biscuit.']) {
+      const w = await writeMemory(ctx.app, tokenA, { text: t, source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou' });
+      newestCreatedAt = ctx.mem.companionRow(w.body.row.id).created_at; // 'YYYY-MM-DD HH:MM:SS', store clock
+    }
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('a cursor in the store-clock format is used VERBATIM — the row AT the cursor second comes back', async () => {
+    // Regression pin: Date.parse('YYYY-MM-DD HH:MM:SS') reads host-LOCAL. On
+    // any host west of UTC the old normalization pushed the cursor INTO THE
+    // FUTURE (this Mac: +5h) and silently dropped the newest rows.
+    const res = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent(newestCreatedAt));
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBeGreaterThanOrEqual(1);
+    expect(res.body.results.some((r) => r.created_at === newestCreatedAt)).toBe(true);
+  });
+
+  it('an ISO-8601 cursor with an offset still works (converted to the store clock)', async () => {
+    const res = await listMemory(ctx.app, tokenA, '?since=2020-01-01T00:00:00Z');
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+  });
+
+  it('a garbage cursor is still a 400', async () => {
+    const res = await listMemory(ctx.app, tokenA, '?since=not-a-date');
+    expect(res.status).toBe(400);
+  });
+
+  it('limit=-1 falls back to the default cap, not LIMIT -1 = unbounded', async () => {
+    const neg = await listMemory(ctx.app, tokenA, '?limit=-1');
+    const plain = await listMemory(ctx.app, tokenA);
+    expect(neg.status).toBe(200);
+    expect(neg.body.count).toBe(plain.body.count);
+  });
+
+  it('search limit=-1 floors at 1 instead of slicing negative / unbounding the overfetch', async () => {
+    const res = await searchMemory(ctx.app, tokenA, { query: 'dog', limit: -1 });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+  });
+
+  it('search results carry the honest embedded stamp; list rows do not', async () => {
+    const s = await searchMemory(ctx.app, tokenA, { query: 'dog' });
+    expect(s.body.results.length).toBeGreaterThan(0);
+    for (const r of s.body.results) {
+      expect('embedded' in r).toBe(true); // keyword arm, no vectors: stamped false, never guessed true
+    }
+    const l = await listMemory(ctx.app, tokenA);
+    expect('embedded' in l.body.results[0]).toBe(false);
   });
 });
