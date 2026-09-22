@@ -83,7 +83,7 @@ A memory row, as the phone sees it:
 | `key` | optional stable fact-slot name chosen by the client (e.g. `dog.name`, `favorite.game`). Two rows may share a `key`; the newer one should say `supersedes`. |
 | `text` | the fact, in the companion's own words. ≤ 2000 chars. |
 | `source` | where it came from (`chat`, `trick`, `game`, …). ≤ 64 chars. |
-| `at` | when it was learned (client clock). Stored verbatim — an offline write keeps the moment it happened. Any timestamp the platform can parse is accepted; ISO-8601 with an explicit offset is recommended. |
+| `at` | when it was learned (client clock). Stored verbatim — an offline write keeps the moment it happened. Any timestamp the platform can parse is accepted (≤ 64 chars); ISO-8601 with an explicit offset is recommended. |
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
@@ -122,7 +122,8 @@ new row's id) and leaves it in place — recall excludes it, history keeps it.
 The old row must belong to the caller and must itself be live: superseding an
 unknown row is `404`, superseding an already-superseded row is `409` (correct
 the replacement, not the history). Both writes — the new row and the mark on
-the old one — happen in one transaction.
+the old one — happen in one transaction. Forgetting the replacement un-marks
+the old row again (see the forget section).
 
 ## GET /me/memory — list / sync
 
@@ -134,8 +135,10 @@ GET $API/me/memory?kind=aboutYou&since=2026-09-21T20:00:00Z&limit=100
 - `since` — optional sync cursor. Pass a `created_at` **exactly as this API
   returned it** (`YYYY-MM-DD HH:MM:SS`, the store clock, UTC) and it is used
   verbatim; an ISO-8601 timestamp WITH an explicit offset converts to the
-  store clock; an offset-less ISO timestamp (`2026-09-21T20:00:00`) is read
-  as UTC — never as the server's local wall clock. The cursor is
+  store clock; an ISO timestamp WITHOUT an explicit offset — seconds,
+  milliseconds, or minute precision (`2026-09-21T20:00:00`,
+  `2026-09-21T20:00:00.500`) — is read as UTC, never as the server's local
+  wall clock. The cursor is
   **inclusive** — a row sharing the cursor's store-second comes back — so
   the client dedups by `id`. This is the sync call: pull with the newest
   `created_at` you have seen, store rows by id, repeat until `count < limit`.
@@ -200,6 +203,13 @@ forgetting an unknown id, so ids are not an existence oracle across owners.
 (Supersede, not forget, is how a *correction* works; forget is for "never
 should have been here".)
 
+Forgetting a row that was itself a **replacement** un-marks the row it had
+superseded: the corrected fact returns to recall exactly as it was before the
+correction was made. Forgetting the correction is a retraction of the
+correction — a superseded row is never entombed behind a pointer to a row that
+no longer exists. Re-creating the forgotten row afterwards (same `key`+`text`,
+with `supersedes` naming the restored row) supersedes it again.
+
 ## Isolation guarantees
 
 1. Owner scope is derived from the verified JWT on every call — there is no
@@ -228,7 +238,7 @@ All errors are `{ "error": "message" }` — the `409` additionally carries
 
 | status | when |
 |---|---|
-| 400 | missing/invalid field (`kind` outside the three persona kinds, oversized text, unparseable `at`/`since`, `supersedes` pointing at the new row itself) |
+| 400 | missing/invalid field (`kind` outside the three persona kinds, oversized `text`/`source`/`key`/`at`/`supersedes`, unparseable `at`/`since`, `supersedes` pointing at the new row itself) |
 | 401 | no/invalid bearer token, or admin-key-only auth (this surface never accepts admin keys) |
 | 404 | unknown row id — or another owner's row (indistinguishable by design) |
 | 403 | an agent key touching the companion row class from the agent-facing surface (list / index write / index delete) |

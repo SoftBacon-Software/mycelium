@@ -126,6 +126,11 @@ export default function createMemoryDB(db, opts) {
     benchOptIn: benchOptIn,
     benchTypePrefix: BENCH_TYPE_PREFIX,
     benchNsPrefix: BENCH_NS_PREFIX,
+    // Plumbed, not re-declared over there (review A r3 MINOR 1): one copy of
+    // the private-class constants, or the cache arm and the SQL arms can
+    // silently disagree about what is private.
+    companionType: COMPANION_TYPE,
+    companionNsPrefix: COMPANION_NS_PREFIX,
     scanCap: VECTOR_SCAN_CAP
   }, (opts && opts.vectorCache) || {}));
   // The per-db side-channel auto-memory's unindexFacts uses (196): both
@@ -394,10 +399,24 @@ export default function createMemoryDB(db, opts) {
       ).run(supersededById, sourceId);
     },
 
+    // Forget must UN-MARK what it orphans (review A r3 MINOR 3): if the
+    // forgotten row was itself a replacement, the row it superseded still
+    // carries a superseded_by pointing at a row that no longer exists —
+    // excluded from recall FOREVER with no API able to restore it, and
+    // re-creating the replacement 409s against the dangling mark. Clearing
+    // the pointer puts the older row back where the world was before the
+    // correction; forget stays "never should have been here", not "and
+    // everything it touched, too".
+    companionClearSupersededBy(forgottenId) {
+      return db.prepare(
+        "UPDATE sm_embeddings SET superseded_by = NULL WHERE source_type = 'companion' AND superseded_by = ?"
+      ).run(forgottenId);
+    },
+
     companionList(filters) {
       filters = filters || {};
       var sql = "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
-      var params = { namespace: filters.namespace, limit: Math.min(filters.limit || 100, 500) };
+      var params = { namespace: filters.namespace, limit: Math.max(1, Math.min(filters.limit || 100, 500)) }; // floor 1: SQLite reads a negative LIMIT as UNBOUNDED (review A r3 NIT 6)
       if (filters.kind) {
         sql += " AND json_extract(metadata, '$.kind') = @kind";
         params.kind = filters.kind;

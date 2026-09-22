@@ -518,10 +518,14 @@ export default function (core) {
     if (!source) return apiError(res, 400, 'source is required — where the fact came from (chat, trick, game, ...)');
     if (source.length > 64) return apiError(res, 400, 'source exceeds 64 chars');
     if (!at) return apiError(res, 400, 'at is required — when the fact was learned (ISO-8601)');
+    // r3 NIT 5: any timestamp Date.parse takes, a 64-char cap bounds. It
+    // refuses pathological junk before the parse, not after it.
+    if (at.length > 64) return apiError(res, 400, 'at exceeds 64 chars');
     if (isNaN(Date.parse(at))) return apiError(res, 400, "at must be an ISO-8601 timestamp; got: '" + at + "'");
     if (!kind) return apiError(res, 400, 'kind is required — one of: ' + COMPANION_KINDS.join(', '));
     if (!companionKindOr400(res, kind)) return;
     if (key.length > 128) return apiError(res, 400, 'key exceeds 128 chars');
+    if (supersedes.length > 128) return apiError(res, 400, 'supersedes exceeds 128 chars');
 
     var namespace = companionNamespace(user.userId);
     var id = companionRowId(user.userId, key, text);
@@ -597,7 +601,10 @@ export default function (core) {
           return apiError(res, 400, "since is not a real timestamp: '" + since + "'");
         }
       } else {
-        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(since)) since += 'Z';
+        // ANY offset-less date-time (not just exact seconds — r3 MINOR 4:
+        // `2026-09-21T20:00:00.500` hit the same host-local trap one grammar
+        // production over) is read as UTC, the store clock's frame.
+        if (/[T ]\d{2}:\d{2}/.test(since) && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(since)) since += 'Z';
         var t = Date.parse(since);
         if (isNaN(t)) {
           return apiError(res, 400, "since must be a created_at exactly as this API returned it (YYYY-MM-DD HH:MM:SS) or an ISO-8601 timestamp; got: '" + since + "'");
@@ -720,6 +727,10 @@ export default function (core) {
     if (!row || (row.namespace || '') !== companionNamespace(user.userId)) {
       return apiError(res, 404, "no such memory: '" + id + "'");
     }
+    // Un-mark first (review A r3 MINOR 3): if the forgotten row was itself a
+    // replacement, the row it superseded returns to recall instead of being
+    // entombed behind a pointer to a row that no longer exists.
+    db.companionClearSupersededBy(id);
     db.remove(COMPANION_SOURCE_TYPE, id);
     res.json({ ok: true, forgotten: id });
   });
@@ -1213,10 +1224,14 @@ export default function (core) {
     // Drone provider: queue async jobs instead of embedding synchronously
     if (config.embedding_provider === 'drone') {
       var queued = 0;
+      var refused = 0; // a SECURITY refusal (companion rows never ride the agent-readable drone queue), not a failure — counted, not swallowed (review A r3 MINOR 2)
       for (var row of unembedded) {
         try {
-          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
-          queued++;
+          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text')) {
+            queued++;
+          } else {
+            refused++;
+          }
         } catch (e) {
           console.error('[semantic-memory] reindex drone queue failed:', e.message);
         }
@@ -1224,8 +1239,9 @@ export default function (core) {
       var droneRemaining = db.getUnembedded(1).length;
       return res.json({
         ok: true,
-        message: 'Queued ' + queued + ' drone embed jobs' + (droneRemaining > 0 ? ' — more remaining, call again' : ''),
+        message: 'Queued ' + queued + ' drone embed jobs' + (refused > 0 ? ' — ' + refused + ' companion rows refused (private rows never enter the drone queue)' : '') + (droneRemaining > 0 ? ' — more remaining, call again' : ''),
         queued: queued,
+        refused: refused,
         remaining: droneRemaining > 0,
         stats: db.stats()
       });
@@ -1291,10 +1307,14 @@ export default function (core) {
 
     if (config.embedding_provider === 'drone') {
       // Drone provider: queue async jobs; vectors arrive later via callback
+      var refused = 0; // companion rows: security-refused from the drone queue (review A r3 MINOR 2)
       for (var row of rows) {
         try {
-          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
-          queued++;
+          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text')) {
+            queued++;
+          } else {
+            refused++;
+          }
         } catch (e) {
           failed++;
           console.error('[semantic-memory] backfill drone queue failed:', e.message);
@@ -1328,6 +1348,7 @@ export default function (core) {
       processed: processed,
       embedded: embedded,
       failed: failed,
+      refused: refused,
       queued: queued,
       remaining: db.countUnembedded()
     });

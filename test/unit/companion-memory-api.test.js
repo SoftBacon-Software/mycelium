@@ -650,3 +650,81 @@ describe('review A round 2: the drone queue, the last write path, cursor traps, 
     expect(res.body.filter).toBeUndefined();
   });
 });
+
+describe('review A round 3: the vector-cache arm, un-entombing, millis cursors, caps', () => {
+  let ctx;
+
+  beforeAll(async () => { ctx = await makeApp(); });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('a companion row with an embedding is excluded from the VECTOR arms too — cache and oracle alike (r3 MINOR 1)', async () => {
+    const w = await writeMemory(ctx.app, tokenA, { text: 'Their dog is named Pickles.', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou' });
+    const id = w.body.row.id;
+    // Embed the row DIRECTLY through the store wrapper (a direct provider
+    // would do this on write): the keyword arms were already proven to hide
+    // it — this pins the vector cache and its JSON-path oracle, where the
+    // exclusion is a per-entry skip, not a WHERE clause.
+    const vec = [0.1, 0.2, 0.3];
+    ctx.mem.updateEmbedding('companion', id, 0, vec, 'test');
+    // The vector arms return raw sm_embeddings rows: source_id is the row
+    // id the API speaks in (the integer PK is theirs, not ours).
+    for (const arm of ['searchVector', 'searchVectorJsonPath']) {
+      const hidden = await ctx.mem[arm](vec, { limit: 10 });
+      expect(hidden.some((r) => r.source_id === id)).toBe(false);
+      const shown = await ctx.mem[arm](vec, { limit: 10, companion_ok: true });
+      expect(shown.some((r) => r.source_id === id)).toBe(true);
+      expect(shown.find((r) => r.source_id === id).score).toBeGreaterThan(0.99); // the query vector IS the row vector
+    }
+  });
+
+  it('forgetting a replacement returns the superseded row to recall — never entombed (r3 MINOR 3)', async () => {
+    const orig = await writeMemory(ctx.app, tokenA, { text: 'Their dog is named Pickles.', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou', key: 'dog.name' });
+    const fix = await writeMemory(ctx.app, tokenA, { text: 'Their dog is actually named Rex.', source: 'chat', at: '2026-09-21T20:16:00.000Z', kind: 'aboutYou', key: 'dog.name', supersedes: orig.body.row.id });
+    expect(fix.status).toBe(201);
+    await searchMemory(ctx.app, tokenA, { query: 'Pickles' }).then((r) => {
+      expect(r.body.results.some((x) => x.id === orig.body.row.id)).toBe(false); // corrected away
+    });
+    const forgot = await request(ctx.app).post('/memory/me/memory/' + fix.body.row.id + '/forget').set('Authorization', 'Bearer ' + tokenA);
+    expect(forgot.status).toBe(200);
+    // The retraction: the original fact is back in recall...
+    await searchMemory(ctx.app, tokenA, { query: 'Pickles' }).then((r) => {
+      expect(r.body.results.some((x) => x.id === orig.body.row.id)).toBe(true);
+      expect(r.body.results.find((x) => x.id === orig.body.row.id).superseded_by).toBeNull();
+    });
+    // ...and re-creating the correction works again (409-forever is gone).
+    const refix = await writeMemory(ctx.app, tokenA, { text: 'Their dog is actually named Rex.', source: 'chat', at: '2026-09-21T20:16:00.000Z', kind: 'aboutYou', key: 'dog.name', supersedes: orig.body.row.id });
+    expect(refix.status).toBe(201);
+    await searchMemory(ctx.app, tokenA, { query: 'Pickles' }).then((r) => {
+      expect(r.body.results.some((x) => x.id === orig.body.row.id)).toBe(false); // corrected away, again
+    });
+  });
+
+  it('an offset-less cursor WITH milliseconds is read as UTC — both directions pinned (r3 MINOR 4)', async () => {
+    const w = await writeMemory(ctx.app, tokenA, { text: 'Their dog is named Pickles.', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou' });
+    const ts = ctx.mem.companionRow(w.body.row.id).created_at; // 'YYYY-MM-DD HH:MM:SS' UTC
+    const d = ts.slice(0, 10);
+    const nextSec = new Date(Date.parse(ts.replace(' ', 'T') + 'Z') + 1000).toISOString().slice(11, 19);
+    // same instant +500ms, no offset → must land on the row's own second (a
+    // host-local read WEST of UTC drags the cursor back hours → row vanishes)
+    const at = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent(d + 'T' + ts.slice(11) + '.500'));
+    expect(at.status).toBe(200);
+    expect(at.body.results.some((r) => r.created_at === ts)).toBe(true);
+    // one second LATER, no offset → row excluded (a host-local read EAST of
+    // UTC drags the cursor back → row wrongly present)
+    const past = await listMemory(ctx.app, tokenA, '?since=' + encodeURIComponent(d + 'T' + nextSec + '.000'));
+    expect(past.status).toBe(200);
+    expect(past.body.results.some((r) => r.created_at === ts)).toBe(false);
+  });
+
+  it('at beyond 64 chars is a 400 naming the CAP, not the parse (r3 NIT 5)', async () => {
+    const res = await writeMemory(ctx.app, tokenA, { text: 'x', source: 'chat', at: 'a'.repeat(65), kind: 'aboutYou' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('at exceeds 64');
+  });
+
+  it('supersedes beyond 128 chars is a 400 naming the field (r3 NIT 5)', async () => {
+    const res = await writeMemory(ctx.app, tokenA, { text: 'x', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou', supersedes: 'b'.repeat(129) });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('supersedes exceeds 128');
+  });
+});
