@@ -135,6 +135,21 @@ export default function createMemoryDB(db, opts) {
   }
   try { db.__myceliumEmbeddingWrite = updateEmbeddingRow; } catch (e) { /* frozen host */ }
 
+  // Companion Memory API (docs/companion-memory-api.md): bridge the
+  // superseded_by column onto an sm_embeddings table that predates it —
+  // CREATE TABLE IF NOT EXISTS in schema.sql cannot extend a table that
+  // already exists, so the column would silently miss every persistent
+  // instance on upgrade. Same guarded-ALTER idiom as core.js applyMigrations:
+  // "already exists" is the fresh-DB case (schema.sql already declared it)
+  // and is swallowed; anything else surfaces at load.
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN superseded_by TEXT').run();
+  } catch (e) {
+    // "duplicate column name" = the fresh-DB case (schema.sql declared it);
+    // anything else is real and surfaces at load.
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
+
   return {
 
     // -- Config --
@@ -335,6 +350,45 @@ export default function createMemoryDB(db, opts) {
     remove(sourceType, sourceId) {
       db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
       vectorCache.onRemovePair(sourceType, sourceId, null);
+    },
+
+    // -- Companion rows (docs/companion-memory-api.md) ---------------------------
+    // Ordinary sm_embeddings rows — source_type 'companion', one namespace per
+    // owner ('companion:u<userId>') so the EXISTING search arms scope owner
+    // reads in SQL; supersede state is the schema.sql column, not metadata,
+    // so a recall filter reads it straight off the row.
+
+    companionRow(sourceId) {
+      return db.prepare(
+        "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0"
+      ).get(sourceId);
+    },
+
+    // A state flip, not a content change: content_text is untouched (so the
+    // FTS triggers don't fire and the stored vector stays valid) and
+    // updated_at is deliberately left alone (the vector cache's recency scan
+    // doesn't reshuffle because a row died). The WHERE re-asserts a live row
+    // so even a concurrent double-submit cannot flip history twice.
+    companionMarkSuperseded(sourceId, supersededById) {
+      db.prepare(
+        "UPDATE sm_embeddings SET superseded_by = ? WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0 AND superseded_by IS NULL"
+      ).run(supersededById, sourceId);
+    },
+
+    companionList(filters) {
+      filters = filters || {};
+      var sql = "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
+      var params = { namespace: filters.namespace, limit: Math.min(filters.limit || 100, 500) };
+      if (filters.kind) {
+        sql += " AND json_extract(metadata, '$.kind') = @kind";
+        params.kind = filters.kind;
+      }
+      if (filters.since) {
+        sql += ' AND created_at > @since';
+        params.since = filters.since;
+      }
+      sql += ' ORDER BY created_at DESC, id DESC LIMIT @limit';
+      return db.prepare(sql).all(params);
     },
 
     // Admin bulk purge by exact filter — how a finished benchmark run cleans up

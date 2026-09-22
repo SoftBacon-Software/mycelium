@@ -1,0 +1,221 @@
+# The Companion Memory API
+
+*A phone-readable, phone-writable, per-user slice of Mycelium memory — built for
+the companion app (the character **Qurio**), useful to any client that speaks for
+ONE person.*
+
+Mycelium's memory API (`POST /memory/index`, `POST /memory/search`, …) is
+agent-shaped: it authenticates with admin keys and agent keys, and every row is
+attributed to an agent. That is correct for the lab and wrong for a phone: no
+phone should ever hold an admin key, and a companion's memories belong to a
+*person*, not to an agent. This surface is the consumer shape of the same store:
+
+- **Persona is memory.** A companion is rows of three kinds — `aboutYou`
+  (facts about the person), `aboutMe` (facts about the companion itself),
+  `howWeTalk` (voice, rituals, in-jokes). Keyed, newer supersedes older.
+- **One person, one token, one scope.** Every row is written into the token
+  owner's scope; a token can never read or forget another owner's rows.
+- **Offline-first.** Writes are idempotent, so the phone can replay its outbox
+  after days offline without creating duplicates.
+
+The rows live in the SAME store the agents search (`sm_embeddings` via the
+semantic-memory plugin, source_type `companion`), so they are embedded and
+recalled by the existing semantic layer — nothing here forks the memory stack.
+
+## Where it lives
+
+The routes are mounted on the semantic-memory plugin's existing `/memory`
+prefix (the same convention as `POST /memory/search`), so the full paths are:
+
+```
+POST   /api/mycelium/memory/me/memory            write one memory
+GET    /api/mycelium/memory/me/memory            list/sync memories
+POST   /api/mycelium/memory/me/memory/search     recall by meaning
+POST   /api/mycelium/memory/me/memory/:id/forget  remove one memory
+```
+
+Examples below use `$API` for `https://<your-host>/api/mycelium`.
+
+## Authentication
+
+Every call carries a **studio bearer token** minted by the existing login:
+
+```
+POST $API/studio/login        { "username": "...", "password": "..." }
+→ { "token": "<JWT>", "user": { "id": 3, ... } }
+```
+
+The token expires in 7 days; the phone re-logs-in when it does.
+
+```
+Authorization: Bearer <token>
+```
+
+- **Admin keys are not accepted on this surface** — a request carrying only
+  `X-Admin-Key` gets `401`, by design. The admin surface for memory remains
+  the agent-facing `/memory/*` routes, unchanged.
+- **The owner is the token, nothing else.** The owner scope is derived from
+  the verified JWT payload (`userId`) on every call; no header, query param,
+  or body field can widen it.
+
+## Rows
+
+A memory row, as the phone sees it:
+
+```json
+{
+  "id": "3fa7c1…(64 hex)",
+  "kind": "aboutYou",
+  "key": "dog.name",
+  "text": "Their dog is named Pickles.",
+  "source": "chat",
+  "at": "2026-09-21T20:15:00.000Z",
+  "created_at": "2026-09-21 20:15:04",
+  "superseded_by": null,
+  "supersedes": null
+}
+```
+
+| field | meaning |
+|---|---|
+| `id` | stable row identity (deterministic — see idempotency). Use it for `supersedes` and `/forget`. |
+| `kind` | `aboutYou` \| `aboutMe` \| `howWeTalk` — the persona kinds. |
+| `key` | optional stable fact-slot name chosen by the client (e.g. `dog.name`, `favorite.game`). Two rows may share a `key`; the newer one should say `supersedes`. |
+| `text` | the fact, in the companion's own words. ≤ 2000 chars. |
+| `source` | where it came from (`chat`, `trick`, `game`, …). ≤ 64 chars. |
+| `at` | when it was learned (client clock, ISO-8601). Stored verbatim — an offline write keeps the moment it happened. |
+| `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
+| `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
+| `supersedes` | id of the row this one replaced (echoed back). |
+
+## POST /me/memory — write one memory
+
+```json
+{
+  "text": "Their dog is named Pickles.",
+  "source": "chat",
+  "at": "2026-09-21T20:15:00.000Z",
+  "kind": "aboutYou",
+  "key": "dog.name",
+  "supersedes": "<id of the old dog-name row, if any>"
+}
+```
+
+`text`, `source`, `at`, `kind` are required; `key` and `supersedes` are
+optional. `kind` must be one of the three persona kinds.
+
+Returns `201` with `{ "ok": true, "row": { … } }`.
+
+**Idempotent by (owner, key, text).** The row id is a digest of exactly those
+three, so replaying a write from the offline outbox returns the SAME row with
+`"replayed": true` and writes nothing — even if the row has since been
+superseded or forgotten-and-rewritten. A client that is unsure whether a write
+landed can simply send it again.
+
+**Supersede.** Passing `supersedes` marks the old row (`superseded_by` = the
+new row's id) and leaves it in place — recall excludes it, history keeps it.
+The old row must belong to the caller and must itself be live: superseding an
+unknown row is `404`, superseding an already-superseded row is `409` (correct
+the replacement, not the history). Both writes — the new row and the mark on
+the old one — happen in one transaction.
+
+## GET /me/memory — list / sync
+
+```
+GET $API/me/memory?kind=aboutYou&since=2026-09-21T20:00:00Z&limit=100
+```
+
+- `kind` — optional filter, one persona kind.
+- `since` — optional ISO-8601 cursor; returns rows with `created_at` after it
+  (store clock). This is the sync call: pull with the newest `created_at` you
+  have seen, store rows, repeat until `count < limit`.
+- `limit` — default 100, cap 500.
+
+Returns `{ "results": [ …rows… ], "count": n }`, newest first. **Superseded
+rows are included and carry `superseded_by`** — the client renders the live
+row and can render "you used to say X, now Y" from history.
+
+## POST /me/memory/search — recall by meaning
+
+```json
+{ "query": "what does my dog like", "kinds": ["aboutYou"], "limit": 5 }
+```
+
+- `query` — required.
+- `kinds` — optional array restricting the kinds searched.
+- `limit` — default 5, cap 50.
+- `?include_superseded=1` — opt into dead rows (default: excluded — the
+  companion should not recall what was corrected; the row id that superseded a
+  hit is not implied, use GET for history).
+
+Runs through the SAME hybrid semantic search the agents use
+(FTS5 + embeddings, reciprocal-rank fusion), scoped to the caller's owner
+scope in the query itself. The response reports its mode honestly:
+
+```json
+{
+  "results": [ { "…row…": "", "score": 0.031 } ],
+  "query": "what does my dog like",
+  "mode": "hybrid",
+  "count": 1
+}
+```
+
+`mode: "keyword-fallback"` with a `degraded: { reason, fell_back_to }` block
+means no embedding provider answered and results are lexical only — the
+result set is still the owner's own rows, the honesty is the point. When the
+platform has an embedder configured, phone rows embed automatically on write,
+like every other memory row.
+
+## POST /me/memory/:id/forget — remove one memory
+
+```
+POST $API/me/memory/3fa7c1…/forget
+→ { "ok": true, "forgotten": "3fa7c1…" }
+```
+
+A hard delete: the row leaves the store, the search index, and the vector set.
+Forgetting the row of another owner returns `404` — indistinguishable from
+forgetting an unknown id, so ids are not an existence oracle across owners.
+(Supersede, not forget, is how a *correction* works; forget is for "never
+should have been here".)
+
+## Isolation guarantees
+
+1. Owner scope is derived from the verified JWT on every call — there is no
+   parameter that can name another owner.
+2. Writes, reads, search, and forget all filter by that scope (namespace
+   `companion:u<userId>` in the store, plus a metadata owner check on every
+   search hit).
+3. A token for user A cannot read, recall, or forget user B's rows; cross-owner
+   ids 404 like unknown ids.
+
+## Rate limit
+
+All four routes share **60 requests per minute per IP** — sized for a phone,
+not a machine. Exceeding it returns `429` with `RateLimit-*` headers and
+`Retry-After`. (Operators can disable limiters instance-wide with
+`MYCELIUM_RATE_LIMIT=off`.)
+
+## Error shape
+
+All errors are `{ "error": "message" }`, naming the offending field on 400s:
+
+| status | when |
+|---|---|
+| 400 | missing/invalid field (`kind` outside the three persona kinds, oversized text, unparseable `at`/`since`, `supersedes` pointing at the new row itself) |
+| 401 | no/invalid bearer token, or admin-key-only auth (this surface never accepts admin keys) |
+| 404 | unknown row id — or another owner's row (indistinguishable by design) |
+| 409 | `supersedes` names a row that is already superseded |
+| 429 | rate limit exceeded |
+
+## What this deliberately does NOT do
+
+- No agent-shaped attribution: rows are attributed to a person, never to an
+  agent; there is no `X-Acting-As` here.
+- No change to the agent-facing `/memory/*` routes — their behavior, auth, and
+  rows are untouched; `companion` rows appear to them only as ordinary
+  `source_type: companion` rows in the same index (admin-visible, as all rows
+  are).
+- No sharing between owners. A household with two phones is two owners; Duo
+  sharing is a future contract, not this one.

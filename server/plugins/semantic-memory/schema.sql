@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS sm_embeddings (
   embedding BLOB,
   embedding_model TEXT,
   metadata TEXT NOT NULL DEFAULT '{}',
+  -- Companion Memory API (docs/companion-memory-api.md): a superseded row is
+  -- MARKED, not deleted — this column names the row that replaced it. History
+  -- is kept; recall filters it out unless the caller opts back in.
+  superseded_by TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(source_type, source_id, chunk_index)

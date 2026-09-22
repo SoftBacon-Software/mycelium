@@ -1,5 +1,6 @@
 // Semantic Memory plugin routes
 
+import crypto from 'crypto';
 import { Router } from 'express';
 import createMemoryDB from './db.js';
 import { chunkText } from './chunking.js';
@@ -378,6 +379,288 @@ export default function (core) {
     console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
       (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
+  });
+
+  // ======== THE COMPANION MEMORY API (docs/companion-memory-api.md) ===========
+  // Mycelium's first CONSUMER memory surface — built for the companion app
+  // (the character Qurio): a phone that reads/writes ONE person's memory over
+  // the network with a per-user token, offline-first, where PERSONA IS MEMORY
+  // (rows of kind aboutYou / aboutMe / howWeTalk, keyed, newer supersedes
+  // older). The agent-shaped /memory/* routes above are UNTOUCHED — this is an
+  // additive owner-scoped surface over the SAME store + embedder: rows are
+  // source_type 'companion' in one namespace per owner, so the existing
+  // hybrid search reaches them unmodified.
+  //
+  // AUTH (the contract's hard line): a studio JWT minted by POST /studio/login
+  // ONLY. Admin keys are REFUSED here — no admin key on a phone, ever — and
+  // the owner scope is derived from the verified token payload on every call;
+  // no header, query param, or body field can widen it. getStudioUser arrives
+  // via pluginCore (the same decoder /studio/me uses); a core without it
+  // fails CLOSED (every call 401s rather than guessing an owner).
+  var getStudioUser = (core.auth && core.auth.getStudioUser) || function () { return null; };
+
+  var COMPANION_SOURCE_TYPE = 'companion';
+  var COMPANION_KINDS = ['aboutYou', 'aboutMe', 'howWeTalk'];
+  var COMPANION_TEXT_MAX = 2000;
+  // One shared limiter — 60/min is the SURFACE budget for a phone, not a
+  // per-route allowance (four separate buckets would quietly make it 240).
+  var companionLimiter = rateLimited('memory/companion', { windowMs: 60000, max: 60 });
+
+  function companionNamespace(userId) {
+    return 'companion:u' + userId;
+  }
+
+  // Deterministic row id — the idempotency key is (owner, key, text), so an
+  // offline client can replay its outbox forever: same three → same id → the
+  // write path finds the row and answers without writing.
+  function companionRowId(userId, key, text) {
+    return crypto.createHash('sha256')
+      .update('companion ' + userId + ' ' + (key || '') + ' ' + text)
+      .digest('hex');
+  }
+
+  // The row in the shape the doc's "Rows" table promises. Internal columns
+  // (the embedding vector, chunk bookkeeping, raw metadata JSON) never leave.
+  // metadata arrives as a string from a direct read and ALREADY PARSED from
+  // the search arms — handle both.
+  function companionView(row, opts) {
+    var meta = row.metadata;
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta || '{}'); } catch (e) { meta = {}; }
+    }
+    if (!meta || typeof meta !== 'object') meta = {};
+    var view = {
+      id: row.source_id,
+      kind: meta.kind || null,
+      key: meta.key || null,
+      text: row.content_text,
+      source: meta.source || null,
+      at: meta.at || null,
+      created_at: row.created_at,
+      superseded_by: row.superseded_by || null,
+      supersedes: meta.supersedes || null
+    };
+    if (opts && opts.score !== undefined) view.score = opts.score;
+    return view;
+  }
+
+  // The whole surface authenticates the same way: verify the bearer, derive
+  // the owner, or refuse. Admin keys and agent keys never authenticate here.
+  function companionOwner(req, res) {
+    var user = getStudioUser(req);
+    if (!user || !user.userId) {
+      apiError(res, 401, 'a studio bearer token is required — log in via POST /api/mycelium/studio/login; this surface never accepts admin keys');
+      return null;
+    }
+    return user;
+  }
+
+  function companionKindOr400(res, kind) {
+    if (COMPANION_KINDS.indexOf(kind) !== -1) return true;
+    apiError(res, 400, 'kind must be one of: ' + COMPANION_KINDS.join(', '));
+    return false;
+  }
+
+  // POST /me/memory — write one memory. Idempotent by (owner, key, text): the
+  // row id is a digest of exactly those three, so replaying an offline outbox
+  // returns the SAME row ("replayed": true) and writes nothing — a replay
+  // never resurrects a superseded row and never double-fires a supersede.
+  // supersedes marks the old row in the SAME transaction that writes the new
+  // one (a supersede is both rows or neither — the lessons-supersede rule).
+  router.post('/me/memory', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var body = req.body || {};
+    function str(v) { return typeof v === 'string' ? v.trim() : ''; }
+    var text = str(body.text);
+    var source = str(body.source);
+    var at = str(body.at);
+    var kind = str(body.kind);
+    var key = str(body.key);
+    var supersedes = str(body.supersedes);
+
+    if (!text) return apiError(res, 400, "text is required — the fact, in the companion's own words");
+    if (text.length > COMPANION_TEXT_MAX) {
+      return apiError(res, 400, 'text exceeds ' + COMPANION_TEXT_MAX + ' chars — a memory is a fact, not a document');
+    }
+    if (!source) return apiError(res, 400, 'source is required — where the fact came from (chat, trick, game, ...)');
+    if (source.length > 64) return apiError(res, 400, 'source exceeds 64 chars');
+    if (!at) return apiError(res, 400, 'at is required — when the fact was learned (ISO-8601)');
+    if (isNaN(Date.parse(at))) return apiError(res, 400, "at must be an ISO-8601 timestamp; got: '" + at + "'");
+    if (!kind) return apiError(res, 400, 'kind is required — one of: ' + COMPANION_KINDS.join(', '));
+    if (!companionKindOr400(res, kind)) return;
+    if (key.length > 128) return apiError(res, 400, 'key exceeds 128 chars');
+
+    var namespace = companionNamespace(user.userId);
+    var id = companionRowId(user.userId, key, text);
+
+    // A pure body-vs-identity check, so it fires even when the row already
+    // exists: a retry that adds supersedes pointing at its own target is a
+    // client bug, not a replay.
+    if (supersedes && supersedes === id) {
+      return apiError(res, 400, "supersedes names the row this write would create ('" + id + "') — a memory cannot replace itself");
+    }
+
+    var existing = db.companionRow(id);
+    if (existing) {
+      // As it is NOW — live, superseded, or the product of an earlier replay.
+      return res.status(200).json({ ok: true, replayed: true, row: companionView(existing) });
+    }
+
+    var meta = { owner: user.userId, username: user.username || null, kind: kind, source: source, at: at };
+    if (key) meta.key = key;
+    if (supersedes) meta.supersedes = supersedes;
+
+    if (supersedes) {
+      var oldRow = db.companionRow(supersedes);
+      if (!oldRow || (oldRow.namespace || '') !== namespace) {
+        // Unknown AND another owner's row are the same 404 — ids are not an
+        // existence oracle across owners.
+        return apiError(res, 404, "supersedes names no memory of yours: '" + supersedes + "'");
+      }
+      var oldMeta;
+      try { oldMeta = JSON.parse(oldRow.metadata || '{}'); } catch (e) { oldMeta = {}; }
+      var alreadyDead = oldRow.superseded_by || oldMeta.superseded_by;
+      if (alreadyDead) {
+        return apiError(res, 409, "supersede refused: '" + supersedes + "' was already superseded — correct the replacement, not the history", { superseded_by: alreadyDead });
+      }
+      var writeBoth = core.db.transaction(function () {
+        db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+        db.companionMarkSuperseded(supersedes, id);
+      });
+      writeBoth();
+    } else {
+      db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+    }
+
+    // Embed like every other row (fire-and-forget; no-op without a provider).
+    autoEmbedUnembedded(COMPANION_SOURCE_TYPE, id, 0);
+
+    res.status(201).json({ ok: true, replayed: false, row: companionView(db.companionRow(id)) });
+  });
+
+  // GET /me/memory?kind=&since=&limit= — list / sync. Superseded rows are
+  // INCLUDED and carry superseded_by: history is marked, never hidden — the
+  // client renders the live row and "you used to say X, now Y" from the same
+  // page. `since` is the sync cursor (rows stored after it, store clock).
+  router.get('/me/memory', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var kind = nonEmptyQuery(req.query.kind);
+    if (kind && !companionKindOr400(res, kind)) return;
+    var since = nonEmptyQuery(req.query.since);
+    if (since) {
+      var t = Date.parse(since);
+      if (isNaN(t)) return apiError(res, 400, "since must be an ISO-8601 timestamp; got: '" + since + "'");
+      since = new Date(t).toISOString().replace('T', ' ').slice(0, 19); // the store clock's format
+    }
+    var limit = Math.min(parseIntParam(req.query.limit) || 100, 500);
+    var rows = db.companionList({
+      namespace: companionNamespace(user.userId),
+      kind: kind,
+      since: since,
+      limit: limit
+    });
+    res.json({
+      results: rows.map(function (r) { return companionView(r); }),
+      count: rows.length
+    });
+  });
+
+  // POST /me/memory/search — recall by meaning through the SAME hybrid layer
+  // /search uses, scoped to the owner in the query itself (source_types +
+  // namespace both narrow in SQL; the metadata owner check below is belt and
+  // braces). Superseded rows are excluded unless ?include_superseded=1 — the
+  // companion should not recall what was corrected. The overfetch-then-filter
+  // order is the §F2 rule /lessons documents: the caller's limit is spent on
+  // rows that survive, and a filter that culled says what it did.
+  router.post('/me/memory/search', companionLimiter, asyncHandler(async function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var body = req.body || {};
+    var query = typeof body.query === 'string' ? body.query.trim() : '';
+    if (!query) return apiError(res, 400, 'query is required');
+    var kinds = null;
+    if (body.kinds !== undefined) {
+      if (!Array.isArray(body.kinds) || body.kinds.length === 0) {
+        return apiError(res, 400, 'kinds, when present, must be a non-empty array drawn from: ' + COMPANION_KINDS.join(', '));
+      }
+      for (var ki = 0; ki < body.kinds.length; ki++) {
+        if (COMPANION_KINDS.indexOf(body.kinds[ki]) === -1) {
+          return apiError(res, 400, 'kinds must be a subset of: ' + COMPANION_KINDS.join(', '));
+        }
+      }
+      kinds = body.kinds;
+    }
+    var limit = Math.min(parseIntParam(body.limit) || 5, 50);
+    var includeSuperseded = req.query.include_superseded === '1' || req.query.include_superseded === 'true';
+
+    var opts = {
+      limit: Math.min(limit * 5, 100),
+      source_types: [COMPANION_SOURCE_TYPE],
+      namespace: companionNamespace(user.userId)
+    };
+
+    var embedFailReason = null;
+    var queryEmbedding = null;
+    try {
+      var config = db.getAllConfig();
+      if (config.embedding_provider && config.embedding_provider !== 'none') {
+        queryEmbedding = await generateEmbedding(config, query, { priority: 'high' });
+        if (!queryEmbedding) {
+          embedFailReason = 'embedding provider returned no vector (async-drone, unknown provider, or empty response)';
+        }
+      } else {
+        embedFailReason = 'no embedding provider configured (embedding_provider = ' + (config.embedding_provider || 'none') + ')';
+      }
+    } catch (e) {
+      embedFailReason = e.message;
+      console.error('[semantic-memory] companion query embedding failed, falling back to keyword:', e.message);
+    }
+
+    var results = await db.searchHybrid(query, opts, queryEmbedding); // 196: may wait on an in-flight cache build
+    var beforeFilter = results.length;
+    results = results.filter(function (r) {
+      var meta = r.metadata || {};
+      if (meta.owner !== user.userId) return false;
+      if (kinds && kinds.indexOf(meta.kind) === -1) return false;
+      if (!includeSuperseded && r.superseded_by) return false;
+      return true;
+    });
+    var response = {
+      results: results.map(function (r) { return companionView(r, { score: r.score }); }).slice(0, limit),
+      query: query,
+      mode: queryEmbedding ? 'hybrid' : 'keyword-fallback',
+      count: 0
+    };
+    response.count = response.results.length;
+    if (embedFailReason) {
+      response.degraded = {
+        reason: embedFailReason,
+        fell_back_to: 'keyword',
+        note: 'vector search unavailable; results are lexical (FTS5/LIKE) only'
+      };
+    }
+    if (beforeFilter > response.results.length) {
+      response.filter = { results_before_filter: beforeFilter, results_after_filter: response.results.length };
+    }
+    res.json(response);
+  }));
+
+  // POST /me/memory/:id/forget — a hard delete: the row leaves the store, the
+  // search index, and the vector set (db.remove drives both). Another owner's
+  // id 404s exactly like an unknown id — ids are not an existence oracle
+  // across owners. Supersede, not forget, is how a correction works.
+  router.post('/me/memory/:id/forget', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var id = String(req.params.id || '');
+    var row = db.companionRow(id);
+    if (!row || (row.namespace || '') !== companionNamespace(user.userId)) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    db.remove(COMPANION_SOURCE_TYPE, id);
+    res.json({ ok: true, forgotten: id });
   });
 
   // GET /memory/stats — index stats

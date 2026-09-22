@@ -251,7 +251,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-162 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+163 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
@@ -260,7 +260,7 @@ npm test            # vitest run — unit + smoke under test/
 | Plugin | Description |
 |--------|-------------|
 | `marketing` | build-in-public drafts, social posting, X delivery, outreach (mounted at `/marketing` — `/marketing/bip`, `/marketing/social`, `/marketing/x`, `/marketing/outreach`; the old top-level paths 301 for one release) |
-| `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)) |
+| `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)); also mounts the per-user Companion Memory API for consumer clients — [docs/companion-memory-api.md](docs/companion-memory-api.md) |
 | `auto-memory` | automated fact extraction from platform events |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 | `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |
