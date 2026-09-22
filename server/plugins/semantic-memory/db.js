@@ -415,7 +415,9 @@ export default function createMemoryDB(db, opts) {
 
     companionList(filters) {
       filters = filters || {};
-      var sql = "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
+      // Named columns (review A r4 NIT 4): the view needs five fields; SELECT *
+      // would drag up to 500 embedding BLOBs into a phone's sync page.
+      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
       var params = { namespace: filters.namespace, limit: Math.max(1, Math.min(filters.limit || 100, 500)) }; // floor 1: SQLite reads a negative LIMIT as UNBOUNDED (review A r3 NIT 6)
       if (filters.kind) {
         sql += " AND json_extract(metadata, '$.kind') = @kind";
@@ -638,13 +640,19 @@ export default function createMemoryDB(db, opts) {
     },
 
     getUnembedded(limit) {
+      // Companion rows are NOT backlog (review A r4 MINOR 2): under the drone
+      // provider they are security-refused at the queue by design, so counting
+      // them made /reindex and /backfill-embeddings answer remaining:true
+      // forever and the boot drain re-offer them every pass. The same
+      // predicate the search arms hide them with keeps this from drifting.
+      // Not-backlog is not deleted: the rows stay keyword-searchable.
       return db.prepare(
-        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL ORDER BY updated_at DESC LIMIT ?'
+        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL + ' ORDER BY updated_at DESC LIMIT ?'
       ).all(limit || 50);
     },
 
     countUnembedded() {
-      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
+      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL).get().c;
     },
 
     // Oversized NULL-embedding rows can never embed whole — the provider

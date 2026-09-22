@@ -111,7 +111,10 @@ with the same shape and `"replayed": true`.
 three, so replaying a write from the offline outbox returns the SAME row with
 `"replayed": true` and writes nothing — even if the row has since been
 superseded or forgotten-and-rewritten. A client that is unsure whether a write
-landed can simply send it again. (A replay answers with the row **as it is
+landed can simply send it again. `kind` is metadata, **not** identity: a write
+whose only difference from an existing row is its `kind` replays as that row.
+To correct a fact's kind, supersede it with new text, or forget the row and
+write the new one. (A replay answers with the row **as it is
 now**; the `supersedes` validations — 404 unknown/cross-owner, 409
 already-superseded — apply only when a write actually creates a row, so the
 same body can answer 404 as a fresh write and 200 as a replay if the target
@@ -208,7 +211,10 @@ superseded: the corrected fact returns to recall exactly as it was before the
 correction was made. Forgetting the correction is a retraction of the
 correction — a superseded row is never entombed behind a pointer to a row that
 no longer exists. Re-creating the forgotten row afterwards (same `key`+`text`,
-with `supersedes` naming the restored row) supersedes it again.
+with `supersedes` naming the restored row) supersedes it again. Forgetting the
+*superseded* row instead leaves the replacement's `supersedes` echo pointing
+at an id that no longer resolves — history keeps what happened; treat an
+unresolvable id in `supersedes` as "forgotten".
 
 ## Isolation guarantees
 

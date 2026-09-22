@@ -727,4 +727,18 @@ describe('review A round 3: the vector-cache arm, un-entombing, millis cursors, 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('supersedes exceeds 128');
   });
+
+  it('companion rows are not embed backlog — never "remaining: true" forever (r4 MINOR 2)', async () => {
+    // Provider is unset, so the write leaves a NULL embedding — the exact
+    // state that used to make /reindex and /backfill-embeddings report
+    // un-drainable remaining work under the drone provider.
+    await writeMemory(ctx.app, tokenA, { text: 'Their dog is named Pickles.', source: 'chat', at: '2026-09-21T20:15:00.000Z', kind: 'aboutYou' });
+    expect(ctx.mem.countUnembedded()).toBe(0);
+    // The exclusion is the companion class, not NULL-embeddings in general.
+    ctx.mem.index('note', 'agent-note-1', 'an agent wrote this', {});
+    expect(ctx.mem.countUnembedded()).toBe(1);
+    const work = ctx.mem.getUnembedded(10);
+    expect(work.some((r) => r.source_type === 'companion')).toBe(false);
+    expect(work.some((r) => r.source_id === 'agent-note-1')).toBe(true);
+  });
 });

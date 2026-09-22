@@ -730,8 +730,14 @@ export default function (core) {
     // Un-mark first (review A r3 MINOR 3): if the forgotten row was itself a
     // replacement, the row it superseded returns to recall instead of being
     // entombed behind a pointer to a row that no longer exists.
-    db.companionClearSupersededBy(id);
-    db.remove(COMPANION_SOURCE_TYPE, id);
+    // One transaction (review A r4 MINOR 1): a supersede is both rows or
+    // neither, and a forget that un-marks is no different — half-done, it
+    // leaves the corrected fact AND its correction both recallable.
+    var forgetAll = core.db.transaction(function () {
+      db.companionClearSupersededBy(id);
+      db.remove(COMPANION_SOURCE_TYPE, id);
+    });
+    forgetAll();
     res.json({ ok: true, forgotten: id });
   });
 
