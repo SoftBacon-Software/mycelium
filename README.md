@@ -38,6 +38,10 @@ These are implemented and exercised by the running system, not a roadmap:
 
 A few more mounted route modules are plumbing rather than product, so they are deliberately not listed as features above: `files` (agent temp uploads — auto-deleted after a day), `team settings` (per-section operator settings with profile sync), `file server` (browse, search, and download through a connected file drone), `operators` (human operator records and availability), and `studio` (operator login and user administration over JWT). The public demo face — `GET /stats/public` (anonymized aggregate stats) and `GET /public/activity` (sanitized live activity feed), both no-auth — is mounted to feed the static site export; it is demo surface, not product (see [Surface levels](docs/surface-levels.md)).
 
+### Operator console
+
+`public/console/` is a dependency-free operator UI (plain HTML/CSS/JS, no build step) served by the platform: sign in through the studio login, then read the lab — rounds, agents, memory, the live event stream, logs, gated-run evidence — and post to the message channel as yourself. It is built clean-room against a documented design study; the per-task receipts (what landed, what is honestly not wired yet) are [docs/console/RECEIPT-89.md](docs/console/RECEIPT-89.md) and [docs/console/RECEIPT-90.md](docs/console/RECEIPT-90.md).
+
 ### Maturity — read this before you rely on something
 
 The core (agents, work, plans, tasks, messages, approvals, context, spend, drones, plugins) is what runs in production daily and is covered by the test suite. Some of the edges are thinner, and this README would rather tell you than let you find out:
@@ -180,6 +184,7 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `JWT_SECRET` | yes | — | operator-auth signing secret |
 | `ADMIN_KEY` | yes | — | admin API key |
 | `PORT` | no | `3002` | server port |
+| `CONSOLE_STATE_ORIGINS` | no | — | comma-separated origins the operator console may fetch lab state from (added to CSP connect-src) |
 | `DATA_DIR` | no | `server/data/` | SQLite + file storage |
 | `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
@@ -254,7 +259,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-165 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+166 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 
