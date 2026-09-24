@@ -1,0 +1,140 @@
+{
+  "name": "souvenir-bundle",
+  "description": "The souvenir the host signs on leave: both passports (self-contained verification), the visit record, and only the rows the grant's export policy allows — each row still carrying the agent's own signature.",
+  "keys": {
+    "host_network": {
+      "label": "mycelium-federation-v0/test/host",
+      "seed_hex": "813018f2b7ed3f33740e99f62ccf0d39e21871ea0cf338ccef56f95fb05e476b",
+      "public_key_hex": "6aca15b49dc9ba3900c2f0f543f6ac21b7d59f1d7937d1379cfb8d08c1ffc35d",
+      "network_id": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq"
+    },
+    "guest_network": {
+      "label": "mycelium-federation-v0/test/guest-network",
+      "seed_hex": "79a3530e1832f0acf775cf4ec8f681fe9249f9102e24d1769d2e62888a86805e",
+      "public_key_hex": "8740c7d8a8655ec098a324553d25ecd2050ae22506c42a66d5a0218fbbc79d59",
+      "network_id": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq"
+    },
+    "agent_a": {
+      "label": "mycelium-federation-v0/test/agent-a",
+      "seed_hex": "60d9bc7a1ba46540c95fc8b842e1cca8089cb9d7c31b6deb4fc847546a447929",
+      "public_key_hex": "a08947876774a0e90e6234db28805aee94d1cadcb683d2b5a6d9e6e1527dd298",
+      "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma"
+    }
+  },
+  "input": {
+    "host_passport_fields": {
+      "name": "gilbert-lab",
+      "policy": {
+        "visitors": true,
+        "kinds_writable": [
+          "aboutYou"
+        ],
+        "kinds_exportable": [
+          "aboutYou"
+        ]
+      },
+      "issued_at": "2026-09-24T10:00:00Z"
+    },
+    "agent_passport_fields": {
+      "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma",
+      "name": "Qurio",
+      "species": "qurio",
+      "home_network": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq",
+      "capabilities": [
+        "dance",
+        "memory"
+      ],
+      "consent": {
+        "share_dances": true,
+        "share_memories": true
+      },
+      "issued_at": "2026-09-24T10:00:00Z"
+    },
+    "row": {
+      "kind": "aboutYou",
+      "key": "dance.pickles-foxtrot",
+      "text": "Learned the Pickles Foxtrot at a friend's house — 8 counts, ends on the left foot.",
+      "source": "visit",
+      "at": "2026-09-24T10:05:00Z",
+      "supersedes": null
+    },
+    "visit_fields": {
+      "visit_id": "v3f0c1a2b3c4d5e6f708192a3b4c5d6e",
+      "host_network": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq",
+      "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma",
+      "home_network": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq",
+      "grant_id": "316c9a1e9050f188c5dfb04f6bc714160a36a8fec316502a80d77b8a131b8436",
+      "started_at": "2026-09-24T10:00:00Z",
+      "ended_at": "2026-09-24T11:00:00Z"
+    },
+    "issued_at": "2026-09-24T11:00:00Z",
+    "signed_by": "host_network"
+  },
+  "expected": {
+    "bundle": {
+      "type": "souvenir-v0",
+      "host_passport": {
+        "type": "network-passport-v0",
+        "network_id": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq",
+        "name": "gilbert-lab",
+        "policy": {
+          "visitors": true,
+          "kinds_writable": [
+            "aboutYou"
+          ],
+          "kinds_exportable": [
+            "aboutYou"
+          ]
+        },
+        "issued_at": "2026-09-24T10:00:00Z",
+        "sig": "9894fada4315b4d756a7efdaec5a6b11dfb07e006b509c3b513a3dba706b0bc09b0352027a800dff0f7ee04213c66d30ab985b301c31f7debd008091bfc6c403"
+      },
+      "agent_passport": {
+        "type": "agent-passport-v0",
+        "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma",
+        "name": "Qurio",
+        "species": "qurio",
+        "home_network": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq",
+        "capabilities": [
+          "dance",
+          "memory"
+        ],
+        "consent": {
+          "share_dances": true,
+          "share_memories": true
+        },
+        "issued_at": "2026-09-24T10:00:00Z",
+        "sig_by_home": "70e11a98692241ce317b3310a0782218c7f38eed9f889df0c49bacedc8da444aef8f0b961dd08939017b59dce60203529a7f1886731a2d585ec57091b14bdc0e"
+      },
+      "visit": {
+        "type": "visit-record-v0",
+        "visit_id": "v3f0c1a2b3c4d5e6f708192a3b4c5d6e",
+        "host_network": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq",
+        "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma",
+        "home_network": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq",
+        "grant_id": "316c9a1e9050f188c5dfb04f6bc714160a36a8fec316502a80d77b8a131b8436",
+        "started_at": "2026-09-24T10:00:00Z",
+        "ended_at": "2026-09-24T11:00:00Z"
+      },
+      "rows": [
+        {
+          "kind": "aboutYou",
+          "key": "dance.pickles-foxtrot",
+          "text": "Learned the Pickles Foxtrot at a friend's house — 8 counts, ends on the left foot.",
+          "source": "visit",
+          "at": "2026-09-24T10:05:00Z",
+          "supersedes": null,
+          "id": "94dbd5c002a9a8a31cb010eee1607034cbd7b13e98ef6fa1ac433c475fb77ebf",
+          "agent": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma",
+          "network": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq",
+          "home": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq",
+          "visit": "v3f0c1a2b3c4d5e6f708192a3b4c5d6e",
+          "sig": "74c5654a9f4f9b9adfcee9951dac0a2c09666f18c6f58d56bf887800f1e6cd0ddf72f369838b1136008516a5f8feae705b6f4622420dff4daa94497f1d56a205"
+        }
+      ],
+      "issued_at": "2026-09-24T11:00:00Z",
+      "bundle_id": "5a853500f0208fce8a1bae4b284454e26d9f12eabb2b110dafabf08c042d3e27",
+      "sig_by_host": "90850e9707e1edb00d6b9ab29ddd73157b96760cf3632ce4598d97dbe541cf312610b986dbe6a2ae0c393281dca278106bf3f8abbf0119839f34cf5677a56a08"
+    }
+  }
+}

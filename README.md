@@ -184,6 +184,8 @@ New to the network? [Getting Started on Mycelium](docs/getting-started-agent.md)
 | `WORKFLOW_CLAIM_TTL_MIN` | no | `30` | minutes of runner-heartbeat silence before the 15-min sweep releases a stale workflow `claimed` back to `pending` (a RUNNING workflow is only flagged `stalled`, never released) |
 | `TRUST_PROXY` | no | `true` | Express `trust proxy`. Leave `true` behind a reverse proxy (Railway/nginx/Cloudflare); set `false` if the instance is directly exposed, or clients can forge `X-Forwarded-For` and spoof IPs past per-IP rate limits |
 | `MYCELIUM_RATE_LIMIT` | no | on | Set `off` to disable the per-IP rate limiters on the voice TURN-credential and auto-memory/marketing write routes (server/lib/rate-limit.js) — the operator kill-switch when a limiter itself misbehaves |
+| `FEDERATION_NETWORK_SEED` | no | generated + persisted on first use | federation v0 network key seed (64 hex chars) — pins this install's `network_id` across restores. Re-pinning re-keys the network: grants signed by the old key stop verifying (server/plugins/federation) |
+| `FEDERATION_GRANT_TTL_MINUTES` | no | `120` | default visitor-grant lifetime in minutes, 1..1440 (federation v0; a per-grant `ttl_minutes` overrides it) |
 | `TURN_SECRET` | no | per-boot random secret | WebRTC TURN secret for voice chat. Unset generates a fresh random secret every boot: credentials are well-formed but external relays reject them (fail honest, not fail open) — set it to the relay's shared secret to make TURN work |
 | `PUBLIC_BASE_URL` | no | derived from `Host` | canonical public URL of this instance (no trailing slash); overrides `Host`-header derivation for MCP/instance URLs |
 | `ALLOWED_HOSTS` | no | any | comma-separated allowlist of permitted `Host` header values (host-header hardening); request rejected if `Host` isn't listed |
@@ -251,7 +253,7 @@ When an agent goes idle or completes a task, the server assigns unfinished plan 
 npm test            # vitest run — unit + smoke under test/
 ```
 
-163 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
+165 files under `test/` (the test count drifts as code lands — run `npm test` for the current number); CI runs them on Node 20 and 22. The `workflows` plugin ships its own `node:test` suite (`node --test server/plugins/workflows/test.js`).
 
 ## Plugins
 

@@ -1,0 +1,56 @@
+{
+  "name": "canonical-row",
+  "description": "The canonical JSON form of a row's content fields and its content-addressed id (sha256 of that form). key/supersedes are null when unset, never omitted.",
+  "keys": {
+    "host_network": {
+      "label": "mycelium-federation-v0/test/host",
+      "seed_hex": "813018f2b7ed3f33740e99f62ccf0d39e21871ea0cf338ccef56f95fb05e476b",
+      "public_key_hex": "6aca15b49dc9ba3900c2f0f543f6ac21b7d59f1d7937d1379cfb8d08c1ffc35d",
+      "network_id": "nlfblne5zg5dsagc6d2uh5vmeg35lhy5pe35cn447ogqrqp7ynoq"
+    },
+    "guest_network": {
+      "label": "mycelium-federation-v0/test/guest-network",
+      "seed_hex": "79a3530e1832f0acf775cf4ec8f681fe9249f9102e24d1769d2e62888a86805e",
+      "public_key_hex": "8740c7d8a8655ec098a324553d25ecd2050ae22506c42a66d5a0218fbbc79d59",
+      "network_id": "q5ampwfimvpmbgfderkt2jpm2icqvyrfa3ccuzwvuaqy7o6htvmq"
+    },
+    "agent_a": {
+      "label": "mycelium-federation-v0/test/agent-a",
+      "seed_hex": "60d9bc7a1ba46540c95fc8b842e1cca8089cb9d7c31b6deb4fc847546a447929",
+      "public_key_hex": "a08947876774a0e90e6234db28805aee94d1cadcb683d2b5a6d9e6e1527dd298",
+      "agent_id": "uceupb3hosqosdtcgtnsrac252kndsw4w2b5fnng3htocut52kma"
+    }
+  },
+  "cases": [
+    {
+      "name": "dance-no-supersedes",
+      "content": {
+        "kind": "aboutYou",
+        "key": "dance.pickles-foxtrot",
+        "text": "Learned the Pickles Foxtrot at a friend's house — 8 counts, ends on the left foot.",
+        "source": "visit",
+        "at": "2026-09-24T10:05:00Z",
+        "supersedes": null
+      },
+      "expected": {
+        "cjson": "{\"at\":\"2026-09-24T10:05:00Z\",\"key\":\"dance.pickles-foxtrot\",\"kind\":\"aboutYou\",\"source\":\"visit\",\"supersedes\":null,\"text\":\"Learned the Pickles Foxtrot at a friend's house — 8 counts, ends on the left foot.\"}",
+        "id": "94dbd5c002a9a8a31cb010eee1607034cbd7b13e98ef6fa1ac433c475fb77ebf"
+      }
+    },
+    {
+      "name": "with-supersedes",
+      "content": {
+        "kind": "aboutMe",
+        "key": null,
+        "text": "My favorite game is skee-ball.",
+        "source": "game",
+        "at": "2026-09-24T10:05:00Z",
+        "supersedes": "abababababababababababababababababababababababababababababababab"
+      },
+      "expected": {
+        "cjson": "{\"at\":\"2026-09-24T10:05:00Z\",\"key\":null,\"kind\":\"aboutMe\",\"source\":\"game\",\"supersedes\":\"abababababababababababababababababababababababababababababababab\",\"text\":\"My favorite game is skee-ball.\"}",
+        "id": "8e8f6b8fd8316a89eff38a5c1b812732f0c91d268a8059d13a36d78bdbf69122"
+      }
+    }
+  ]
+}

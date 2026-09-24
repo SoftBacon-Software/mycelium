@@ -452,6 +452,20 @@ export default function (core) {
       superseded_by: row.superseded_by || null,
       supersedes: meta.supersedes || null
     };
+    // Federation v0: an imported row that collided with a live home row is a
+    // candidate (accepted explicitly, never a silent supersede); a row that
+    // crossed a border carries its receipt.
+    if (meta.candidate) view.candidate = true;
+    if (row.fed_agent || row.fed_network || row.fed_visit) {
+      view.provenance = {
+        id: meta.fed_id || null, // the protocol's content-addressed id
+        agent: row.fed_agent || null,
+        network: row.fed_network || null,
+        home: row.fed_home || null,
+        visit: row.fed_visit || null,
+        sig: row.fed_sig || null
+      };
+    }
     if (opts && opts.score !== undefined) view.score = opts.score;
     // task 213's honest-embeddedness stamp, carried through from the search
     // arms: a keyword-ranked row with embedded:false must not masquerade as a
@@ -692,6 +706,11 @@ export default function (core) {
       if (meta.owner !== user.userId) return false;
       if (kinds && kinds.indexOf(meta.kind) === -1) return false;
       if (!includeSuperseded && r.superseded_by) return false;
+      // Federation v0: an imported supersede-candidate is not the fact of
+      // record until the home side accepts it — recall stays with the home
+      // row (the honesty law: he says where he learned it, he does not
+      // silently become right). GET /me/memory still shows it, flagged.
+      if (meta.candidate) return false;
       return true;
     });
     var afterFilter = results.length; // measured BEFORE the page slice (review A r2 NIT 7): slicing is the caller's own limit at work, not a filter cull — attributing it to the filter lies about the corpus

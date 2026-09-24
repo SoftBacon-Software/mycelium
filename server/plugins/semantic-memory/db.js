@@ -416,8 +416,11 @@ export default function createMemoryDB(db, opts) {
     companionList(filters) {
       filters = filters || {};
       // Named columns (review A r4 NIT 4): the view needs five fields; SELECT *
-      // would drag up to 500 embedding BLOBs into a phone's sync page.
-      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
+      // would drag up to 500 embedding BLOBs into a phone's sync page. The fed_*
+      // provenance columns ride along (NULL on native rows, small TEXT) —
+      // without them a visited/imported row's receipt is silently stripped by
+      // the list/sync path, the exact path the phone reads provenance through.
+      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by, fed_agent, fed_network, fed_home, fed_visit, fed_sig FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
       var params = { namespace: filters.namespace, limit: Math.max(1, Math.min(filters.limit || 100, 500)) }; // floor 1: SQLite reads a negative LIMIT as UNBOUNDED (review A r3 NIT 6)
       if (filters.kind) {
         sql += " AND json_extract(metadata, '$.kind') = @kind";
