@@ -212,13 +212,14 @@ server/
   db.js                 # SQLite (better-sqlite3, WAL mode)
   schema.sql            # full base schema (56 tables; plugins add their own)
   routes/               # 284 routes, decomposed into 33 per-domain modules (mycelium.js core + 32 domain modules)
-  plugins/              # plugin system (5 plugins + _template)
+  plugins/              # plugin system (6 plugins + _template)
 sdk/                    # multi-runtime Agent SDK (src, bin CLIs, adapters, examples)
 mcp/                    # MCP server (79 core tools + plugin tools)
 runner/                 # autonomous agent runner
 admin-claude/           # reference admin-automation agent (webhook or poll; Anthropic or Ollama) — see Packages
 printer-drone/          # 3D-printer drone worker (Bambu / OctoPrint / Moonraker / mock) — see Packages
 file-drone/             # WebSocket file-server drone (serves a local filesystem to the network)
+spec/                   # cross-implementation protocol specs + test vectors (federation-v0: the one canonical vector set — every Mycelium node, Swift or JS, runs the same suite)
 tools/                  # operator scripts — onboarding, install, QA, stress, drone launchers (see Tools)
 scripts/                # release + deploy + local-setup helpers (release.sh, deploy-jetson.sh, docker-smoke.sh, local-setup.sh)
 test/                   # vitest (unit + smoke)
@@ -257,12 +258,13 @@ npm test            # vitest run — unit + smoke under test/
 
 ## Plugins
 
-5 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
+6 built-in plugins, each with its own schema, routes, event hooks, and MCP tools:
 
 | Plugin | Description |
 |--------|-------------|
 | `marketing` | build-in-public drafts, social posting, X delivery, outreach (mounted at `/marketing` — `/marketing/bip`, `/marketing/social`, `/marketing/x`, `/marketing/outreach`; the old top-level paths 301 for one release) |
 | `semantic-memory` | hybrid FTS5 keyword + vector search over platform data (vector search is off until you configure a provider — [see its README for vector setup](server/plugins/semantic-memory/README.md)); also mounts the per-user Companion Memory API for consumer clients — [docs/companion-memory-api.md](docs/companion-memory-api.md) |
+| `federation` | federation v0 — every install is a network; passported agents visit, write with provenance, and carry a host-signed souvenir home ([spec/federation-v0/](spec/federation-v0/) is the protocol + the language-neutral test vectors both implementations run; default policy: no visitors) |
 | `auto-memory` | automated fact extraction from platform events |
 | `workflows` | fire a DAG of agent invocations (fan-out / pipeline / custom) for a dormant runner to claim and execute; ships its own `node:test` suite |
 | `appointments` | role-keyed model tenancy — role → `{model_id, engine, host, flag_overrides, capability}`; the squad dispatcher resolves per-role brains here (an empty table = every caller falls back to its static map) |

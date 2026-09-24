@@ -30,9 +30,30 @@ export default function (core) {
 
   var helloLimiter = rateLimited('federation/hello', { windowMs: 60000, max: 30 });
   var visitLimiter = rateLimited('federation/visit', { windowMs: 60000, max: 120 });
+  // Review A nit 10: the bearer-authenticated surfaces carry limiters too —
+  // a stolen/compromised studio bearer must not be able to hammer grant
+  // issuance or import unthrottled. 30/min matches hello (an owner issues a
+  // handful of grants by hand; imports are one-per-souvenir).
+  var grantLimiter = rateLimited('federation/grant', { windowMs: 60000, max: 30 });
+  var importLimiter = rateLimited('federation/import', { windowMs: 60000, max: 30 });
 
-  var GRANT_TTL_MINUTES = parseInt(process.env.FEDERATION_GRANT_TTL_MINUTES || '120', 10);
+  var GRANT_TTL_DEFAULT_MINUTES = 120;
   var GRANT_TTL_MAX_MINUTES = 24 * 60;
+  // Review A nit 9: a garbage FEDERATION_GRANT_TTL_MINUTES must not 400 every
+  // grant with a confusing message — fall back to the default and say so once.
+  // Values above the max clamp to it.
+  var GRANT_TTL_MINUTES = GRANT_TTL_DEFAULT_MINUTES;
+  (function () {
+    var raw = process.env.FEDERATION_GRANT_TTL_MINUTES;
+    if (raw === undefined || raw === '') return;
+    var parsed = parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      GRANT_TTL_MINUTES = Math.min(parsed, GRANT_TTL_MAX_MINUTES);
+    } else {
+      console.warn('[federation] FEDERATION_GRANT_TTL_MINUTES=' + raw +
+        ' is not a positive integer — using the default (' + GRANT_TTL_DEFAULT_MINUTES + ' minutes)');
+    }
+  })();
 
   // ---- identity + policy ----------------------------------------------------
   // The network key is generated on first use and persisted (seed, hex) unless
@@ -88,7 +109,9 @@ export default function (core) {
       name: id.name,
       policy: id.policy,
       visits_hosted: core.db.prepare('SELECT COUNT(*) AS n FROM fed_visits').get().n,
-      bundles_imported: core.db.prepare('SELECT COUNT(*) AS n FROM fed_imports').get().n
+      // DISTINCT: fed_imports is one row per (bundle, owner) — the count is
+      // bundles, not imports (review A minor 6).
+      bundles_imported: core.db.prepare('SELECT COUNT(DISTINCT bundle_id) AS n FROM fed_imports').get().n
     });
   });
 
@@ -154,7 +177,7 @@ export default function (core) {
   // Studio bearer only: the visit lands in the TOKEN OWNER's memory scope, so
   // the owner issues the grant. Default policy (visitors off) refuses here.
 
-  router.post('/grant', function (req, res) {
+  router.post('/grant', grantLimiter, function (req, res) {
     var user = requireBearer(req, res);
     if (!user) return;
     var id = identity();
@@ -177,7 +200,11 @@ export default function (core) {
       return apiError(res, 400, 'kinds_exportable must be an array of: ' + KINDS.join(', '));
     }
 
-    var ttl = parseInt(body.ttl_minutes || GRANT_TTL_MINUTES, 10);
+    // Review A nit 9: ttl_minutes 0 (or garbage) is a 400, not a silent
+    // fall-back to the default — `||` swallowed 0; only an absent field means
+    // "use the configured default".
+    var rawTtl = body.ttl_minutes;
+    var ttl = rawTtl === undefined || rawTtl === null ? GRANT_TTL_MINUTES : parseInt(rawTtl, 10);
     if (isNaN(ttl) || ttl < 1 || ttl > GRANT_TTL_MAX_MINUTES) {
       return apiError(res, 400, 'ttl_minutes must be 1..' + GRANT_TTL_MAX_MINUTES);
     }
@@ -210,6 +237,15 @@ export default function (core) {
     if (!visit) return { err: 404 };
     var row = store.grantByVisit(visitId);
     if (!row) return { err: 404 };
+    // Re-key revocation (review A blocker 2). A grant's signature verifies
+    // against the host_network key STAMPED IN IT — the old key — so signature
+    // verification alone can never notice a re-key. The promise four doc
+    // sites make (README env table, .env.example, the /network route, here)
+    // is enforced by this check: the CURRENT identity must be the one that
+    // issued the grant. Without it, a mid-visit re-key kept accepting writes
+    // and then bricked the souvenir (a bundle signed by the new key over rows
+    // stamped with the old network id fails every border check).
+    if (row.host_network !== identity().networkId) return { err: 'rekeyed' };
     var grant = {
       type: 'grant-v0',
       grant_id: row.grant_id,
@@ -224,9 +260,15 @@ export default function (core) {
       expires_at: row.expires_at,
       sig_by_host: row.sig_by_host
     };
-    // host_network is stamped at issue time: a grant issued before a re-key
-    // fails verification against the new identity, loudly, as it should.
     return { visit: visit, grant: grant, row: row };
+  }
+
+  // The door answer when grantForVisit refuses a known visit.
+  function refuseVisit(res, g) {
+    if (g.err === 'rekeyed') {
+      return apiError(res, 403, 'grant rejected: the network was re-keyed after this grant was issued — every grant from the previous network identity is revoked');
+    }
+    return apiError(res, 404, 'no such visit');
   }
 
   function checkEnvelope(req, res, expectedAgentId) {
@@ -247,10 +289,13 @@ export default function (core) {
 
   router.post('/visit/:visitId/memory', visitLimiter, function (req, res) {
     var g = grantForVisit(req.params.visitId);
-    if (g.err) return apiError(res, 404, 'no such visit');
+    if (g.err) return refuseVisit(res, g);
     var env = checkEnvelope(req, res, g.grant.agent_id);
     if (!env) return;
 
+    if (g.row.status === 'revoked') {
+      return apiError(res, 403, 'this visit was revoked by the host operator (POST /federation/visit/:id/end)');
+    }
     if (g.row.status !== 'active') return apiError(res, 403, 'this visit has ended');
     var gv = verifyGrant(g.grant, Date.now());
     if (!gv.valid) {
@@ -289,9 +334,15 @@ export default function (core) {
 
   router.post('/visit/:visitId/souvenir', visitLimiter, function (req, res) {
     var g = grantForVisit(req.params.visitId);
-    if (g.err) return apiError(res, 404, 'no such visit');
+    if (g.err) return refuseVisit(res, g);
     var env = checkEnvelope(req, res, g.grant.agent_id);
     if (!env) return;
+
+    // The kill switch outranks the grant clock: a revoked visit refuses the
+    // souvenir even inside the grant's validity window (review A minor 3).
+    if (g.row.status === 'revoked') {
+      return apiError(res, 403, 'this visit was revoked by the host operator — no souvenir can leave');
+    }
 
     var gv = verifyGrant(g.grant, Date.now());
     if (!gv.valid) {
@@ -339,7 +390,7 @@ export default function (core) {
   // at HELLO and its passport is on file. A self-asserted home alone proves
   // nothing — anyone can generate a keypair.
 
-  router.post('/import', asyncHandler(async function (req, res) {
+  router.post('/import', importLimiter, asyncHandler(async function (req, res) {
     var user = requireBearer(req, res);
     if (!user) return;
     var id = identity();
@@ -360,8 +411,11 @@ export default function (core) {
     var bv = verifyBundle(bundle, { expectedHome: expectedHome });
     if (!bv.valid) return apiError(res, 400, 'bundle rejected: ' + bv.reason);
 
-    var prior = store.getImport(bundle.bundle_id);
-    if (prior && prior.owner === user.userId) {
+    // Bundle-level replay bookkeeping is PER OWNER (review A minor 6): the
+    // fed_imports PK is (bundle_id, owner), so the fast path fires for every
+    // owner who already imported this bundle — not just the first one.
+    var prior = store.getImport(bundle.bundle_id, user.userId);
+    if (prior) {
       var priorEpisode = store.rowById(user.userId, episodeRow(bundle).id);
       // §2.7: a replay answers 'replayed' PER ROW — the original outcomes are
       // history, not this answer. Nothing is written.
@@ -400,9 +454,24 @@ export default function (core) {
 
   // ---- operator visibility ------------------------------------------------------
 
+  // POST /visit/:visitId/end — the operator's kill switch for an in-flight
+  // visit (review A minor 3). Toggling policy.visitors off stops NEW grants
+  // only; this ends a live one: further writes AND souvenirs 403. The
+  // alternative levers are the grant's TTL (up to 24 h) and a re-key.
+  router.post('/visit/:visitId/end', function (req, res) {
+    if (!checkAdmin(req, res)) return;
+    if (!store.visit(req.params.visitId)) return apiError(res, 404, 'no such visit');
+    var visit = store.revokeVisit(req.params.visitId);
+    res.json({ ok: true, visit: visit, status: 'revoked' });
+  });
+
   router.get('/visits', function (req, res) {
     if (!checkAdmin(req, res)) return;
-    var rows = core.db.prepare('SELECT * FROM fed_visits ORDER BY started_at DESC LIMIT 200').all();
+    var rows = core.db.prepare(
+      'SELECT v.*, g.status AS grant_status FROM fed_visits v ' +
+      'LEFT JOIN fed_grants g ON g.visit_id = v.visit_id ' +
+      'ORDER BY v.started_at DESC LIMIT 200'
+    ).all();
     res.json({ ok: true, visits: rows, count: rows.length });
   });
 

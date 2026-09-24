@@ -31,6 +31,14 @@ never a second set.
   protocol messages are restricted to strings, integers, booleans, null,
   arrays, and objects — no floats (two languages must byte-identically
   serialize the same value).
+- **String escaping inside `cjson`** (minimal escaping — pinned byte-for-byte
+  by vector `01` case `escaping-alphabet`): `"` escapes as `\"`, `\` as `\\`;
+  of the control characters U+0000–U+001F only `\b` `\t` `\n` `\f` `\r` have
+  shorthands, every other control character is `\u00xx` with **lowercase**
+  hex and exactly four digits; ALL other characters — non-ASCII included
+  (`é`, `—`, `🍄`, U+2028, U+2029) — are left literal UTF-8, never
+  `\u`-escaped. A second implementation must not guess: the vector is the
+  contract.
 - **Digests/signatures:** `sha256hex(x)` = hex sha256 of the UTF-8 `cjson(x)`.
   Signatures are Ed25519 over the UTF-8 `cjson(message-without-its-sig-field)`,
   hex-encoded.
@@ -135,6 +143,13 @@ cross networks, so there is nothing to verify at a border.
   this visit may leave in a souvenir. Default `[]`: nothing leaves.
 - A grant is valid at time `now` iff the signature verifies and
   `issued_at <= now < expires_at`.
+- **Expiry forfeits the souvenir** (deliberate product decision): a grant
+  that expires mid-visit leaves the visitor with nothing to carry home — the
+  writes stay in the host's store under its retention policy, and a fresh
+  grant is a fresh `visit_id` with an empty row set. The TTL (default 120
+  min, max 24 h) is the visitor's warning; the host operator's levers over
+  an in-flight visit are the kill switch (`POST /visit/:id/end`) and a
+  re-key.
 
 ### 2.5 The visit
 
@@ -214,14 +229,19 @@ envelope is transport hardening; the §2 signatures are the protocol.
 | route | who | auth |
 |---|---|---|
 | `POST /federation/hello` | visitor knocks | signed passports only (rate-limited) |
-| `POST /federation/grant` | host owner issues | studio bearer (the visited scope's owner) |
+| `POST /federation/grant` | host owner issues | studio bearer (the visited scope's owner; rate-limited) |
 | `POST /federation/visit/:visitId/memory` | visitor writes | agent-signed envelope + valid grant |
 | `POST /federation/visit/:visitId/souvenir` | visitor leaves | agent-signed envelope |
-| `POST /federation/import` | home imports | studio bearer (rows land in their scope) |
+| `POST /federation/visit/:visitId/end` | host operator kills an in-flight visit | admin |
+| `POST /federation/import` | home imports | studio bearer (rows land in their scope; rate-limited) |
 | `GET/POST /federation/network` | instance identity + policy | admin |
 
 Default policy: **no visitors** — HELLO reports it, GRANT refuses to issue,
-visit writes 403 until an operator turns it on.
+visit writes 403 until an operator turns it on. Two levers revoke what is
+already in flight: `POST /visit/:id/end` (the kill switch — writes AND
+souvenirs refuse) and a re-key (`POST /network` with a new `seed_hex`, or
+re-pinning `FEDERATION_NETWORK_SEED`) — every grant issued under the previous
+network key is refused at the door.
 
 Visited/imported rows land in the companion store (`sm_embeddings`,
 `source_type 'companion'`) with provenance columns `fed_agent, fed_network,
@@ -243,7 +263,7 @@ the Swift mirror in MyceliumKit. `vectors/generate.mjs` regenerates them from
 
 | file | covers |
 |---|---|
-| `01-canonical-row.json` | cjson form + content-addressed id (with/without supersedes) |
+| `01-canonical-row.json` | cjson form + content-addressed id (with/without supersedes; the `escaping-alphabet` case pins string escaping byte-for-byte — quotes, backslash, control characters, non-ASCII literal) |
 | `02-passport.json` | agent passport + `sig_by_home` |
 | `03-grant.json` | grant issue + `sig_by_host`, validity window |
 | `04-souvenir-bundle.json` | signed visit record + rows + bundle signature |

@@ -27,6 +27,7 @@
 // (network of one) the two coincide in spirit: one owner, one row.
 
 import crypto from 'crypto';
+import companionView from '../semantic-memory/companion-view.js';
 
 export default function createFederationStore(db) {
   // The migration this plugin owns (task 247 §2): provenance columns on the
@@ -42,12 +43,24 @@ export default function createFederationStore(db) {
     try {
       db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def).run();
     } catch (e) {
-      if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+      if (/duplicate column|already exists/.test(String(e.message))) continue; // fresh-DB case: declared in schema.sql
+      if (/no such table/i.test(String(e.message))) {
+        // Review A nit 8: name the dependency instead of dying on a raw
+        // SQLite error — without semantic-memory the per-plugin load catch
+        // reduces this to "federation silently absent", and the operator
+        // gets to do the archaeology. Say the requirement out loud.
+        throw new Error('federation requires the semantic-memory plugin: sm_embeddings is missing — enable semantic-memory (or create its tables) before federation can load', { cause: e });
+      }
+      throw e;
     }
   }
   try {
     db.exec('CREATE INDEX IF NOT EXISTS idx_sm_fed_visit ON sm_embeddings(fed_visit)');
-  } catch (e) { /* table missing (federation-only test DBs) — routes 500 honestly */ }
+  } catch (e) {
+    // Only the missing-table case is expected here (federation-only test
+    // DBs — which the ALTER above already refused); anything else surfaces.
+    if (!/no such table/i.test(String(e.message))) throw e;
+  }
 
   var now = "datetime('now')";
 
@@ -108,6 +121,18 @@ export default function createFederationStore(db) {
     endVisit(visitId) {
       db.prepare('UPDATE fed_visits SET ended_at = ' + now + ', souvenir_at = ' + now + ' WHERE visit_id = ? AND ended_at IS NULL').run(visitId);
       db.prepare("UPDATE fed_grants SET status = 'ended' WHERE visit_id = ? AND status = 'active'").run(visitId);
+    },
+
+    // The admin kill switch (review A minor 3): unlike endVisit (the visit's
+    // own souvenir closing it), a revoked visit refuses writes AND souvenirs.
+    // ended_at is stamped only when the visit was still open, so a revoke
+    // after a natural end does not rewrite history.
+    revokeVisit(visitId) {
+      db.prepare('UPDATE fed_visits SET ended_at = COALESCE(ended_at, ' + now + ') WHERE visit_id = ?').run(visitId);
+      db.prepare("UPDATE fed_grants SET status = 'revoked' WHERE visit_id = ?").run(visitId);
+      return db.prepare(
+        'SELECT v.*, g.status AS grant_status FROM fed_visits v LEFT JOIN fed_grants g ON g.visit_id = v.visit_id WHERE v.visit_id = ?'
+      ).get(visitId);
     },
 
     visit(visitId) {
@@ -183,36 +208,11 @@ export default function createFederationStore(db) {
       return { inserted: true, row: this.rowById(ownerId, row.id) };
     },
 
-    // The row shape the protocol + API surfaces agree on (companionView plus
-    // provenance, minus internals).
+    // The row shape the protocol + API surfaces agree on. This IS the
+    // companion view — one shared implementation in semantic-memory (the
+    // plugin that owns the table), not a twin that can drift (review A nit 7).
     view(row) {
-      var meta = row.metadata;
-      if (typeof meta === 'string') {
-        try { meta = JSON.parse(meta || '{}'); } catch (e) { meta = {}; }
-      }
-      var view = {
-        id: row.source_id,
-        kind: meta.kind || null,
-        key: meta.key || null,
-        text: row.content_text,
-        source: meta.source || null,
-        at: meta.at || null,
-        created_at: row.created_at,
-        superseded_by: row.superseded_by || null,
-        supersedes: meta.supersedes || null
-      };
-      if (meta.candidate) view.candidate = true;
-      if (row.fed_agent || row.fed_network || row.fed_visit) {
-        view.provenance = {
-          id: meta.fed_id || null, // the protocol's content-addressed id
-          agent: row.fed_agent || null,
-          network: row.fed_network || null,
-          home: row.fed_home || null,
-          visit: row.fed_visit || null,
-          sig: row.fed_sig || null
-        };
-      }
-      return view;
+      return companionView(row);
     },
 
     // A store row back into protocol shape (for building souvenir bundles).
@@ -239,12 +239,15 @@ export default function createFederationStore(db) {
 
     // ---- imports --------------------------------------------------------------
 
+    // Per-owner bookkeeping (review A minor 6): the PK is (bundle_id, owner),
+    // so OR IGNORE only ever collapses the SAME owner re-importing — the
+    // route's replay fast path then fires for every owner, not just the first.
     recordImport(bundleId, ownerId, outcomes) {
       db.prepare('INSERT OR IGNORE INTO fed_imports (bundle_id, owner, outcomes) VALUES (?, ?, ?)').run(bundleId, ownerId, JSON.stringify(outcomes));
     },
 
-    getImport(bundleId) {
-      var row = db.prepare('SELECT * FROM fed_imports WHERE bundle_id = ?').get(bundleId);
+    getImport(bundleId, ownerId) {
+      var row = db.prepare('SELECT * FROM fed_imports WHERE bundle_id = ? AND owner = ?').get(bundleId, ownerId);
       if (!row) return null;
       row.outcomes = JSON.parse(row.outcomes);
       return row;

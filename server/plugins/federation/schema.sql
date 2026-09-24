@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS fed_grants (
   issued_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   sig_by_host TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active'  -- active | ended
+  status TEXT NOT NULL DEFAULT 'active', -- active | ended | revoked
+                                   -- 'revoked' = the admin kill switch
+                                   -- (POST /visit/:id/end): writes AND
+                                   -- souvenirs refuse; 'ended' still allows
+                                   -- the idempotent souvenir rebuild.
+  CHECK (status IN ('active', 'ended', 'revoked'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_fed_grants_agent ON fed_grants(agent_id, status);
@@ -64,12 +69,16 @@ CREATE TABLE IF NOT EXISTS fed_nonces (
 );
 
 -- Souvenir bundles this network has imported (the home side) — bundle-level
--- replay bookkeeping on top of the row-level content-id dedupe.
+-- replay bookkeeping on top of the row-level content-id dedupe. Keyed PER
+-- OWNER: two owners importing the same bundle are two rows, so the replay
+-- fast path fires for each of them (the multi-owner model the store commits
+-- to elsewhere).
 CREATE TABLE IF NOT EXISTS fed_imports (
-  bundle_id TEXT PRIMARY KEY,
+  bundle_id TEXT NOT NULL,
   owner INTEGER NOT NULL,
   outcomes TEXT NOT NULL,            -- JSON array, as answered
-  imported_at TEXT DEFAULT (datetime('now'))
+  imported_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (bundle_id, owner)
 );
 
 -- NOTE — provenance on the memory rows themselves (fed_agent, fed_network,

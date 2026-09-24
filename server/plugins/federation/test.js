@@ -211,3 +211,16 @@ function fetchJSON(app, method, path, body) {
     });
   });
 }
+
+// Review A nit 8: with semantic-memory absent (its table never created), the
+// store must name the dependency instead of dying on a raw SQLite error that
+// the per-plugin catch reduces to "federation silently absent".
+test('store creation names the semantic-memory dependency when sm_embeddings is missing (review A nit 8)', () => {
+  var db = new Database(':memory:');
+  db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8')); // fed_* tables only
+  assert.throws(
+    function () { createFederationStore(db); },
+    /requires the semantic-memory plugin/
+  );
+  db.close();
+});

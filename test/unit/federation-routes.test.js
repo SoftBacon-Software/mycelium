@@ -39,6 +39,7 @@ import { dirname, join } from 'path';
 import { keyFromSeed, idForKey } from '../../server/plugins/federation/keys.js';
 import { makeEnvelope, makeRow, makeNetworkPassport, makeVisitRecord, makeBundle } from '../../server/plugins/federation/protocol.js';
 import { makeVisitor } from '../../server/plugins/federation/client.js';
+import createFederationStore from '../../server/plugins/federation/store.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FED_DIR = join(HERE, '..', '..', 'server', 'plugins', 'federation');
@@ -621,6 +622,291 @@ describe('federation routes: the migration leaves existing rows valid', () => {
       const row = ctx.db.prepare("SELECT * FROM sm_embeddings WHERE source_id = 'legacy-row-1'").get();
       expect(row.fed_agent).toBeNull();
       expect(row.content_text).toBe('An old fact.');
+    } finally {
+      try { ctx.db.close(); } catch (e) { /* already closed */ }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review A (247r) on PR #189 — every block below was RED on the head 22d84d1b.
+
+describe('federation routes: re-key revokes in-flight grants (review A blocker 2)', () => {
+  let ctx, visitor, grantRes, newNetworkId;
+
+  beforeAll(async () => {
+    ctx = await makeApp();
+    await adminPost(ctx.app, '/federation/network', {
+      seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+      kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+    });
+    visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED });
+    grantRes = await bearerPost(ctx.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+    expect(grantRes.status).toBe(201);
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('a mid-visit re-key revokes the grant — the next write is a 403, never a silent 201', async () => {
+    const visitId = grantRes.body.visit_id;
+    // The write the operator saw before pulling the lever.
+    const before = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+      kind: 'aboutYou', key: 'rekey.before', text: 'written under key A', source: 'visit',
+      at: '2026-09-24T10:05:00Z', supersedes: null
+    });
+    expect(before.status).toBe(201);
+
+    // The documented emergency lever (README env table, .env.example,
+    // routes.js): re-pin the seed → new network identity.
+    const rekey = await adminPost(ctx.app, '/federation/network', { seed_hex: OTHER_SEED });
+    expect(rekey.status).toBe(200);
+    expect(rekey.body.network_id).not.toBe(HOST_ID);
+    newNetworkId = rekey.body.network_id;
+
+    // The visitor still holds a grant stamped with the OLD network id; its
+    // signature even verifies (against that old key). The CURRENT identity
+    // must refuse it at the door.
+    const after = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+      kind: 'aboutYou', key: 'rekey.after', text: 'written after the re-key', source: 'visit',
+      at: '2026-09-24T10:06:00Z', supersedes: null
+    });
+    expect(after.status).toBe(403);
+    expect(after.body.error).toContain('re-keyed');
+  });
+
+  it('the souvenir door refuses too — no self-inconsistent bundle (new key signing old-network rows)', async () => {
+    const res = await visitor.requestSouvenir(transport(ctx.app), grantRes.body.visit_id);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain('re-keyed');
+  });
+
+  it('the re-keyed network still issues fresh grants under its new identity', async () => {
+    const grant = await bearerPost(ctx.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+    expect(grant.status).toBe(201);
+    expect(grant.body.grant.host_network).toBe(newNetworkId);
+    const write = await visitor.writeMemory(transport(ctx.app), grant.body.visit_id, newNetworkId, {
+      kind: 'aboutYou', key: 'rekey.fresh', text: 'under the new key', source: 'visit',
+      at: '2026-09-24T10:07:00Z', supersedes: null
+    });
+    expect(write.status).toBe(201);
+  });
+});
+
+describe('federation routes: the admin end-visit kill switch (review A minor 3)', () => {
+  let ctx, visitor, grantRes;
+
+  beforeAll(async () => {
+    ctx = await makeApp();
+    await adminPost(ctx.app, '/federation/network', {
+      seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+      kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+    });
+    visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED });
+    grantRes = await bearerPost(ctx.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+    expect(grantRes.status).toBe(201);
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('ending an unknown visit is a 404', async () => {
+    const res = await adminPost(ctx.app, '/federation/visit/v-does-not-exist/end', {});
+    expect(res.status).toBe(404);
+  });
+
+  it('end requires admin — a studio bearer is not enough', async () => {
+    const res = await bearerPost(ctx.app, tokenHost, '/federation/visit/' + grantRes.body.visit_id + '/end', {});
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /visit/:id/end revokes the visit: further writes AND souvenirs are 403', async () => {
+    const visitId = grantRes.body.visit_id;
+    const write = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+      kind: 'aboutYou', key: 'kill.before', text: 'written while active', source: 'visit',
+      at: '2026-09-24T10:05:00Z', supersedes: null
+    });
+    expect(write.status).toBe(201);
+
+    const end = await adminPost(ctx.app, '/federation/visit/' + visitId + '/end', {});
+    expect(end.status).toBe(200);
+    expect(end.body.visit.visit_id).toBe(visitId);
+    expect(end.body.visit.grant_status).toBe('revoked');
+
+    const lateWrite = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+      kind: 'aboutYou', key: 'kill.after', text: 'too late', source: 'visit',
+      at: '2026-09-24T10:06:00Z', supersedes: null
+    });
+    expect(lateWrite.status).toBe(403);
+    expect(lateWrite.body.error).toContain('revoked');
+
+    const lateSouvenir = await visitor.requestSouvenir(transport(ctx.app), visitId);
+    expect(lateSouvenir.status).toBe(403);
+    expect(lateSouvenir.body.error).toContain('revoked');
+  });
+});
+
+describe('federation routes: import bookkeeping is per-owner (review A minor 6)', () => {
+  let home;
+
+  beforeAll(async () => {
+    home = await makeApp();
+    await adminPost(home.app, '/federation/network', { seed_hex: GUEST_SEED, name: 'qurio-phone' });
+  });
+  afterAll(() => { try { home.db.close(); } catch (e) { /* already closed */ } });
+
+  function honestBundle(visitId) {
+    const hostKey = keyFromSeed(HOST_SEED);
+    const hostPp = makeNetworkPassport(hostKey, HOST_ID, {
+      name: 'lab-host', policy: { visitors: true, kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou'] },
+      issued_at: '2026-09-24T10:00:00Z'
+    });
+    const v = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED });
+    return makeBundle(hostKey, {
+      host_passport: hostPp,
+      agent_passport: v.agentPassport,
+      visit: makeVisitRecord({
+        visit_id: visitId, host_network: HOST_ID, agent_id: v.agentId,
+        home_network: GUEST_ID, grant_id: 'g'.repeat(64), started_at: '2026-09-24T10:00:00Z', ended_at: '2026-09-24T11:00:00Z'
+      }),
+      rows: [makeRow(v.agentKey, v.agentId, {
+        kind: 'aboutYou', key: 'perowner.fact', text: 'One bundle, two owners, two bookkeeping rows.',
+        source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+      }, { agent: v.agentId, network: HOST_ID, home: GUEST_ID, visit: visitId })],
+      issued_at: '2026-09-24T11:00:00Z'
+    });
+  }
+
+  it('a second owner\'s re-import takes the bundle-level replay fast path', async () => {
+    const bundle = honestBundle('vtest-perowner-01');
+    const a = await bearerPost(home.app, tokenHome, '/federation/import', { bundle });
+    expect(a.status).toBe(201);
+    expect(a.body.replayed).toBe(false);
+
+    const b = await bearerPost(home.app, tokenOther, '/federation/import', { bundle });
+    expect(b.status).toBe(201);
+    expect(b.body.replayed).toBe(false);
+
+    // Owner B re-imports. Under a bundle_id-only PK, B's outcomes row was
+    // silently dropped at their first import, so the fast path never fired
+    // for them — this answered replayed:false with per-row 'replayed'
+    // outcomes instead. The bookkeeping must be per-owner.
+    const again = await bearerPost(home.app, tokenOther, '/federation/import', { bundle });
+    expect(again.status).toBe(200);
+    expect(again.body.replayed).toBe(true);
+  });
+});
+
+describe('federation routes: ttl + env validation (review A nit 9)', () => {
+  let ctx;
+
+  beforeAll(async () => {
+    ctx = await makeApp();
+    await adminPost(ctx.app, '/federation/network', {
+      seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+      kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+    });
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  it('ttl_minutes: 0 is a 400, not a silent fall-back to the default', async () => {
+    const visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED });
+    const res = await bearerPost(ctx.app, tokenHost, '/federation/grant', {
+      agent_passport: visitor.agentPassport, ttl_minutes: 0
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('ttl_minutes');
+  });
+
+  it('a garbage FEDERATION_GRANT_TTL_MINUTES falls back to the default instead of 400ing every grant', async () => {
+    const prev = process.env.FEDERATION_GRANT_TTL_MINUTES;
+    process.env.FEDERATION_GRANT_TTL_MINUTES = 'banana';
+    vi.resetModules(); // the TTL env is read at routes.js module scope — re-import it
+    try {
+      const fresh = await makeApp();
+      try {
+        await adminPost(fresh.app, '/federation/network', {
+          seed_hex: HOST_SEED, visitors: true,
+          kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+        });
+        const visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: seedFor('mycelium-federation-v0/test/ttl-env') });
+        const res = await bearerPost(fresh.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+        expect(res.status).toBe(201);
+        expect(Date.parse(res.body.grant.expires_at)).toBeGreaterThan(Date.parse(res.body.grant.issued_at));
+      } finally {
+        try { fresh.db.close(); } catch (e) { /* already closed */ }
+      }
+    } finally {
+      if (prev === undefined) delete process.env.FEDERATION_GRANT_TTL_MINUTES;
+      else process.env.FEDERATION_GRANT_TTL_MINUTES = prev;
+      vi.resetModules();
+    }
+  });
+});
+
+describe('federation routes: grant + import carry rate limiters (review A nit 10)', () => {
+  let ctx;
+
+  beforeAll(async () => {
+    ctx = await makeApp();
+    await adminPost(ctx.app, '/federation/network', {
+      seed_hex: HOST_SEED, visitors: true,
+      kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+    });
+  });
+  afterAll(() => { try { ctx.db.close(); } catch (e) { /* already closed */ } });
+
+  // Unauthenticated posts still count: the limiter runs before the handler,
+  // so a compromised bearer hammering the surface is throttled regardless of
+  // whether the individual request would have authenticated.
+  async function hitsUntil429(path) {
+    const prev = process.env.MYCELIUM_RATE_LIMIT;
+    process.env.MYCELIUM_RATE_LIMIT = ''; // this file defaults the kill-switch to 'off'
+    try {
+      for (let i = 0; i < 40; i++) {
+        const res = await request(ctx.app).post(path).send({});
+        if (res.status === 429) return { hit: true, at: i + 1, body: res.body };
+      }
+      return { hit: false };
+    } finally {
+      if (prev === undefined) delete process.env.MYCELIUM_RATE_LIMIT;
+      else process.env.MYCELIUM_RATE_LIMIT = prev;
+    }
+  }
+
+  it('the 31st /grant inside the window is a 429', async () => {
+    const out = await hitsUntil429('/federation/grant');
+    expect(out.hit).toBe(true);
+    expect(out.at).toBe(31);
+    expect(out.body.error).toContain('federation/grant');
+  });
+
+  it('the 31st /import inside the window is a 429', async () => {
+    const out = await hitsUntil429('/federation/import');
+    expect(out.hit).toBe(true);
+    expect(out.at).toBe(31);
+    expect(out.body.error).toContain('federation/import');
+  });
+});
+
+describe('federation routes: the spec pins the product edges (review A minor 4)', () => {
+  it('the spec documents that a grant expiring mid-visit forfeits the souvenir', () => {
+    const spec = readFileSync(join(HERE, '..', '..', 'spec', 'federation-v0', 'README.md'), 'utf8');
+    expect(spec).toMatch(/forfeit/);
+  });
+});
+
+describe('federation routes: one companion view, not twins (review A nit 7)', () => {
+  it('federation store.view IS the companion view — the shared implementation, byte for byte', async () => {
+    const { default: companionView } = await import('../../server/plugins/semantic-memory/companion-view.js');
+    const ctx = await makeApp();
+    try {
+      const store = createFederationStore(ctx.db);
+      const agentKey = keyFromSeed(AGENT_SEED);
+      const agentId = idForKey(agentKey);
+      const row = makeRow(agentKey, agentId, {
+        kind: 'aboutYou', key: 'view.parity', text: 'one shape, two surfaces', source: 'visit',
+        at: '2026-09-24T10:05:00Z', supersedes: null
+      }, { agent: agentId, network: HOST_ID, home: GUEST_ID, visit: 'vtest-view-parity' });
+      const written = store.insertFedRow(7, row);
+      expect(written.inserted).toBe(true);
+      expect(store.view(written.row)).toEqual(companionView(written.row));
     } finally {
       try { ctx.db.close(); } catch (e) { /* already closed */ }
     }

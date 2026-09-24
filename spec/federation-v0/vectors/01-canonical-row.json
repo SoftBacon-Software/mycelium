@@ -51,6 +51,21 @@
         "cjson": "{\"at\":\"2026-09-24T10:05:00Z\",\"key\":null,\"kind\":\"aboutMe\",\"source\":\"game\",\"supersedes\":\"abababababababababababababababababababababababababababababababab\",\"text\":\"My favorite game is skee-ball.\"}",
         "id": "8e8f6b8fd8316a89eff38a5c1b812732f0c91d268a8059d13a36d78bdbf69122"
       }
+    },
+    {
+      "name": "escaping-alphabet",
+      "content": {
+        "kind": "aboutYou",
+        "key": "escape.zoo",
+        "text": "He said \"yo\"\t— back\\slash\nand a line\r\u0001ctl-1\u001fctl-31 café 🍄",
+        "source": "visit",
+        "at": "2026-09-24T10:05:00Z",
+        "supersedes": null
+      },
+      "expected": {
+        "cjson": "{\"at\":\"2026-09-24T10:05:00Z\",\"key\":\"escape.zoo\",\"kind\":\"aboutYou\",\"source\":\"visit\",\"supersedes\":null,\"text\":\"He said \\\"yo\\\"\\t— back\\\\slash\\nand a line\\r\\u0001ctl-1\\u001fctl-31 café 🍄\"}",
+        "id": "16c027208398f1702c8597cb91c61203920a5def2b08f6a926b499d17c71cded"
+      }
     }
   ]
 }

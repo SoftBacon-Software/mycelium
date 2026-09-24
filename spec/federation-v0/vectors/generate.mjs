@@ -92,6 +92,11 @@ var danceContent = {
   supersedes: null
 };
 
+// Every escaping rule cjson exercises (see also spec README §1): `\"`, `\\`,
+// the \b-free shorthands JSON.stringify emits (\t \n \r), control chars with
+// no shorthand as lowercase \u00xx, and non-ASCII left literal.
+var escapeText = 'He said "yo"\t— back\\slash\nand a line\r\u0001ctl-1\u001fctl-31 café 🍄';
+
 var danceRow = makeRow(agentA, AGENT_ID, danceContent, {
   agent: AGENT_ID, network: HOST_ID, home: GUEST_ID, visit: VISIT_ID
 });
@@ -154,6 +159,16 @@ write('01-canonical-row.json', {
       name: 'with-supersedes',
       content: { kind: 'aboutMe', key: null, text: 'My favorite game is skee-ball.', source: 'game', at: T1, supersedes: 'ab'.repeat(32) },
       expected: { cjson: JSON.stringify({ at: T1, key: null, kind: 'aboutMe', source: 'game', supersedes: 'ab'.repeat(32), text: 'My favorite game is skee-ball.' }), id: rowId({ kind: 'aboutMe', key: null, text: 'My favorite game is skee-ball.', source: 'game', at: T1, supersedes: 'ab'.repeat(32) }) }
+    },
+    {
+      // The escaping alphabet a second implementation must not guess
+      // (review A nit 11): quotes, backslash, the JSON control-character
+      // shorthands, two raw control chars with no shorthand, and non-ASCII
+      // left literal (UTF-8, never \u-escaped). The pinned cjson string is
+      // the byte-level contract.
+      name: 'escaping-alphabet',
+      content: { kind: 'aboutYou', key: 'escape.zoo', text: escapeText, source: 'visit', at: T1, supersedes: null },
+      expected: { cjson: JSON.stringify({ at: T1, key: 'escape.zoo', kind: 'aboutYou', source: 'visit', supersedes: null, text: escapeText }), id: rowId({ kind: 'aboutYou', key: 'escape.zoo', text: escapeText, source: 'visit', at: T1, supersedes: null }) }
     }
   ]
 });
