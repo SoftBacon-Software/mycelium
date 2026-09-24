@@ -36,6 +36,12 @@ export default function (core) {
   // handful of grants by hand; imports are one-per-souvenir).
   var grantLimiter = rateLimited('federation/grant', { windowMs: 60000, max: 30 });
   var importLimiter = rateLimited('federation/import', { windowMs: 60000, max: 30 });
+  // One bucket for the whole admin surface (GET/POST /network, GET /visits,
+  // POST /visit/:id/end) — the task-240 remediation pattern for CodeQL's
+  // js/missing-rate-limiting, applied to the two routes it flagged on this
+  // PR (GET /network, GET /visits) and their siblings on the same plane.
+  // 30/min is ~10x any operator-cadence use of these console endpoints.
+  var adminLimiter = rateLimited('federation/admin', { windowMs: 60000, max: 30 });
 
   var GRANT_TTL_DEFAULT_MINUTES = 120;
   var GRANT_TTL_MAX_MINUTES = 24 * 60;
@@ -100,7 +106,7 @@ export default function (core) {
   }
 
   // GET /network — identity + policy (admin)
-  router.get('/network', function (req, res) {
+  router.get('/network', adminLimiter, function (req, res) {
     if (!checkAdmin(req, res)) return;
     var id = identity();
     res.json({
@@ -118,7 +124,7 @@ export default function (core) {
   // POST /network — set name/policy, or pin the identity seed (admin).
   // Changing the seed re-keys the network: grants already issued under the old
   // key stop verifying. Deliberate act, admin-only, logged in the response.
-  router.post('/network', function (req, res) {
+  router.post('/network', adminLimiter, function (req, res) {
     if (!checkAdmin(req, res)) return;
     var body = req.body || {};
     if (body.seed_hex !== undefined) {
@@ -458,14 +464,14 @@ export default function (core) {
   // visit (review A minor 3). Toggling policy.visitors off stops NEW grants
   // only; this ends a live one: further writes AND souvenirs 403. The
   // alternative levers are the grant's TTL (up to 24 h) and a re-key.
-  router.post('/visit/:visitId/end', function (req, res) {
+  router.post('/visit/:visitId/end', adminLimiter, function (req, res) {
     if (!checkAdmin(req, res)) return;
     if (!store.visit(req.params.visitId)) return apiError(res, 404, 'no such visit');
     var visit = store.revokeVisit(req.params.visitId);
     res.json({ ok: true, visit: visit, status: 'revoked' });
   });
 
-  router.get('/visits', function (req, res) {
+  router.get('/visits', adminLimiter, function (req, res) {
     if (!checkAdmin(req, res)) return;
     var rows = core.db.prepare(
       'SELECT v.*, g.status AS grant_status FROM fed_visits v ' +

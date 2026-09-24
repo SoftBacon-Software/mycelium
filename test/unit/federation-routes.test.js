@@ -885,6 +885,38 @@ describe('federation routes: grant + import carry rate limiters (review A nit 10
   });
 });
 
+describe('federation routes: the admin surface carries one rate limiter (CodeQL js/missing-rate-limiting, alerts 281+284)', () => {
+  // One bucket ('federation/admin') covers GET/POST /network, GET /visits and
+  // POST /visit/:id/end — the two GETs are the routes CodeQL flagged on the
+  // PR; the POSTs share their plane. Fresh app: the bucket is shared across
+  // all four routes, so any prior admin call in another ctx would offset the
+  // count. Unauthenticated requests still count (the limiter runs before
+  // checkAdmin), which is the property that throttles a key-guessing client.
+  it('the 31st hit on the admin surface — round-robin over its four routes — is a 429', async () => {
+    const prev = process.env.MYCELIUM_RATE_LIMIT;
+    process.env.MYCELIUM_RATE_LIMIT = ''; // armed (only the literal 'off' disables)
+    const ctx = await makeApp();
+    try {
+      const hits = [
+        () => request(ctx.app).get('/federation/network'),
+        () => request(ctx.app).get('/federation/visits'),
+        () => request(ctx.app).post('/federation/visit/v-nope/end').send({}) // POST: the route's verb — a GET would 404 before the limiter
+      ];
+      let hitAt = -1, body = null;
+      for (let i = 0; i < 40 && hitAt === -1; i++) {
+        const res = await hits[i % hits.length]();
+        if (res.status === 429) { hitAt = i + 1; body = res.body; }
+      }
+      expect(hitAt).toBe(31);
+      expect(body.error).toContain('federation/admin');
+    } finally {
+      if (prev === undefined) delete process.env.MYCELIUM_RATE_LIMIT;
+      else process.env.MYCELIUM_RATE_LIMIT = prev;
+      try { ctx.db.close(); } catch (e) { /* already closed */ }
+    }
+  });
+});
+
 describe('federation routes: the spec pins the product edges (review A minor 4)', () => {
   it('the spec documents that a grant expiring mid-visit forfeits the souvenir', () => {
     const spec = readFileSync(join(HERE, '..', '..', 'spec', 'federation-v0', 'README.md'), 'utf8');
