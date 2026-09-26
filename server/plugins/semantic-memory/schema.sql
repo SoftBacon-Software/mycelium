@@ -11,6 +11,19 @@ CREATE TABLE IF NOT EXISTS sm_embeddings (
   embedding BLOB,
   embedding_model TEXT,
   metadata TEXT NOT NULL DEFAULT '{}',
+  -- Companion Memory API (docs/companion-memory-api.md): a superseded row is
+  -- MARKED, not deleted — this column names the row that replaced it. History
+  -- is kept; recall filters it out unless the caller opts back in.
+  superseded_by TEXT,
+  -- Federation v0 (server/plugins/federation/, spec/federation-v0/): rows that
+  -- crossed a network border carry provenance. NULL on every home-written and
+  -- pre-federation row — the federation plugin's guarded ALTERs add these to
+  -- databases that predate the columns (fresh DBs get them here).
+  fed_agent TEXT,     -- agent_id of the writer
+  fed_network TEXT,   -- network_id where the row was MADE
+  fed_home TEXT,      -- the writer's home network
+  fed_visit TEXT,     -- visit id (null on home-written rows)
+  fed_sig TEXT,       -- the row's Ed25519 signature (null on home rows)
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(source_type, source_id, chunk_index)

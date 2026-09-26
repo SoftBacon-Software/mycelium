@@ -1920,7 +1920,11 @@ export async function initPlugins(app) {
   var pluginCore = {
     app: app,
     db: getDB(),
-    auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName },
+    // getStudioUser (F-mycelium/246): the verified studio-JWT decoder, so a
+    // consumer surface (the companion memory API) can derive a per-USER owner
+    // scope from the login the platform already mints — the same decoder
+    // /studio/me uses, not a plugin-private fork that could drift.
+    auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName, getStudioUser },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
     apiError, parseIntParam, validateEnum,
     // asyncHandler: shared async-route wrapper so plugin authors can self-protect

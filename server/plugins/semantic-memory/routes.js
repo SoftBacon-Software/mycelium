@@ -1,8 +1,10 @@
 // Semantic Memory plugin routes
 
+import crypto from 'crypto';
 import { Router } from 'express';
 import createMemoryDB from './db.js';
 import { chunkText } from './chunking.js';
+import companionView from './companion-view.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
@@ -244,6 +246,7 @@ export default function (core) {
     if (!source_type || !source_id || !content_text) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
+    if (refuseCompanionScoped(source_type, namespace, res)) return;
     if (refuseIfUnprovenanced(source_type, metadata, res)) return;
     var chunkCount = 1;
     if (chunk_index) {
@@ -296,6 +299,7 @@ export default function (core) {
       if (!item.source_type || !item.source_id || !item.content_text) {
         return apiError(res, 400, 'Each item needs source_type, source_id, and content_text');
       }
+      if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
       if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
     }
 
@@ -342,6 +346,7 @@ export default function (core) {
   router.delete('/index/:sourceType/:sourceId', function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
+    if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
     db.remove(req.params.sourceType, req.params.sourceId);
     res.json({ ok: true });
   });
@@ -380,6 +385,342 @@ export default function (core) {
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
   });
 
+  // ======== THE COMPANION MEMORY API (docs/companion-memory-api.md) ===========
+  // Mycelium's first CONSUMER memory surface — built for the companion app
+  // (the character Qurio): a phone that reads/writes ONE person's memory over
+  // the network with a per-user token, offline-first, where PERSONA IS MEMORY
+  // (rows of kind aboutYou / aboutMe / howWeTalk, keyed, newer supersedes
+  // older). The agent-shaped /memory/* routes above are UNTOUCHED — this is an
+  // additive owner-scoped surface over the SAME store + embedder: rows are
+  // source_type 'companion' in one namespace per owner, so the existing
+  // hybrid search reaches them unmodified.
+  //
+  // AUTH (the contract's hard line): a studio JWT minted by POST /studio/login
+  // ONLY. Admin keys are REFUSED here — no admin key on a phone, ever — and
+  // the owner scope is derived from the verified token payload on every call;
+  // no header, query param, or body field can widen it. getStudioUser arrives
+  // via pluginCore (the same decoder /studio/me uses); a core without it
+  // fails CLOSED (every call 401s rather than guessing an owner).
+  var getStudioUser = (core.auth && core.auth.getStudioUser) || function () { return null; };
+
+  var COMPANION_SOURCE_TYPE = 'companion';
+  var COMPANION_KINDS = ['aboutYou', 'aboutMe', 'howWeTalk'];
+  var COMPANION_TEXT_MAX = 2000;
+  // Keep in sync with db.js's COMPANION_NS_PREFIX — both must name the same
+  // private row class or the db-layer search exclusion and these route guards
+  // disagree about what is private.
+  var COMPANION_NS_PREFIX = 'companion:';
+  // One shared limiter — 60/min is the SURFACE budget for a phone, not a
+  // per-route allowance (four separate buckets would quietly make it 240).
+  var companionLimiter = rateLimited('memory/companion', { windowMs: 60000, max: 60 });
+
+  function companionNamespace(userId) {
+    return 'companion:u' + userId;
+  }
+
+  // Deterministic row id — the idempotency key is (owner, key, text), so an
+  // offline client can replay its outbox forever: same three → same id → the
+  // write path finds the row and answers without writing.
+  function companionRowId(userId, key, text) {
+    // Components are LENGTH-PREFIXED, not just \0-joined (review A r2 NIT 4):
+    // a JSON body can carry U+0000, and a bare \0 join is ambiguous — key
+    // 'a\0b' with text 'c' would hash the same as key 'a' with text 'b\0c'.
+    var k = key || '';
+    function comp(s) { return s.length + ':' + s; }
+    return crypto.createHash('sha256')
+      .update('companion\u0000' + userId + '\u0000' + comp(k) + '\u0000' + comp(text))
+      .digest('hex');
+  }
+
+  // companionView moved to ./companion-view.js (shared with the federation
+  // plugin's store — one shape, not twins; review A nit 7).
+
+  // The whole surface authenticates the same way: verify the bearer, derive
+  // the owner, or refuse. Admin keys and agent keys never authenticate here.
+  function companionOwner(req, res) {
+    var user = getStudioUser(req);
+    if (!user || !user.userId) {
+      apiError(res, 401, 'a studio bearer token is required — log in via POST /api/mycelium/studio/login; this surface never accepts admin keys');
+      return null;
+    }
+    return user;
+  }
+
+  function companionKindOr400(res, kind) {
+    if (COMPANION_KINDS.indexOf(kind) !== -1) return true;
+    apiError(res, 400, 'kind must be one of: ' + COMPANION_KINDS.join(', '));
+    return false;
+  }
+
+  // Companion rows are PER-USER PRIVATE (docs/companion-memory-api.md): the
+  // agent-facing surface never reads, lists, writes, or deletes them. The db
+  // layer's COMPANION_HIDDEN_SQL hides them from every search arm; this guard
+  // covers the rest of this router (list / index write / index delete). 403,
+  // always naming why — a silent empty result would be a silent failure.
+  // (Review A finding 1: before this guard an agent key could read, rewrite
+  // the record of, and delete a person's companion memory.)
+  function refuseCompanionScoped(sourceType, namespace, res) {
+    if (sourceType === COMPANION_SOURCE_TYPE ||
+        (typeof namespace === 'string' && namespace.indexOf(COMPANION_NS_PREFIX) === 0)) {
+      apiError(res, 403, "'" + (sourceType || namespace) + "' is companion-private memory — agent keys cannot read, write, or delete it; the companion surface (/me/memory) manages its own rows");
+      return true;
+    }
+    return false;
+  }
+
+  // POST /me/memory — write one memory. Idempotent by (owner, key, text): the
+  // row id is a digest of exactly those three, so replaying an offline outbox
+  // returns the SAME row ("replayed": true) and writes nothing — a replay
+  // never resurrects a superseded row and never double-fires a supersede.
+  // supersedes marks the old row in the SAME transaction that writes the new
+  // one (a supersede is both rows or neither — the lessons-supersede rule).
+  router.post('/me/memory', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var body = req.body || {};
+    function str(v) { return typeof v === 'string' ? v.trim() : ''; }
+    var text = str(body.text);
+    var source = str(body.source);
+    var at = str(body.at);
+    var kind = str(body.kind);
+    var key = str(body.key);
+    var supersedes = str(body.supersedes);
+
+    if (!text) return apiError(res, 400, "text is required — the fact, in the companion's own words");
+    if (text.length > COMPANION_TEXT_MAX) {
+      return apiError(res, 400, 'text exceeds ' + COMPANION_TEXT_MAX + ' chars — a memory is a fact, not a document');
+    }
+    if (!source) return apiError(res, 400, 'source is required — where the fact came from (chat, trick, game, ...)');
+    if (source.length > 64) return apiError(res, 400, 'source exceeds 64 chars');
+    if (!at) return apiError(res, 400, 'at is required — when the fact was learned (ISO-8601)');
+    // r3 NIT 5: any timestamp Date.parse takes, a 64-char cap bounds. It
+    // refuses pathological junk before the parse, not after it.
+    if (at.length > 64) return apiError(res, 400, 'at exceeds 64 chars');
+    if (isNaN(Date.parse(at))) return apiError(res, 400, "at must be an ISO-8601 timestamp; got: '" + at + "'");
+    if (!kind) return apiError(res, 400, 'kind is required — one of: ' + COMPANION_KINDS.join(', '));
+    if (!companionKindOr400(res, kind)) return;
+    if (key.length > 128) return apiError(res, 400, 'key exceeds 128 chars');
+    if (supersedes.length > 128) return apiError(res, 400, 'supersedes exceeds 128 chars');
+
+    var namespace = companionNamespace(user.userId);
+    var id = companionRowId(user.userId, key, text);
+
+    // A pure body-vs-identity check, so it fires even when the row already
+    // exists: a retry that adds supersedes pointing at its own target is a
+    // client bug, not a replay.
+    if (supersedes && supersedes === id) {
+      return apiError(res, 400, "supersedes names the row this write would create ('" + id + "') — a memory cannot replace itself");
+    }
+
+    var existing = db.companionRow(id);
+    if (existing) {
+      // As it is NOW — live, superseded, or the product of an earlier replay.
+      return res.status(200).json({ ok: true, replayed: true, row: companionView(existing) });
+    }
+
+    var meta = { owner: user.userId, username: user.username || null, kind: kind, source: source, at: at };
+    if (key) meta.key = key;
+    if (supersedes) meta.supersedes = supersedes;
+
+    if (supersedes) {
+      var oldRow = db.companionRow(supersedes);
+      if (!oldRow || (oldRow.namespace || '') !== namespace) {
+        // Unknown AND another owner's row are the same 404 — ids are not an
+        // existence oracle across owners.
+        return apiError(res, 404, "supersedes names no memory of yours: '" + supersedes + "'");
+      }
+      var oldMeta;
+      try { oldMeta = JSON.parse(oldRow.metadata || '{}'); } catch (e) { oldMeta = {}; }
+      var alreadyDead = oldRow.superseded_by || oldMeta.superseded_by;
+      if (alreadyDead) {
+        return apiError(res, 409, "supersede refused: '" + supersedes + "' was already superseded — correct the replacement, not the history", { superseded_by: alreadyDead });
+      }
+      var writeBoth = core.db.transaction(function () {
+        db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+        db.companionMarkSuperseded(supersedes, id);
+      });
+      writeBoth();
+    } else {
+      db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+    }
+
+    // Embed like every other row (fire-and-forget; no-op without a provider).
+    autoEmbedUnembedded(COMPANION_SOURCE_TYPE, id, 0);
+
+    res.status(201).json({ ok: true, replayed: false, row: companionView(db.companionRow(id)) });
+  });
+
+  // GET /me/memory?kind=&since=&limit= — list / sync. Superseded rows are
+  // INCLUDED and carry superseded_by: history is marked, never hidden — the
+  // client renders the live row and "you used to say X, now Y" from the same
+  // page. `since` is the sync cursor (rows stored after it, store clock).
+  router.get('/me/memory', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var kind = nonEmptyQuery(req.query.kind);
+    if (kind && !companionKindOr400(res, kind)) return;
+    var since = nonEmptyQuery(req.query.since);
+    if (since) {
+      // The store clock's format (`YYYY-MM-DD HH:MM:SS`, UTC) passes through
+      // VERBATIM (review A finding 2): Date.parse reads that shape as
+      // HOST-LOCAL time, so normalizing it shifted the cursor by the host's
+      // UTC offset — and east of UTC that SKIPS a window of memories forever
+      // while the client believes sync is complete. Offset-LESS ISO
+      // (`2026-09-21T20:00:00`) hits the same Date.parse trap, so it is read
+      // deliberately as UTC (review A r2 finding 3) — the store clock's own
+      // frame. Anything else goes through Date.parse and lands on the store
+      // format; the store-format shape itself is date-checked so a garbage
+      // cursor 400s instead of reading as "sync complete" (r2 finding 6).
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) {
+        if (isNaN(Date.parse(since.replace(' ', 'T') + 'Z'))) {
+          return apiError(res, 400, "since is not a real timestamp: '" + since + "'");
+        }
+      } else {
+        // ANY offset-less date-time (not just exact seconds — r3 MINOR 4:
+        // `2026-09-21T20:00:00.500` hit the same host-local trap one grammar
+        // production over) is read as UTC, the store clock's frame.
+        if (/[T ]\d{2}:\d{2}/.test(since) && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(since)) since += 'Z';
+        var t = Date.parse(since);
+        if (isNaN(t)) {
+          return apiError(res, 400, "since must be a created_at exactly as this API returned it (YYYY-MM-DD HH:MM:SS) or an ISO-8601 timestamp; got: '" + since + "'");
+        }
+        since = new Date(t).toISOString().replace('T', ' ').slice(0, 19);
+      }
+    }
+    // Non-positive / garbage limits fall back to the default (review A
+    // finding 5: `LIMIT -1` in SQLite means UNBOUNDED — a negative limit must
+    // never remove the cap).
+    var qLimit = parseIntParam(req.query.limit);
+    var limit = qLimit && qLimit > 0 ? Math.min(qLimit, 500) : 100;
+    var rows = db.companionList({
+      namespace: companionNamespace(user.userId),
+      kind: kind,
+      since: since,
+      limit: limit
+    });
+    res.json({
+      results: rows.map(function (r) { return companionView(r); }),
+      count: rows.length
+    });
+  });
+
+  // POST /me/memory/search — recall by meaning through the SAME hybrid layer
+  // /search uses, scoped to the owner in the query itself (source_types +
+  // namespace both narrow in SQL; the metadata owner check below is belt and
+  // braces). Superseded rows are excluded unless ?include_superseded=1 — the
+  // companion should not recall what was corrected. The overfetch-then-filter
+  // order is the §F2 rule /lessons documents: the caller's limit is spent on
+  // rows that survive, and a filter that culled says what it did.
+  router.post('/me/memory/search', companionLimiter, asyncHandler(async function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var body = req.body || {};
+    var query = typeof body.query === 'string' ? body.query.trim() : '';
+    if (!query) return apiError(res, 400, 'query is required');
+    var kinds = null;
+    if (body.kinds !== undefined) {
+      if (!Array.isArray(body.kinds) || body.kinds.length === 0) {
+        return apiError(res, 400, 'kinds, when present, must be a non-empty array drawn from: ' + COMPANION_KINDS.join(', '));
+      }
+      for (var ki = 0; ki < body.kinds.length; ki++) {
+        if (COMPANION_KINDS.indexOf(body.kinds[ki]) === -1) {
+          return apiError(res, 400, 'kinds must be a subset of: ' + COMPANION_KINDS.join(', '));
+        }
+      }
+      kinds = body.kinds;
+    }
+    var bLimit = parseIntParam(body.limit); // same floor rule as GET /me/memory
+    var limit = bLimit && bLimit > 0 ? Math.min(bLimit, 50) : 5;
+    var includeSuperseded = req.query.include_superseded === '1' || req.query.include_superseded === 'true';
+
+    var opts = {
+      limit: Math.min(limit * 5, 100),
+      source_types: [COMPANION_SOURCE_TYPE],
+      namespace: companionNamespace(user.userId),
+      // The one legitimate carrier of this flag: route code, not request
+      // input. Without it the db layer's COMPANION_HIDDEN_SQL would exclude
+      // the very rows this route exists to search.
+      companion_ok: true
+    };
+
+    var embedFailReason = null;
+    var queryEmbedding = null;
+    try {
+      var config = db.getAllConfig();
+      if (config.embedding_provider && config.embedding_provider !== 'none') {
+        queryEmbedding = await generateEmbedding(config, query, { priority: 'high' });
+        if (!queryEmbedding) {
+          embedFailReason = 'embedding provider returned no vector (async-drone, unknown provider, or empty response)';
+        }
+      } else {
+        embedFailReason = 'no embedding provider configured (embedding_provider = ' + (config.embedding_provider || 'none') + ')';
+      }
+    } catch (e) {
+      embedFailReason = e.message;
+      console.error('[semantic-memory] companion query embedding failed, falling back to keyword:', e.message);
+    }
+
+    var results = await db.searchHybrid(query, opts, queryEmbedding); // 196: may wait on an in-flight cache build
+    var beforeFilter = results.length;
+    results = results.filter(function (r) {
+      var meta = r.metadata || {};
+      if (meta.owner !== user.userId) return false;
+      if (kinds && kinds.indexOf(meta.kind) === -1) return false;
+      if (!includeSuperseded && r.superseded_by) return false;
+      // Federation v0: an imported supersede-candidate is not the fact of
+      // record until the home side accepts it — recall stays with the home
+      // row (the honesty law: he says where he learned it, he does not
+      // silently become right). GET /me/memory still shows it, flagged.
+      if (meta.candidate) return false;
+      return true;
+    });
+    var afterFilter = results.length; // measured BEFORE the page slice (review A r2 NIT 7): slicing is the caller's own limit at work, not a filter cull — attributing it to the filter lies about the corpus
+    var response = {
+      results: results.map(function (r) { return companionView(r, { score: r.score, embedded: r.embedded }); }).slice(0, limit),
+      query: query,
+      mode: queryEmbedding ? 'hybrid' : 'keyword-fallback',
+      count: 0
+    };
+    response.count = response.results.length;
+    if (embedFailReason) {
+      response.degraded = {
+        reason: embedFailReason,
+        fell_back_to: 'keyword',
+        note: 'vector search unavailable; results are lexical (FTS5/LIKE) only'
+      };
+    }
+    if (beforeFilter > afterFilter) {
+      response.filter = { results_before_filter: beforeFilter, results_after_filter: afterFilter };
+    }
+    res.json(response);
+  }));
+
+  // POST /me/memory/:id/forget — a hard delete: the row leaves the store, the
+  // search index, and the vector set (db.remove drives both). Another owner's
+  // id 404s exactly like an unknown id — ids are not an existence oracle
+  // across owners. Supersede, not forget, is how a correction works.
+  router.post('/me/memory/:id/forget', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var id = String(req.params.id || '');
+    var row = db.companionRow(id);
+    if (!row || (row.namespace || '') !== companionNamespace(user.userId)) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    // Un-mark first (review A r3 MINOR 3): if the forgotten row was itself a
+    // replacement, the row it superseded returns to recall instead of being
+    // entombed behind a pointer to a row that no longer exists.
+    // One transaction (review A r4 MINOR 1): a supersede is both rows or
+    // neither, and a forget that un-marks is no different — half-done, it
+    // leaves the corrected fact AND its correction both recallable.
+    var forgetAll = core.db.transaction(function () {
+      db.companionClearSupersededBy(id);
+      db.remove(COMPANION_SOURCE_TYPE, id);
+    });
+    forgetAll();
+    res.json({ ok: true, forgotten: id });
+  });
+
   // GET /memory/stats — index stats
   // GET /memory/list?source_type=preference&namespace=&limit= — query-free
   // retrieval by type, newest first. For always-on content the model must see
@@ -391,6 +732,7 @@ export default function (core) {
     if (!sourceType || typeof sourceType !== 'string') {
       return apiError(res, 400, 'source_type is required');
     }
+    if (refuseCompanionScoped(sourceType, req.query.namespace, res)) return;
     var rows = db.listByType(sourceType, {
       namespace: req.query.namespace || null,
       limit: req.query.limit
@@ -803,6 +1145,7 @@ export default function (core) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
     var sourceType = req.params.sourceType;
+    if (refuseCompanionScoped(sourceType, null, res)) return; // review A r2: the last unguarded agent write into the class
     var sourceId = decodeURIComponent(req.params.sourceId);
     var { embedding, model, chunk_index } = req.body;
     if (!embedding || !Array.isArray(embedding)) return apiError(res, 400, 'embedding array is required');
@@ -867,10 +1210,14 @@ export default function (core) {
     // Drone provider: queue async jobs instead of embedding synchronously
     if (config.embedding_provider === 'drone') {
       var queued = 0;
+      var refused = 0; // a SECURITY refusal (companion rows never ride the agent-readable drone queue), not a failure — counted, not swallowed (review A r3 MINOR 2)
       for (var row of unembedded) {
         try {
-          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
-          queued++;
+          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text')) {
+            queued++;
+          } else {
+            refused++;
+          }
         } catch (e) {
           console.error('[semantic-memory] reindex drone queue failed:', e.message);
         }
@@ -878,8 +1225,9 @@ export default function (core) {
       var droneRemaining = db.getUnembedded(1).length;
       return res.json({
         ok: true,
-        message: 'Queued ' + queued + ' drone embed jobs' + (droneRemaining > 0 ? ' — more remaining, call again' : ''),
+        message: 'Queued ' + queued + ' drone embed jobs' + (refused > 0 ? ' — ' + refused + ' companion rows refused (private rows never enter the drone queue)' : '') + (droneRemaining > 0 ? ' — more remaining, call again' : ''),
         queued: queued,
+        refused: refused,
         remaining: droneRemaining > 0,
         stats: db.stats()
       });
@@ -945,10 +1293,14 @@ export default function (core) {
 
     if (config.embedding_provider === 'drone') {
       // Drone provider: queue async jobs; vectors arrive later via callback
+      var refused = 0; // companion rows: security-refused from the drone queue (review A r3 MINOR 2)
       for (var row of rows) {
         try {
-          createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text');
-          queued++;
+          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text')) {
+            queued++;
+          } else {
+            refused++;
+          }
         } catch (e) {
           failed++;
           console.error('[semantic-memory] backfill drone queue failed:', e.message);
@@ -982,6 +1334,7 @@ export default function (core) {
       processed: processed,
       embedded: embedded,
       failed: failed,
+      refused: refused,
       queued: queued,
       remaining: db.countUnembedded()
     });

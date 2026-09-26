@@ -1,0 +1,12 @@
+{
+  "name": "federation",
+  "version": "0.1.0",
+  "displayName": "Federation",
+  "description": "Federation v0 — every Mycelium install is a network. Agents with passports visit other networks, make memories there, and bring them home as signed souvenirs. Spec: spec/federation-v0/ (language-neutral vectors included).",
+  "author": "SoftBacon Software",
+  "enabled": true,
+  "routePrefix": "/federation",
+  "schema": "schema.sql",
+  "depends": ["semantic-memory"],
+  "gatedActions": []
+}

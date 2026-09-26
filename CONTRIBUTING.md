@@ -2,7 +2,7 @@
 
 Thanks for being here. Mycelium is small enough that one good
 contributor makes a real difference, and big enough (~284 endpoints,
-5 plugins, SDK + MCP + runner) that there's plenty of
+6 plugins, SDK + MCP + runner) that there's plenty of
 useful work to do.
 
 ## Quick start
@@ -125,7 +125,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 163 files across `test/unit/`,
+There's a vitest suite under `test/` — 167 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 

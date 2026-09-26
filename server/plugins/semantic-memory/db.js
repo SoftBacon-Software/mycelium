@@ -38,6 +38,25 @@ var BENCH_HIDDEN_SQL =
   "NOT (substr(COALESCE(source_type,''),1," + BENCH_TYPE_PREFIX.length + ") = '" + BENCH_TYPE_PREFIX + "'" +
   " OR substr(COALESCE(namespace,''),1," + BENCH_NS_PREFIX.length + ") = '" + BENCH_NS_PREFIX + "')";
 
+// -- Companion rows are PRIVATE (task F-mycelium/246, review A finding 1) ------
+// A companion row — source_type 'companion' OR namespace starting 'companion:' —
+// is a person's memory, written through /me/memory with that person's studio
+// bearer. Unlike bench rows (fixtures, visible when a search names them), a
+// companion row is NEVER visible to the agent-facing search arms: the only
+// caller that may see one sets opts.companion_ok, and that flag is set by ROUTE
+// CODE (the companion API itself), never from request input — naming
+// source_types:['companion'] on an agent search opts into nothing. Enforced in
+// the query layer, same rule and same reason as the bench exclusion above: the
+// caller's limit is spent on rows it is allowed to see. The source_type leg is
+// an exact '=' (one type, not a prefix family); the namespace leg is substr()
+// for the same literal-'_'-vs-LIKE reason the bench SQL cites.
+export var COMPANION_TYPE = 'companion';
+export var COMPANION_NS_PREFIX = 'companion:';
+
+var COMPANION_HIDDEN_SQL =
+  "NOT (COALESCE(source_type,'') = '" + COMPANION_TYPE + "'" +
+  " OR substr(COALESCE(namespace,''),1," + COMPANION_NS_PREFIX.length + ") = '" + COMPANION_NS_PREFIX + "')";
+
 // DoS bound shared by BOTH vector arms: only the newest N candidate rows
 // among the filtered set are scored — what the old per-query SQL expressed as
 // `ORDER BY updated_at DESC LIMIT <cap>`, and what the decoded-vector cache
@@ -107,6 +126,11 @@ export default function createMemoryDB(db, opts) {
     benchOptIn: benchOptIn,
     benchTypePrefix: BENCH_TYPE_PREFIX,
     benchNsPrefix: BENCH_NS_PREFIX,
+    // Plumbed, not re-declared over there (review A r3 MINOR 1): one copy of
+    // the private-class constants, or the cache arm and the SQL arms can
+    // silently disagree about what is private.
+    companionType: COMPANION_TYPE,
+    companionNsPrefix: COMPANION_NS_PREFIX,
     scanCap: VECTOR_SCAN_CAP
   }, (opts && opts.vectorCache) || {}));
   // The per-db side-channel auto-memory's unindexFacts uses (196): both
@@ -134,6 +158,21 @@ export default function createMemoryDB(db, opts) {
     vectorCache.onUpsert(sourceType, sourceId, chunkIndex || 0);
   }
   try { db.__myceliumEmbeddingWrite = updateEmbeddingRow; } catch (e) { /* frozen host */ }
+
+  // Companion Memory API (docs/companion-memory-api.md): bridge the
+  // superseded_by column onto an sm_embeddings table that predates it —
+  // CREATE TABLE IF NOT EXISTS in schema.sql cannot extend a table that
+  // already exists, so the column would silently miss every persistent
+  // instance on upgrade. Same guarded-ALTER idiom as core.js applyMigrations:
+  // "already exists" is the fresh-DB case (schema.sql already declared it)
+  // and is swallowed; anything else surfaces at load.
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN superseded_by TEXT').run();
+  } catch (e) {
+    // "duplicate column name" = the fresh-DB case (schema.sql declared it);
+    // anything else is real and surfaces at load.
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
 
   return {
 
@@ -337,6 +376,69 @@ export default function createMemoryDB(db, opts) {
       vectorCache.onRemovePair(sourceType, sourceId, null);
     },
 
+    // -- Companion rows (docs/companion-memory-api.md) ---------------------------
+    // Ordinary sm_embeddings rows — source_type 'companion', one namespace per
+    // owner ('companion:u<userId>') so the EXISTING search arms scope owner
+    // reads in SQL; supersede state is the schema.sql column, not metadata,
+    // so a recall filter reads it straight off the row.
+
+    companionRow(sourceId) {
+      return db.prepare(
+        "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0"
+      ).get(sourceId);
+    },
+
+    // A state flip, not a content change: content_text is untouched (so the
+    // FTS triggers don't fire and the stored vector stays valid) and
+    // updated_at is deliberately left alone (the vector cache's recency scan
+    // doesn't reshuffle because a row died). The WHERE re-asserts a live row
+    // so even a concurrent double-submit cannot flip history twice.
+    companionMarkSuperseded(sourceId, supersededById) {
+      db.prepare(
+        "UPDATE sm_embeddings SET superseded_by = ? WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0 AND superseded_by IS NULL"
+      ).run(supersededById, sourceId);
+    },
+
+    // Forget must UN-MARK what it orphans (review A r3 MINOR 3): if the
+    // forgotten row was itself a replacement, the row it superseded still
+    // carries a superseded_by pointing at a row that no longer exists —
+    // excluded from recall FOREVER with no API able to restore it, and
+    // re-creating the replacement 409s against the dangling mark. Clearing
+    // the pointer puts the older row back where the world was before the
+    // correction; forget stays "never should have been here", not "and
+    // everything it touched, too".
+    companionClearSupersededBy(forgottenId) {
+      return db.prepare(
+        "UPDATE sm_embeddings SET superseded_by = NULL WHERE source_type = 'companion' AND superseded_by = ?"
+      ).run(forgottenId);
+    },
+
+    companionList(filters) {
+      filters = filters || {};
+      // Named columns (review A r4 NIT 4): the view needs five fields; SELECT *
+      // would drag up to 500 embedding BLOBs into a phone's sync page. The fed_*
+      // provenance columns ride along (NULL on native rows, small TEXT) —
+      // without them a visited/imported row's receipt is silently stripped by
+      // the list/sync path, the exact path the phone reads provenance through.
+      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by, fed_agent, fed_network, fed_home, fed_visit, fed_sig FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
+      var params = { namespace: filters.namespace, limit: Math.max(1, Math.min(filters.limit || 100, 500)) }; // floor 1: SQLite reads a negative LIMIT as UNBOUNDED (review A r3 NIT 6)
+      if (filters.kind) {
+        sql += " AND json_extract(metadata, '$.kind') = @kind";
+        params.kind = filters.kind;
+      }
+      if (filters.since) {
+        // INCLUSIVE cursor (review A finding 3): created_at has 1-second
+        // resolution and this product writes in bursts, so `>` silently skips
+        // any row sharing the cursor's store-second — a sync loss the client
+        // cannot see. The client dedups by id (the doc says so); an extra
+        // already-known row is cheap, a lost one is forever.
+        sql += ' AND created_at >= @since';
+        params.since = filters.since;
+      }
+      sql += ' ORDER BY created_at DESC, id DESC LIMIT @limit';
+      return db.prepare(sql).all(params);
+    },
+
     // Admin bulk purge by exact filter — how a finished benchmark run cleans up
     // after itself (task 163's 3,104 bench rows were only reachable one
     // (source_type, source_id) pair at a time before this). At least one filter
@@ -394,6 +496,7 @@ export default function createMemoryDB(db, opts) {
         params.push(opts.namespace);
       }
       if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
+      if (!opts.companion_ok) where.push(COMPANION_HIDDEN_SQL);
 
       params.push(fetchLimit);
 
@@ -425,6 +528,7 @@ export default function createMemoryDB(db, opts) {
           likeParams.push(opts.namespace);
         }
         if (!benchOptIn(opts)) likeWhere.push(BENCH_HIDDEN_SQL);
+        if (!opts.companion_ok) likeWhere.push(COMPANION_HIDDEN_SQL);
         likeParams.push(fetchLimit);
         var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
@@ -500,6 +604,7 @@ export default function createMemoryDB(db, opts) {
         params.push(opts.namespace);
       }
       if (!benchOptIn(opts)) where.push(BENCH_HIDDEN_SQL);
+      if (!opts.companion_ok) where.push(COMPANION_HIDDEN_SQL);
 
       // Cap rows loaded for JS-side cosine sim to prevent DoS on large tables
       params.push(VECTOR_SCAN_CAP);
@@ -538,13 +643,19 @@ export default function createMemoryDB(db, opts) {
     },
 
     getUnembedded(limit) {
+      // Companion rows are NOT backlog (review A r4 MINOR 2): under the drone
+      // provider they are security-refused at the queue by design, so counting
+      // them made /reindex and /backfill-embeddings answer remaining:true
+      // forever and the boot drain re-offer them every pass. The same
+      // predicate the search arms hide them with keeps this from drifting.
+      // Not-backlog is not deleted: the rows stay keyword-searchable.
       return db.prepare(
-        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL ORDER BY updated_at DESC LIMIT ?'
+        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL + ' ORDER BY updated_at DESC LIMIT ?'
       ).all(limit || 50);
     },
 
     countUnembedded() {
-      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL').get().c;
+      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL).get().c;
     },
 
     // Oversized NULL-embedding rows can never embed whole — the provider

@@ -84,6 +84,14 @@ export function createVectorCache(db, opts) {
   var benchOptIn = opts.benchOptIn || function () { return false; };
   var benchTypePrefix = opts.benchTypePrefix || 'bench_';
   var benchNsPrefix = opts.benchNsPrefix || 'bench-';
+  // Companion rows (F-mycelium/246, review A finding 1) are private the way
+  // bench rows are excluded — but with a HARDER rule: a bench row reappears
+  // when the scan names its type/namespace; a companion row reappears ONLY for
+  // a scan whose opts carry companion_ok (set by the companion API's route
+  // code, never by request input). Mirrors db.js's COMPANION_HIDDEN_SQL so
+  // both vector arms refuse the same rows.
+  var companionType = opts.companionType || 'companion';
+  var companionNsPrefix = opts.companionNsPrefix || 'companion:';
   var scanCap = opts.scanCap || 5000;
   // Rows decoded per event-loop tick during a build/reconcile. 500 x ~15 KB
   // of JSON.parse stays inside the ~20 ms/tick budget; injectable so tests
@@ -163,6 +171,8 @@ export function createVectorCache(db, opts) {
       nsId: namespace === null ? NS_NULL : intern(nsIds, namespace),
       isBench: (sourceType.indexOf(benchTypePrefix) === 0) ||
                (namespace !== null && namespace.indexOf(benchNsPrefix) === 0),
+      isCompanion: (sourceType === companionType) ||
+                   (namespace !== null && namespace.indexOf(companionNsPrefix) === 0),
       dim: arr.length,
       vec: vec,
       norm: Math.sqrt(mag)
@@ -366,7 +376,7 @@ export function createVectorCache(db, opts) {
   function fallbackServed() { fallbackQueries++; }
 
   // The query path. Mirrors searchVectorJsonPath's semantics: filters and the
-  // bench exclusion apply BEFORE any cosine; the scan cap keeps the newest N
+  // bench/companion exclusions apply BEFORE any cosine; the scan cap keeps the newest N
   // candidates among the filtered set; scores sort best-first with ties in
   // recency order. REQUIRES an awaited ensureFresh() first (db.js's search
   // path awaits it; direct callers must too) — this throws rather than
@@ -391,6 +401,7 @@ export function createVectorCache(db, opts) {
       nsFilter = nid === undefined ? -2 : nid; // -2 matches nothing: an unknown namespace holds no cached rows
     }
     var benchIn = benchOptIn(scanOpts);
+    var companionOk = scanOpts.companion_ok === true;
 
     // Filter + cap in ONE pass down the recency order — the cap is the break.
     var tScan = Date.now();
@@ -400,6 +411,7 @@ export function createVectorCache(db, opts) {
       if (typeSet !== null && !typeSet.has(e.typeId)) continue;
       if (nsFilter !== undefined && e.nsId !== nsFilter) continue;
       if (!benchIn && e.isBench) continue;
+      if (!companionOk && e.isCompanion) continue;
       candidates.push(e);
       if (candidates.length >= scanCap) break;
     }

@@ -75,14 +75,16 @@ describe('guardrails + a2a-gateway removal (task 186 §5, the 185 shape)', () =>
     }
   })
 
-  test('README: 5 built-in plugins; no guardrails / a2a-gateway table rows', () => {
+  test('README: 6 built-in plugins; no guardrails / a2a-gateway table rows', () => {
+    // 5 → 6 with the federation plugin (PR #189): the pin exists to keep the
+    // README's count honest, so it moves with the plugin that changed it.
     var readme = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8')
-    expect(readme).toMatch(/5 built-in plugins/)
-    expect(readme).toMatch(/5 plugins \+ _template/)
+    expect(readme).toMatch(/6 built-in plugins/)
+    expect(readme).toMatch(/6 plugins \+ _template/)
     expect(readme).not.toMatch(/^\| `guardrails` \|/m)
     expect(readme).not.toMatch(/^\| `a2a-gateway` \|/m)
     var contributing = readFileSync(join(REPO_ROOT, 'CONTRIBUTING.md'), 'utf8')
-    expect(contributing).toMatch(/5 plugins/)
+    expect(contributing).toMatch(/6 plugins/)
   })
 
   test('KEPT: checkGuardrails core middleware, ssrf-guard, migrate-table-names rows', () => {
