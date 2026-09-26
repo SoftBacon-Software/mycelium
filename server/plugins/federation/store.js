@@ -48,8 +48,13 @@ export default function createFederationStore(db) {
         // Review A nit 8: name the dependency instead of dying on a raw
         // SQLite error — without semantic-memory the per-plugin load catch
         // reduces this to "federation silently absent", and the operator
-        // gets to do the archaeology. Say the requirement out loud.
-        throw new Error('federation requires the semantic-memory plugin: sm_embeddings is missing — enable semantic-memory (or create its tables) before federation can load', { cause: e });
+        // gets to do the archaeology. Say the requirement out loud — and
+        // name BOTH causes: the table is created by semantic-memory's
+        // schema, so either semantic-memory is missing/disabled, or (the
+        // round-3 blocker) it loaded after federation on this boot. The old
+        // "enable semantic-memory" advice was wrong on a fresh install,
+        // where it IS enabled and the load ORDER was the defect.
+        throw new Error('federation requires the semantic-memory plugin: sm_embeddings is missing — the table is created by semantic-memory\'s schema, so semantic-memory must be enabled and its plugin loaded before federation; if semantic-memory IS enabled, this is a plugin load-order defect', { cause: e });
       }
       throw e;
     }

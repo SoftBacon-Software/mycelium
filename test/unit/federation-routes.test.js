@@ -1033,6 +1033,151 @@ describe('federation routes: rowsByVisit is scoped to the host owner (review B m
   });
 });
 
+describe('federation routes: the host owner cannot import their own visit\'s souvenir (review A round 3 minor)', () => {
+  it('a same-owner loopback import is refused 409 — the rebuild stays clean', async () => {
+    const ctx = await makeApp(); // ONE server as host AND home — two owners
+    try {
+      await adminPost(ctx.app, '/federation/network', {
+        seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+        kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou', 'aboutMe']
+      });
+      const visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED, homeName: 'qurio-phone' });
+      expect((await visitor.hello(transport(ctx.app))).status).toBe(200);
+      const grant = await bearerPost(ctx.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+      expect(grant.status).toBe(201);
+      const visitId = grant.body.visit_id;
+      const write = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+        kind: 'aboutYou', key: 'sameowner.fact', text: 'One server, one owner, one visit — theirs.',
+        source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+      });
+      expect(write.status).toBe(201);
+
+      const first = await visitor.requestSouvenir(transport(ctx.app), visitId);
+      expect(first.status).toBe(200);
+
+      // THE EDGE (review A round 3): the IMPORTER is the visit's host owner.
+      // The import's episode row (fed_visit = visitId, sig = null) would land
+      // in the HOST OWNER's namespace — the exact namespace rowsByVisit
+      // selects — and the sig-null aboutMe row would ship in every rebuild,
+      // failing row-sig at the door (verified live at 43b7d015: souvenir #2
+      // was unbuildable while the grant lived). Refused, plainly.
+      const imp = await bearerPost(ctx.app, tokenHost, '/federation/import', { bundle: first.body.bundle });
+      expect(imp.status).toBe(409); // RED on head: 201 — the rebuild was bricked
+      expect(typeof imp.body.error).toBe('string');
+      expect(imp.body.error).toContain('host');
+
+      // Nothing landed: the souvenir rebuild stays clean and re-fetchable.
+      const again = await visitor.requestSouvenir(transport(ctx.app), visitId);
+      expect(again.status).toBe(200);
+      expect(again.body.bundle.rows.length).toBe(1);
+      expect(visitor.checkSouvenir(again.body.bundle).valid).toBe(true);
+
+      // A DIFFERENT owner importing the same bundle stays legal (review B
+      // minor 2's loopback case — the namespace scoping exists for them).
+      const other = await bearerPost(ctx.app, tokenHome, '/federation/import', { bundle: first.body.bundle });
+      expect(other.status).toBe(201);
+      expect(other.body.outcomes[0].outcome).toBe('imported');
+    } finally {
+      try { ctx.db.close(); } catch (e) { /* already closed */ }
+    }
+  });
+});
+
+describe('federation routes: /import re-checks the visit-door row caps (review A round 3 nit)', () => {
+  // The visit door caps every row (text ≤ 2000, source ≤ 64, key ≤ 128) but
+  // /import re-checked nothing — and the bundle's signer IS the host, so a
+  // hostile host could mint agent-signed rows of any size (the agent seed
+  // below is the test's own, modelling a colluding host) and write them into
+  // a home's memory scope, up to the 1mb body cap.
+  function hostileBundle(rows) {
+    const hostKey = keyFromSeed(HOST_SEED);
+    const agentKey = keyFromSeed(AGENT_SEED);
+    const agentId = idForKey(agentKey);
+    const visit = makeVisitRecord({
+      visit_id: 'v-caps-probe', host_network: HOST_ID, agent_id: agentId,
+      home_network: GUEST_ID, grant_id: 'grant-caps-probe',
+      started_at: '2026-09-24T10:00:00Z', ended_at: '2026-09-24T10:30:00Z'
+    });
+    const signed = rows.map((r) => makeRow(agentKey, agentId, r, {
+      agent: agentId, network: HOST_ID, home: GUEST_ID, visit: 'v-caps-probe'
+    }));
+    return makeBundle(hostKey, {
+      host_passport: makeNetworkPassport(hostKey, HOST_ID, {
+        name: 'lab-host', policy: { visitors: true }, issued_at: '2026-09-24T10:30:00Z'
+      }),
+      agent_passport: makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED }).agentPassport,
+      visit: visit,
+      rows: signed,
+      issued_at: '2026-09-24T10:30:00Z'
+    });
+  }
+
+  async function importBundle(ctx, bundle) {
+    return bearerPost(ctx.app, tokenHome, '/federation/import', { bundle });
+  }
+
+  async function capsCtx() {
+    const ctx = await makeApp();
+    await adminPost(ctx.app, '/federation/network', { seed_hex: HOST_SEED, name: 'lab-host', visitors: true });
+    const visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED, homeName: 'qurio-phone' });
+    // The knock puts the agent's home passport on file — /import's vouching.
+    expect((await visitor.hello(transport(ctx.app))).status).toBe(200);
+    return ctx;
+  }
+
+  it('a row over the 2000-char text cap is refused at import', async () => {
+    const ctx = await capsCtx();
+    try {
+      const bundle = hostileBundle([{
+        kind: 'aboutYou', key: 'caps.text', text: 'x'.repeat(2001),
+        source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+      }]);
+      const imp = await importBundle(ctx, bundle);
+      expect(imp.status).toBe(400); // RED on head: 201 — the 1mb row landed
+      expect(imp.body.error).toContain('text exceeds 2000 chars');
+    } finally { try { ctx.db.close(); } catch (e) { /* already closed */ } }
+  });
+
+  it('a row over the 64-char source cap is refused at import', async () => {
+    const ctx = await capsCtx();
+    try {
+      const bundle = hostileBundle([{
+        kind: 'aboutYou', key: 'caps.source', text: 'short enough',
+        source: 's'.repeat(65), at: '2026-09-24T10:05:00Z', supersedes: null
+      }]);
+      const imp = await importBundle(ctx, bundle);
+      expect(imp.status).toBe(400); // RED on head: 201
+      expect(imp.body.error).toContain('source exceeds 64 chars');
+    } finally { try { ctx.db.close(); } catch (e) { /* already closed */ } }
+  });
+
+  it('a row over the 128-char key cap is refused at import', async () => {
+    const ctx = await capsCtx();
+    try {
+      const bundle = hostileBundle([{
+        kind: 'aboutYou', key: 'k'.repeat(129), text: 'short enough',
+        source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+      }]);
+      const imp = await importBundle(ctx, bundle);
+      expect(imp.status).toBe(400); // RED on head: 201
+      expect(imp.body.error).toContain('key exceeds 128 chars');
+    } finally { try { ctx.db.close(); } catch (e) { /* already closed */ } }
+  });
+
+  it('a row within every cap still imports — the caps are a ceiling, not a wall', async () => {
+    const ctx = await capsCtx();
+    try {
+      const bundle = hostileBundle([{
+        kind: 'aboutYou', key: 'caps.ok', text: 'e'.repeat(2000),
+        source: 's'.repeat(64), at: '2026-09-24T10:05:00Z', supersedes: null
+      }]);
+      const imp = await importBundle(ctx, bundle);
+      expect(imp.status).toBe(201);
+      expect(imp.body.outcomes[0].outcome).toBe('imported');
+    } finally { try { ctx.db.close(); } catch (e) { /* already closed */ } }
+  });
+});
+
 describe('federation routes: one companion view, not twins (review A nit 7)', () => {
   it('federation store.view IS the companion view — the shared implementation, byte for byte', async () => {
     const { default: companionView } = await import('../../server/plugins/semantic-memory/companion-view.js');

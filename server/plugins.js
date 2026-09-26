@@ -246,13 +246,42 @@ export function guardPluginRouter(pluginRouter, pluginName) {
   return pluginRouter;
 }
 
+// Load order: dependencies before dependents (manifest.depends, an array of
+// plugin names). Unknown names order nothing (a plugin may depend on one the
+// install does not ship); a cycle resolves deterministically in readdir
+// order. Depth is bounded by the plugin count, so the recursion is safe.
+function dependencyOrder(plugins) {
+  var byName = {};
+  for (var p of plugins) byName[p.manifest.name] = p;
+  var placed = {};
+  var out = [];
+  function visit(p, stack) {
+    var name = p.manifest.name;
+    if (placed[name] || stack[name]) return;
+    stack[name] = true;
+    var deps = p.manifest.depends || [];
+    for (var i = 0; i < deps.length; i++) {
+      if (byName[deps[i]]) visit(byName[deps[i]], stack);
+    }
+    delete stack[name];
+    placed[name] = true;
+    out.push(p);
+  }
+  for (var root of plugins) visit(root, {});
+  return out;
+}
+
 export async function loadPlugins(core, router) {
   if (!fs.existsSync(PLUGINS_DIR)) {
     console.log('[plugins] No plugins directory found');
     return;
   }
 
+  // ---- pass 1: discovery — read every manifest and ensure its registry row.
+  // No plugin RUNS here: schemas, routes and workers wait for pass 2, which
+  // walks the plugins in dependency order.
   var entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
+  var discovered = [];
   var dirNames = []; // manifest names that have a directory — the reconcile's ground truth
   for (var entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -274,6 +303,32 @@ export async function loadPlugins(core, router) {
 
       // Ensure DB record (insert or update metadata, preserves enabled flag)
       ensurePluginRecord(manifest);
+      discovered.push({ dirName: entry.name, dir: pluginDir, manifest: manifest, mcpTools: mcpTools });
+    } catch (e) {
+      console.error('[plugins] Failed to load ' + entry.name + ':', e.message);
+    }
+  }
+
+  // ---- pass 2: load, dependencies before dependents (manifest.depends).
+  // federation is the first plugin that needs ANOTHER plugin's table at LOAD
+  // time — its provenance ALTERs run against semantic-memory's sm_embeddings
+  // (federation/store.js) — and a single readdir-order pass loads
+  // `federation` before `semantic-memory` on a FRESH database: the ALTER hits
+  // a table that does not exist yet, the named error drops the whole plugin
+  // for that boot, and only a SECOND boot heals (the table now exists) — so
+  // `docker compose up -d`, which boots once, shipped without federation.
+  // A dependency that is absent, disabled or cyclic imposes no order: the
+  // dependent loads where it would have and fails (or not) on its own
+  // merits, with its own error.
+  var loadOrder = dependencyOrder(discovered);
+  for (var discoveredPlugin of loadOrder) {
+    // Reuse pass 1's function-scoped vars (a second `var` here would be a
+    // no-redeclare lint hit, a new warning on a tree pinned at its ceiling).
+    pluginDir = discoveredPlugin.dir;
+    manifest = discoveredPlugin.manifest;
+    mcpTools = discoveredPlugin.mcpTools;
+
+    try {
       var record = getPluginRecord(manifest.name);
 
       if (!record.enabled) {
@@ -397,7 +452,7 @@ export async function loadPlugins(core, router) {
       console.log('[plugins] Loaded ' + manifest.name + ' v' + manifest.version + ' (' + mcpTools.length + ' MCP tools)');
 
     } catch (e) {
-      console.error('[plugins] Failed to load ' + entry.name + ':', e.message);
+      console.error('[plugins] Failed to load ' + discoveredPlugin.dirName + ':', e.message);
     }
   }
 

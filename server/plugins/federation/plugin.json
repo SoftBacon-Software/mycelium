@@ -7,5 +7,6 @@
   "enabled": true,
   "routePrefix": "/federation",
   "schema": "schema.sql",
+  "depends": ["semantic-memory"],
   "gatedActions": []
 }

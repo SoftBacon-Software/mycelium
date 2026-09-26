@@ -440,6 +440,33 @@ export default function (core) {
     var bv = verifyBundle(bundle, { expectedHome: expectedHome });
     if (!bv.valid) return apiError(res, 400, 'bundle rejected: ' + bv.reason);
 
+    // Review A round 3 (minor): a bundle whose host is THIS network is a
+    // souvenir this instance built. When the importer is also the visit's
+    // host owner, importing it would write the sig-null episode row into the
+    // host owner's namespace — the exact namespace rowsByVisit selects — and
+    // every souvenir rebuild would ship it and fail row-sig at the door
+    // (verified live at 43b7d015: the visitor could not re-fetch a lost
+    // bundle while the grant lived). The souvenir belongs to the visitor; the
+    // host owner is refused. A DIFFERENT owner on this instance stays legal —
+    // that is the review-B minor-2 loopback case the namespace scoping serves.
+    if (bundle.host_passport.network_id === id.networkId) {
+      var localVisit = store.visit(bundle.visit && bundle.visit.visit_id);
+      if (localVisit && localVisit.host_owner === user.userId) {
+        return apiError(res, 409, 'you hosted this visit — a souvenir of your own visit belongs to the visitor, and importing it into your own memory would poison the souvenir (its episode row would ship in every rebuild); nothing was imported');
+      }
+    }
+
+    // Review A round 3 (nit): the visit door caps every row (text 2000,
+    // source 64, key 128) but /import re-checked nothing — and the bundle's
+    // signer IS the host, so a hostile host could write agent-signed rows up
+    // to the 1mb body cap into a home's memory scope (~500x what its own
+    // visits allow). The door's caps, re-checked per row.
+    for (var capRow of bundle.rows) {
+      if (capRow.text.length > 2000) return apiError(res, 400, 'row rejected: text exceeds 2000 chars');
+      if (capRow.source.length > 64) return apiError(res, 400, 'row rejected: source exceeds 64 chars');
+      if (capRow.key && capRow.key.length > 128) return apiError(res, 400, 'row rejected: key exceeds 128 chars');
+    }
+
     // Bundle-level replay bookkeeping is PER OWNER (review A minor 6): the
     // fed_imports PK is (bundle_id, owner), so the fast path fires for every
     // owner who already imported this bundle — not just the first one.
