@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS fed_grants (
   host_network TEXT NOT NULL,        -- network_id at issue time (a re-key invalidates)
   agent_id TEXT NOT NULL,
   home_network TEXT NOT NULL,
+  agent_passport_cjson TEXT,         -- the verified agent passport BOUND to this
+                                     -- grant at /grant (review B blocker 1): the
+                                     -- souvenir is built from THIS exact canonical
+                                     -- form, never from the overwritable
+                                     -- fed_passports row
   kinds_writable TEXT NOT NULL,      -- JSON array
   kinds_readable TEXT NOT NULL DEFAULT '[]',
   kinds_exportable TEXT NOT NULL DEFAULT '[]',

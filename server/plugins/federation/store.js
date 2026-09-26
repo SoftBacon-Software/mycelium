@@ -61,6 +61,15 @@ export default function createFederationStore(db) {
     // DBs — which the ALTER above already refused); anything else surfaces.
     if (!/no such table/i.test(String(e.message))) throw e;
   }
+  // Review B blocker 1: the souvenir is built from the agent passport BOUND
+  // to the grant at /grant. Fresh databases get the column declared in this
+  // plugin's schema.sql; existing ones reach it through the same guarded
+  // ALTER idiom as the sm_embeddings columns above.
+  try {
+    db.prepare('ALTER TABLE fed_grants ADD COLUMN agent_passport_cjson TEXT').run();
+  } catch (e) {
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
 
   var now = "datetime('now')";
 
@@ -100,8 +109,8 @@ export default function createFederationStore(db) {
 
     insertGrant(g) {
       db.prepare(
-        'INSERT INTO fed_grants (grant_id, visit_id, host_owner, host_network, agent_id, home_network, kinds_writable, kinds_readable, kinds_exportable, issued_at, expires_at, sig_by_host) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(g.grant_id, g.visit_id, g.host_owner, g.host_network, g.agent_id, g.home_network,
+        'INSERT INTO fed_grants (grant_id, visit_id, host_owner, host_network, agent_id, home_network, agent_passport_cjson, kinds_writable, kinds_readable, kinds_exportable, issued_at, expires_at, sig_by_host) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(g.grant_id, g.visit_id, g.host_owner, g.host_network, g.agent_id, g.home_network, g.agent_passport_cjson || null,
         JSON.stringify(g.kinds_writable), JSON.stringify(g.kinds_readable || []),
         JSON.stringify(g.kinds_exportable), g.issued_at, g.expires_at, g.sig_by_host);
       db.prepare(
@@ -171,8 +180,14 @@ export default function createFederationStore(db) {
       ).get(this.fedRowId(ownerId, protocolId), companionNamespace(ownerId));
     },
 
-    rowsByVisit(visitId) {
-      return db.prepare("SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND fed_visit = ? AND chunk_index = 0 ORDER BY created_at, source_id").all(visitId);
+    // Host-owner scoped (review B minor 2): when one server is both host and
+    // home, an import writes the episode row with fed_visit set and sig null
+    // into the HOME owner's namespace — `WHERE fed_visit = ?` alone would
+    // ship it in a souvenir rebuild and fail row-sig at the home door.
+    rowsByVisit(visitId, hostOwnerId) {
+      return db.prepare(
+        "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND fed_visit = ? AND namespace = ? AND chunk_index = 0 ORDER BY created_at, source_id"
+      ).all(visitId, companionNamespace(hostOwnerId));
     },
 
     liveHomeRows(ownerId) {

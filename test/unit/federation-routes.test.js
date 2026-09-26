@@ -924,6 +924,115 @@ describe('federation routes: the spec pins the product edges (review A minor 4)'
   });
 });
 
+// ---------------------------------------------------------------------------
+// Review B (247d) on PR #189 @ 2fded0a0 — both blocks below were RED on that head.
+
+describe('federation routes: the souvenir is built from the passport BOUND TO THE GRANT (review B blocker 1)', () => {
+  let host, home, visitor, grantRes, bundle;
+
+  beforeAll(async () => {
+    host = await makeApp();
+    home = await makeApp();
+    await adminPost(host.app, '/federation/network', {
+      seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+      kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou']
+    });
+    await adminPost(home.app, '/federation/network', { seed_hex: GUEST_SEED, name: 'qurio-phone' });
+    visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED, homeName: 'qurio-phone', agentName: 'Qurio' });
+  });
+  afterAll(() => {
+    try { host.db.close(); } catch (e) { /* already closed */ }
+    try { home.db.close(); } catch (e) { /* already closed */ }
+  });
+
+  it('a stranger network\'s validly-signed HELLO cannot poison the visitor\'s souvenir', async () => {
+    // The honest visit: knock, grant, one write.
+    expect((await visitor.hello(transport(host.app))).status).toBe(200);
+    grantRes = await bearerPost(host.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+    expect(grantRes.status).toBe(201);
+    const visitId = grantRes.body.visit_id;
+    const write = await visitor.writeMemory(transport(host.app), visitId, HOST_ID, {
+      kind: 'aboutYou', key: 'dance.pickles-foxtrot',
+      text: "Learned the Pickles Foxtrot at a friend's house — 8 counts, ends on the left foot.",
+      source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+    });
+    expect(write.status).toBe(201);
+
+    // THE ATTACK: agent_id is a public key — any network that knows it can
+    // mint an agent passport for that id under ITS OWN home, validly signed
+    // by its own key (which IS that home). HELLO upserts on
+    // (kind, subject_id), so this knock replaces the passport on file for
+    // the real visitor. No credential needed, inside the hello rate limit.
+    const stranger = makeVisitor({ homeSeed: OTHER_SEED, agentSeed: AGENT_SEED, homeName: 'imposter-net' });
+    expect(stranger.agentId).toBe(visitor.agentId); // same agent id…
+    expect(stranger.agentPassport.home_network).toBe(stranger.homeNetworkId); // …forged home
+    expect(stranger.agentPassport.home_network).not.toBe(GUEST_ID);
+    expect((await stranger.hello(transport(host.app))).status).toBe(200); // the knock lands
+
+    // The souvenir must still be built from the passport the host owner
+    // consented to at /grant — the one bound to THIS grant — not from the
+    // (now poisoned) fed_passports row.
+    const res = await visitor.requestSouvenir(transport(host.app), visitId);
+    expect(res.status).toBe(200);
+    bundle = res.body.bundle;
+    expect(bundle.agent_passport.home_network).toBe(GUEST_ID); // RED on head: the forged home
+    const check = visitor.checkSouvenir(bundle); // the phone's own door check
+    expect(check.valid).toBe(true); // RED on head: visit-home-mismatch
+
+    // ...and the whole trip survives: network 1's /import verifies it.
+    const imp = await bearerPost(home.app, tokenHome, '/federation/import', { bundle });
+    expect(imp.status).toBe(201); // RED on head: 400 passport-home-mismatch
+    expect(imp.body.outcomes[0].outcome).toBe('imported');
+  });
+});
+
+describe('federation routes: rowsByVisit is scoped to the host owner (review B minor 2)', () => {
+  it('a loopback import does not ship its sig-null episode row in a souvenir rebuild', async () => {
+    const ctx = await makeApp(); // ONE server as host AND home — two owners
+    try {
+      await adminPost(ctx.app, '/federation/network', {
+        seed_hex: HOST_SEED, name: 'lab-host', visitors: true,
+        // aboutMe exportable: the trigger — the episode row is an aboutMe row.
+        kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou', 'aboutMe']
+      });
+      const visitor = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT_SEED, homeName: 'qurio-phone' });
+      expect((await visitor.hello(transport(ctx.app))).status).toBe(200);
+      const grant = await bearerPost(ctx.app, tokenHost, '/federation/grant', { agent_passport: visitor.agentPassport });
+      expect(grant.status).toBe(201);
+      const visitId = grant.body.visit_id;
+      const write = await visitor.writeMemory(transport(ctx.app), visitId, HOST_ID, {
+        kind: 'aboutYou', key: 'loopback.fact', text: 'One server, two owners, one visit.',
+        source: 'visit', at: '2026-09-24T10:05:00Z', supersedes: null
+      });
+      expect(write.status).toBe(201);
+
+      // Owner 2 (host owner) takes the souvenir — clean.
+      const first = await visitor.requestSouvenir(transport(ctx.app), visitId);
+      expect(first.status).toBe(200);
+      expect(visitor.checkSouvenir(first.body.bundle).valid).toBe(true);
+
+      // Owner 1 (a DIFFERENT owner on this same instance) imports it: the
+      // import writes the episode row (fed_visit = visitId, sig = null) into
+      // owner 1's namespace. fed_visit alone now matches TWO namespaces.
+      const imp = await bearerPost(ctx.app, tokenHome, '/federation/import', { bundle: first.body.bundle });
+      expect(imp.status).toBe(201);
+
+      // The idempotent souvenir rebuild must select ONLY the host owner's
+      // rows for this visit — the home owner's episode row shares fed_visit
+      // but not namespace, and shipping it fails row-sig at the door.
+      const again = await visitor.requestSouvenir(transport(ctx.app), visitId);
+      expect(again.status).toBe(200);
+      const rebuilt = again.body.bundle;
+      expect(rebuilt.rows.filter((r) => !r.sig)).toEqual([]); // RED on head: the episode row, sig null
+      expect(rebuilt.rows.length).toBe(1);
+      expect(rebuilt.rows[0].kind).toBe('aboutYou');
+      expect(visitor.checkSouvenir(rebuilt).valid).toBe(true); // RED on head: row-sig
+    } finally {
+      try { ctx.db.close(); } catch (e) { /* already closed */ }
+    }
+  });
+});
+
 describe('federation routes: one companion view, not twins (review A nit 7)', () => {
   it('federation store.view IS the companion view — the shared implementation, byte for byte', async () => {
     const { default: companionView } = await import('../../server/plugins/semantic-memory/companion-view.js');

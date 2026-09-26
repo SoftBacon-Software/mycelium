@@ -228,7 +228,14 @@ export default function (core) {
       issued_at: issuedAt.toISOString(),
       expires_at: expiresAt.toISOString()
     });
-    store.insertGrant(Object.assign({ host_owner: user.userId }, grant));
+    store.insertGrant(Object.assign({ host_owner: user.userId }, grant, {
+      // Review B blocker 1: bind the VERIFIED passport to the grant. The
+      // souvenir is built from this exact canonical form — the one the owner
+      // consented to — never from the fed_passports row, which any network
+      // that knows the agent's public id can overwrite with a validly-signed
+      // HELLO under its own home (UNIQUE(kind, subject_id) upsert).
+      agent_passport_cjson: cjson(body.agent_passport)
+    }));
     store.upsertPassport('agent', body.agent_passport.agent_id, body.agent_passport.home_network, cjson(body.agent_passport));
     res.status(201).json({ ok: true, grant: grant, visit_id: grant.visit_id });
   });
@@ -364,11 +371,27 @@ export default function (core) {
     }
 
     var exportable = g.grant.kinds_exportable;
-    var rows = store.rowsByVisit(g.grant.visit_id)
+    // Host-owner scoped (review B minor 2): g.visit.host_owner — a loopback
+    // import on this same instance wrote its episode row under the home
+    // owner's namespace with this visit's id and sig null; rowsByVisit must
+    // not pick it up.
+    var rows = store.rowsByVisit(g.grant.visit_id, g.visit.host_owner)
       .map(function (r) { return store.protocolRow(r); })
       .filter(function (r) { return exportable.indexOf(r.kind) !== -1; });
 
-    var agentPassport = JSON.parse(store.getPassport('agent', g.grant.agent_id).passport_cjson);
+    // Review B blocker 1: the bundle carries the passport BOUND TO THE GRANT
+    // at /grant — not the fed_passports row, which any network that knows
+    // the agent's public id can overwrite with a validly-signed HELLO under
+    // its own home. A poisoned row used to build a bundle whose
+    // agent_passport.home_network ≠ visit.home_network — the home door
+    // rejected it (visit-home-mismatch) and the visitor lost the whole visit.
+    if (!g.row.agent_passport_cjson) {
+      // Only possible on a database where this grant was issued before the
+      // column existed (the plugin has never shipped with such a row) — fail
+      // closed rather than fall back to the overwritable table.
+      return apiError(res, 409, 'this grant predates passport binding — no souvenir can be built from it; re-issue the grant');
+    }
+    var agentPassport = JSON.parse(g.row.agent_passport_cjson);
     var bundle = makeBundle(id.key, {
       host_passport: makeNetworkPassport(id.key, id.networkId, {
         name: id.name, policy: id.policy, issued_at: endedAt
