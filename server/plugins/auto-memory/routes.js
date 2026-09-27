@@ -46,7 +46,27 @@ export default function (core) {
     return true;
   }
 
-  // GET /auto-memory/facts — list facts
+  // TRUST LAYER P0.2 (F-mycelium/250, review A blocker B2): write authority on
+  // facts — the am_facts counterpart of refuseNotRowOwner on the sm_embeddings
+  // surface. agent_id has been the AUTHENTICATED writer since this PR, so it
+  // is the ownership column: a non-admin caller supersedes or reverifies only
+  // facts it wrote. A NULL agent_id (the internal consolidator's insights, or
+  // anything written before the column meant "writer") is owner-UNKNOWN and
+  // therefore admin-only — fail-closed, exactly like written_by NULL on
+  // /memory/*: an accidental NULL can only make a row MORE protected, never
+  // less. The admin key keeps cross-agent access (the bench arms, the MCP
+  // fork, the due-reverification drain). Refusal mirrors the same 403
+  // sentence family the owner-only /memory routes use.
+  // Returns true when the request was refused (response already sent).
+  function refuseNotFactOwner(res, fact, who, isAdmin, action) {
+    if (isAdmin) return false;
+    if (fact.agent_id === who) return false;
+    apiError(res, 403, (action ? action + ' refused: ' : '') + 'fact ' + fact.id + ' is ' +
+      (fact.agent_id
+        ? "owned by '" + fact.agent_id + "' — an agent key may supersede or reverify only the facts it wrote; ask the owner or use the admin key"
+        : 'owner-unknown (agent_id is NULL — written before write authority existed) — only the admin key may supersede or reverify it'));
+    return true;
+  }
   router.get('/facts', function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
@@ -82,6 +102,10 @@ export default function (core) {
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
     if (namespaceGuard(req, fact, res, 'read')) return;
+    // TRUST LAYER P0.2 (review A nit N1): the single read is scoped like the
+    // list (agent_id = who) — another agent's fact is "not there": a plain
+    // 404 that neither confirms the row nor names its owner. Admin excepted.
+    if (!req._authIsAdmin && fact.agent_id !== who) return apiError(res, 404, 'Fact not found');
     res.json(fact);
   });
 
@@ -232,6 +256,10 @@ export default function (core) {
     var fact = db.getFact(id);
     if (!fact) return apiError(res, 404, 'Fact not found');
     if (namespaceGuard(req, fact, res, 'reverify')) return;
+    // TRUST LAYER P0.2 (review A blocker B2): verified_at/confidence are the
+    // row's provenance — a cross-agent stamp was the same door the sm_embeddings
+    // custody closed, one surface over. Owner (or admin) only.
+    if (refuseNotFactOwner(res, fact, who, req._authIsAdmin, 'reverify')) return;
     var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
     db.reverifyFact(id, conf);
     res.json({ ok: true, fact: db.getFact(id) });
@@ -257,6 +285,11 @@ export default function (core) {
     var newFact = db.getFact(newId);
     if (!newFact) return apiError(res, 400, 'new_id does not exist');
     if (namespaceGuard(req, oldFact, res, 'supersede')) return;
+    // TRUST LAYER P0.2 (review A blocker B2): a supersede writes the OLD row —
+    // superseded_by, valid_to, and (namespaced) its live index text through the
+    // internal indexFactSemantic seam. Ownership of the old fact decides who
+    // may start one; the replacement row is only referenced, never written.
+    if (refuseNotFactOwner(res, oldFact, who, req._authIsAdmin, 'supersede')) return;
     if ((oldFact.namespace || null) !== (newFact.namespace || null)) {
       return apiError(res, 404, 'supersede refused: fact ' + oldId + ' lives in namespace ' +
         (oldFact.namespace ? "'" + oldFact.namespace + "'" : '(legacy, unscoped)') + ', fact ' + newId + ' lives in namespace ' +

@@ -470,3 +470,264 @@ describe('P0.2 an agent key overwrites/deletes only rows it wrote', () => {
     expect(byAdmin.status).toBe(200);
   });
 });
+
+// ============================ Review A (task 250b) ============================
+// Review A on PR #190 (@ e1089d1d, CHANGES REQUESTED) re-verified the six
+// mandated P0 behaviors clean, then found two BLOCKERS through doors the diff
+// didn't cover, each with a live repro on a spawned server. The tests below
+// pin those repros at the same layer this file already uses (real router,
+// real plugins, fresh temp DB) — written RED first, each reproducing the
+// reviewer's probe, then fixed.
+//
+//   B1   PUT /studio/users/:id mints (and strips) roles on checkAdmin alone —
+//        which passes on an admin studio JWT. A role change in EITHER
+//        direction requires the admin KEY: one invariant sentence.
+//   B2   /auto-memory/facts/:id/supersede and /reverify guard only the
+//        namespace, never ownership — B stamps verified_at on A's fact and
+//        closes A's validity interval pointing at B's own row.
+//   M1   POST/PUT /studio/users accept any role string verbatim ("adimn " was
+//        a 200) — the role is a fixed vocabulary: operator | agent | admin.
+//   M2   (rate-limits fork) the single-row DELETE /memory/index/:t/:id has no
+//        limiter — 120/min like its purge sibling.
+//   S1   (review-A sweep, third door) PUT /memory/embeddings/:t/:id failed
+//        OPEN when no claimed embed job named the row — any agent key could
+//        store a vector over any row in the index (poison the ranking without
+//        touching the text).
+//   N1   GET /auto-memory/facts/:id reads any agent's fact by id — the list
+//        scopes agent_id=who; the single read does too now.
+
+describe('B1 PUT /studio/users/:id — a role change requires the admin KEY (grant AND revoke)', () => {
+  it('refuses role=admin (promotion) from a studio admin JWT (reviewer probe: was 200, victim logged back in as admin)', async () => {
+    const victim = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'b1-victim', password: 'password123', display_name: 'B1 Victim' });
+    expect(victim.status).toBe(200);
+    expect(victim.body.role).toBe('operator');
+
+    const res = await request(app).put('/api/mycelium/studio/users/' + victim.body.id)
+      .set(adminJwtAuth).send({ role: 'admin' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/admin key/i);
+
+    // the mint never happened — a fresh read shows the row still operator
+    const list = await request(app).get('/api/mycelium/studio/users').set(adminKeyAuth);
+    expect(list.body.find((u) => u.username === 'b1-victim').role).toBe('operator');
+  });
+
+  it('refuses a role DEMOTION from a studio admin JWT (the same invariant, the other direction)', async () => {
+    const admin = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'b1-admin', password: 'password123', display_name: 'B1 Admin', role: 'admin' });
+    expect(admin.status).toBe(200);
+
+    const res = await request(app).put('/api/mycelium/studio/users/' + admin.body.id)
+      .set(adminJwtAuth).send({ role: 'operator' });
+    expect(res.status).toBe(403);
+
+    const list = await request(app).get('/api/mycelium/studio/users').set(adminKeyAuth);
+    expect(list.body.find((u) => u.username === 'b1-admin').role).toBe('admin');
+  });
+
+  it('the admin KEY still moves a role (demote control — the key is the door)', async () => {
+    const user = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'b1-key-change', password: 'password123', display_name: 'B1 Key' });
+    const res = await request(app).put('/api/mycelium/studio/users/' + user.body.id)
+      .set(adminKeyAuth).send({ role: 'agent' });
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe('agent');
+  });
+
+  it('a display_name-only PUT still works from an admin JWT (no role in play)', async () => {
+    const user = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'b1-rename', password: 'password123', display_name: 'Before' });
+    const res = await request(app).put('/api/mycelium/studio/users/' + user.body.id)
+      .set(adminJwtAuth).send({ display_name: 'After' });
+    expect(res.status).toBe(200);
+    expect(res.body.display_name).toBe('After');
+  });
+});
+
+describe('M1 /studio/users accepts only the fixed role vocabulary', () => {
+  it('refuses a junk role on POST (reviewer probe: role "adimn " was accepted 200)', async () => {
+    const res = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'm1-junk', password: 'password123', display_name: 'Junk', role: 'adimn ' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/role/i);
+    const list = await request(app).get('/api/mycelium/studio/users').set(adminKeyAuth);
+    expect(list.body.find((u) => u.username === 'm1-junk')).toBeUndefined();
+  });
+
+  it('refuses a junk role on PUT', async () => {
+    const user = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'm1-junk-put', password: 'password123', display_name: 'Junk Put' });
+    const res = await request(app).put('/api/mycelium/studio/users/' + user.body.id)
+      .set(adminKeyAuth).send({ role: 'superadmin' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/role/i);
+  });
+
+  it('accepts each whitelisted role on POST (operator | agent | admin — admin still key-gated above)', async () => {
+    const agent = await request(app).post('/api/mycelium/studio/users').set(adminKeyAuth)
+      .send({ username: 'm1-agent-role', password: 'password123', display_name: 'Agent Role', role: 'agent' });
+    expect(agent.status).toBe(200);
+    expect(agent.body.role).toBe('agent');
+  });
+});
+
+describe('B2 /auto-memory/facts/:id/supersede + /reverify honor fact ownership', () => {
+  it("refuses another agent's reverify of A's fact (reviewer probe C9a: was 200, stamped verified_at)", async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'lucy owns this fact and its verification trail' });
+    expect(a.status).toBe(200);
+
+    const res = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/reverify')
+      .set(agentAuth(AGENT_B_KEY)).send({});
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/lucy-tl250/);
+
+    const after = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id).set(agentAuth(AGENT_A_KEY));
+    expect(after.status).toBe(200);
+    expect(after.body.verified_at).toBeNull(); // the stamp never happened
+  });
+
+  it("refuses another agent's supersede of A's fact (reviewer probe C9b: was 200, closed A's interval)", async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'lucy wrote this fact; its validity is hers to close' });
+    const b = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_B_KEY))
+      .send({ fact_text: 'echo wrote the replacement fact' });
+
+    const res = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/supersede')
+      .set(agentAuth(AGENT_B_KEY)).send({ new_id: b.body.id });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/lucy-tl250/);
+
+    const after = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id).set(agentAuth(AGENT_A_KEY));
+    expect(after.body.superseded_by).toBeNull(); // A's interval is still open
+    expect(after.body.valid_to).toBeNull();
+  });
+
+  it('the owner still reverifies and supersedes its own fact', async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'an owner-managed fact pair lives here' });
+    const a2 = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'the owner wrote the replacement fact too' });
+
+    const rv = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/reverify')
+      .set(agentAuth(AGENT_A_KEY)).send({});
+    expect(rv.status).toBe(200);
+    expect(rv.body.fact.verified_at).toBeTruthy();
+
+    const sup = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/supersede')
+      .set(agentAuth(AGENT_A_KEY)).send({ new_id: a2.body.id });
+    expect(sup.status).toBe(200);
+    expect(sup.body.ok).toBe(true);
+  });
+
+  it('the admin key keeps cross-agent supersede/reverify (bench + harness compat)', async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'an agent fact the admin corrects on purpose' });
+    const b = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_B_KEY))
+      .send({ fact_text: 'the replacement fact from another seat' });
+
+    const rv = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/reverify')
+      .set(adminKeyAuth).send({});
+    expect(rv.status).toBe(200);
+
+    const sup = await request(app).post('/api/mycelium/auto-memory/facts/' + a.body.id + '/supersede')
+      .set(adminKeyAuth).send({ new_id: b.body.id });
+    expect(sup.status).toBe(200);
+    expect(sup.body.ok).toBe(true);
+  });
+
+  it('owner-unknown facts (agent_id NULL, e.g. the internal consolidator) are admin-mutable — fail-closed', async () => {
+    const nullRow = db.getDB().prepare(
+      "INSERT INTO am_facts (agent_id, fact_text) VALUES (NULL, 'a consolidation insight with no owning agent')"
+    ).run();
+    const id = nullRow.lastInsertRowid;
+    const other = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_B_KEY))
+      .send({ fact_text: 'echo wrote the would-be replacement row' });
+
+    const rv = await request(app).post('/api/mycelium/auto-memory/facts/' + id + '/reverify')
+      .set(agentAuth(AGENT_B_KEY)).send({});
+    expect(rv.status).toBe(403);
+    expect(rv.body.error).toMatch(/admin key|owner-unknown/i);
+
+    const sup = await request(app).post('/api/mycelium/auto-memory/facts/' + id + '/supersede')
+      .set(agentAuth(AGENT_B_KEY)).send({ new_id: other.body.id });
+    expect(sup.status).toBe(403);
+
+    const adminSup = await request(app).post('/api/mycelium/auto-memory/facts/' + id + '/supersede')
+      .set(adminKeyAuth).send({ new_id: other.body.id });
+    expect(adminSup.status).toBe(200);
+  });
+});
+
+describe('S1 (review-A sweep) PUT /memory/embeddings is not a cross-agent vector write', () => {
+  const VEC = [0.1, 0.2, 0.3];
+
+  it('refuses an agent key storing a vector over a row it did not write (was 200 — fail-open no-claim path)', async () => {
+    await request(app).post('/api/mycelium/memory/index').set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 's1-foreign-row', content_text: 'lucy wrote this row' });
+    const res = await request(app).put('/api/mycelium/memory/embeddings/note/s1-foreign-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'poison-vec', chunk_index: 0 });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/claim|owner|admin key/i);
+    const row = db.getDB().prepare(
+      "SELECT embedding FROM sm_embeddings WHERE source_type = 'note' AND source_id = 's1-foreign-row' AND chunk_index = 0"
+    ).get();
+    expect(row.embedding).toBeNull(); // the vector never landed
+  });
+
+  it('allows an agent key to embed its OWN row', async () => {
+    await request(app).post('/api/mycelium/memory/index').set(agentAuth(AGENT_B_KEY))
+      .send({ source_type: 'note', source_id: 's1-own-row', content_text: 'echo wrote this row' });
+    const res = await request(app).put('/api/mycelium/memory/embeddings/note/s1-own-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'own-vec', chunk_index: 0 });
+    expect(res.status).toBe(200);
+  });
+
+  it('still allows the drone holding the claimed embed job for the row', async () => {
+    await request(app).post('/api/mycelium/memory/index').set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 's1-claimed-row', content_text: 'lucy wrote this row too' });
+    db.getDB().prepare(
+      "INSERT INTO drone_jobs (title, input_data, requires, requester, job_type, status, drone_id) VALUES (?, ?, ?, ?, 'embed', 'claimed', ?)"
+    ).run(
+      'Embed: note:s1-claimed-row',
+      JSON.stringify({ source_type: 'note', source_id: 's1-claimed-row', chunk_index: 0 }),
+      JSON.stringify(['ollama']), 'semantic-memory', 'echo-tl250'
+    );
+    const res = await request(app).put('/api/mycelium/memory/embeddings/note/s1-claimed-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'drone-vec', chunk_index: 0 });
+    expect(res.status).toBe(200);
+  });
+
+  it('owner-unknown rows (written_by NULL) stay admin-only, and the admin keeps the bypass', async () => {
+    db.getDB().prepare(
+      "INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text) VALUES ('note', 's1-legacy-row', 0, 'written before authority')"
+    ).run();
+    const refused = await request(app).put('/api/mycelium/memory/embeddings/note/s1-legacy-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'agent-vec', chunk_index: 0 });
+    expect(refused.status).toBe(403);
+
+    const admin = await request(app).put('/api/mycelium/memory/embeddings/note/s1-legacy-row')
+      .set(adminKeyAuth).send({ embedding: VEC, model: 'admin-vec', chunk_index: 0 });
+    expect(admin.status).toBe(200);
+  });
+});
+
+describe('N1 (review-A nit) GET /auto-memory/facts/:id is scoped like the list', () => {
+  it('refuses another agent’s fact by id — the list would not have shown it (was 200)', async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'lucy wrote this fact for her own recall' });
+    const res = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id)
+      .set(agentAuth(AGENT_B_KEY));
+    expect(res.status).toBe(404); // scoped like the list: another agent's fact is "not there"
+  });
+
+  it('the owner and the admin still read it', async () => {
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth(AGENT_A_KEY))
+      .send({ fact_text: 'a readable-by-owner-and-admin fact' });
+    const owner = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id).set(agentAuth(AGENT_A_KEY));
+    expect(owner.status).toBe(200);
+    const admin = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id).set(adminKeyAuth);
+    expect(admin.status).toBe(200);
+  });
+});

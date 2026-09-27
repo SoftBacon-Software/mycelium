@@ -412,7 +412,10 @@ export default function (core) {
 
   // DELETE /memory/index/:sourceType/:sourceId — remove from index
   // TRUST LAYER P0.2: an agent key deletes only the rows it wrote.
-  router.delete('/index/:sourceType/:sourceId', function (req, res) {
+  // Rate-limited (review A MINOR M2): post-custody the blast radius is the
+  // caller's own rows, so this is a flood/noise path — the same 120/min floor
+  // as its purge sibling, not a data path.
+  router.delete('/index/:sourceType/:sourceId', rateLimited('memory/index-delete', { windowMs: 60000, max: 120 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
@@ -1214,11 +1217,30 @@ export default function (core) {
         "AND json_extract(input_data, '$.source_id') = ? " +
         "AND CAST(json_extract(input_data, '$.chunk_index') AS INTEGER) = ? LIMIT 1"
       ).get(sourceType, String(sourceId), chunkIndex);
-      if (!row) return true;            // no claim for this source → linkage N/A → allow
+      // TRUST LAYER P0.2 (F-mycelium/250, review-A sweep S1): both fallbacks
+      // used to return TRUE — no claimed job, or no drone_jobs table, meant
+      // "allow", which made the claim linkage decorative: absent a live claim,
+      // ANY agent key could store a vector over ANY row. A linkage that cannot
+      // answer does not authorize (fail-closed); the row-OWNER path in the
+      // route (rowOwnedByCaller) still answers for the caller's own rows.
+      if (!row) return false;           // no claim for this source → the linkage does not authorize this write
       return row.drone_id === droneId;  // scoped: only the owning drone
     } catch (e) {
-      return true;                       // drone_jobs unavailable → graceful allow
+      return false;                      // drone_jobs unavailable → fail-closed; the owner path is unaffected
     }
+  }
+
+  // TRUST LAYER P0.2 (review-A sweep S1): the OTHER leg of the vector-write
+  // gate — does the caller own every chunk of this row? Same rule as
+  // refuseNotRowOwner: written_by must be present and equal on every chunk;
+  // NULL is owner-UNKNOWN and never agent-mutable.
+  function rowOwnedByCaller(sourceType, sourceId, who) {
+    var chunks = db.getDocChunks(sourceType, sourceId);
+    if (chunks.length === 0) return false; // nothing stored — nothing to own
+    for (var i = 0; i < chunks.length; i++) {
+      if (!chunks[i].written_by || chunks[i].written_by !== who) return false;
+    }
+    return true;
   }
 
   // PUT /memory/embeddings/:sourceType/:sourceId — drone callback to store embedding.
@@ -1235,8 +1257,18 @@ export default function (core) {
     var { embedding, model, chunk_index } = req.body;
     if (!embedding || !Array.isArray(embedding)) return apiError(res, 400, 'embedding array is required');
     var chunkIndex = chunk_index || 0;
-    if (!req._authIsAdmin && !droneOwnsEmbedJob(core.db, who, sourceType, sourceId, chunkIndex)) {
-      return apiError(res, 403, 'not authorized to write this embedding');
+    // TRUST LAYER P0.2 (F-mycelium/250, review-A sweep S1): the vector is part
+    // of the row — an embedding write is a WRITE AUTHORITY event. A non-admin
+    // caller stores a vector only on a row it wrote (rowOwnedByCaller) or
+    // while holding the CLAIMED embed job for that exact row (the drone
+    // callback). The old default — no claimed job → allow — handed every agent
+    // key a vector write over every row in the index: poison the ranking
+    // without ever touching the text. Owner-unknown rows (written_by NULL)
+    // stay admin-only, fail-closed like refuseNotRowOwner.
+    if (!req._authIsAdmin && !droneOwnsEmbedJob(core.db, who, sourceType, sourceId, chunkIndex) &&
+        !rowOwnedByCaller(sourceType, sourceId, who)) {
+      return apiError(res, 403, "'" + sourceType + ':' + sourceId +
+        "' is not the caller's row and no claimed embed job names it — an agent key may store a vector only on a row it wrote or while holding the claimed embed job; ask the owner or use the admin key");
     }
     db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
     res.json({ ok: true, source_type: sourceType, source_id: sourceId });

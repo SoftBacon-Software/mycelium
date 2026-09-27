@@ -170,4 +170,12 @@ describe('P0.2 the six memory routes answer 429 one past their ceiling', () => {
     expectCeiling('auto-memory/extract', 120, (base) => () =>
       request(base).post('/api/mycelium/auto-memory/extract').set(agent)
         .send({ text: 'extract probe activity text for the limiter' })), 60000);
+
+  // Review A MINOR M2: the single-row delete rode no limiter at all — the
+  // program's "rate limits on … DELETE" letter was satisfied by the admin
+  // purge alone. Post-custody its blast radius is the caller's own rows, so
+  // this is a flood/noise path — the same 120/min floor as its purge sibling.
+  it('DELETE /memory/index/:type/:id holds 120/min (single-row delete)',
+    expectCeiling('memory/index-delete', 120, (base) => (i) =>
+      request(base).delete('/api/mycelium/memory/index/rl-del-probe/no-such-row-' + i).set(agent)), 60000);
 });
