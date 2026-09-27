@@ -102,7 +102,10 @@ function expectCeiling(name, max, makeRequests) {
         if (r.status === 429) saw = r;
       }
       expect(saw, 'no 429 within five requests past the ceiling').toBeTruthy();
-      expect(saw.body.error).toMatch(new RegExp(name.replace(/[/*]/g, '\\$&')));
+      // Review B item 9 / CodeQL js/incomplete-sanitization: build the
+      // assertion as a plain substring match instead of a RegExp from an
+      // incompletely-escaped route name — same strictness, no meta-characters.
+      expect(saw.body.error).toContain('Too many requests (' + name + ')');
     } finally {
       server.close();
     }

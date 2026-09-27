@@ -77,7 +77,9 @@ beforeAll(async () => {
 
   const routes = (await import('../../server/routes/mycelium.js')).default;
   app = express();
-  app.use(express.json({ limit: '2mb' }));
+  // 16mb = production parity (server/index.js mounts /memory at 16mb) so the
+  // ROUTE-level content cap (review B item 9) is what an over-cap write hits.
+  app.use(express.json({ limit: '16mb' }));
   app.use('/api/mycelium', routes);
   const { initPlugins } = await import('../../server/routes/mycelium.js');
   await initPlugins(app); // mounts the REAL semantic-memory + auto-memory routers
@@ -1233,5 +1235,42 @@ describe('Review B item 4: the written_by backfill migration', () => {
       raw.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ====================== Review B items 7 + 9 (task 250d) ======================
+describe('Review B item 7: studio custody ids cannot collide with agent ids', () => {
+  it("a role-'agent' studio user's rows are written_by __user:<name>, never a bare agent-id-shaped name", async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set({ Authorization: 'Bearer ' + jwtFor('agent') })
+      .send({ source_type: 'note', source_id: 'b7-studio-row', content_text: 'studio custody namespace probe' });
+    expect(r.status).toBe(200);
+    const row = db.getDB().prepare("SELECT written_by FROM sm_embeddings WHERE source_type='note' AND source_id='b7-studio-row' AND chunk_index=0").get();
+    expect(row.written_by).toBe('__user:agent-user');
+  });
+});
+
+describe('Review B item 9: /memory/index content size cap', () => {
+  it('refuses an oversized content_text with 413 (was: 16 MB accepted)', async () => {
+    const big = 'x'.repeat(4000001);
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b9-big', content_text: big });
+    expect(r.status).toBe(413);
+    expect(String(r.body.error)).toContain('4000000-character cap');
+  });
+
+  it('accepts a doc just under the cap and bulk items are capped per item', async () => {
+    const ok = 'x'.repeat(4000000);
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b9-ok', content_text: ok });
+    expect(r.status).toBe(200);
+
+    const bulk = await request(app).post('/api/mycelium/memory/index/bulk')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ items: [{ source_type: 'note', source_id: 'b9-bulk-big', content_text: 'x'.repeat(4000001) }] });
+    expect(bulk.status).toBe(413);
+    expect(String(bulk.body.error)).toContain('items[0]');
   });
 });

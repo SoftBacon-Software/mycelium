@@ -106,6 +106,14 @@ function chip(txt, hue, extra) {
 
 // ---------------------------------------------------------------- fetch layer
 
+// Trust layer P0 (review B item 8): operator logins are REFUSED on the agent
+// memory surface — render the refusal plainly instead of a bare status code
+// or a terse server sentence.
+function refusalNote(r) {
+  if (r.status !== 403) return null;
+  return 'refused (403) — this login is not an agent on the memory surface; the console reads agent memory with an admin-role account, and writes take an agent key';
+}
+
 async function api(path, opts) {
   opts = opts || {};
   const headers = Object.assign({}, JSON_HEADERS, opts.headers || {});
@@ -729,7 +737,7 @@ async function refreshLessons() {
     S.lessonsAt = Date.now();
     S.lessonsErr = null;
   } else {
-    S.lessonsErr = r.error || ('http ' + r.status);
+    S.lessonsErr = refusalNote(r) || r.error || ('http ' + r.status);
   }
   renderMemory();
   updateBadges();
@@ -782,7 +790,7 @@ async function doRecall() {
   M.go.disabled = false;
   M.go.textContent = 'RECALL';
   if (!r.ok) {
-    S.recall = null; S.recallErr = r.error;
+    S.recall = null; S.recallErr = refusalNote(r) || r.error;
     clear(M.results);
     errNote();
     return;

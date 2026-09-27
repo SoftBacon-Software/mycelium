@@ -314,6 +314,22 @@ export default function (core) {
   // discovered at loop time.
   var MAX_CHUNKS_PER_DOC = 8389;
 
+  // TRUST LAYER P0 (review B item 9): a content size cap on the index surface
+  // — the 16 MB body parser alone let a single 200 KB write stand unrefused,
+  // and the chunk-count bound stops counting rows only where chunk_size is
+  // small. 4,000,000 chars is 1000 default chunks (~1000x the largest real
+  // memory doc): every legitimate write fits; abuse does not.
+  var MAX_CONTENT_CHARS = 4000000;
+
+  function refuseOversizedContent(contentText, res, label) {
+    var len = String(contentText).length;
+    if (len <= MAX_CONTENT_CHARS) return false;
+    apiError(res, 413, (label ? label + ': ' : '') + 'content_text exceeds the ' + MAX_CONTENT_CHARS +
+      '-character cap (got ' + len + ') — split the doc');
+    return true;
+  }
+
+
   // TRUST LAYER P0 (review B item 2 — custody squatting): the source types the
   // SERVER itself writes into sm_embeddings, enumerated from every INSERT site
   // on the branch: memory + am_fact (auto-memory fact indexing), message /
@@ -345,6 +361,7 @@ export default function (core) {
     if (!source_type || !source_id || !content_text) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
+    if (refuseOversizedContent(content_text, res)) return;
     if (refuseCompanionScoped(source_type, namespace, res)) return;
     if (refuseServerOwnedSource(source_type, req._authIsAdmin, res)) return;
     if (refuseAgentDirective(metadata, req._authIsAdmin, res)) return;
@@ -409,6 +426,7 @@ export default function (core) {
       if (!item.source_type || !item.source_id || !item.content_text) {
         return apiError(res, 400, 'Each item needs source_type, source_id, and content_text');
       }
+      if (refuseOversizedContent(item.content_text, res, 'items[' + i + ']')) return;
       if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
       if (refuseServerOwnedSource(item.source_type, req._authIsAdmin, res, 'items[' + i + ']')) return;
       if (refuseAgentDirective(item.metadata, req._authIsAdmin, res, 'items[' + i + ']')) return;

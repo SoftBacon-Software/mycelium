@@ -52,6 +52,10 @@ function makeCore(db) {
 async function boot() {
   const db = new Database(':memory:');
   db.exec(smSchema);
+  // review B item 9 added MAX_CONTENT_CHARS (4M chars) alongside the chunk-count
+  // bound — pin chunk_size at 400 so BOTH bounds stay exercisable in one fixture
+  // (8389 chunks x 400 = 3.36M chars is under the char cap; x 4000 would exceed it).
+  db.prepare("INSERT INTO sm_config (key, value) VALUES ('chunk_size', '400')").run();
   const app = express();
   // 64mb: upstream production caps /memory at 16mb; the test app widens the
   // parser so the ROUTE-level bound is what the over-bound leg exercises.
@@ -67,10 +71,10 @@ afterEach(async function () {
   app = undefined;
 });
 
-// chunkText hard-splits newline-free text at exactly 4000 chars, so n chunks
-// need 4000*(n-1)+1 chars.
+// chunkText hard-splits newline-free text at the CONFIGURED chunk_size (the
+// fixture pins 400 — see boot), so n chunks need 400*(n-1)+1 chars.
 const MAX = 8389;
-const lenForChunks = (n) => 4000 * (n - 1) + 1;
+const lenForChunks = (n) => 400 * (n - 1) + 1;
 
 describe('semantic-memory chunk-count bound (task 240 #279)', () => {
   it('refuses MAX+1 chunks with 413 naming content_text, writing nothing', async function () {

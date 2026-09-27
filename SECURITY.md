@@ -102,6 +102,32 @@ carry explicit rules:
   and claim-time `capabilities` are routing/telemetry data; no security
   gate reads them as entitlement.
 
+### CORS and no-origin requests (trust layer P0)
+
+The CORS layer (`ALLOWED_ORIGINS` in `server/index.js`) decides which
+**web origins** may call the API with credentials (`credentials: true`) —
+the dashboard and the dev servers on the allowlist, nothing else.
+
+Requests with **no `Origin` header are allowed through CORS by design**, and
+that is the correct rule, not a gap:
+
+- A browser **always** attaches `Origin` to cross-origin requests; a request
+  without one is by definition not a browser request. There is no
+  browser-side way to suppress the header, so the no-origin branch can never
+  be reached by a hostile page.
+- The lanes that legitimately send no origin are the **non-browser
+  callers**: the Agent SDK (`sdk/`), the MCP server (`mcp/`), lane health
+  and recall `curl` loops, and server-to-server federation. Every one of
+  them authenticates **explicitly on every request** (agent key, admin key,
+  or bearer token) — no-origin callers cannot ride a browser session,
+  because they have no browser session to ride.
+- Authorization is therefore enforced by the auth layer, not CORS: on the
+  agent memory surface a studio JWT is refused unless its role grants it
+  (see the trust model above), an agent key is a mutually untrusting peer,
+  and row custody is checked per write. CORS only decides whether a browser
+  origin may *speak*; the auth layer decides *who* is speaking and *what*
+  they may touch.
+
 ## Out of Scope
 
 The following are not considered security issues against Mycelium:

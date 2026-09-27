@@ -43,7 +43,11 @@ export function memoryAgentGuard(auth) {
         return null;
       }
       req._authIsAdmin = user.role === 'admin';
-      return user.displayName || user.username;
+      // TRUST LAYER P0 (review B item 7): studio custody lives in a NAMESPACE
+      // of its own — a bare displayName could equal a real agent id and either
+      // impersonate it (a row the studio user then owns by name) or inherit a
+      // squatter. The __user: prefix makes a collision impossible.
+      return '__user:' + (user.displayName || user.username);
     }
     // No studio token: the regular chain — admin key, then agent key.
     return auth.checkAgentOrAdmin(req, res);
