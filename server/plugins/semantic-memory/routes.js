@@ -234,7 +234,29 @@ export default function (core) {
       if (bound.agent && bound.agent !== who) bound.claimed_actor = bound.agent;
       bound.agent = who;
     }
+    // TRUST LAYER P0 (review B item 3): the binding holds for EVERY source
+    // type — an identity claim on a 'note' is as untrusted as on a lesson.
+    // Each identity field the body asserts is bound to the AUTHENTICATED
+    // caller; a disagreeing value survives only as claimed_*. Fields the
+    // body omits stay omitted (no shape change for clean writes).
+    if (bound.actor && bound.actor !== who) bound.claimed_actor = bound.actor;
+    if (bound.actor) bound.actor = who;
+    if (bound.agent && bound.agent !== who) bound.claimed_actor = bound.agent;
+    if (bound.agent) bound.agent = who;
+    if (bound.agent_id && bound.agent_id !== who) bound.claimed_agent_id = bound.agent_id;
+    if (bound.agent_id) bound.agent_id = who;
     return bound;
+  }
+
+  // TRUST LAYER P0 (review B item 3): 'directive' provenance is decay-exempt —
+  // the DIRECTOR's channel, reached through the admin key only. The /facts
+  // route already gates its authority field; this closes the metadata path on
+  // the index surface (metadata.source_authority is stored verbatim, so an
+  // agent key writing it would mint decay-exempt rows by hand).
+  function refuseAgentDirective(metadata, isAdmin, res, label) {
+    if (isAdmin || !metadata || typeof metadata !== 'object' || metadata.source_authority !== 'directive') return false;
+    apiError(res, 403, (label ? label + ': ' : '') + "source_authority 'directive' is reserved for the admin key — an agent key's provenance is verified or inferred, never directives");
+    return true;
   }
 
   // TRUST LAYER P0.2 (F-mycelium/250): WRITE AUTHORITY. An agent key may
@@ -325,6 +347,7 @@ export default function (core) {
     }
     if (refuseCompanionScoped(source_type, namespace, res)) return;
     if (refuseServerOwnedSource(source_type, req._authIsAdmin, res)) return;
+    if (refuseAgentDirective(metadata, req._authIsAdmin, res)) return;
     if (refuseIfUnprovenanced(source_type, metadata, res)) return;
     // TRUST LAYER P0.2: bind the provenance identity, then the write authority,
     // BEFORE any write — a body actor never survives an agent-key write, and
@@ -388,6 +411,7 @@ export default function (core) {
       }
       if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
       if (refuseServerOwnedSource(item.source_type, req._authIsAdmin, res, 'items[' + i + ']')) return;
+      if (refuseAgentDirective(item.metadata, req._authIsAdmin, res, 'items[' + i + ']')) return;
       if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
       // TRUST LAYER P0.2: the same identity binding + write authority as the
       // single route — a bulk request is not a way around either.

@@ -1001,3 +1001,78 @@ describe('Review B item 2: server-owned source types cannot be squatted', () => 
     expect(row.content_text).toBe('tl250 eviction probe');
   });
 });
+
+// ====================== Review B item 3 (task 250d) ======================
+// directive / identity binding on EVERY source type (was: lesson/verdict/
+// episode only — a 'note' or 'memory' row stored a self-asserted agent_id
+// and even source_authority 'directive' verbatim).
+describe('Review B item 3: identity binding + directive gate on every source type', () => {
+  it('binds metadata.agent_id to the caller on a plain note (mismatch kept as claimed_agent_id)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b3-agent-id', content_text: 'binding probe note', metadata: { agent_id: 'kira' } });
+    expect(r.status).toBe(200);
+    const row = db.getDB().prepare("SELECT metadata, written_by FROM sm_embeddings WHERE source_type='note' AND source_id='b3-agent-id' AND chunk_index=0").get();
+    const meta = JSON.parse(row.metadata);
+    expect(meta.agent_id).toBe('lucy-tl250'); // the AUTHENTICATED identity
+    expect(meta.claimed_agent_id).toBe('kira'); // the claim, flagged, never trusted
+    expect(row.written_by).toBe('lucy-tl250');
+  });
+
+  it('binds actor on a plain note (mismatch kept as claimed_actor)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b3-actor', content_text: 'actor binding probe', metadata: { actor: 'kira' } });
+    expect(r.status).toBe(200);
+    const row = db.getDB().prepare("SELECT metadata FROM sm_embeddings WHERE source_type='note' AND source_id='b3-actor' AND chunk_index=0").get();
+    const meta = JSON.parse(row.metadata);
+    expect(meta.actor).toBe('lucy-tl250');
+    expect(meta.claimed_actor).toBe('kira');
+  });
+
+  it('binds agent on a plain note (mismatch kept as claimed_actor)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b3-agent', content_text: 'agent binding probe', metadata: { agent: 'echo-tl250' } });
+    expect(r.status).toBe(200);
+    const row = db.getDB().prepare("SELECT metadata FROM sm_embeddings WHERE source_type='note' AND source_id='b3-agent' AND chunk_index=0").get();
+    const meta = JSON.parse(row.metadata);
+    expect(meta.agent).toBe('lucy-tl250');
+    expect(meta.claimed_actor).toBe('echo-tl250');
+  });
+
+  it('an agreeing agent_id stays clean (no claim field)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b3-agree', content_text: 'agreeing identity probe', metadata: { agent_id: 'lucy-tl250' } });
+    expect(r.status).toBe(200);
+    const meta = JSON.parse(db.getDB().prepare("SELECT metadata FROM sm_embeddings WHERE source_type='note' AND source_id='b3-agree' AND chunk_index=0").get().metadata);
+    expect(meta.agent_id).toBe('lucy-tl250');
+    expect(meta.claimed_agent_id).toBeUndefined();
+  });
+
+  it("agent key cannot write source_authority 'directive' via /memory/index (403)", async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ source_type: 'note', source_id: 'b3-directive', content_text: 'directive claim', metadata: { source_authority: 'directive' } });
+    expect(r.status).toBe(403);
+    expect(String(r.body.error)).toContain('directive');
+  });
+
+  it("agent key cannot write source_authority 'directive' via /index/bulk either (403, item named)", async () => {
+    const r = await request(app).post('/api/mycelium/memory/index/bulk')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ items: [{ source_type: 'note', source_id: 'b3-bulk-directive', content_text: 'bulk directive claim', metadata: { source_authority: 'directive' } }] });
+    expect(r.status).toBe(403);
+    expect(String(r.body.error)).toContain('items[0]');
+  });
+
+  it('admin key still writes directive provenance (operator control)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(adminKeyAuth)
+      .send({ source_type: 'note', source_id: 'b3-admin-directive', content_text: 'admin directive control', metadata: { source_authority: 'directive', agent_id: 'kira' } });
+    expect(r.status).toBe(200);
+    const row = db.getDB().prepare("SELECT metadata FROM sm_embeddings WHERE source_type='note' AND source_id='b3-admin-directive' AND chunk_index=0").get();
+    expect(JSON.parse(row.metadata).source_authority).toBe('directive'); // stored as written
+  });
+});
