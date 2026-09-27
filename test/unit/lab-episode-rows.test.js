@@ -172,7 +172,11 @@ describe('episode read side (218) — recall by meaning, enumeration by day', ()
     const hit = res.body.results.find((r) => r.source_id === 'episode:3f7a1c9b2d');
     expect(hit).toBeTruthy();
     expect(hit.metadata.session_date).toBe('2026-09-15');
-    expect(hit.metadata.agent).toBe('kira');
+    // P0.2 identity binding (F-mycelium/250): the stored agent is the
+    // AUTHENTICATED caller; the body's claim survives as claimed_actor,
+    // flagged, never trusted.
+    expect(hit.metadata.agent).toBe('tester-agent');
+    expect(hit.metadata.claimed_actor).toBe('kira');
   });
 
   it('GET /memory/episodes?agent=&session_date= enumerates one agent-day, newest first', async () => {
@@ -185,14 +189,18 @@ describe('episode read side (218) — recall by meaning, enumeration by day', ()
       episodeRow({ source_id: 'episode:a3', content_text: 'another kira day row about the seat hold gate' })
     );
 
+    // All three rows were posted by the same authenticated agent
+    // (tester-agent) claiming kira/lucy — so the stored agent-day that
+    // exists is tester-agent/2026-09-15 (a1 + a3; a2 is a different day).
     const res = await request(app)
       .get('/memory/episodes')
-      .query({ agent: 'kira', session_date: '2026-09-15' });
+      .query({ agent: 'tester-agent', session_date: '2026-09-15' });
     expect(res.status).toBe(200);
     expect(res.body.source_type).toBe('episode');
     expect(res.body.count).toBe(2);
     for (const r of res.body.results) {
-      expect(r.metadata.agent).toBe('kira');
+      expect(r.metadata.agent).toBe('tester-agent');
+      expect(r.metadata.claimed_actor).toBe('kira');
       expect(r.metadata.session_date).toBe('2026-09-15');
       expect(r.metadata.session_id).toBeTruthy();
     }
@@ -231,7 +239,8 @@ describe('episode read side (218) — recall by meaning, enumeration by day', ()
     expect(idx.status).toBe(200);
     expect(idx.body.chunks).toBeGreaterThan(1); // it really is chunked
 
-    const res = await request(app).get('/memory/episodes').query({ agent: 'kira' });
+    // P0.2: the row stores the authenticated agent; the kira claim is flagged.
+    const res = await request(app).get('/memory/episodes').query({ agent: 'tester-agent' });
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(1);
     const row = res.body.results[0];

@@ -6,12 +6,18 @@ import createMemoryDB from './db.js';
 import { chunkText } from './chunking.js';
 import companionView from './companion-view.js';
 import { rateLimited } from '../../lib/rate-limit.js';
+import { memoryAgentGuard } from '../../lib/memory-auth.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
 export default function (core) {
   var router = Router();
   var db = createMemoryDB(core.db);
-  var { checkAgentOrAdmin, checkAdmin, getAdminDisplayName } = core.auth;
+  var { checkAdmin, getAdminDisplayName } = core.auth;
+  // TRUST LAYER P0.1 (F-mycelium/250): the agent routes' gate — an agent key,
+  // the admin key/JWT, or a role-'agent' studio token; any OTHER studio JWT is
+  // refused. checkAgentOrAdmin (any studio JWT authenticates) is exactly the
+  // hole the 09-26 audit named, so the agent surface no longer rides it.
+  var checkMemoryAgent = memoryAgentGuard(core.auth);
   // asyncHandler comes from core now (routes/mycelium.js exports it on
   // pluginCore), retiring the private copy this file used to ship. The loader's
   // guardPluginRouter also wraps every plugin handler at mount time, so an
@@ -45,8 +51,8 @@ export default function (core) {
   // names that source_type in `source_types` or that namespace in `namespace`.
   // Enforced in the query layer (db.js searchKeyword/searchVector) so `limit`
   // is spent on visible rows; to recall a benchmark's own writes, name them.
-  router.post('/search', asyncHandler(async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+  router.post('/search', rateLimited('memory/search', { windowMs: 60000, max: 1200 }), asyncHandler(async function (req, res) {
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var { query, source_types, namespace, project_id, limit, mode } = req.body;
     if (!query || typeof query !== 'string') return apiError(res, 400, 'query is required');
@@ -210,6 +216,53 @@ export default function (core) {
     return (typeof v === 'string' && v.trim().length > 0) ? v.trim() : null;
   }
 
+  // TRUST LAYER P0.2 (F-mycelium/250): provenance identity binding. The §186
+  // gate demands actor/learned_at/evidence — but until now the ACTOR was
+  // whatever the body claimed, so any writer could sign a lesson as anyone.
+  // The authenticated identity now owns the field: a non-admin caller's actor
+  // (lesson/verdict) or agent (episode) IS `who`; a disagreeing body value is
+  // kept as claimed_actor — visible, flagged, never trusted. Admin (the
+  // harness writers, the bench arms) keeps writing on behalf of a named actor.
+  function bindProvenanceIdentity(sourceType, metadata, who, isAdmin) {
+    if (isAdmin || !metadata || typeof metadata !== 'object') return metadata;
+    var bound = Object.assign({}, metadata);
+    if (db.LESSON_SOURCE_TYPES[sourceType]) {
+      if (bound.actor && bound.actor !== who) bound.claimed_actor = bound.actor;
+      bound.actor = who;
+    }
+    if (db.EPISODE_SOURCE_TYPES[sourceType]) {
+      if (bound.agent && bound.agent !== who) bound.claimed_actor = bound.agent;
+      bound.agent = who;
+    }
+    return bound;
+  }
+
+  // TRUST LAYER P0.2 (F-mycelium/250): WRITE AUTHORITY. An agent key may
+  // overwrite or delete only rows IT wrote — the owner is the written_by
+  // column, stamped from the authenticated identity at every write. NULL
+  // means the row predates the column or came from an internal writer:
+  // owner-UNKNOWN, and only the admin key may mutate it (fail-closed — an
+  // accidental NULL can only make a row MORE protected, never less).
+  // Returns true when the request was refused (response already sent).
+  function refuseNotRowOwner(res, sourceType, sourceId, who, isAdmin, action) {
+    if (isAdmin) return false;
+    var chunks = db.getDocChunks(sourceType, sourceId);
+    if (chunks.length === 0) return false; // nothing stored yet — a first write
+    for (var i = 0; i < chunks.length; i++) {
+      if (!chunks[i].written_by) {
+        apiError(res, 403, (action ? action + ' refused: ' : '') + "'" + sourceType + ':' + sourceId +
+          "' has no recorded owner (written before write authority existed) — only the admin key may overwrite or delete it");
+        return true;
+      }
+      if (chunks[i].written_by !== who) {
+        apiError(res, 403, (action ? action + ' refused: ' : '') + "'" + sourceType + ':' + sourceId +
+          "' is owned by '" + chunks[i].written_by + "' — an agent key may overwrite or delete only the rows it wrote; ask the owner or use the admin key");
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Embed only what lacks a vector (task 227): the row-state check, not the
   // caller's churn, decides. An unchanged doc keeps its stored embedding, so
   // a half-hourly re-post costs the embedder nothing — the same churn the
@@ -239,8 +292,10 @@ export default function (core) {
   // discovered at loop time.
   var MAX_CHUNKS_PER_DOC = 8389;
 
-  router.post('/index', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+  // Rate-limited (TRUST LAYER P0.2): recall fires per agent turn — 1200/min
+  // per IP is ≥10x any observed lane cadence (route_usage, jetson01).
+  router.post('/index', rateLimited('memory/index', { windowMs: 60000, max: 1200 }), function (req, res) {
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var { source_type, source_id, content_text, namespace, metadata, chunk_index } = req.body;
     if (!source_type || !source_id || !content_text) {
@@ -248,13 +303,19 @@ export default function (core) {
     }
     if (refuseCompanionScoped(source_type, namespace, res)) return;
     if (refuseIfUnprovenanced(source_type, metadata, res)) return;
+    // TRUST LAYER P0.2: bind the provenance identity, then the write authority,
+    // BEFORE any write — a body actor never survives an agent-key write, and
+    // another agent's row is not this caller's to overwrite.
+    metadata = bindProvenanceIdentity(source_type, metadata, who, req._authIsAdmin);
+    if (refuseNotRowOwner(res, source_type, source_id, who, req._authIsAdmin)) return;
     var chunkCount = 1;
     if (chunk_index) {
       // Explicit chunk_index = caller-managed chunking — store the row as-is
       db.index(source_type, source_id, content_text, {
         namespace: namespace,
         chunk_index: chunk_index,
-        metadata: metadata
+        metadata: metadata,
+        written_by: who
       });
       autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
@@ -270,7 +331,8 @@ export default function (core) {
       // chunks from a previous (larger) version of the doc are removed
       var chunks = db.indexDoc(source_type, source_id, content_text, {
         namespace: namespace,
-        metadata: metadata
+        metadata: metadata,
+        written_by: who
       });
       chunkCount = chunks.length;
       // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
@@ -286,8 +348,10 @@ export default function (core) {
   });
 
   // POST /memory/index/bulk — bulk index
-  router.post('/index/bulk', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+  // Rate-limited (TRUST LAYER P0.2): 100 items per call, so 120 calls/min is a
+  // 12k-row/min worst case per IP — the house floor with batch size factored.
+  router.post('/index/bulk', rateLimited('memory/index/bulk', { windowMs: 60000, max: 120 }), function (req, res) {
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var items = req.body.items;
     if (!Array.isArray(items) || items.length === 0) return apiError(res, 400, 'items array is required');
@@ -301,11 +365,15 @@ export default function (core) {
       }
       if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
       if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
+      // TRUST LAYER P0.2: the same identity binding + write authority as the
+      // single route — a bulk request is not a way around either.
+      item.metadata = bindProvenanceIdentity(item.source_type, item.metadata, who, req._authIsAdmin);
+      if (refuseNotRowOwner(res, item.source_type, item.source_id, who, req._authIsAdmin, 'items[' + i + ']')) return;
     }
 
     // bulkIndex is chunk-aware — oversized items split into chunk rows;
     // it returns the rows actually written so each one embeds separately.
-    var rows = db.bulkIndex(items);
+    var rows = db.bulkIndex(items, who);
 
     // Fire-and-forget embed for rows that didn't bring their own embedding —
     // EXCEPT unchanged rows (task 227): a byte-identical re-index kept its
@@ -343,10 +411,12 @@ export default function (core) {
   });
 
   // DELETE /memory/index/:sourceType/:sourceId — remove from index
+  // TRUST LAYER P0.2: an agent key deletes only the rows it wrote.
   router.delete('/index/:sourceType/:sourceId', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
+    if (refuseNotRowOwner(res, req.params.sourceType, req.params.sourceId, who, req._authIsAdmin, 'delete')) return;
     db.remove(req.params.sourceType, req.params.sourceId);
     res.json({ ok: true });
   });
@@ -363,7 +433,8 @@ export default function (core) {
   // Filter values must be non-empty strings: a malformed value 400s rather
   // than being silently dropped from the WHERE (that would purge by the
   // remaining filter and delete rows the caller never named).
-  router.delete('/index', function (req, res) {
+  // Rate-limited (TRUST LAYER P0.2): a cleanup, never a loop — the floor.
+  router.delete('/index', rateLimited('memory/purge', { windowMs: 60000, max: 120 }), function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
     function filterArg(v) {
@@ -726,7 +797,7 @@ export default function (core) {
   // retrieval by type, newest first. For always-on content the model must see
   // every turn (standing preferences), where query-ranked /search is wrong.
   router.get('/list', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var sourceType = req.query.source_type;
     if (!sourceType || typeof sourceType !== 'string') {
@@ -750,7 +821,7 @@ export default function (core) {
   // already reaches them; this route exists because "all of Tuesday" is a
   // filter, not a query.)
   router.get('/episodes', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var rows = db.listEpisodes({
       agent: nonEmptyQuery(req.query.agent),
@@ -777,7 +848,7 @@ export default function (core) {
   // ?include_superseded=1 reads them back with their supersede line and
   // provenance (history kept, never erased — the §3 rule).
   router.get('/lessons', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var filters = {
       task_class: nonEmptyQuery(req.query.task_class),
@@ -901,9 +972,12 @@ export default function (core) {
   router.post('/lessons/:id/supersede',
     rateLimited('memory/lessons-supersede', { windowMs: 60000, max: 120 }),
     async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var oldId = String(req.params.id || '');
+    // TRUST LAYER P0.2: a supersede rewrites BOTH rows — only the old row's
+    // owner (or the admin key) may start one.
+    if (refuseNotRowOwner(res, 'lesson', oldId, who, req._authIsAdmin, 'supersede')) return;
     var body = req.body || {};
     function str(v) { return typeof v === 'string' ? v.trim() : ''; }
     var reason = str(body.reason);
@@ -974,6 +1048,10 @@ export default function (core) {
         reason: reason,
         supersedes: oldId
       });
+      // TRUST LAYER P0.2: the correcting agent signs its own correction — a
+      // body actor that disagrees with the authenticated identity rides along
+      // as claimed_actor (the gate below still sees a present actor).
+      newMeta = bindProvenanceIdentity('lesson', newMeta, who, req._authIsAdmin);
       var missing = db.missingProvenanceFields(newMeta);
       if (missing.length > 0) {
         return apiError(res, 400, "supersede refused: source_type 'lesson' requires provenance metadata — missing: " + missing.join(', '));
@@ -994,7 +1072,8 @@ export default function (core) {
         if (byText) {
           var chunks = db.indexDoc('lesson', newId, newText, {
             namespace: oldRow.namespace || null,
-            metadata: newMeta
+            metadata: newMeta,
+            written_by: who
           });
           var stored = db.getDocChunks('lesson', newId);
           for (var ci = 0; ci < chunks.length; ci++) {
@@ -1021,7 +1100,11 @@ export default function (core) {
         });
         db.indexDoc('lesson', oldId, supersededContent, {
           namespace: oldRow.namespace || null,
-          metadata: reindexedMeta
+          metadata: reindexedMeta,
+          // TRUST LAYER P0.2: the flip keeps the row's ORIGINAL owner — an
+          // admin marking a lesson dead does not steal it; a pre-column row
+          // stays owner-unknown.
+          written_by: oldRow.written_by || null
         });
         // The death line is a DOC-level stamp, but chunking may strand it in
         // the last slice — every surviving chunk that lacks it gains it (still
@@ -1033,7 +1116,8 @@ export default function (core) {
             db.index('lesson', oldId, storedChunks[si].content_text + deathLine, {
               namespace: storedChunks[si].namespace,
               chunk_index: storedChunks[si].chunk_index,
-              metadata: reindexedMeta
+              metadata: reindexedMeta,
+              written_by: storedChunks[si].written_by || null
             });
           }
           autoEmbedUnembedded('lesson', oldId, si, db.getDoc('lesson', oldId, si));
@@ -1072,7 +1156,7 @@ export default function (core) {
   // metadata contract as a lesson (actor, learned_at, evidence required at the
   // route; task_class, repo, origin, outcome carrying the meaning).
   router.get('/history', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var filters = {
       task_class: nonEmptyQuery(req.query.task_class),
@@ -1087,7 +1171,7 @@ export default function (core) {
   });
 
   router.get('/stats', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     res.json(db.stats());
   });
@@ -1103,7 +1187,7 @@ export default function (core) {
   // param, not a namespace named ""). Agent- OR admin-key readable: the lab's
   // recall paths read their own coverage with agent keys.
   router.get('/coverage', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     // "no namespace" is the ABSENCE of the param → the global shape. A param
     // that is present but empty/whitespace is a caller bug (the nonEmptyQuery
@@ -1117,7 +1201,7 @@ export default function (core) {
   });
 
   // A drone returning a vector for an embed job authenticates with the same
-  // agent key it claims work with (checkAgentOrAdmin falls through to that
+  // agent key it claims work with (checkMemoryAgent falls through to that
   // check). Scope a non-admin (drone) write to an embed job THAT drone claimed,
   // so one agent can't poison another's embeddings. Returns true (allow) when
   // no drone has claimed the source (linkage N/A — a direct embed) or when
@@ -1138,11 +1222,12 @@ export default function (core) {
   }
 
   // PUT /memory/embeddings/:sourceType/:sourceId — drone callback to store embedding.
-  // Auth is checkAgentOrAdmin (admin/agent direct, plus the drone key auth a
-  // drone reuses to claim work). Non-admin writes are scoped to the drone's own
+  // Auth is checkMemoryAgent (admin/agent direct, plus the drone key auth a
+  // drone reuses to claim work; TRUST LAYER P0.1 closed the any-studio-JWT
+  // path this route used to share). Non-admin writes are scoped to the drone's own
   // claimed embed job when the drone_jobs linkage is available.
   router.put('/embeddings/:sourceType/:sourceId', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var sourceType = req.params.sourceType;
     if (refuseCompanionScoped(sourceType, null, res)) return; // review A r2: the last unguarded agent write into the class
@@ -1270,7 +1355,7 @@ export default function (core) {
   // Returns { processed, embedded, failed, queued, remaining } where remaining
   // is the total count of docs still lacking embeddings after this call.
   router.post('/backfill-embeddings', asyncHandler(async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
 
     var config = db.getAllConfig();

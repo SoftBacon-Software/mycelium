@@ -57,9 +57,12 @@ export function deleteOperator(id) {
 // -- Studio Users --
 
 export function createStudioUser(username, displayName, passwordHash, role) {
+  // TRUST LAYER P0.1 (F-mycelium/250): least privilege — the DB-level default
+  // is 'operator', mirroring the route. A NULL/absent role never lands as
+  // 'admin' regardless of caller.
   var result = db.prepare(
     "INSERT INTO studio_users (username, display_name, password_hash, role) VALUES (?, ?, ?, ?) RETURNING id"
-  ).get(username, displayName, passwordHash, role || 'admin');
+  ).get(username, displayName, passwordHash, role || 'operator');
   return result.id;
 }
 

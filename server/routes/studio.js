@@ -65,7 +65,15 @@ export function registerStudioRoutes(router, deps) {
     var username = (req.body.username || '').trim().toLowerCase();
     var password = req.body.password || '';
     var displayName = (req.body.display_name || '').trim();
-    var role = req.body.role || 'admin';
+    // TRUST LAYER P0.1 (F-mycelium/250, AUDIT finding): least privilege.
+    // A created user defaults to 'operator', never 'admin' — and minting an
+    // admin requires the admin KEY. checkAdmin above passes on an admin
+    // studio JWT too, but a phished operator session must not be able to
+    // mint persistent privilege; only the key (a server-side secret) can.
+    var role = req.body.role || 'operator';
+    if (role === 'admin' && !isAdminKey(req.headers['x-admin-key'])) {
+      return res.status(403).json({ error: 'creating an admin user requires the admin key (X-Admin-Key) — a studio admin JWT cannot mint another admin' });
+    }
     if (!username || !password || !displayName) {
       return res.status(400).json({ error: 'username, password, and display_name are required' });
     }

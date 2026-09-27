@@ -14,6 +14,7 @@ import fs from 'fs';
 import nodePath from 'path';
 import https from 'https';
 import { sendEmail, isEmailEnabled, templatePasswordReset, templateOperatorAlert } from '../email.js';
+import { memoryAgentGuard } from '../lib/memory-auth.js';
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
@@ -1909,6 +1910,10 @@ registerInboxRoutes(router, {
 
 // ======== LOAD PLUGINS ========
 // Called from index.js after DB init
+// TRUST LAYER P0.1 (F-mycelium/250): the agent memory surface's gate, built
+// once from the real auth pair (both hoisted function declarations) and
+// handed to plugins on pluginCore.auth below.
+var checkMemoryAgent = memoryAgentGuard({ checkAgentOrAdmin: checkAgentOrAdmin, getStudioUser: getStudioUser });
 export async function initPlugins(app) {
   if (!app) {
     // Fail LOUD. A missing app silently disables guardrail blocking, which
@@ -1924,7 +1929,7 @@ export async function initPlugins(app) {
     // consumer surface (the companion memory API) can derive a per-USER owner
     // scope from the login the platform already mints — the same decoder
     // /studio/me uses, not a plugin-private fork that could drift.
-    auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName, getStudioUser },
+    auth: { checkAgentOrAdmin, checkAdmin, getAdminDisplayName, getStudioUser, checkMemoryAgent },
     emitEvent, checkApprovalGate, gatedActions: GATED_ACTIONS,
     apiError, parseIntParam, validateEnum,
     // asyncHandler: shared async-route wrapper so plugin authors can self-protect
