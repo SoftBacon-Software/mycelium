@@ -703,13 +703,32 @@ Return a JSON object (no markdown, no explanation):
   "insights": [{ "category": "...", "fact_text": "...", "confidence": 0.0-1.0 }]
 }`;
 
-export async function runConsolidation(db, config, _core) {
+export async function runConsolidation(db, config, _core, opts) {
   var startTime = Date.now();
+  // TRUST LAYER P0 (review B item 5): the caller bounds what the LLM's answer
+  // may touch. null (the scheduler, the admin-only POST /consolidate route) is
+  // the server itself — input-set-bounded only; a callerAgentId further
+  // restricts every mutation to that agent's OWN input rows.
+  var safeOpts = opts || {};
+  var callerAgentId = safeOpts.callerAgentId || null;
 
   // Get recent facts
   var recentFacts = db.listFacts({ limit: 200 });
   if (recentFacts.length < 5) {
     return { message: 'Not enough facts to consolidate', facts_count: recentFacts.length };
+  }
+
+  // The input set is the contract: an id the LLM outputs that is not one of
+  // these rows was never shown to it (an invented or stale id) and touches
+  // nothing. Directives are decay-exempt provenance — they outlive
+  // consolidations whatever the caller is.
+  var inputById = {};
+  recentFacts.forEach(function (f) { inputById[String(f.id)] = f; });
+  function canTouch(f) {
+    if (!f) return false;
+    if (f.source_authority === 'directive') return false;
+    if (callerAgentId && String(f.agent_id) !== String(callerAgentId)) return false;
+    return true;
   }
 
   var factsText = recentFacts.map(function (f) {
@@ -733,24 +752,32 @@ export async function runConsolidation(db, config, _core) {
     var factsMerged = 0;
     var factsSuperseded = 0;
 
-    // Update confidence scores
+    // Update confidence scores — same bounds as the merge leg (review B item 5)
+    var factsRefused = 0;
     if (Array.isArray(result.keep)) {
       for (var k of result.keep) {
         if (k.id && k.new_confidence !== undefined) {
+          if (!canTouch(inputById[String(k.id)])) { factsRefused++; continue; }
           db.updateFactConfidence(k.id, k.new_confidence);
         }
       }
     }
 
-    // Merge duplicates
+    // Merge duplicates — supersede_ids restricted to the consolidation's own
+    // input ids, never a directive row, and (caller-scoped runs) the caller's
+    // own rows only. Refusals are counted, not silently swallowed.
     if (Array.isArray(result.merge)) {
       for (var m of result.merge) {
         if (m.keep_id && Array.isArray(m.supersede_ids)) {
+          if (!canTouch(inputById[String(m.keep_id)])) { factsRefused++; continue; }
+          var applied = 0;
           for (var sid of m.supersede_ids) {
+            if (!canTouch(inputById[String(sid)])) { factsRefused++; continue; }
             db.supersedeFact(sid, m.keep_id);
-            factsSuperseded++;
+            applied++;
           }
-          factsMerged++;
+          if (applied > 0) factsMerged++;
+          factsSuperseded += applied;
         }
       }
     }
@@ -774,6 +801,7 @@ export async function runConsolidation(db, config, _core) {
       facts_processed: recentFacts.length,
       facts_merged: factsMerged,
       facts_superseded: factsSuperseded,
+      mutations_refused: factsRefused,
       duration_ms: durationMs
     };
   } catch (e) {

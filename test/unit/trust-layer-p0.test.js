@@ -1076,3 +1076,105 @@ describe('Review B item 3: identity binding + directive gate on every source typ
     expect(JSON.parse(row.metadata).source_authority).toBe('directive'); // stored as written
   });
 });
+
+// ====================== Review B item 5 (task 250d) ======================
+// consolidation supersede_ids were unchecked: the LLM's answer could supersede
+// ANY fact — directive rows, other agents' rows, ids it invented.
+describe('Review B item 5: consolidation touches only its input, never directives', () => {
+  let fakeLlm;
+  let llmUrl;
+  const scripted = { response: '{}' }; // the fake model's answer, set per test
+
+  beforeAll(async () => {
+    const http = await import('node:http');
+    fakeLlm = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ response: scripted.response }));
+      });
+    });
+    await new Promise((r) => fakeLlm.listen(0, '127.0.0.1', r));
+    llmUrl = 'http://127.0.0.1:' + fakeLlm.address().port;
+    const put = await request(app).put('/api/mycelium/auto-memory/config').set(adminKeyAuth)
+      .send({ llm_provider: 'ollama', llm_url: llmUrl, llm_model: 'fake-consolidator' });
+    expect(put.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    if (fakeLlm) fakeLlm.close();
+    // leave the config as we found it (provider none) for any later suite
+    await request(app).put('/api/mycelium/auto-memory/config').set(adminKeyAuth)
+      .send({ llm_provider: 'none', llm_url: '' });
+  });
+
+  const mkFact = async (agentId, marker, authority) => {
+    const r = await request(app).post('/api/mycelium/auto-memory/facts').set(adminKeyAuth)
+      .send({ fact_text: marker + ' — consolidation input probe', agent_id: agentId, source_authority: authority || 'inferred' });
+    expect(r.status).toBe(200);
+    return r.body.id;
+  };
+
+  it('admin /consolidate supersedes only input ids and never a directive row', async () => {
+    const anchor = await mkFact('lucy-tl250', 'b5 anchor (keep)');
+    const lucyDup = await mkFact('lucy-tl250', 'b5 lucy duplicate (supersede target)');
+    const directiveRow = await mkFact('lucy-tl250', 'b5 directive row (never superseded)', 'directive');
+    const echoRow = await mkFact('echo-tl250', 'b5 echo row (in input — admin may supersede)');
+    await mkFact('lucy-tl250', 'b5 filler one'); // recentFacts >= 5
+    await mkFact('lucy-tl250', 'b5 filler two');
+    const invented = 1000000 + anchor; // an id the LLM made up — not in the input
+
+    scripted.response = JSON.stringify({
+      keep: [],
+      merge: [{ keep_id: anchor, supersede_ids: [lucyDup, directiveRow, echoRow, invented] }],
+      insights: []
+    });
+
+    const r = await request(app).post('/api/mycelium/auto-memory/consolidate').set(adminKeyAuth).send({});
+    expect(r.status).toBe(200);
+    expect(r.body.result.facts_superseded).toBe(2); // lucyDup + echoRow only
+    const rows = db.getDB().prepare('SELECT id, superseded_by, source_authority FROM am_facts WHERE id IN (?, ?, ?, ?)')
+      .all(lucyDup, directiveRow, echoRow, invented);
+    const byId = Object.fromEntries(rows.map((x) => [x.id, x]));
+    expect(byId[lucyDup].superseded_by).toBe(anchor); // input row: superseded
+    expect(byId[echoRow].superseded_by).toBe(anchor); // other agent, but in the input — admin: input set only
+    expect(byId[directiveRow].superseded_by).toBeNull(); // a directive outlives consolidations
+    expect(byId[invented]).toBeUndefined(); // invented id touched nothing
+  });
+
+  it('a caller-scoped run (callerAgentId) supersedes only its OWN input rows', async () => {
+    const { default: createAutoMemoryDB } = await import('../../server/plugins/auto-memory/db.js');
+    const { runConsolidation } = await import('../../server/plugins/auto-memory/routes.js');
+    const amdb = createAutoMemoryDB(db.getDB());
+
+    const anchor = amdb.createFact('lucy-tl250', null, 'general', 'b5s caller anchor (keep)', 0.8, 'aria', null);
+    const lucyDup = amdb.createFact('lucy-tl250', null, 'general', 'b5s lucy duplicate (supersede target)', 0.8, 'aria', null);
+    const echoRow = amdb.createFact('echo-tl250', null, 'general', 'b5s echo row (other agent — refused)', 0.8, 'aria', null);
+    const directiveRow = amdb.createFact('lucy-tl250', null, 'general', 'b5s directive row (refused)', 0.9, 'aria', null, 'directive');
+    const invented = 2000000 + anchor;
+    await mkFact('lucy-tl250', 'b5s filler one'); // keep the input >= 5 rows
+    await mkFact('lucy-tl250', 'b5s filler two');
+
+    scripted.response = JSON.stringify({
+      keep: [
+        { id: directiveRow, new_confidence: 0.99 }, // a directive's confidence is not the caller's to tune
+        { id: invented, new_confidence: 0.99 } // an invented id tunes nothing
+      ],
+      merge: [{ keep_id: anchor, supersede_ids: [lucyDup, echoRow, directiveRow, invented] }],
+      insights: []
+    });
+
+    const result = await runConsolidation(amdb, amdb.getAllConfig(), null, { callerAgentId: 'lucy-tl250' });
+    expect(result.facts_superseded).toBe(1); // lucyDup only
+    const rows = db.getDB().prepare('SELECT id, superseded_by, confidence FROM am_facts WHERE id IN (?, ?, ?, ?)')
+      .all(lucyDup, echoRow, directiveRow, invented);
+    const byId = Object.fromEntries(rows.map((x) => [x.id, x]));
+    expect(byId[lucyDup].superseded_by).toBe(anchor); // own input row: superseded
+    expect(byId[echoRow].superseded_by).toBeNull(); // another agent's row: refused
+    expect(byId[directiveRow].superseded_by).toBeNull(); // directive: refused
+    expect(byId[invented]).toBeUndefined(); // invented id: refused
+    const dRow = db.getDB().prepare('SELECT confidence FROM am_facts WHERE id = ?').get(directiveRow);
+    expect(dRow.confidence).toBe(0.9); // the keep-leg confidence edit was refused too
+  });
+});
