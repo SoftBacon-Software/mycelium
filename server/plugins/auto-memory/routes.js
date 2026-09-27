@@ -563,11 +563,16 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
     coreDb.prepare || (function () { throw new Error('no db'); })();
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata)
-      VALUES ('memory', ?, ?, ?)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by)
+      VALUES ('memory', ?, ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
-        content_text = excluded.content_text, metadata = excluded.metadata, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }));
+        content_text = excluded.content_text, metadata = excluded.metadata,
+        -- TRUST LAYER P0 (review B item 2): this is a SERVER write of a
+        -- server-owned type — the fact's agent_id is the row's real owner and
+        -- replaces whatever custody the row carried (a squatter's write under
+        -- the next fact id does not survive the server's own upsert).
+        written_by = excluded.written_by, updated_at = datetime('now')
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }), agentId || null);
     return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
@@ -649,14 +654,21 @@ async function indexFactSemantic(coreDb, factId, contentText, metadata, namespac
     coreDb.prepare || (function () { throw new Error('no db'); })();
     // Same upsert shape as semantic-memory's db.index (a re-index REPLACES the
     // row: text, metadata — and the vector, which the scheduler refills).
+    // TRUST LAYER P0 (review B item 2): the row's custody is the fact's real
+    // owner (metadata.agent_id, bound to the authenticated caller by the
+    // /facts route) — stamped on insert and FORCED on conflict, so a squatter
+    // who pre-wrote the fact's id under a NULL/other written_by loses the row
+    // to the server's own write instead of inheriting custody.
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
-      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by)
+      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, namespace = excluded.namespace,
         metadata = excluded.metadata, embedding = excluded.embedding,
-        embedding_model = excluded.embedding_model, updated_at = datetime('now')
-    `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}));
+        embedding_model = excluded.embedding_model,
+        written_by = excluded.written_by, updated_at = datetime('now')
+    `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}),
+      (metadata && metadata.agent_id) || null);
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
   }

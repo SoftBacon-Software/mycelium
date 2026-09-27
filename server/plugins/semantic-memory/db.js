@@ -297,6 +297,11 @@ export default function createMemoryDB(db, opts) {
       // TRUST LAYER P0.2: the write's owner, stamped by the route from the
       // AUTHENTICATED identity (never a body field). NULL on internal writers.
       var writtenBy = opts.written_by || null;
+      // TRUST LAYER P0 (review B item 2): SERVER-side writers of server-owned
+      // source types set force_written_by — the source's real owner replaces
+      // whatever custody the row carried, so a squatter's claim cannot survive
+      // the server writing its own row. Surface writes keep the keep-first CASE.
+      var forceWrittenBy = opts.force_written_by === true;
 
       var prior = db.prepare(
         'SELECT content_text, namespace, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
@@ -318,9 +323,12 @@ export default function createMemoryDB(db, opts) {
           -- FIRST writer and preserved on every authorized rewrite — an admin
           -- correcting a row does not steal it, and the owner can keep
           -- maintaining (or deleting) it afterwards. Only a first write (or a
-          -- pre-column NULL) takes a new value.
-          written_by = CASE WHEN sm_embeddings.written_by IS NULL
-            THEN excluded.written_by ELSE sm_embeddings.written_by END,
+          -- pre-column NULL) takes a new value. Review B item 2: a forced
+          -- (server-side) write always takes excluded.written_by instead —
+          -- the source's real owner evicts a squatter's claim.
+          written_by = ${forceWrittenBy
+            ? 'excluded.written_by'
+            : 'CASE WHEN sm_embeddings.written_by IS NULL\n            THEN excluded.written_by ELSE sm_embeddings.written_by END'},
           embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.embedding ELSE excluded.embedding END,
           embedding_model = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text

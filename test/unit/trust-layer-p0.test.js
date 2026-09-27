@@ -809,7 +809,11 @@ describe('S3 (review-A r2 major) the drone embed chain is authorized against the
 
     const b = await backfill(AGENT_B_KEY);
     expect(b.status).toBe(200);
-    expect(b.body.queued).toBe(1); // was 2: B's call queued lucy's row too
+    // review B item 2: server-written rows now carry their real owner, so the
+    // echo-owned NULL-embed pool B's backfill may queue is larger than the one
+    // seeded here — the scoping assertions below (never lucy's row) are the point.
+    const bOwnedNull = db.getDB().prepare("SELECT COUNT(*) AS c FROM sm_embeddings WHERE written_by = 'echo-tl250' AND embedding IS NULL").get().c;
+    expect(b.body.queued).toBe(bOwnedNull);
     expect(embedJobs().filter(j => j.title.includes('s3-a-row')).length).toBe(foreignBefore); // the backfill added none
     expect(embedJobs().some(j => j.title.includes('s3-b-row') && j.requester === 'echo-tl250')).toBe(true); // owner-stamped
 
@@ -926,5 +930,74 @@ describe('S3 (review-A r2 major) the drone embed chain is authorized against the
     const refused = await request(app).put('/api/mycelium/memory/embeddings/note/s3-f-row')
       .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'poison-vec', chunk_index: 0 });
     expect(refused.status).toBe(403);
+  });
+});
+
+// ============================ Review B (task 250d) ============================
+// Review B items 2 (custody squatting) — director's review @ 10c03bd9.
+describe('Review B item 2: server-owned source types cannot be squatted', () => {
+  // The complete list of source types the SERVER itself writes into sm_embeddings
+  // (grep of every INSERT writer on the branch): memory + am_fact (auto-memory routes),
+  // message/context_key/concept/task/savepoint/workflow (semantic-memory handlers event
+  // indexing), companion (federation store). Agent keys must refuse to write them; the
+  // server's own writers stamp written_by from the row's real owner.
+  const SERVER_TYPES = ['memory', 'am_fact', 'message', 'context_key', 'concept', 'task', 'savepoint', 'workflow', 'plan', 'plan_step'];
+
+  it('agent key cannot POST /memory/index a server-owned source type (403)', async () => {
+    for (const t of SERVER_TYPES) {
+      const r = await request(app).post('/api/mycelium/memory/index')
+        .set(agentAuth(AGENT_A_KEY))
+        .send({ source_type: t, source_id: `srv-guard-${t}`, content_text: 'agent squat attempt' });
+      expect(r.status).toBe(403);
+      expect(String(r.body.error)).toContain('server-owned');
+    }
+  });
+
+  it('agent key cannot bulk-index a server-owned source type either', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index/bulk')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ items: [{ source_type: 'message', source_id: 'srv-bulk-msg', content_text: 'nope' }] });
+    expect(r.status).toBe(403);
+  });
+
+  it('admin key still may POST /memory/index a server-owned type (operator control)', async () => {
+    const r = await request(app).post('/api/mycelium/memory/index')
+      .set(adminKeyAuth)
+      .send({ source_type: 'message', source_id: 'srv-admin-msg', content_text: 'admin control write' });
+    expect(r.status).toBe(200);
+  });
+
+  it('auto-memory fact -> memory row is stamped written_by=<owning agent> (was NULL)', async () => {
+    const mk = await request(app).post('/api/mycelium/auto-memory/facts')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ fact_type: 'lesson', fact_text: 'tl250 stamped-memory-row probe', agent_id: 'lucy-tl250' });
+    expect(mk.status).toBe(200);
+    const row = db.getDB().prepare("SELECT written_by FROM sm_embeddings WHERE source_type='memory' AND source_id=?").get(String(mk.body.id));
+    expect(row).toBeTruthy();
+    expect(row.written_by).toBe('lucy-tl250');
+  });
+
+  it('auto-memory namespaced fact -> am_fact row stamped written_by=<owning agent>', async () => {
+    const mk = await request(app).post('/api/mycelium/auto-memory/facts')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ fact_type: 'lesson', fact_text: 'tl250 stamped-amfact-row probe', agent_id: 'lucy-tl250', namespace: 'tl250-ns' });
+    expect(mk.status).toBe(200);
+    const row = db.getDB().prepare("SELECT written_by FROM sm_embeddings WHERE source_type='am_fact' AND source_id=?").get(String(mk.body.id));
+    expect(row).toBeTruthy();
+    expect(row.written_by).toBe('lucy-tl250');
+  });
+
+  it('a squatted memory row is evicted when the server writes its row (written_by forced, never inherited)', async () => {
+    // Historic squat: a pre-fix row written by AGENT_B under the fact id AGENT_A is about to take.
+    const next = db.getDB().prepare('SELECT COALESCE(MAX(id),0)+1 AS n FROM am_facts').get().n;
+    db.getDB().prepare("INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text, written_by) VALUES ('memory', ?, 0, 'squat content', 'echo-tl250')").run(String(next));
+    const mk = await request(app).post('/api/mycelium/auto-memory/facts')
+      .set(agentAuth(AGENT_A_KEY))
+      .send({ fact_type: 'lesson', fact_text: 'tl250 eviction probe', agent_id: 'lucy-tl250' });
+    expect(mk.status).toBe(200);
+    expect(String(mk.body.id)).toBe(String(next));
+    const row = db.getDB().prepare("SELECT written_by, content_text FROM sm_embeddings WHERE source_type='memory' AND source_id=?").get(String(next));
+    expect(row.written_by).toBe('lucy-tl250');
+    expect(row.content_text).toBe('tl250 eviction probe');
   });
 });

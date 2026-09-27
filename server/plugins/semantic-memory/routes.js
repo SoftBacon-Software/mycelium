@@ -292,6 +292,28 @@ export default function (core) {
   // discovered at loop time.
   var MAX_CHUNKS_PER_DOC = 8389;
 
+  // TRUST LAYER P0 (review B item 2 — custody squatting): the source types the
+  // SERVER itself writes into sm_embeddings, enumerated from every INSERT site
+  // on the branch: memory + am_fact (auto-memory fact indexing), message /
+  // context_key / concept / task / savepoint / workflow / plan / plan_step
+  // (this plugin's handlers.js event auto-indexing), companion (federation
+  // store). An agent key may not write them at all — a write here impersonates
+  // a server row and, on a colliding source_id, would hijack the server's next
+  // upsert (the squatter keeps custody under the keep-first CASE). Admin keys
+  // pass: operators seed/repair server rows deliberately.
+  var SERVER_SOURCE_TYPES = {
+    memory: true, am_fact: true, message: true, context_key: true, concept: true,
+    task: true, savepoint: true, workflow: true, plan: true, plan_step: true, companion: true
+  };
+
+  function refuseServerOwnedSource(sourceType, isAdmin, res, label) {
+    if (isAdmin || !SERVER_SOURCE_TYPES[sourceType]) return false;
+    apiError(res, 403, (label ? label + ': ' : '') + "source_type '" + sourceType +
+      "' is server-owned — agent keys cannot write it (the server stamps its own rows' written_by from the source's real owner)");
+    return true;
+  }
+
+
   // Rate-limited (TRUST LAYER P0.2): recall fires per agent turn — 1200/min
   // per IP is ≥10x any observed lane cadence (route_usage, jetson01).
   router.post('/index', rateLimited('memory/index', { windowMs: 60000, max: 1200 }), function (req, res) {
@@ -302,6 +324,7 @@ export default function (core) {
       return apiError(res, 400, 'source_type, source_id, and content_text are required');
     }
     if (refuseCompanionScoped(source_type, namespace, res)) return;
+    if (refuseServerOwnedSource(source_type, req._authIsAdmin, res)) return;
     if (refuseIfUnprovenanced(source_type, metadata, res)) return;
     // TRUST LAYER P0.2: bind the provenance identity, then the write authority,
     // BEFORE any write — a body actor never survives an agent-key write, and
@@ -364,6 +387,7 @@ export default function (core) {
         return apiError(res, 400, 'Each item needs source_type, source_id, and content_text');
       }
       if (refuseCompanionScoped(item.source_type, item.namespace, res)) return;
+      if (refuseServerOwnedSource(item.source_type, req._authIsAdmin, res, 'items[' + i + ']')) return;
       if (refuseIfUnprovenanced(item.source_type, item.metadata, res, 'items[' + i + ']')) return;
       // TRUST LAYER P0.2: the same identity binding + write authority as the
       // single route — a bulk request is not a way around either.
