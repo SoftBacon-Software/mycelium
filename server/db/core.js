@@ -107,6 +107,14 @@ export var migrations = [
     // the pre-fix window instead of mixing shapes; every row the current
     // binary writes stamps 1 (lib/route-usage.js upsert).
     ["route_usage", "prefix_resolved", "INTEGER NOT NULL DEFAULT 0"],
+    // Trust layer P0 (F-mycelium/250c, review-A round 2 major): the embedder
+    // registration. drone-embed jobs name memory rows owned by OTHER agents,
+    // so the only claimants entitled to them are the row's owner and an
+    // embedder the ADMIN registered — the embedder is infrastructure. The
+    // flag is admin-key-settable (PUT /agents/:id) and never agent-writable:
+    // self-declared capabilities and heartbeat diagnostics are routing data,
+    // never a security gate. 0 (unregistered) is fail-closed.
+    ["agents", "embedder_registered", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
 // Apply every migration above to `db` as idempotent ALTER TABLE ADD COLUMN

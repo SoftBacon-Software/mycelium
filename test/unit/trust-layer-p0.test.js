@@ -684,15 +684,20 @@ describe('S1 (review-A sweep) PUT /memory/embeddings is not a cross-agent vector
     expect(res.status).toBe(200);
   });
 
-  it('still allows the drone holding the claimed embed job for the row', async () => {
-    await request(app).post('/api/mycelium/memory/index').set(agentAuth(AGENT_A_KEY))
-      .send({ source_type: 'note', source_id: 's1-claimed-row', content_text: 'lucy wrote this row too' });
+  it('still allows the drone holding the claimed embed job for a row it wrote (owner-stamped claim)', async () => {
+    // Round 2 (250c) tightened this leg: the claim linkage authorizes the
+    // write only when the claimant is entitled to the ROW — its own row (as
+    // here, requester = the owner the pipeline stamped), or via an admin-
+    // registered embedder. A seeded claim over a FOREIGN row is refused —
+    // see the S3 describe at the bottom of this file.
+    await request(app).post('/api/mycelium/memory/index').set(agentAuth(AGENT_B_KEY))
+      .send({ source_type: 'note', source_id: 's1-claimed-row', content_text: 'echo wrote this row too' });
     db.getDB().prepare(
       "INSERT INTO drone_jobs (title, input_data, requires, requester, job_type, status, drone_id) VALUES (?, ?, ?, ?, 'embed', 'claimed', ?)"
     ).run(
       'Embed: note:s1-claimed-row',
       JSON.stringify({ source_type: 'note', source_id: 's1-claimed-row', chunk_index: 0 }),
-      JSON.stringify(['ollama']), 'semantic-memory', 'echo-tl250'
+      JSON.stringify(['ollama']), 'echo-tl250', 'echo-tl250'
     );
     const res = await request(app).put('/api/mycelium/memory/embeddings/note/s1-claimed-row')
       .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'drone-vec', chunk_index: 0 });
@@ -729,5 +734,197 @@ describe('N1 (review-A nit) GET /auto-memory/facts/:id is scoped like the list',
     expect(owner.status).toBe(200);
     const admin = await request(app).get('/api/mycelium/auto-memory/facts/' + a.body.id).set(adminKeyAuth);
     expect(admin.status).toBe(200);
+  });
+});
+
+// ============ S3 (review-A round 2 MAJOR) — the drone embed chain ============
+// The chain, all agent-callable once a provider='drone' deployment wires its
+// embedder the way the feature anticipates (250r2-sweepprobe2, quoted in the
+// review): backfill (agent key, queues ALL owners' rows with their full text)
+// → heartbeat (agent key, self-declared system_diagnostics — the render's
+// "must heartbeat first" gate) → claim (agent key, self-declared capabilities
+// matched against the template's requires) → PUT a chosen vector over a
+// FOREIGN row, 200. On the sha under review the chain completed end-to-end
+// (S3a..S3h: model=echo-poison emb=[9.9,9.9,9.9] over lucy's row, text intact)
+// the moment an admin INSERTed the 'embed' template — an availability
+// accident, not an authorization decision.
+//
+// The fix is at the authorization layer, not the template:
+//   (a)  /memory/backfill-embeddings queues only rows the caller owns
+//        (admin: all) — the attacker-populated queue was the enabler;
+//   (b)  an embed job's claim is authorized against the ROW's owner or an
+//        admin-registered embedder — never by self-declared capabilities;
+//        and an agent cannot mint the embed job itself;
+//   (c)  self-declared heartbeat diagnostics never satisfy the gate —
+//        no agent-key path can move the embedder_registered flag;
+//   (d)  the vector write re-checks the claimant's right to that row,
+//        whatever currently holds the claim.
+describe('S3 (review-A r2 major) the drone embed chain is authorized against the row owner', () => {
+  const VEC = [0.4, 0.4, 0.4];
+
+  const embedTemplate = async () => {
+    const r = await request(app).post('/api/mycelium/drones/templates').set(adminKeyAuth)
+      .send({ id: 'embed', name: 'Embed Job', requires: ['ollama'] });
+    if (r.status !== 200 && r.status !== 409) throw new Error('template setup answered ' + r.status);
+  };
+  const droneProvider = async () => {
+    const r = await request(app).put('/api/mycelium/memory/config').set(adminKeyAuth)
+      .send({ embedding_provider: 'drone', embedding_model: 'nomic-embed-text' });
+    expect(r.status).toBe(200);
+  };
+  const indexRow = (key, sourceId, text) =>
+    request(app).post('/api/mycelium/memory/index').set(agentAuth(key))
+      .send({ source_type: 'note', source_id: sourceId, content_text: text });
+  const backfill = (key) =>
+    request(app).post('/api/mycelium/memory/backfill-embeddings?limit=10').set(agentAuth(key));
+  const backfillAdmin = () =>
+    request(app).post('/api/mycelium/memory/backfill-embeddings?limit=10').set(adminKeyAuth);
+  const embedJobs = () => db.getDB().prepare(
+    "SELECT title, requester, status, drone_id FROM drone_jobs WHERE job_type = 'embed'"
+  ).all();
+  // Claim repeatedly until the queue is dry, collecting granted titles. The
+  // invariant under test is order-independent: NO granted title names a row
+  // the claimant does not own (the queue holds several jobs by the time these
+  // tests run — earlier tests' refused infra jobs stay pending).
+  const claimAll = async (key) => {
+    const granted = [];
+    for (let i = 0; i < 50; i++) {
+      const r = await request(app).post('/api/mycelium/drones/claim').set(agentAuth(key))
+        .send({ capabilities: ['ollama'] });
+      expect(r.status).toBe(200);
+      if (!r.body.job) break;
+      granted.push(r.body.job.title);
+    }
+    return granted;
+  };
+
+  it('(a) an agent backfill queues only rows the caller owns (admin: all)', async () => {
+    await droneProvider();
+    await indexRow(AGENT_A_KEY, 's3-a-row', 'LUCY-SECRET-CONTENT lucy row, vector poison target');
+    await indexRow(AGENT_B_KEY, 's3-b-row', 'echo row for its own backfill');
+    // under provider=drone the index pipeline itself auto-queues an infra job
+    // per fresh row — snapshot it; the assertion below is about what B's
+    // BACKFILL adds (the pipeline's own jobs are the claim test's subject).
+    const foreignBefore = embedJobs().filter(j => j.title.includes('s3-a-row')).length;
+
+    const b = await backfill(AGENT_B_KEY);
+    expect(b.status).toBe(200);
+    expect(b.body.queued).toBe(1); // was 2: B's call queued lucy's row too
+    expect(embedJobs().filter(j => j.title.includes('s3-a-row')).length).toBe(foreignBefore); // the backfill added none
+    expect(embedJobs().some(j => j.title.includes('s3-b-row') && j.requester === 'echo-tl250')).toBe(true); // owner-stamped
+
+    const admin = await backfillAdmin();
+    expect(admin.status).toBe(200);
+    expect(admin.body.queued).toBeGreaterThanOrEqual(1); // admin: all owners
+    expect(embedJobs().find(j => j.title.includes('s3-a-row')).requester).toBe('semantic-memory'); // infra
+  });
+
+  it('(b,c) a claim needs row entitlement even with template + self-declared capabilities + self-declared diagnostics', async () => {
+    await embedTemplate();
+    await indexRow(AGENT_A_KEY, 's3-a-claim-row', 'LUCY-SECRET-CONTENT the claim-payload leak target');
+    await indexRow(AGENT_B_KEY, 's3-b-claim-row', 'echo row whose own job may be claimed');
+    const hb = await request(app).post('/api/mycelium/agents/heartbeat').set(agentAuth(AGENT_B_KEY))
+      .send({ status: 'online', system_diagnostics: { os: 'probe', cpu_model: 'attack-probe' } });
+    expect(hb.status).toBe(200); // S3b: the self-declared diagnostics are in place
+    expect((await backfill(AGENT_B_KEY)).status).toBe(200);
+    expect((await backfillAdmin()).status).toBe(200); // the infra job naming lucy's row
+
+    const granted = await claimAll(AGENT_B_KEY);
+    expect(granted.length).toBeGreaterThanOrEqual(1); // B's own work still flows
+    for (const t of granted) expect(t).not.toMatch(/s3-a/); // was GRANTED: 'Embed: note:s3-a-claim-row'
+  });
+
+  it('(c) no agent-key path mints embedder_registered — not self-update, not heartbeat', async () => {
+    const selfPut = await request(app).put('/api/mycelium/agents/echo-tl250').set(agentAuth(AGENT_B_KEY))
+      .send({ embedder_registered: true });
+    expect(selfPut.status).toBe(403); // was 400 'Nothing to update' — now a named refusal
+
+    const hb = await request(app).post('/api/mycelium/agents/heartbeat').set(agentAuth(AGENT_B_KEY))
+      .send({ status: 'online', system_diagnostics: { os: 'probe', embedder_registered: 1 } });
+    expect(hb.status).toBe(200); // diagnostics are stored — and authorize nothing
+
+    const me = await request(app).get('/api/mycelium/agents/echo-tl250').set(agentAuth(AGENT_B_KEY));
+    expect(Boolean(me.body.embedder_registered)).toBe(false); // the gate flag never moved
+  });
+
+  it('(d) the vector write re-checks the claimant\'s right to the row, whatever holds the claim', async () => {
+    await indexRow(AGENT_A_KEY, 's3-d-row', 'lucy row a seeded claim must not unlock');
+    db.getDB().prepare(
+      "INSERT INTO drone_jobs (title, input_data, requires, requester, job_type, status, drone_id) VALUES (?, ?, ?, 'semantic-memory', 'embed', 'claimed', ?)"
+    ).run('Embed: note:s3-d-row',
+      JSON.stringify({ source_type: 'note', source_id: 's3-d-row', chunk_index: 0 }),
+      JSON.stringify(['ollama']), 'echo-tl250');
+
+    const refused = await request(app).put('/api/mycelium/memory/embeddings/note/s3-d-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'poison-vec', chunk_index: 0 });
+    expect(refused.status).toBe(403); // was 200: the claim linkage alone authorized the write
+    const row = db.getDB().prepare(
+      "SELECT embedding FROM sm_embeddings WHERE source_type = 'note' AND source_id = 's3-d-row' AND chunk_index = 0"
+    ).get();
+    expect(row.embedding).toBeNull(); // the vector never landed
+
+    const own = await request(app).put('/api/mycelium/memory/embeddings/note/s3-b-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'own-vec', chunk_index: 0 });
+    expect(own.status).toBe(200); // the owner leg is untouched
+
+    const admin = await request(app).put('/api/mycelium/memory/embeddings/note/s3-d-row')
+      .set(adminKeyAuth).send({ embedding: VEC, model: 'admin-vec', chunk_index: 0 });
+    expect(admin.status).toBe(200);
+
+    // The agent-callable twin of the DB seed above: PUT /drones/jobs/:id lets
+    // any agent self-assign an unclaimed job (drone_id NULL bypasses the job
+    // route's ownership guard), so "holding the claim" must not be enough —
+    // the vector write re-check is what refuses here.
+    await indexRow(AGENT_A_KEY, 's3-d2-row', 'lucy row, infra job self-assign target');
+    expect((await backfillAdmin()).status).toBe(200);
+    const infraJob = db.getDB().prepare(
+      "SELECT id FROM drone_jobs WHERE job_type = 'embed' AND status = 'pending' AND json_extract(input_data, '$.source_id') = 's3-d2-row' LIMIT 1"
+    ).get();
+    expect(infraJob).toBeTruthy();
+    const selfAssign = await request(app).put('/api/mycelium/drones/jobs/' + infraJob.id)
+      .set(agentAuth(AGENT_B_KEY)).send({ status: 'claimed', drone_id: 'echo-tl250' });
+    expect(selfAssign.status).toBe(200); // the job route still allows the state change
+    const stillRefused = await request(app).put('/api/mycelium/memory/embeddings/note/s3-d2-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'poison-vec', chunk_index: 0 });
+    expect(stillRefused.status).toBe(403); // (d): self-assigned claim ≠ right to the row
+  });
+
+  it('(b) an agent cannot mint the embed job itself — job_type embed is pipeline/admin-only', async () => {
+    const mint = await request(app).post('/api/mycelium/drones/jobs').set(agentAuth(AGENT_B_KEY))
+      .send({ title: 'Embed: note:s3-a-row', job_type: 'embed', input_data: { source_type: 'note', source_id: 's3-a-row', chunk_index: 0 } });
+    expect(mint.status).toBe(403); // was 200: a self-requester embed job names any owner's row
+
+    const mint2 = await request(app).post('/api/mycelium/drones/jobs/from-template').set(agentAuth(AGENT_B_KEY))
+      .send({ template_id: 'embed', title: 'Embed: note:s3-a-row', input_data: { source_type: 'note', source_id: 's3-a-row' } });
+    expect(mint2.status).toBe(403);
+  });
+
+  it('(b,d) the admin-registered embedder is the infra path — grant, write, and revoke', async () => {
+    await indexRow(AGENT_A_KEY, 's3-e-row', 'lucy row the registered embedder may embed');
+    expect((await backfillAdmin()).status).toBe(200);
+
+    const reg = await request(app).put('/api/mycelium/agents/echo-tl250').set(adminKeyAuth)
+      .send({ embedder_registered: true });
+    expect(reg.status).toBe(200); // the admin key is the door
+
+    const granted = await claimAll(AGENT_B_KEY);
+    expect(granted.some(t => t.includes('s3-e-row'))).toBe(true); // registered embedder gets infra work
+
+    const write = await request(app).put('/api/mycelium/memory/embeddings/note/s3-e-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'infra-vec', chunk_index: 0 });
+    expect(write.status).toBe(200); // live claim + registration → the row's vector
+
+    const unreg = await request(app).put('/api/mycelium/agents/echo-tl250').set(adminKeyAuth)
+      .send({ embedder_registered: false });
+    expect(unreg.status).toBe(200); // revocation is the admin's too
+
+    await indexRow(AGENT_A_KEY, 's3-f-row', 'lucy row after the registration is revoked');
+    expect((await backfillAdmin()).status).toBe(200);
+
+    const after = await claimAll(AGENT_B_KEY);
+    for (const t of after) expect(t).not.toMatch(/s3-f/); // revoked → no new infra claims
+    const refused = await request(app).put('/api/mycelium/memory/embeddings/note/s3-f-row')
+      .set(agentAuth(AGENT_B_KEY)).send({ embedding: VEC, model: 'poison-vec', chunk_index: 0 });
+    expect(refused.status).toBe(403);
   });
 });

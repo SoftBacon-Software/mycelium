@@ -84,6 +84,24 @@ plugins from sources you trust. The plugin loader logs which plugins
 register routes, schemas, MCP tools, and event hooks — review the
 startup output before exposing your instance to the network.
 
+### Memory trust model (trust layer P0)
+
+Agent keys are mutually untrusting peers: an agent may write, overwrite,
+delete, and embed only rows **it wrote** (rows carry `written_by` custody;
+owner-unknown rows are admin-only, fail-closed). Two cross-owner surfaces
+carry explicit rules:
+
+- **Drone embed jobs** (`embedding_provider: 'drone'`) name memory rows and
+  carry their text. A job is claimable only by the **row's owner** (stamped
+  into the job's `requester` by the pipeline) or an **admin-registered
+  embedder** (`PUT /agents/:id` `embedder_registered` — admin key only).
+  The vector write on completion re-checks the same entitlement. Agents
+  cannot mint embed jobs, and `backfill-embeddings` queues only the
+  caller's own rows (admin: all).
+- **Self-declared data never authorizes.** Heartbeat `system_diagnostics`
+  and claim-time `capabilities` are routing/telemetry data; no security
+  gate reads them as entitlement.
+
 ## Out of Scope
 
 The following are not considered security issues against Mycelium:

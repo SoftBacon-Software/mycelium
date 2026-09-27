@@ -178,6 +178,16 @@ export function registerDroneRoutes(router, deps) {
     var workspaceBranch = req.body.workspace_branch || 'main';
     var profileId = req.body.profile_id || null;
     var jobType = req.body.job_type || null;
+    // Trust layer P0 (250c, review-A r2 major (b)): an embed job names a
+    // memory row and carries its text in input_data — a self-submitted one
+    // would let any agent mint a job over ANY owner's row, hand itself the row
+    // text at claim time, and (pre-250c) authorize the vector write. Embed
+    // jobs enter the queue only through the memory pipeline (backfill / reindex
+    // / the boot drain, which stamp the row owner or 'semantic-memory' as the
+    // requester) — an agent backfills its own rows instead.
+    if (jobType === 'embed' && !req._authIsAdmin) {
+      return apiError(res, 403, "Embed jobs are queued by the memory pipeline and claimed by the row's owner or an admin-registered embedder — backfill your own rows via POST /memory/backfill-embeddings instead of minting embed jobs");
+    }
     if (profileId && !getDroneProfile(profileId)) return res.status(400).json({ error: 'Profile not found: ' + profileId });
     // When job_type is provided, auto-fill requires from template
     if (jobType) {
@@ -203,6 +213,12 @@ export function registerDroneRoutes(router, deps) {
     if (!templateId) return res.status(400).json({ error: 'template_id is required' });
     var template = getJobTemplate(templateId);
     if (!template) return res.status(404).json({ error: 'Template not found: ' + templateId });
+    // The same embed-job gate as POST /drones/jobs (250c): the embed template
+    // is the pipeline's, not an agent's — a from-template submission would
+    // carry the same self-named row over the same claim path.
+    if (templateId === 'embed' && !req._authIsAdmin) {
+      return apiError(res, 403, "Embed jobs are queued by the memory pipeline and claimed by the row's owner or an admin-registered embedder — backfill your own rows via POST /memory/backfill-embeddings instead of minting embed jobs");
+    }
     var inputData = req.body.input_data || {};
     // input_data.setup is admin-only — shell-executed on the drone (see the C-4
     // gate on POST /drones/jobs). Block non-admin free-form setup here too.

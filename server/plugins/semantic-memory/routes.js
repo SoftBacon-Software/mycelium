@@ -1209,6 +1209,22 @@ export default function (core) {
   // so one agent can't poison another's embeddings. Returns true (allow) when
   // no drone has claimed the source (linkage N/A — a direct embed) or when
   // drone_jobs is absent (graceful: older installs / minimal fixtures).
+  // TRUST LAYER P0 (250c, review-A round 2 major (d)): a live claim is
+  // NECESSARY but no longer SUFFICIENT — the write re-checks the claimant's
+  // right to THAT row (the row's owner, or an admin-registered embedder),
+  // so a claim obtained by any other means (a pre-250c leftover, a direct
+  // table seed, a future queue bug) still cannot move a foreign row's vector.
+  // The same predicate gates the claim itself (server/db/drones.js
+  // claimDroneJob); this is the completion-side half of the pair.
+  function isRegisteredEmbedder(platformDb, droneId) {
+    try {
+      var reg = platformDb.prepare('SELECT embedder_registered FROM agents WHERE id = ?').get(droneId);
+      return !!(reg && reg.embedder_registered);
+    } catch (e) {
+      return false;                    // column/table unavailable → fail-closed
+    }
+  }
+
   function droneOwnsEmbedJob(platformDb, droneId, sourceType, sourceId, chunkIndex) {
     try {
       var row = platformDb.prepare(
@@ -1224,7 +1240,9 @@ export default function (core) {
       // answer does not authorize (fail-closed); the row-OWNER path in the
       // route (rowOwnedByCaller) still answers for the caller's own rows.
       if (!row) return false;           // no claim for this source → the linkage does not authorize this write
-      return row.drone_id === droneId;  // scoped: only the owning drone
+      if (row.drone_id !== droneId) return false;  // scoped: only the claiming drone
+      // 250c (d): the claim linkage alone is not the right to the row.
+      return rowOwnedByCaller(sourceType, sourceId, droneId) || isRegisteredEmbedder(platformDb, droneId);
     } catch (e) {
       return false;                      // drone_jobs unavailable → fail-closed; the owner path is unaffected
     }
@@ -1268,7 +1286,7 @@ export default function (core) {
     if (!req._authIsAdmin && !droneOwnsEmbedJob(core.db, who, sourceType, sourceId, chunkIndex) &&
         !rowOwnedByCaller(sourceType, sourceId, who)) {
       return apiError(res, 403, "'" + sourceType + ':' + sourceId +
-        "' is not the caller's row and no claimed embed job names it — an agent key may store a vector only on a row it wrote or while holding the claimed embed job; ask the owner or use the admin key");
+        "' is not the caller's row and no entitled embed job covers it — an agent key may store a vector only on a row it wrote, or as the row's owner / an admin-registered embedder holding the claimed embed job for it; ask the owner or use the admin key");
     }
     db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
     res.json({ ok: true, source_type: sourceType, source_id: sourceId });
@@ -1386,7 +1404,17 @@ export default function (core) {
   // call: ?limit= rows max (default 200, cap 1000), embedded in batches of 20.
   // Returns { processed, embedded, failed, queued, remaining } where remaining
   // is the total count of docs still lacking embeddings after this call.
-  router.post('/backfill-embeddings', asyncHandler(async function (req, res) {
+  // TRUST LAYER P0 (250c, review-A round 2 major (a) + MINOR M3): an agent
+  // caller backfills ONLY its own rows — the old all-owners sweep let any
+  // agent populate the drone queue with jobs naming (and carrying the text
+  // of) every other owner's rows, the enabler of the S3 chain. Owner-unknown
+  // rows (written_by NULL) never match an owner scope: admin-only, fail-closed.
+  // The admin key keeps the all-rows sweep (remaining is the caller-scoped
+  // count for agents, so the response crosses no owner's counters either).
+  // Rate limit: the one memory route that fans out PER ROW (up to 1000 rows
+  // per call toward the embedding provider) rides the same 120/min floor as
+  // its mutating siblings.
+  router.post('/backfill-embeddings', rateLimited('memory/backfill', { windowMs: 60000, max: 120 }), asyncHandler(async function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
 
@@ -1398,22 +1426,29 @@ export default function (core) {
     var limit = parseIntParam(req.query.limit) || (req.body && parseIntParam(req.body.limit)) || 200;
     limit = Math.min(Math.max(limit, 1), 1000);
 
+    // The caller's scope: the row owner for an agent key, the whole index for
+    // the admin key. Infra callers (boot drain) use db.getUnembedded directly.
+    var owner = req._authIsAdmin ? null : who;
+
     // Fetch the working set once — failed rows stay NULL, and re-querying
     // inside the loop would spin on them forever. Oversized rows (the
     // persistently-failing legacy docs) are chunk-split before embedding,
     // so processed/embedded count post-chunking rows.
-    var rows = db.expandOversizedRows(db.getUnembedded(limit));
+    var rows = db.expandOversizedRows(db.getUnembedded(limit, owner));
     var processed = 0;
     var embedded = 0;
     var failed = 0;
     var queued = 0;
 
     if (config.embedding_provider === 'drone') {
-      // Drone provider: queue async jobs; vectors arrive later via callback
+      // Drone provider: queue async jobs; vectors arrive later via callback.
+      // queuedBy = the authenticated caller: the owner scope above guarantees
+      // every queued row is the caller's own, so the job's requester IS the
+      // row owner and the claim gate can bind the job to them.
       var refused = 0; // companion rows: security-refused from the drone queue (review A r3 MINOR 2)
       for (var row of rows) {
         try {
-          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text')) {
+          if (createDroneEmbedJob(core.db, row.source_type, row.source_id, row.chunk_index, row.content_text, config.embedding_model || 'nomic-embed-text', owner || undefined)) {
             queued++;
           } else {
             refused++;
@@ -1453,7 +1488,7 @@ export default function (core) {
       failed: failed,
       refused: refused,
       queued: queued,
-      remaining: db.countUnembedded()
+      remaining: db.countUnembedded(owner) // caller-scoped: an agent's remaining is its own backlog
     });
   }));
 

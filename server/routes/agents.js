@@ -264,10 +264,19 @@ export function registerAgentRoutes(router, deps) {
     var fields = {};
     if (req.body.avatar_url !== undefined) fields.avatar_url = req.body.avatar_url;
     if (req.body.name !== undefined) fields.name = req.body.name;
+    // Trust layer P0 (250c, review-A r2 (c)): the embedder registration is the
+    // flag the drone-embed claim and vector-write gates read — an agent key
+    // (including the drone's own) can never mint it. Only the admin key moves
+    // it; heartbeat's field whitelist never carries it, so self-declared
+    // diagnostics cannot either.
+    if (req.body.embedder_registered !== undefined && !req._authIsAdmin) {
+      return res.status(403).json({ error: 'embedder_registered is admin-only — the embedder registration is infrastructure the admin key controls (an agent key is never the gate)' });
+    }
     // Admin-only fields
     if (req._authIsAdmin) {
       if (req.body.role !== undefined) fields.role = req.body.role;
       if (req.body.operator_id !== undefined) fields.operator_id = req.body.operator_id;
+      if (req.body.embedder_registered !== undefined) fields.embedder_registered = req.body.embedder_registered ? 1 : 0;
       if (req.body.project !== undefined) fields.project = req.body.project;
       if (req.body.project_id !== undefined) fields.project_id = req.body.project_id;
       if (req.body.capabilities !== undefined) fields.capabilities = typeof req.body.capabilities === 'string' ? req.body.capabilities : JSON.stringify(req.body.capabilities);

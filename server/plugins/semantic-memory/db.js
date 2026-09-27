@@ -670,20 +670,32 @@ export default function createMemoryDB(db, opts) {
       updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model);
     },
 
-    getUnembedded(limit) {
+    getUnembedded(limit, owner) {
       // Companion rows are NOT backlog (review A r4 MINOR 2): under the drone
       // provider they are security-refused at the queue by design, so counting
       // them made /reindex and /backfill-embeddings answer remaining:true
       // forever and the boot drain re-offer them every pass. The same
       // predicate the search arms hide them with keeps this from drifting.
       // Not-backlog is not deleted: the rows stay keyword-searchable.
-      return db.prepare(
-        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL + ' ORDER BY updated_at DESC LIMIT ?'
-      ).all(limit || 50);
+      // TRUST LAYER P0 (250c, review-A r2 major (a)): `owner` scopes the
+      // backlog to rows the caller WROTE — a non-admin backfill never queues
+      // another owner's row (their text would enter the agent-readable drone
+      // job queue and the completed vector would cross owners). NULL
+      // written_by is owner-UNKNOWN and never matches an owner scope: those
+      // rows stay admin-only, fail-closed like every other custody gate.
+      var sql = 'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL;
+      var params = [];
+      if (owner) { sql += ' AND written_by = ?'; params.push(owner); }
+      sql += ' ORDER BY updated_at DESC LIMIT ?';
+      params.push(limit || 50);
+      return db.prepare(sql).all(...params);
     },
 
-    countUnembedded() {
-      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL).get().c;
+    countUnembedded(owner) {
+      var sql = 'SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL;
+      var params = [];
+      if (owner) { sql += ' AND written_by = ?'; params.push(owner); }
+      return db.prepare(sql).get(...params).c;
     },
 
     // Oversized NULL-embedding rows can never embed whole — the provider
@@ -710,7 +722,13 @@ export default function createMemoryDB(db, opts) {
           var meta; // assigned on both paths below
           try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
           var chunks = this.indexDoc(row.source_type, row.source_id, fullText, {
-            namespace: docRows[0].namespace, metadata: meta
+            namespace: docRows[0].namespace, metadata: meta,
+            // TRUST LAYER P0 (250c): custody survives the chunk-split — the
+            // re-written/new chunk rows keep the doc's owner, so the owner's
+            // own claim-and-write still answers after an oversized-row backfill
+            // (a split that dropped written_by would strand the row
+            // owner-unknown and fail the vector-write gate closed at them).
+            written_by: docRows[0].written_by
           });
           for (var ci = 0; ci < chunks.length; ci++) {
             work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });

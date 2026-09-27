@@ -178,4 +178,18 @@ describe('P0.2 the six memory routes answer 429 one past their ceiling', () => {
   it('DELETE /memory/index/:type/:id holds 120/min (single-row delete)',
     expectCeiling('memory/index-delete', 120, (base) => (i) =>
       request(base).delete('/api/mycelium/memory/index/rl-del-probe/no-such-row-' + i).set(agent)), 60000);
+
+  // Review A round-2 MINOR M3: backfill-embeddings is a mutating memory route
+  // like its siblings, and the one route that fans out per row (up to 1000
+  // rows per call toward an embedding provider) — the same 120/min floor.
+  // The fill runs with provider='drone' so each call answers 200 without
+  // dialing a network embedder (the drone path only queues jobs).
+  it('/memory/backfill-embeddings holds 120/min',
+    async () => {
+      const cfg = await request(app).put('/api/mycelium/memory/config').set(admin)
+        .send({ embedding_provider: 'drone', embedding_model: 'nomic-embed-text' });
+      expect(cfg.status).toBe(200);
+      await expectCeiling('memory/backfill', 120, (base) => () =>
+        request(base).post('/api/mycelium/memory/backfill-embeddings?limit=1').set(agent))();
+    }, 60000);
 });

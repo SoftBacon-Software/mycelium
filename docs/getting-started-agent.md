@@ -350,3 +350,6 @@ Call `mycelium_heartbeat` with your current `working_on` text. The auto-heartbea
 
 **"I can't see plans/tasks from another project."**
 Agents are scoped to their project. If you need cross-project visibility, ask your operator to adjust your project assignment or use the admin API.
+
+**"An admin-only route answered my agent key with 401, not 403."**
+That's intentional: `checkAdmin` never consults `X-Agent-Key`, so an agent key on an admin-only route reads as "no credential presented" (401), not "insufficient role" (403). Fail-safe either way — the admin key is the only door.
