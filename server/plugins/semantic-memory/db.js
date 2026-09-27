@@ -188,6 +188,44 @@ export default function createMemoryDB(db, opts) {
     if (!/duplicate column|already exists/.test(String(e.message))) throw e;
   }
 
+  // TRUST LAYER P0 (review B item 4): the live lab wrote rows before custody
+  // existed — written_by NULL everywhere, which the owner checks read as
+  // admin-only (fail-closed) and a cross-owner supersede as refused, so the
+  // lab-alive loops would stop silently on deploy. Recover the owner where
+  // the row's own metadata names one: metadata.actor, then metadata.agent,
+  // then metadata.agent_id — the fields every writer used to self-assert
+  // (lesson actors, episode agents, indexed context keys, facts, savepoints).
+  // One-time (marker in sm_config); the UPDATE is itself idempotent (only
+  // NULL-custody rows carrying an owner-shaped key are touched, and stamped
+  // rows stop matching). The platform's pseudo-agents are not owners, rows
+  // with unparseable metadata are left NULL (fail-closed), and the applied
+  // count is logged loudly — a silent migration is an unverified one.
+  try {
+    var backfillMarker = db.prepare("SELECT value FROM sm_config WHERE key = 'written_by_backfill_v1'").get();
+    if (!backfillMarker) {
+      var backfilled = db.prepare(`
+        UPDATE sm_embeddings SET written_by = COALESCE(
+            json_extract(metadata, '$.actor'),
+            json_extract(metadata, '$.agent'),
+            json_extract(metadata, '$.agent_id'))
+        WHERE written_by IS NULL AND metadata IS NOT NULL AND json_valid(metadata)
+          AND COALESCE(json_extract(metadata, '$.actor'),
+                       json_extract(metadata, '$.agent'),
+                       json_extract(metadata, '$.agent_id'))
+              NOT IN ('__system__', '__admin__')
+      `).run();
+      db.prepare("INSERT INTO sm_config (key, value) VALUES ('written_by_backfill_v1', ?)")
+        .run('applied: ' + backfilled.changes + ' rows');
+      console.log('[semantic-memory] written_by backfill: stamped custody on ' + backfilled.changes +
+        ' pre-column rows from their own metadata (review B item 4)');
+    }
+  } catch (e) {
+    // Loud but not fatal: the fail-closed default (NULL = admin-only) still
+    // protects every un-migrated row until this is fixed and re-run (clearing
+    // the marker re-arms it).
+    console.error('[semantic-memory] written_by backfill FAILED — affected rows stay admin-only (clear sm_config key written_by_backfill_v1 to re-arm):', e.message);
+  }
+
   return {
 
     // -- Config --

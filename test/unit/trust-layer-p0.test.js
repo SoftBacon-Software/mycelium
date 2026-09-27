@@ -1178,3 +1178,60 @@ describe('Review B item 5: consolidation touches only its input, never directive
     expect(dRow.confidence).toBe(0.9); // the keep-leg confidence edit was refused too
   });
 });
+
+// ====================== Review B item 4 (task 250d) ======================
+// the live lab wrote rows before custody existed — written_by NULL everywhere
+// (= admin-only after deploy, cross-owner supersedes refused). A one-time,
+// idempotent migration recovers the owner from the row's own metadata
+// (actor / agent / agent_id) on a fixture DB with NULL rows.
+describe('Review B item 4: the written_by backfill migration', () => {
+  it('stamps custody from metadata on a fixture DB, once, idempotently', async () => {
+    const Database = (await import('better-sqlite3')).default;
+    const { default: createMemoryDB } = await import('../../server/plugins/semantic-memory/db.js');
+    const dir = mkdtempSync(join(tmpdir(), 'myc-tl250-backfill-'));
+    const raw = new Database(join(dir, 'fixture.db'));
+    raw.exec(`
+      CREATE TABLE sm_embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_type TEXT NOT NULL, source_id TEXT NOT NULL, chunk_index INTEGER DEFAULT 0,
+        content_text TEXT, metadata TEXT, namespace TEXT, embedding TEXT, embedding_model TEXT,
+        created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(source_type, source_id, chunk_index)
+      );
+      CREATE TABLE sm_config (key TEXT PRIMARY KEY, value TEXT);
+    `);
+    const ins = raw.prepare("INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata) VALUES ('note', ?, 'x', ?)");
+    ins.run('actor-row', JSON.stringify({ actor: 'lucy-tl250' }));
+    ins.run('agent-row', JSON.stringify({ agent: 'echo-tl250' }));
+    ins.run('agent-id-row', JSON.stringify({ agent_id: 'kira' }));
+    ins.run('precedence-row', JSON.stringify({ actor: 'lucy-tl250', agent: 'echo-tl250' })); // actor wins
+    ins.run('pseudo-row', JSON.stringify({ agent: '__admin__' })); // pseudo-agents own nothing
+    ins.run('badjson-row', 'not-json{'); // invalid metadata: nothing to recover
+    ins.run('bare-row', null); // no metadata at all
+    try {
+      createMemoryDB(raw); // boots the plugin — and with it, the backfill
+
+      const wb = raw.prepare("SELECT source_id, written_by FROM sm_embeddings ORDER BY id").all();
+      const byId = Object.fromEntries(wb.map((r) => [r.source_id, r.written_by]));
+      expect(byId['actor-row']).toBe('lucy-tl250');
+      expect(byId['agent-row']).toBe('echo-tl250');
+      expect(byId['agent-id-row']).toBe('kira');
+      expect(byId['precedence-row']).toBe('lucy-tl250'); // actor > agent > agent_id
+      expect(byId['pseudo-row']).toBeNull(); // __admin__ is not an owner
+      expect(byId['badjson-row']).toBeNull(); // fail-closed
+      expect(byId['bare-row']).toBeNull(); // fail-closed
+
+      // Idempotent: a second boot is a no-op (marker), and re-running the same
+      // UPDATE by hand touches nothing (the WHERE only matches NULL rows that
+      // carry an owner-shaped key).
+      createMemoryDB(raw);
+      const recheck = raw.prepare("SELECT source_id, written_by FROM sm_embeddings ORDER BY id").all();
+      expect(Object.fromEntries(recheck.map((r) => [r.source_id, r.written_by]))).toEqual(byId);
+      const marker = raw.prepare("SELECT value FROM sm_config WHERE key = 'written_by_backfill_v1'").get();
+      expect(marker.value).toContain('4'); // the applied count is recorded loudly (4 stamped, 3 fail-closed)
+    } finally {
+      raw.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
