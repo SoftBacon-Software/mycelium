@@ -77,18 +77,33 @@ the `.env.example` shows how to generate them.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
-### No rule-engine / guardrails layer (trust layer P0.3)
+### No guardrails plugin — but enforcement rules do block (trust layer P0.3)
 
-Mycelium ships **no guardrails rule engine** — there is no
-`enforcement='block'` rule table, no `/safety/*` routes, and no
-`checkGuardrails` seam. A guardrails plugin once existed but shipped
-disabled, never mounted, and was removed (its fail-open seam outlived
-it and was removed with trust-layer P0.3 before it could mislead an
-operator into thinking rules were enforced). Enforcement today is:
-authentication (above), per-route rate limits, the risk-tiered
-approvals, and the kill switch. If you need rule-based blocking,
-implement it as a proxy/reverse-plugin in front of the API rather
-than expecting a core hook.
+The guardrails plugin and its `checkGuardrails` seam are gone: the
+plugin shipped disabled, never mounted, and was removed, and its
+fail-open seam — a gate that could only ever fail open while its
+warning text pointed at the deleted plugin — was removed with
+trust-layer P0.3 before it could mislead an operator into thinking
+rules were enforced. `/safety/*` never existed server-side and still
+answers 404.
+
+One rule mechanism **is** live and blocks in-core:
+`checkEnforcementRules` (`server/routes/mycelium.js`) reads rules from
+the `mycelium/enforcement_rules` context key — set through the
+ordinary context API (`PUT /context/keys/mycelium/enforcement_rules`),
+surfaced in db stats as `enforcement_rules_active` — and guards two
+routes: `POST /messages` (tool `send_message`) and
+`POST /github/prs/:owner/:repo/:number/merge` (tool `merge_pr`). A
+rule matches by tool name (`*` wildcard) plus an optional
+case-insensitive regex over the call args (with optional `enforce`
+conditions: `expected_tool`, `expected_args`, `required_role`); a
+matched rule with `severity: 'block'` answers 403 with
+`enforcement_rule: <rule id>` and emits an `enforcement_violation`
+event — lower severities warn only. It is opt-in: with no rules
+configured, every call passes.
+
+Everything else that enforces is unchanged: authentication (above),
+per-route rate limits, the risk-tiered approvals, and the kill switch.
 
 ### Third-party plugins
 
