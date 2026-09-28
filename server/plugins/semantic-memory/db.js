@@ -174,6 +174,58 @@ export default function createMemoryDB(db, opts) {
     if (!/duplicate column|already exists/.test(String(e.message))) throw e;
   }
 
+  // TRUST LAYER P0.2 (F-mycelium/250): write authority — WHO wrote this row.
+  // The agent routes stamp it from the AUTHENTICATED identity on every write
+  // (routes.js); the routes' owner check lets a non-admin overwrite/delete
+  // only rows bearing its own name. NULL = written before the column existed,
+  // or by an internal writer (fact indexing, chunk-splitting) = owner-UNKNOWN
+  // = only the admin key may mutate it (fail-closed: an accidental NULL can
+  // only ever make a row MORE protected, never less). Guarded ALTER, same
+  // idiom as superseded_by above.
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN written_by TEXT').run();
+  } catch (e) {
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
+
+  // TRUST LAYER P0 (review B item 4): the live lab wrote rows before custody
+  // existed — written_by NULL everywhere, which the owner checks read as
+  // admin-only (fail-closed) and a cross-owner supersede as refused, so the
+  // lab-alive loops would stop silently on deploy. Recover the owner where
+  // the row's own metadata names one: metadata.actor, then metadata.agent,
+  // then metadata.agent_id — the fields every writer used to self-assert
+  // (lesson actors, episode agents, indexed context keys, facts, savepoints).
+  // One-time (marker in sm_config); the UPDATE is itself idempotent (only
+  // NULL-custody rows carrying an owner-shaped key are touched, and stamped
+  // rows stop matching). The platform's pseudo-agents are not owners, rows
+  // with unparseable metadata are left NULL (fail-closed), and the applied
+  // count is logged loudly — a silent migration is an unverified one.
+  try {
+    var backfillMarker = db.prepare("SELECT value FROM sm_config WHERE key = 'written_by_backfill_v1'").get();
+    if (!backfillMarker) {
+      var backfilled = db.prepare(`
+        UPDATE sm_embeddings SET written_by = COALESCE(
+            json_extract(metadata, '$.actor'),
+            json_extract(metadata, '$.agent'),
+            json_extract(metadata, '$.agent_id'))
+        WHERE written_by IS NULL AND metadata IS NOT NULL AND json_valid(metadata)
+          AND COALESCE(json_extract(metadata, '$.actor'),
+                       json_extract(metadata, '$.agent'),
+                       json_extract(metadata, '$.agent_id'))
+              NOT IN ('__system__', '__admin__')
+      `).run();
+      db.prepare("INSERT INTO sm_config (key, value) VALUES ('written_by_backfill_v1', ?)")
+        .run('applied: ' + backfilled.changes + ' rows');
+      console.log('[semantic-memory] written_by backfill: stamped custody on ' + backfilled.changes +
+        ' pre-column rows from their own metadata (review B item 4)');
+    }
+  } catch (e) {
+    // Loud but not fatal: the fail-closed default (NULL = admin-only) still
+    // protects every un-migrated row until this is fixed and re-run (clearing
+    // the marker re-arms it).
+    console.error('[semantic-memory] written_by backfill FAILED — affected rows stay admin-only (clear sm_config key written_by_backfill_v1 to re-arm):', e.message);
+  }
+
   return {
 
     // -- Config --
@@ -280,6 +332,14 @@ export default function createMemoryDB(db, opts) {
       var metadata = opts.metadata ? JSON.stringify(opts.metadata) : '{}';
       var embedding = opts.embedding || null;
       var embeddingModel = opts.embedding_model || null;
+      // TRUST LAYER P0.2: the write's owner, stamped by the route from the
+      // AUTHENTICATED identity (never a body field). NULL on internal writers.
+      var writtenBy = opts.written_by || null;
+      // TRUST LAYER P0 (review B item 2): SERVER-side writers of server-owned
+      // source types set force_written_by — the source's real owner replaces
+      // whatever custody the row carried, so a squatter's claim cannot survive
+      // the server writing its own row. Surface writes keep the keep-first CASE.
+      var forceWrittenBy = opts.force_written_by === true;
 
       var prior = db.prepare(
         'SELECT content_text, namespace, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ? AND chunk_index = ?'
@@ -292,11 +352,21 @@ export default function createMemoryDB(db, opts) {
       }
 
       db.prepare(`
-        INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_type, source_id, chunk_index)
         DO UPDATE SET content_text = excluded.content_text, namespace = excluded.namespace,
           metadata = excluded.metadata,
+          -- TRUST LAYER P0.2: written_by is CUSTODY, established by the row's
+          -- FIRST writer and preserved on every authorized rewrite — an admin
+          -- correcting a row does not steal it, and the owner can keep
+          -- maintaining (or deleting) it afterwards. Only a first write (or a
+          -- pre-column NULL) takes a new value. Review B item 2: a forced
+          -- (server-side) write always takes excluded.written_by instead —
+          -- the source's real owner evicts a squatter's claim.
+          written_by = ${forceWrittenBy
+            ? 'excluded.written_by'
+            : 'CASE WHEN sm_embeddings.written_by IS NULL\n            THEN excluded.written_by ELSE sm_embeddings.written_by END'},
           embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.embedding ELSE excluded.embedding END,
           embedding_model = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
@@ -305,7 +375,7 @@ export default function createMemoryDB(db, opts) {
             AND sm_embeddings.namespace = excluded.namespace
             AND sm_embeddings.metadata = excluded.metadata
             THEN sm_embeddings.updated_at ELSE datetime('now') END
-      `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel);
+      `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel, writtenBy);
       vectorCache.onUpsert(sourceType, sourceId, chunkIndex);
       return { unchanged: false };
     },
@@ -319,17 +389,20 @@ export default function createMemoryDB(db, opts) {
     // `unchangedCount` — the number of INPUT ITEMS that churned nothing — so
     // the bulk route can answer the {ok, indexed, rows, unchanged} split
     // (task 227).
-    bulkIndex(items) {
+    bulkIndex(items, writtenBy) {
       var self = this;
       var rows = [];
       var unchangedItems = 0;
+      // TRUST LAYER P0.2: the route stamps every item with the AUTHENTICATED
+      // writer (second arg); internal callers that omit it leave NULL.
+      var owner = writtenBy || null;
       var txn = db.transaction(function (items) {
         for (var item of items) {
           if (item.chunk_index !== undefined && item.chunk_index !== null) {
             var one = self.index(item.source_type, item.source_id, item.content_text, {
               namespace: item.namespace, chunk_index: item.chunk_index,
               metadata: item.metadata, embedding: item.embedding,
-              embedding_model: item.embedding_model
+              embedding_model: item.embedding_model, written_by: owner
             });
             var oneUnchanged = !!(one && one.unchanged);
             if (oneUnchanged) unchangedItems++;
@@ -343,7 +416,8 @@ export default function createMemoryDB(db, opts) {
           }
           var chunks = self.indexDoc(item.source_type, item.source_id, item.content_text, {
             namespace: item.namespace, metadata: item.metadata,
-            embedding: item.embedding, embedding_model: item.embedding_model
+            embedding: item.embedding, embedding_model: item.embedding_model,
+            written_by: owner
           });
           // Content that is unchanged is unchanged for every chunk of the doc
           // (the split is deterministic), so the doc-level flag rides each row;
@@ -642,20 +716,32 @@ export default function createMemoryDB(db, opts) {
       updateEmbeddingRow(sourceType, sourceId, chunkIndex, embedding, model);
     },
 
-    getUnembedded(limit) {
+    getUnembedded(limit, owner) {
       // Companion rows are NOT backlog (review A r4 MINOR 2): under the drone
       // provider they are security-refused at the queue by design, so counting
       // them made /reindex and /backfill-embeddings answer remaining:true
       // forever and the boot drain re-offer them every pass. The same
       // predicate the search arms hide them with keeps this from drifting.
       // Not-backlog is not deleted: the rows stay keyword-searchable.
-      return db.prepare(
-        'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL + ' ORDER BY updated_at DESC LIMIT ?'
-      ).all(limit || 50);
+      // TRUST LAYER P0 (250c, review-A r2 major (a)): `owner` scopes the
+      // backlog to rows the caller WROTE — a non-admin backfill never queues
+      // another owner's row (their text would enter the agent-readable drone
+      // job queue and the completed vector would cross owners). NULL
+      // written_by is owner-UNKNOWN and never matches an owner scope: those
+      // rows stay admin-only, fail-closed like every other custody gate.
+      var sql = 'SELECT id, source_type, source_id, chunk_index, content_text FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL;
+      var params = [];
+      if (owner) { sql += ' AND written_by = ?'; params.push(owner); }
+      sql += ' ORDER BY updated_at DESC LIMIT ?';
+      params.push(limit || 50);
+      return db.prepare(sql).all(...params);
     },
 
-    countUnembedded() {
-      return db.prepare('SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL).get().c;
+    countUnembedded(owner) {
+      var sql = 'SELECT COUNT(*) as c FROM sm_embeddings WHERE embedding IS NULL AND ' + COMPANION_HIDDEN_SQL;
+      var params = [];
+      if (owner) { sql += ' AND written_by = ?'; params.push(owner); }
+      return db.prepare(sql).get(...params).c;
     },
 
     // Oversized NULL-embedding rows can never embed whole — the provider
@@ -682,7 +768,13 @@ export default function createMemoryDB(db, opts) {
           var meta; // assigned on both paths below
           try { meta = docRows[0].metadata ? JSON.parse(docRows[0].metadata) : null; } catch (e) { meta = null; }
           var chunks = this.indexDoc(row.source_type, row.source_id, fullText, {
-            namespace: docRows[0].namespace, metadata: meta
+            namespace: docRows[0].namespace, metadata: meta,
+            // TRUST LAYER P0 (250c): custody survives the chunk-split — the
+            // re-written/new chunk rows keep the doc's owner, so the owner's
+            // own claim-and-write still answers after an oversized-row backfill
+            // (a split that dropped written_by would strand the row
+            // owner-unknown and fail the vector-write gate closed at them).
+            written_by: docRows[0].written_by
           });
           for (var ci = 0; ci < chunks.length; ci++) {
             work.push({ source_type: row.source_type, source_id: row.source_id, chunk_index: ci, content_text: chunks[ci] });

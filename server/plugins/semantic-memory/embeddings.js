@@ -90,7 +90,12 @@ export function recordDrainPass(cause, enqueued) {
 
 // Queue a drone job to embed content asynchronously.
 // The drone worker calls local Ollama, then PUTs the vector back via callback endpoint.
-export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model) {
+// `queuedBy` (250c, trust layer): WHO the queue entry is FOR — the row owner's
+// agent id when an agent backfills its own rows (the claim gate reads it: the
+// job is the owner's to claim), or the default 'semantic-memory' for
+// infrastructure queueing (boot drain, index pipeline, admin reindex), whose
+// jobs are claimable by an admin-registered embedder.
+export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, text, model, queuedBy) {
   if (sourceType === 'companion') {
     // Companion rows are per-user private (F-mycelium/246, review A r2 MAJOR):
     // a drone embed job stores the row's FULL TEXT in drone_jobs.input_data,
@@ -119,7 +124,7 @@ export function createDroneEmbedJob(rawDb, sourceType, sourceId, chunkIndex, tex
     '',
     inputData,
     JSON.stringify(['ollama']),
-    'semantic-memory',
+    queuedBy || 'semantic-memory',
     3,
     'embed'
   );

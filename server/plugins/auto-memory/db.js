@@ -30,6 +30,14 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('ALTER TABLE am_facts ADD COLUMN namespace TEXT'); } catch (e) { /* already exists */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_namespace ON am_facts(namespace)'); } catch (e) { /* */ }
 
+  // Migration: claimed identity (TRUST LAYER P0.2, F-mycelium/250). agent_id on
+  // a row is the AUTHENTICATED writer (routes.js binds it); claimed_agent_id
+  // keeps what a non-admin caller ASKED to be named when that differed —
+  // visible, flagged, never trusted. NULL on honest writes. Like namespace,
+  // this lives HERE (the guarded-ALTER block), not in schema.sql — same
+  // column-dependent-migration rule the namespace note above states.
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN claimed_agent_id TEXT'); } catch (e) { /* already exists */ }
+
   // The inverse of indexFactInMemory() in routes.js. Every path that stops a fact
   // being CURRENT must also stop it being SEARCHABLE — otherwise a retracted or
   // superseded fact keeps ranking in /memory/search as though it were live, with
@@ -101,13 +109,16 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Facts --
-    // sourceAuthority (verified|directive|inferred), validFrom and namespace are
-    // optional & appended, so existing 7-arg callers keep working (defaults:
-    // inferred, valid_from=now, namespace=NULL = a legacy row).
-    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace) {
+    // sourceAuthority (verified|directive|inferred), validFrom, namespace and
+    // claimedAgentId are optional & appended, so existing callers keep working
+    // (defaults: inferred, valid_from=now, namespace=NULL = a legacy row,
+    // claimed_agent_id=NULL = an honest write). claimedAgentId is the body's
+    // agent_id when it disagreed with the authenticated identity — recorded,
+    // flagged, never trusted (TRUST LAYER P0.2).
+    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId) {
       var result = db.prepare(
-        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?) RETURNING id"
-      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null);
+        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?) RETURNING id"
+      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null);
       return result.id;
     },
 

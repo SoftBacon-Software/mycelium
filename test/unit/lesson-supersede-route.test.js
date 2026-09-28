@@ -267,7 +267,10 @@ describe('POST /memory/lessons/:id/supersede — the by_text correction (both ro
     expect(newRow).toBeTruthy();
     expect(newRow.source_type).toBe('lesson');
     expect(newRow.content_text).toBe(CORRECTION);
-    expect(newRow.metadata.actor).toBe('m5max');
+    // P0.2 identity binding: the superseding row's actor is the authenticated
+    // caller; BASE_BODY's 'm5max' claim survives as claimed_actor.
+    expect(newRow.metadata.actor).toBe('tester-agent');
+    expect(newRow.metadata.claimed_actor).toBe('m5max');
     expect(newRow.metadata.evidence).toBe(BASE_BODY.evidence);
     expect(newRow.metadata.learned_at).toBeTruthy();
     // the correction names what it replaced, and carries the reason

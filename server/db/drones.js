@@ -41,6 +41,25 @@ export function getDroneJob(id) {
 export function claimDroneJob(droneId, capabilities) {
   var caps = Array.isArray(capabilities) ? capabilities : [];
 
+  // Trust layer P0 (F-mycelium/250c, review-A round 2 major): an embed job
+  // names a MEMORY row (its text rides in input_data — the claim payload is a
+  // cross-owner READ unless it is gated) and its completion writes that row's
+  // vector. So the claim itself is an authorization event, checked against the
+  // ROW, not against the drone's self-declared capabilities: a job is this
+  // drone's to claim only when (1) it was queued FOR this drone — the memory
+  // pipeline stamps the row owner into `requester` when an agent backfills its
+  // own rows — or (2) the claiming agent is an admin-registered embedder
+  // (agents.embedder_registered — the admin key is the door; an agent key can
+  // never mint it, and heartbeat's field whitelist never carries it, so
+  // self-declared system_diagnostics satisfy no part of this gate). Anything
+  // else — an infra-queued job (requester 'semantic-memory') and a
+  // self-requester job for a foreign row — is SKIPPED, exactly like a
+  // requires-mismatch: not this drone's work, and no signal that it exists.
+  // `capabilities` stay a ROUTING match (which jobs this drone can physically
+  // run), never the entitlement test.
+  var reg = db.prepare('SELECT embedder_registered FROM agents WHERE id = ?').get(droneId);
+  var registeredEmbedder = !!(reg && reg.embedder_registered);
+
   return db.transaction(function () {
     var pending = db.prepare(
       "SELECT * FROM drone_jobs WHERE status = 'pending' ORDER BY priority DESC, created_at ASC"
@@ -48,6 +67,7 @@ export function claimDroneJob(droneId, capabilities) {
 
     for (var i = 0; i < pending.length; i++) {
       var job = pending[i];
+      if (job.job_type === 'embed' && job.requester !== droneId && !registeredEmbedder) continue;
       var reqs = [];
       try { reqs = JSON.parse(job.requires || '["cpu"]'); } catch (e) { console.warn('[mycelium] JSON parse failed for job.requires (job: ' + job.id + '):', e.message); reqs = ['cpu']; }
       var matched = reqs.every(function (r) { return caps.indexOf(r) !== -1; });
@@ -423,23 +443,35 @@ export function renderJobForDrone(templateId, droneId, inputData) {
     null_dev: nullDev,
     path_sep: pathSep,
   };
-  // Merge inputData vars. These are user-supplied and get interpolated into a
-  // command executed on the drone, so reject shell metacharacters (C-2): $ and
+  var command_template = template.command_template || '';
+  // Merge inputData vars. Only values the command template actually
+  // INTERPOLATES reach a command string, so only those need the C-2 guard —
+  // a value never referenced by {{k}} in command_template is data the worker
+  // reads from input_data (embed jobs carry whole memory-row texts there),
+  // and guarding it refused jobs it could never have injected into. Referenced
+  // values keep the full guard: reject shell metacharacters (C-2): $ and
   // backtick do command substitution even inside quotes; ; | & < > chain and
   // redirect. Blocking them stops injection cross-OS without touching normal
   // prompt text (letters, spaces, commas, apostrophes, parens all pass).
   var SHELL_META = /[$`;|&<>\n\r\0]/;
+  var referenced = {};
+  try {
+    var m = command_template.match(/\{\{(\w+)\}\}/g) || [];
+    for (var r of m) referenced[r.slice(2, -2)] = true;
+  } catch (e) { referenced = {}; }
   if (inputData && typeof inputData === 'object') {
     for (var k of Object.keys(inputData)) {
       if (k.startsWith('_')) continue;
       var v = inputData[k];
-      if (typeof v === 'string' && SHELL_META.test(v)) {
-        return { error: 'Input value for "' + k + '" contains disallowed shell characters ($ ` ; | & < > newline)' };
+      if (referenced[k]) {
+        if (typeof v === 'string' && SHELL_META.test(v)) {
+          return { error: 'Input value for "' + k + '" contains disallowed shell characters ($ ` ; | & < > newline)' };
+        }
+        vars[k] = v;
       }
-      vars[k] = v;
     }
   }
-  var command = template.command_template;
+  var command = command_template;
   for (var [varName, varVal] of Object.entries(vars)) {
     command = command.replace(new RegExp('\\{\\{' + varName + '\\}\\}', 'g'), String(varVal));
   }

@@ -45,6 +45,16 @@ export function registerHooks(core) {
   // hasn't moved); chunking is lossless, so the chunks reassemble the doc
   // for comparison. Note db.index's upsert NULLs the embedding, so indexing
   // without re-embedding would silently lose vectors.
+  //
+  // TRUST LAYER P0 (review B item 2): these are SERVER writes of server-owned
+  // source types — every call passes force_written_by so the source's real
+  // owner replaces whatever custody a colliding row carried (a squatter's
+  // write under the row's id cannot survive the server indexing its own data).
+  function eventOwner(agent) {
+    // The platform's pseudo-agents own nothing: NULL written_by = admin-only.
+    return (agent && agent !== '__system__' && agent !== '__admin__') ? agent : null;
+  }
+
   function indexAndEmbed(sourceType, sourceId, contentText, opts) {
     var existing = db.getDocChunks(sourceType, sourceId);
     if (existing.length > 0) {
@@ -72,7 +82,9 @@ export function registerHooks(core) {
       var sourceId = namespace + ':' + key;
       indexAndEmbed('context_key', sourceId, value, {
         namespace: namespace,
-        metadata: { namespace: namespace, key: key, agent_id: eventData.agent }
+        metadata: { namespace: namespace, key: key, agent_id: eventData.agent },
+        written_by: eventOwner(eventData.agent),
+        force_written_by: true
       });
     } catch (e) {
       console.error('[semantic-memory] auto-index context_key failed:', e.message);
@@ -95,7 +107,9 @@ export function registerHooks(core) {
           to_agent: data.to_agent,
           project_id: data.project_id || eventData.project_id,
           msg_type: data.msg_type
-        }
+        },
+        written_by: eventOwner(data.from_agent || eventData.agent), // the SENDER owns the row
+        force_written_by: true
       });
     } catch (e) {
       console.error('[semantic-memory] auto-index message failed:', e.message);
@@ -135,7 +149,9 @@ export function registerHooks(core) {
     if (text.length < 10) return;
 
     indexAndEmbed('concept', String(conceptId), text, {
-      metadata: { concept_id: conceptId, name: name, type: type }
+      metadata: { concept_id: conceptId, name: name, type: type },
+      written_by: eventOwner(eventData.agent), // concepts are platform-level — often NULL (admin-only)
+      force_written_by: true
     });
   }
 
@@ -169,7 +185,9 @@ export function registerHooks(core) {
       if (text.length < 10) return;
 
       indexAndEmbed('task', String(taskId), text, {
-        metadata: { task_id: taskId, project_id: data.project_id || eventData.project_id }
+        metadata: { task_id: taskId, project_id: data.project_id || eventData.project_id },
+        written_by: eventOwner(eventData.agent), // task_created carries no assignee — often NULL
+        force_written_by: true
       });
     } catch (e) {
       console.error('[semantic-memory] auto-index task failed:', e.message);
@@ -193,7 +211,9 @@ export function registerHooks(core) {
       if (text.length < 10) return;
 
       indexAndEmbed('task', String(taskId), text, {
-        metadata: { task_id: taskId, project_id: eventData.project_id, status: 'done', agent_id: eventData.agent }
+        metadata: { task_id: taskId, project_id: eventData.project_id, status: 'done', agent_id: eventData.agent },
+        written_by: eventOwner(eventData.agent), // the completing agent owns the row
+        force_written_by: true
       });
     } catch (e) {
       console.error('[semantic-memory] auto-index task_completed failed:', e.message);
@@ -214,7 +234,9 @@ export function registerHooks(core) {
     if (text.length < 10) return;
 
     indexAndEmbed('savepoint', agentId, text, {
-      metadata: { agent_id: agentId, savepoint_id: sp.id, heartbeat_at: sp.heartbeat_at }
+      metadata: { agent_id: agentId, savepoint_id: sp.id, heartbeat_at: sp.heartbeat_at },
+      written_by: eventOwner(agentId), // the savepoint's agent (pseudo-agents already skipped above)
+      force_written_by: true
     });
   }
 
@@ -260,7 +282,9 @@ export function registerHooks(core) {
     if (text.length < 10) return;
 
     indexAndEmbed('workflow', String(wf.id), text, {
-      metadata: { workflow_id: wf.id, project_id: wf.project_id, shape: wf.shape, status: wf.status }
+      metadata: { workflow_id: wf.id, project_id: wf.project_id, shape: wf.shape, status: wf.status },
+      written_by: eventOwner(eventData.agent), // multi-agent briefs have no single owner — often NULL
+      force_written_by: true
     });
   }
 
@@ -297,7 +321,9 @@ export function registerHooks(core) {
       if (text.length < 10) return;
 
       indexAndEmbed('plan', String(plan.id), text, {
-        metadata: { plan_id: plan.id, project_id: plan.project_id }
+        metadata: { plan_id: plan.id, project_id: plan.project_id },
+        written_by: eventOwner(eventData.agent),
+        force_written_by: true
       });
     } catch (e) {
       console.error('[semantic-memory] auto-index plan_created failed:', e.message);
@@ -319,7 +345,9 @@ export function registerHooks(core) {
         var text = 'COMPLETED: ' + step.title + (step.description ? '\n' + step.description : '');
         if (text.length < 10) continue;
         indexAndEmbed('plan_step', String(step.id), text, {
-          metadata: { plan_id: step.plan_id, step_id: step.id, task_id: taskId, agent_id: eventData.agent }
+          metadata: { plan_id: step.plan_id, step_id: step.id, task_id: taskId, agent_id: eventData.agent },
+          written_by: eventOwner(eventData.agent),
+          force_written_by: true
         });
       }
     } catch (e) {

@@ -352,7 +352,10 @@ describe('GET /memory/history — prior verdict rows for a repo/class', () => {
     const res = await request(ctx.app).get('/memory/history?repo=jarvis&task_class=tool-call-shape').expect(200);
     expect(res.body.source_type).toBe('verdict');
     expect(ids(res)).toEqual(['v-new', 'v-mid', 'v-old']);
-    expect(res.body.results[0].metadata.actor).toBe('echo');
+    // P0.2 identity binding: the stored actor is the authenticated caller;
+    // the body's 'echo' claim survives as claimed_actor, flagged, never trusted.
+    expect(res.body.results[0].metadata.actor).toBe('tester-agent');
+    expect(res.body.results[0].metadata.claimed_actor).toBe('echo');
     expect(res.body.results[0].metadata.evidence).toContain('wf501');
   });
 
@@ -585,7 +588,10 @@ describe('tools/migrate-lessons-md.mjs — migration against the routes (composi
     const res = await request(ctx.app).get('/memory/lessons?limit=100').expect(200);
     expect(res.body.count).toBe(2);
     for (const row of res.body.results) {
-      expect(row.metadata.actor).toBe('squad');
+      // P0.2 identity binding: stored actor = authenticated caller; the
+      // parser's 'squad' attribution is preserved as claimed_actor.
+      expect(row.metadata.actor).toBe('tester-agent');
+      expect(row.metadata.claimed_actor).toBe('squad');
       expect(row.metadata.evidence).toContain('lessons.md');
     }
 

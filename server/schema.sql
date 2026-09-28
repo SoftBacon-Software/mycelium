@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS agents (
   role            TEXT NOT NULL DEFAULT '',
   operator_id     TEXT NOT NULL DEFAULT '',
   system_diagnostics TEXT NOT NULL DEFAULT '{}',
+  embedder_registered INTEGER NOT NULL DEFAULT 0,
   agent_type      TEXT NOT NULL DEFAULT 'agent',
   llm_backend     TEXT NOT NULL DEFAULT '',
   llm_model       TEXT NOT NULL DEFAULT '',

@@ -4,11 +4,17 @@ import { Router } from 'express';
 import createAutoMemoryDB from './db.js';
 import { callLLM } from './llm.js';
 import { rateLimited } from '../../lib/rate-limit.js';
+import { memoryAgentGuard } from '../../lib/memory-auth.js';
 
 export default function (core) {
   var router = Router();
   var db = createAutoMemoryDB(core.db);
-  var { checkAgentOrAdmin, checkAdmin } = core.auth;
+  var { checkAdmin } = core.auth;
+  // TRUST LAYER P0.1 (F-mycelium/250): the agent routes' gate — an agent key,
+  // the admin key/JWT, or a role-'agent' studio token; any OTHER studio JWT is
+  // refused. checkAgentOrAdmin's any-JWT-authenticates path was the hole the
+  // 09-26 audit named, so the agent surface no longer rides it.
+  var checkMemoryAgent = memoryAgentGuard(core.auth);
   var { apiError, parseIntParam } = core;
 
   // The source_type namespaced facts index under in sm_embeddings — distinct from
@@ -40,9 +46,29 @@ export default function (core) {
     return true;
   }
 
-  // GET /auto-memory/facts — list facts
+  // TRUST LAYER P0.2 (F-mycelium/250, review A blocker B2): write authority on
+  // facts — the am_facts counterpart of refuseNotRowOwner on the sm_embeddings
+  // surface. agent_id has been the AUTHENTICATED writer since this PR, so it
+  // is the ownership column: a non-admin caller supersedes or reverifies only
+  // facts it wrote. A NULL agent_id (the internal consolidator's insights, or
+  // anything written before the column meant "writer") is owner-UNKNOWN and
+  // therefore admin-only — fail-closed, exactly like written_by NULL on
+  // /memory/*: an accidental NULL can only make a row MORE protected, never
+  // less. The admin key keeps cross-agent access (the bench arms, the MCP
+  // fork, the due-reverification drain). Refusal mirrors the same 403
+  // sentence family the owner-only /memory routes use.
+  // Returns true when the request was refused (response already sent).
+  function refuseNotFactOwner(res, fact, who, isAdmin, action) {
+    if (isAdmin) return false;
+    if (fact.agent_id === who) return false;
+    apiError(res, 403, (action ? action + ' refused: ' : '') + 'fact ' + fact.id + ' is ' +
+      (fact.agent_id
+        ? "owned by '" + fact.agent_id + "' — an agent key may supersede or reverify only the facts it wrote; ask the owner or use the admin key"
+        : 'owner-unknown (agent_id is NULL — written before write authority existed) — only the admin key may supersede or reverify it'));
+    return true;
+  }
   router.get('/facts', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var facts = db.listFacts({
       agent_id: who,
@@ -71,11 +97,15 @@ export default function (core) {
 
   // GET /auto-memory/facts/:id — get single fact
   router.get('/facts/:id', function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
     if (namespaceGuard(req, fact, res, 'read')) return;
+    // TRUST LAYER P0.2 (review A nit N1): the single read is scoped like the
+    // list (agent_id = who) — another agent's fact is "not there": a plain
+    // 404 that neither confirms the row nor names its owner. Admin excepted.
+    if (!req._authIsAdmin && fact.agent_id !== who) return apiError(res, 404, 'Fact not found');
     res.json(fact);
   });
 
@@ -130,14 +160,28 @@ export default function (core) {
   // immediately, vector follows one-at-a-time per model, degrade-to-keyword on
   // backlog). Optional `metadata` (free-form object — the bench contract carries
   // episode/valid_from/supersedes/...) rides along on the index row.
-  router.post('/facts', async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+  // Rate-limited (TRUST LAYER P0.2): the timeline bench arm writes a run's
+  // facts through here (tens of thousands per run, over minutes) — 2400/min
+  // per IP keeps that ceiling far above the bench while bounding abuse.
+  router.post('/facts', rateLimited('auto-memory/facts', { windowMs: 60000, max: 2400 }), async function (req, res) {
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var b = req.body || {};
     if (!b.fact_text || String(b.fact_text).length < 10) return apiError(res, 400, 'fact_text (>=10 chars) is required');
+    // TRUST LAYER P0.2: the size cap — fact_text lands verbatim in the
+    // semantic index, so an unbounded fact was an unbounded index row.
+    if (String(b.fact_text).length > 2000) {
+      return apiError(res, 400, 'fact_text exceeds the 2000-character cap (got ' + String(b.fact_text).length + ') — split the fact');
+    }
     var authority = b.source_authority || 'inferred';
     if (['verified', 'directive', 'inferred'].indexOf(authority) === -1) {
       return apiError(res, 400, 'source_authority must be one of: verified, directive, inferred');
+    }
+    // TRUST LAYER P0.2: 'directive' is decay-exempt provenance — the
+    // DIRECTOR's channel, reached through the admin key only. An agent grading
+    // its own statements as directives would exempt them from re-verification.
+    if (authority === 'directive' && !req._authIsAdmin) {
+      return apiError(res, 403, "source_authority 'directive' is reserved for the admin key — an agent's facts are verified or inferred, never directives");
     }
     if (b.namespace != null && (typeof b.namespace !== 'string' || b.namespace.trim().length === 0 || b.namespace.length > 200)) {
       return apiError(res, 400, 'namespace must be a non-empty string (<= 200 chars)');
@@ -146,8 +190,20 @@ export default function (core) {
       return apiError(res, 400, 'metadata must be a JSON object');
     }
     var conf = (b.confidence == null) ? 0.8 : Number(b.confidence);
-    var id = db.createFact(b.agent_id || who, b.project_id || null, b.category || 'general',
-      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null);
+    // TRUST LAYER P0.2: agent_id is the AUTHENTICATED identity, never a body
+    // claim. A non-admin caller IS `who`; a body agent_id that disagrees is
+    // kept as claimed_agent_id — visible, flagged, never trusted. Admin (the
+    // bench arms, the MCP fork) keeps writing facts on behalf of a named agent.
+    var claimedAgentId = null;
+    var factAgentId;
+    if (req._authIsAdmin) {
+      factAgentId = b.agent_id || who;
+    } else {
+      factAgentId = who;
+      if (b.agent_id && b.agent_id !== who) claimedAgentId = b.agent_id;
+    }
+    var id = db.createFact(factAgentId, b.project_id || null, b.category || 'general',
+      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null, claimedAgentId);
     // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
     // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
     // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
@@ -162,7 +218,8 @@ export default function (core) {
           category: b.category || 'general',
           source_authority: authority,
           confidence: conf,
-          agent_id: b.agent_id || who,
+          agent_id: factAgentId,
+          claimed_agent_id: claimedAgentId || undefined, // omitted from the stored JSON when absent
           project_id: b.project_id || null,
           fact_source_id: b.source_id || null,
           valid_from: fact.valid_from || null,
@@ -173,12 +230,16 @@ export default function (core) {
       } else {
         memoryIndex = indexFactInMemory(core.db, id,
           { fact_text: b.fact_text, category: b.category || 'general', source_authority: authority, confidence: conf },
-          b.agent_id || who, b.project_id || null);
+          factAgentId, b.project_id || null);
       }
     } catch (e) {
       memoryIndex = { indexed: false, reason: e.message };
     }
-    res.json({ ok: true, id: id, fact: db.getFact(id), memory_index: memoryIndex });
+    var fact = db.getFact(id);
+    // An honest write carries no claim field at all — the column reads NULL
+    // and the key is dropped rather than serialized as null.
+    if (!fact.claimed_agent_id) delete fact.claimed_agent_id;
+    res.json({ ok: true, id: id, fact: fact, memory_index: memoryIndex });
   });
 
   // POST /auto-memory/facts/:id/reverify — a ground-truth re-check CONFIRMED it (stamp verified_at)
@@ -189,12 +250,16 @@ export default function (core) {
   router.post('/facts/:id/reverify',
     rateLimited('auto-memory/reverify', { windowMs: 60000, max: 900 }),
     function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var id = parseIntParam(req.params.id);
     var fact = db.getFact(id);
     if (!fact) return apiError(res, 404, 'Fact not found');
     if (namespaceGuard(req, fact, res, 'reverify')) return;
+    // TRUST LAYER P0.2 (review A blocker B2): verified_at/confidence are the
+    // row's provenance — a cross-agent stamp was the same door the sm_embeddings
+    // custody closed, one surface over. Owner (or admin) only.
+    if (refuseNotFactOwner(res, fact, who, req._authIsAdmin, 'reverify')) return;
     var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
     db.reverifyFact(id, conf);
     res.json({ ok: true, fact: db.getFact(id) });
@@ -210,7 +275,7 @@ export default function (core) {
   router.post('/facts/:id/supersede',
     rateLimited('auto-memory/supersede', { windowMs: 60000, max: 120 }),
     async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var oldId = parseIntParam(req.params.id);
     var newId = req.body && parseInt(req.body.new_id);
@@ -220,6 +285,11 @@ export default function (core) {
     var newFact = db.getFact(newId);
     if (!newFact) return apiError(res, 400, 'new_id does not exist');
     if (namespaceGuard(req, oldFact, res, 'supersede')) return;
+    // TRUST LAYER P0.2 (review A blocker B2): a supersede writes the OLD row —
+    // superseded_by, valid_to, and (namespaced) its live index text through the
+    // internal indexFactSemantic seam. Ownership of the old fact decides who
+    // may start one; the replacement row is only referenced, never written.
+    if (refuseNotFactOwner(res, oldFact, who, req._authIsAdmin, 'supersede')) return;
     if ((oldFact.namespace || null) !== (newFact.namespace || null)) {
       return apiError(res, 404, 'supersede refused: fact ' + oldId + ' lives in namespace ' +
         (oldFact.namespace ? "'" + oldFact.namespace + "'" : '(legacy, unscoped)') + ', fact ' + newId + ' lives in namespace ' +
@@ -258,8 +328,9 @@ export default function (core) {
   });
 
   // POST /auto-memory/extract — manually trigger extraction on text
-  router.post('/extract', async function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+  // Rate-limited (TRUST LAYER P0.2): LLM-bound — seconds per call; the floor.
+  router.post('/extract', rateLimited('auto-memory/extract', { windowMs: 60000, max: 120 }), async function (req, res) {
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var { text, project_id } = req.body;
     if (!text) return apiError(res, 400, 'text is required');
@@ -333,7 +404,13 @@ export default function (core) {
         db.setConfig(key, String(req.body[key]));
       }
     }
-    res.json({ ok: true, config: db.getAllConfig() });
+    // TRUST LAYER P0.2 (F-mycelium/250): mirror GET /config — the key never
+    // echoes back. The PUT used to hand the freshly-set LLM key to whoever
+    // set it. getAllConfig() builds a fresh object each call (stored state
+    // lives in am_config), so masking here never touches what's persisted.
+    var config = db.getAllConfig();
+    if (config.llm_api_key) config.llm_api_key = '***';
+    res.json({ ok: true, config: config });
   });
 
   // GET /auto-memory/stats — stats (includes decay info)
@@ -341,7 +418,7 @@ export default function (core) {
   router.get('/stats',
     rateLimited('auto-memory/stats', { windowMs: 60000, max: 120 }),
     function (req, res) {
-    var who = checkAgentOrAdmin(req, res);
+    var who = checkMemoryAgent(req, res);
     if (!who) return;
     var stats = db.stats();
     // Add decay-related stats
@@ -486,11 +563,16 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
     coreDb.prepare || (function () { throw new Error('no db'); })();
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata)
-      VALUES ('memory', ?, ?, ?)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by)
+      VALUES ('memory', ?, ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
-        content_text = excluded.content_text, metadata = excluded.metadata, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }));
+        content_text = excluded.content_text, metadata = excluded.metadata,
+        -- TRUST LAYER P0 (review B item 2): this is a SERVER write of a
+        -- server-owned type — the fact's agent_id is the row's real owner and
+        -- replaces whatever custody the row carried (a squatter's write under
+        -- the next fact id does not survive the server's own upsert).
+        written_by = excluded.written_by, updated_at = datetime('now')
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }), agentId || null);
     return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
@@ -572,14 +654,21 @@ async function indexFactSemantic(coreDb, factId, contentText, metadata, namespac
     coreDb.prepare || (function () { throw new Error('no db'); })();
     // Same upsert shape as semantic-memory's db.index (a re-index REPLACES the
     // row: text, metadata — and the vector, which the scheduler refills).
+    // TRUST LAYER P0 (review B item 2): the row's custody is the fact's real
+    // owner (metadata.agent_id, bound to the authenticated caller by the
+    // /facts route) — stamped on insert and FORCED on conflict, so a squatter
+    // who pre-wrote the fact's id under a NULL/other written_by loses the row
+    // to the server's own write instead of inheriting custody.
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model)
-      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by)
+      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, namespace = excluded.namespace,
         metadata = excluded.metadata, embedding = excluded.embedding,
-        embedding_model = excluded.embedding_model, updated_at = datetime('now')
-    `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}));
+        embedding_model = excluded.embedding_model,
+        written_by = excluded.written_by, updated_at = datetime('now')
+    `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}),
+      (metadata && metadata.agent_id) || null);
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
   }
@@ -614,13 +703,32 @@ Return a JSON object (no markdown, no explanation):
   "insights": [{ "category": "...", "fact_text": "...", "confidence": 0.0-1.0 }]
 }`;
 
-export async function runConsolidation(db, config, _core) {
+export async function runConsolidation(db, config, _core, opts) {
   var startTime = Date.now();
+  // TRUST LAYER P0 (review B item 5): the caller bounds what the LLM's answer
+  // may touch. null (the scheduler, the admin-only POST /consolidate route) is
+  // the server itself — input-set-bounded only; a callerAgentId further
+  // restricts every mutation to that agent's OWN input rows.
+  var safeOpts = opts || {};
+  var callerAgentId = safeOpts.callerAgentId || null;
 
   // Get recent facts
   var recentFacts = db.listFacts({ limit: 200 });
   if (recentFacts.length < 5) {
     return { message: 'Not enough facts to consolidate', facts_count: recentFacts.length };
+  }
+
+  // The input set is the contract: an id the LLM outputs that is not one of
+  // these rows was never shown to it (an invented or stale id) and touches
+  // nothing. Directives are decay-exempt provenance — they outlive
+  // consolidations whatever the caller is.
+  var inputById = {};
+  recentFacts.forEach(function (f) { inputById[String(f.id)] = f; });
+  function canTouch(f) {
+    if (!f) return false;
+    if (f.source_authority === 'directive') return false;
+    if (callerAgentId && String(f.agent_id) !== String(callerAgentId)) return false;
+    return true;
   }
 
   var factsText = recentFacts.map(function (f) {
@@ -644,24 +752,32 @@ export async function runConsolidation(db, config, _core) {
     var factsMerged = 0;
     var factsSuperseded = 0;
 
-    // Update confidence scores
+    // Update confidence scores — same bounds as the merge leg (review B item 5)
+    var factsRefused = 0;
     if (Array.isArray(result.keep)) {
       for (var k of result.keep) {
         if (k.id && k.new_confidence !== undefined) {
+          if (!canTouch(inputById[String(k.id)])) { factsRefused++; continue; }
           db.updateFactConfidence(k.id, k.new_confidence);
         }
       }
     }
 
-    // Merge duplicates
+    // Merge duplicates — supersede_ids restricted to the consolidation's own
+    // input ids, never a directive row, and (caller-scoped runs) the caller's
+    // own rows only. Refusals are counted, not silently swallowed.
     if (Array.isArray(result.merge)) {
       for (var m of result.merge) {
         if (m.keep_id && Array.isArray(m.supersede_ids)) {
+          if (!canTouch(inputById[String(m.keep_id)])) { factsRefused++; continue; }
+          var applied = 0;
           for (var sid of m.supersede_ids) {
+            if (!canTouch(inputById[String(sid)])) { factsRefused++; continue; }
             db.supersedeFact(sid, m.keep_id);
-            factsSuperseded++;
+            applied++;
           }
-          factsMerged++;
+          if (applied > 0) factsMerged++;
+          factsSuperseded += applied;
         }
       }
     }
@@ -685,6 +801,7 @@ export async function runConsolidation(db, config, _core) {
       facts_processed: recentFacts.length,
       facts_merged: factsMerged,
       facts_superseded: factsSuperseded,
+      mutations_refused: factsRefused,
       duration_ms: durationMs
     };
   } catch (e) {

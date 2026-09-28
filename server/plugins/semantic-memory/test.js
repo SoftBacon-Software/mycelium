@@ -228,6 +228,16 @@ function getDoc(sourceType, sourceId) {
   return db.prepare('SELECT * FROM sm_embeddings WHERE source_type = ? AND source_id = ?').get(sourceType, String(sourceId));
 }
 
+// TRUST LAYER P0 (review B blocker 1): backfill-embeddings is owner-scoped —
+// an agent caller embeds only rows IT wrote; written_by NULL (internal writers,
+// raw seeds) is owner-UNKNOWN and never matches an owner scope. The backfill
+// mechanics tests below (limit bound, idempotence, oversized chunking, the
+// getChunkSize hoist count, scheduler throughput) exercise the ALL-ROWS sweep,
+// which is now the ADMIN path — so they call with the admin fixture rather
+// than pretending a bare caller still sweeps every owner. The drone-callback
+// test instead SEEDS the row's owner. Per-test notes at each site.
+var ADMIN_HEADER = { 'x-test-admin': '1' };
+
 // Fire-and-forget embeds land a few ticks after the handler returns.
 async function waitFor(fn, ms) {
   var deadline = Date.now() + (ms || 1000);
@@ -402,6 +412,11 @@ test('routes: POST /index and /index/bulk auto-embed', async function () {
 });
 
 test('backfill: embeds NULL rows, bounded by ?limit=, idempotent', async function () {
+  // ADMIN FIXTURE (review B blocker 1): this test pins the all-rows sweep
+  // mechanics — ?limit= bound, idempotence, global remaining — which is the
+  // admin path now that an agent caller's backfill is scoped to its own rows
+  // (and written_by NULL never matches any owner scope). The owner-scoped
+  // agent path is pinned in test/unit/trust-layer-p0.test.js (S3a).
   // Seed rows the way the backlog was created: indexed without embeddings
   for (var i = 0; i < 5; i++) {
     mem.index('m5max_memory', 'backlog-' + i, 'unembedded backlog row number ' + i + ' for the backfill route');
@@ -409,20 +424,20 @@ test('backfill: embeds NULL rows, bounded by ?limit=, idempotent', async functio
   var pre = mem.countUnembedded();
   assert.ok(pre >= 5, 'seeded NULL-embedding rows');
 
-  var first = await call('POST', '/memory/backfill-embeddings?limit=2');
+  var first = await call('POST', '/memory/backfill-embeddings?limit=2', undefined, ADMIN_HEADER);
   assert.equal(first.status, 200);
   assert.equal(first.body.processed, 2);
   assert.equal(first.body.embedded, 2);
   assert.equal(first.body.failed, 0);
   assert.equal(first.body.remaining, pre - 2, 'remaining reports total docs still lacking embeddings');
 
-  var second = await call('POST', '/memory/backfill-embeddings');
+  var second = await call('POST', '/memory/backfill-embeddings', undefined, ADMIN_HEADER);
   assert.equal(second.status, 200);
   assert.equal(second.body.embedded, pre - 2);
   assert.equal(second.body.remaining, 0);
 
   // Re-runnable: nothing left to touch
-  var third = await call('POST', '/memory/backfill-embeddings');
+  var third = await call('POST', '/memory/backfill-embeddings', undefined, ADMIN_HEADER);
   assert.equal(third.status, 200);
   assert.equal(third.body.processed, 0);
   assert.equal(third.body.embedded, 0);
@@ -463,11 +478,18 @@ test('auth: unauthenticated backfill and index get 401, nothing written', async 
 });
 
 test('routes: drone-key embed callback succeeds for the owning drone and is scoped', async function () {
+  // SEEDED OWNER (review B blocker 1): the vector-write gate requires the
+  // claimant to hold a claimed embed job AND be entitled to the ROW — the
+  // row's owner, or an admin-registered embedder. The raw seed used to leave
+  // written_by NULL (owner-UNKNOWN, admin-only), which refused the owning
+  // drone the review names; this test's subject is the CLAIM SCOPING, so the
+  // row is seeded the way the pipeline writes it: owned by the agent whose
+  // row it is (here the claiming drone's own row).
   // drone_jobs isn't part of the plugin schema; create a minimal stand-in so
   // the scoping linkage is "available" for this test. drone-A has claimed an
   // embed job for note:scoped-note chunk 0.
   db.exec("CREATE TABLE IF NOT EXISTS drone_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, input_data TEXT, requires TEXT, requester TEXT, priority INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', drone_id TEXT, job_type TEXT)");
-  db.prepare("INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text) VALUES ('note', 'scoped-note', 0, 'pre-embed')").run();
+  db.prepare("INSERT INTO sm_embeddings (source_type, source_id, chunk_index, content_text, written_by) VALUES ('note', 'scoped-note', 0, 'pre-embed', 'drone-A')").run();
   db.prepare("INSERT INTO drone_jobs (title, input_data, requires, requester, job_type, status, drone_id) VALUES (?, ?, ?, ?, 'embed', 'claimed', 'drone-A')").run(
     'Embed: note:scoped-note',
     JSON.stringify({ source_type: 'note', source_id: 'scoped-note', chunk_index: 0, text: 'pre-embed', model: 'nomic-embed-text', callback_path: '/api/mycelium/memory/embeddings/note/scoped-note' }),
@@ -644,6 +666,10 @@ test('handler: oversized content chunks via indexAndEmbed, unchanged skip still 
 });
 
 test('backfill: oversized NULL row is chunked and embedded instead of failing', async function () {
+  // ADMIN FIXTURE (review B blocker 1): the oversized-chunking mechanics under
+  // test are the all-rows sweep — the admin path after owner scoping. The
+  // seeded row stays written_by NULL, which also pins that the ADMIN sweep
+  // still reaches owner-UNKNOWN rows (agents never do).
   // Seed the way the live backlog looks: one un-chunked oversized row,
   // NULL embedding (indexed before chunking existed)
   var big = makeBigText('legacybacklog', 8);
@@ -656,7 +682,7 @@ test('backfill: oversized NULL row is chunked and embedded instead of failing', 
   // Let in-flight fire-and-forget embeds from earlier tests land first
   await waitFor(function () { return mem.countUnembedded() === 1; });
 
-  var r = await call('POST', '/memory/backfill-embeddings?limit=50');
+  var r = await call('POST', '/memory/backfill-embeddings?limit=50', undefined, ADMIN_HEADER);
   assert.equal(r.status, 200);
   assert.equal(r.body.failed, 0, 'no failures — oversized doc chunked instead');
   assert.ok(r.body.embedded > 1, 'embedded one vector per chunk');
@@ -893,8 +919,12 @@ test('routes: expandOversizedRows calls getChunkSize once per request, not per r
   await new Promise(function (r) { isoServer.listen(0, '127.0.0.1', r); });
   var isoBase = 'http://127.0.0.1:' + isoServer.address().port;
 
+  // ADMIN FIXTURE (review B blocker 1): the hoist-count math (1 + N) assumes
+  // the sweep actually processes the N seeded rows — the all-rows admin path.
+  // An owner-scoped agent call would process 0 rows and trivially "pass" the
+  // count with no work done.
   var res = await realFetch(isoBase + '/memory/backfill-embeddings?limit=50', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-test-admin': '1' }
   });
   var rj = await res.json();
   isoServer.close();
@@ -1366,6 +1396,8 @@ test('priority: a search under bulk-index load answers in ~2 embed times — its
 });
 
 test('priority: the bounded scheduler keeps backfill throughput within 20% of the embedder service rate', async function () {
+  // ADMIN FIXTURE (review B blocker 1): the throughput measurement sweeps the
+  // seeded backlog (written_by NULL) — the admin path after owner scoping.
   var SERVICE = 5; // ms per embed — the serial rate every path already shared
   var ROWS = 200;
   setEmbedFakeDelay(SERVICE);
@@ -1377,7 +1409,7 @@ test('priority: the bounded scheduler keeps backfill throughput within 20% of th
     }
     var backlog = mem.countUnembedded(); // seeded rows + any NULLs left by earlier tests
     var t0 = Date.now();
-    var r = await call('POST', '/memory/backfill-embeddings?limit=1000', {});
+    var r = await call('POST', '/memory/backfill-embeddings?limit=1000', {}, ADMIN_HEADER);
     var elapsed = Date.now() - t0;
     assert.equal(r.status, 200);
     // embedded can exceed backlog: oversized NULL rows are chunk-split before

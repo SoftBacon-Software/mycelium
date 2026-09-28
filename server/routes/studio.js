@@ -20,6 +20,11 @@ export function registerStudioRoutes(router, deps) {
     JWT_SECRET, STUDIO_JWT_EXPIRY, BCRYPT_ROUNDS_PASSWORD,
   } = deps;
 
+  // TRUST LAYER P0.1 (F-mycelium/250, review A MINOR M1): the role is a fixed
+  // vocabulary, not a string the caller authors — "adimn " used to land
+  // verbatim in studio_users.role and mint a session of undefined privilege.
+  var STUDIO_ROLES = ['operator', 'agent', 'admin'];
+
   // ======== STUDIO AUTH ========
 
   // Login — returns JWT
@@ -65,7 +70,21 @@ export function registerStudioRoutes(router, deps) {
     var username = (req.body.username || '').trim().toLowerCase();
     var password = req.body.password || '';
     var displayName = (req.body.display_name || '').trim();
-    var role = req.body.role || 'admin';
+    // TRUST LAYER P0.1 (F-mycelium/250, AUDIT finding): least privilege.
+    // A created user defaults to 'operator', never 'admin' — and minting an
+    // admin requires the admin KEY. checkAdmin above passes on an admin
+    // studio JWT too, but a phished operator session must not be able to
+    // mint persistent privilege; only the key (a server-side secret) can.
+    var role = req.body.role || 'operator';
+    // TRUST LAYER P0.1 (review A MINOR M1): the fixed vocabulary, before the
+    // key gate — a junk role is a bad request, an admin role without the key
+    // is a refusal.
+    if (STUDIO_ROLES.indexOf(role) === -1) {
+      return res.status(400).json({ error: "role must be one of: operator, agent, admin (got '" + role + "')" });
+    }
+    if (role === 'admin' && !isAdminKey(req.headers['x-admin-key'])) {
+      return res.status(403).json({ error: 'creating an admin user requires the admin key (X-Admin-Key) — a studio admin JWT cannot mint another admin' });
+    }
     if (!username || !password || !displayName) {
       return res.status(400).json({ error: 'username, password, and display_name are required' });
     }
@@ -90,6 +109,18 @@ export function registerStudioRoutes(router, deps) {
     if (!checkAdmin(req, res)) return;
     var user = getStudioUserById(parseIntParam(req.params.id));
     if (!user) return res.status(404).json({ error: 'User not found' });
+    // TRUST LAYER P0.1 (review A MINOR M1): the same fixed vocabulary as POST.
+    if (req.body.role !== undefined && STUDIO_ROLES.indexOf(req.body.role) === -1) {
+      return res.status(400).json({ error: "role must be one of: operator, agent, admin (got '" + req.body.role + "')" });
+    }
+    // TRUST LAYER P0.1 (F-mycelium/250, review A blocker B1): a role change —
+    // grant OR revoke — requires the admin KEY. checkAdmin above passes on an
+    // admin studio JWT too, and a phished admin session must not mint (or
+    // strip) persistent privilege: only the key, a server-side secret, moves
+    // a role. One invariant, both directions.
+    if (req.body.role !== undefined && !isAdminKey(req.headers['x-admin-key'])) {
+      return res.status(403).json({ error: 'changing a role requires the admin key (X-Admin-Key) — a studio admin JWT can neither grant nor revoke a role' });
+    }
     var fields = {};
     if (req.body.role !== undefined) fields.role = req.body.role;
     if (req.body.display_name !== undefined) fields.display_name = req.body.display_name;

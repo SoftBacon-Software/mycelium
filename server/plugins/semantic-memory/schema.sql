@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS sm_embeddings (
   fed_home TEXT,      -- the writer's home network
   fed_visit TEXT,     -- visit id (null on home-written rows)
   fed_sig TEXT,       -- the row's Ed25519 signature (null on home rows)
+  -- TRUST LAYER P0.2 (F-mycelium/250): the AUTHENTICATED identity that wrote
+  -- this row, stamped by the agent routes at write time. NULL = written
+  -- before write authority existed (or by an internal writer) = only the
+  -- admin key may overwrite or delete it. The guarded ALTER in db.js adds
+  -- this to databases that predate the column (fresh DBs get it here).
+  written_by TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(source_type, source_id, chunk_index)

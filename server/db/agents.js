@@ -128,7 +128,10 @@ export function updateAgent(id, fields) {
   }
   // 'status' is writable here ONLY for the retirement path — the PUT route
   // rejects every status value except 'retired'; presence comes from heartbeats.
-  buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime', 'status']);
+  // 'embedder_registered' is writable here ONLY for the admin PUT path (the
+  // route refuses it from every agent key) — the trust-layer embed-job gate
+  // reads it at claim and at vector-write time.
+  buildUpdate('agents', id, fields, ['avatar_url', 'name', 'role', 'operator_id', 'project', 'project_id', 'llm_backend', 'llm_model', 'agent_type', 'capabilities', 'system_diagnostics', 'runtime', 'status', 'embedder_registered']);
 }
 
 // ---- Agent Templates ----
