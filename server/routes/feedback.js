@@ -10,7 +10,7 @@ import {
 
 export function registerFeedbackRoutes(router, deps) {
   const {
-    asyncHandler, checkAdmin, checkAgentOrAdmin, checkGuardrails,
+    asyncHandler, checkAdmin, checkAgentOrAdmin,
     parseIntParam, apiError, emitEvent,
   } = deps;
 
@@ -42,7 +42,6 @@ export function registerFeedbackRoutes(router, deps) {
   router.post('/feedback', asyncHandler(async function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    if (!checkGuardrails(req, res, 'feedback_submitted', { agent: who, entity_type: req.body.entity_type, agent_id: req.body.agent_id, rating: req.body.rating })) return;
     var { entity_type, entity_id, subject, rating, comment, agent_id } = req.body;
     if (!rating || rating < 1 || rating > 5) {
       return apiError(res, 400, 'rating must be 1-5');

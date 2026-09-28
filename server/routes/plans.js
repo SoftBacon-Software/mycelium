@@ -14,7 +14,7 @@ import {
 
 export function registerPlanRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkGuardrails, escapeHtml,
+    asyncHandler, checkAgentOrAdmin, escapeHtml,
     parseLimit, parseIntParam, validateStringLength, validateEnum,
     checkApprovalGate, checkProjectScope, warnSuspectTransition,
     emitEvent, MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
@@ -43,7 +43,6 @@ export function registerPlanRoutes(router, deps) {
   router.post('/plans', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'plan_created', { agent: agentId, project_id: req.body.project_id, title: req.body.title })) return;
     var gate = checkApprovalGate(req, agentId, 'plan_create');
     var title = escapeHtml(req.body.title);
     if (!title) return res.status(400).json({ error: 'title is required' });

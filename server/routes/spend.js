@@ -10,7 +10,7 @@ import {
 
 export function registerSpendRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin,
   } = deps;
 
   // ======== SPEND TRACKING ========
@@ -18,7 +18,6 @@ export function registerSpendRoutes(router, deps) {
   router.post('/spend', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'spend_logged', { agent: agentId, project_id: req.body.project_id, cost_usd: req.body.cost_usd })) return;
     var costUsd = parseFloat(req.body.cost_usd) || 0;
     if (costUsd < 0) return res.status(400).json({ error: 'cost_usd must be non-negative' });
     logAgentSpend(

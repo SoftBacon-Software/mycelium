@@ -107,6 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two spawned servers (`docs/specs/2026-10-08-federation-revoke-resend/`).
   Spec: `spec/federation-v0/README.md` §2.8 + the §4 route rows.
 
+### Removed
+
+- **Guardrails fail-open seam (trust layer P0.3).** The `checkGuardrails`
+  middleware and its 12 route call sites are gone. The guardrails plugin was
+  already removed; nothing could install the hook field the seam read, so
+  every check could only ever fail open while its warning text pointed at the
+  deleted plugin — a gate that cannot gate, removed rather than prettied.
+  `/safety/*` never existed server-side and still answers 404; the dead
+  `mycelium_list_safety_events` / `mycelium_safety_stats` MCP client tools
+  that called it are removed client-side. SECURITY.md now states plainly that
+  there is no rule-engine layer and what enforces instead.
+
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 
 ## [0.1.0] - 2026-05-25

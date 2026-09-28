@@ -12,7 +12,7 @@ import {
 
 export function registerRequestRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin,
     escapeHtml, parseIntParam, emitEvent,
   } = deps;
 
@@ -29,7 +29,6 @@ export function registerRequestRoutes(router, deps) {
   router.post('/requests', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'request_created', { agent: agentId, project_id: req.body.project_id, to_agent: req.body.to_agent, content: (req.body.content || '').substring(0, 200) })) return;
     var content = req.body.content;
     if (!content) return res.status(400).json({ error: 'content is required' });
     var toAgent = req.body.to_agent || null;
