@@ -29,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted plugin — a gate that cannot gate, removed rather than prettied.
   `/safety/*` never existed server-side and still answers 404; the dead
   `mycelium_list_safety_events` / `mycelium_safety_stats` MCP client tools
-  that called it are removed client-side. SECURITY.md now states plainly that
-  there is no rule-engine layer and what enforces instead.
+  that called it are removed client-side. SECURITY.md now separates the
+  removed guardrails seam from the live, opt-in `checkEnforcementRules`
+  mechanism (which 403-blocks `send_message` and `merge_pr` from the
+  `mycelium/enforcement_rules` context key) and names what enforces instead.
 
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 
