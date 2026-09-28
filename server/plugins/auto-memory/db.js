@@ -91,6 +91,14 @@ export default function createAutoMemoryDB(db) {
   }
 
   return {
+    // The RAW shared db (the one with .prepare). extractFacts receives THIS
+    // wrapper and indexFactInMemory needs the core handle — before 2026-09-28
+    // (F-mycelium 252) it was handed the wrapper itself, whose missing
+    // .prepare threw, was swallowed as "non-critical", and every extracted
+    // fact silently failed to reach sm_embeddings (written but never
+    // searchable — the §F4 state).
+    __coreDb: db,
+
     // -- Config --
     getConfig(key) {
       var row = db.prepare('SELECT value FROM am_config WHERE key = ?').get(key);

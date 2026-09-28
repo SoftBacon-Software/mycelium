@@ -519,12 +519,21 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         fact.confidence || 0.8,
         'extraction', null
       );
-      created.push({ id: id, category: fact.category, fact_text: fact.fact_text, confidence: fact.confidence });
 
-      // Index in semantic memory if available
+      // Index in semantic memory if available — and SURFACE the outcome (§F4
+      // honesty): the status object used to be discarded here, so a fact that
+      // reached am_facts but not the searchable index vanished silently.
+      // indexFactInMemory unwraps the wrapper to the core db (F-mycelium 252).
+      var memoryIndex;
       try {
-        indexFactInMemory(db, id, fact, agentId, projectId);
-      } catch (e) { /* non-critical */ }
+        memoryIndex = indexFactInMemory(db, id, fact, agentId, projectId);
+      } catch (e) {
+        memoryIndex = { indexed: false, reason: e.message };
+      }
+      if (!memoryIndex.indexed) {
+        console.error('[auto-memory] extracted fact ' + id + ' is NOT searchable: ' + (memoryIndex.reason || 'unknown reason'));
+      }
+      created.push({ id: id, category: fact.category, fact_text: fact.fact_text, confidence: fact.confidence, memory_index: memoryIndex });
     }
 
     // Prune excess facts per agent
@@ -560,6 +569,10 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 // See MEMORY-FAILURE-STATES.md §F4.
 function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
   try {
+    // Accept the auto-memory wrapper too: extractFacts only ever holds the
+    // wrapper (createAutoMemoryDB), which has no .prepare of its own — hand
+    // it the core db it wraps. (F-mycelium 252; see db.js __coreDb.)
+    if (coreDb && coreDb.__coreDb) coreDb = coreDb.__coreDb;
     coreDb.prepare || (function () { throw new Error('no db'); })();
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
