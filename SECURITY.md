@@ -102,6 +102,20 @@ matched rule with `severity: 'block'` answers 403 with
 event — lower severities warn only. It is opt-in: with no rules
 configured, every call passes.
 
+Three limits of this mechanism, stated plainly:
+
+- **Any agent key can write this key today.** The context-key route
+  accepts agent and admin keys alike, so an agent can replace or empty
+  the rule set. Closing that hole is its own P0 (tracked as F-253);
+  until it lands, treat the rules as operator-managed by convention,
+  not agent-proof.
+- **The value must be the `{"rules":[…]}` object shape.** Context keys
+  merge on write, and a bare JSON array is merged into a plain object —
+  which reads back as zero rules. Store the object shape.
+- **Changes apply within 60 s.** `checkEnforcementRules` caches the
+  rules for one minute (`ENFORCEMENT_CACHE_TTL`), so an edit takes
+  effect within that window, not instantly.
+
 Everything else that enforces is unchanged: authentication (above),
 per-route rate limits, the risk-tiered approvals, and the kill switch.
 
