@@ -77,6 +77,48 @@ the `.env.example` shows how to generate them.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
+### No guardrails plugin — but enforcement rules do block (trust layer P0.3)
+
+The guardrails plugin and its `checkGuardrails` seam are gone: the
+plugin shipped disabled, never mounted, and was removed, and its
+fail-open seam — a gate that could only ever fail open while its
+warning text pointed at the deleted plugin — was removed with
+trust-layer P0.3 before it could mislead an operator into thinking
+rules were enforced. `/safety/*` never existed server-side and still
+answers 404.
+
+One rule mechanism **is** live and blocks in-core:
+`checkEnforcementRules` (`server/routes/mycelium.js`) reads rules from
+the `mycelium/enforcement_rules` context key — set through the
+ordinary context API (`PUT /context/keys/mycelium/enforcement_rules`),
+surfaced in db stats as `enforcement_rules_active` — and guards two
+routes: `POST /messages` (tool `send_message`) and
+`POST /github/prs/:owner/:repo/:number/merge` (tool `merge_pr`). A
+rule matches by tool name (`*` wildcard) plus an optional
+case-insensitive regex over the call args (with optional `enforce`
+conditions: `expected_tool`, `expected_args`, `required_role`); a
+matched rule with `severity: 'block'` answers 403 with
+`enforcement_rule: <rule id>` and emits an `enforcement_violation`
+event — lower severities warn only. It is opt-in: with no rules
+configured, every call passes.
+
+Three limits of this mechanism, stated plainly:
+
+- **Any agent key can write this key today.** The context-key route
+  accepts agent and admin keys alike, so an agent can replace or empty
+  the rule set. Closing that hole is its own P0 (tracked as F-253);
+  until it lands, treat the rules as operator-managed by convention,
+  not agent-proof.
+- **The value must be the `{"rules":[…]}` object shape.** Context keys
+  merge on write, and a bare JSON array is merged into a plain object —
+  which reads back as zero rules. Store the object shape.
+- **Changes apply within 60 s.** `checkEnforcementRules` caches the
+  rules for one minute (`ENFORCEMENT_CACHE_TTL`), so an edit takes
+  effect within that window, not instantly.
+
+Everything else that enforces is unchanged: authentication (above),
+per-route rate limits, the risk-tiered approvals, and the kill switch.
+
 ### Third-party plugins
 
 Plugins run in the same process as the core server. Only install

@@ -8,7 +8,7 @@ import { listEvents } from '../db.js';
 
 export function registerEventRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin,
     escapeHtml, parseLimit, emitEvent,
     sseClients, jwt, JWT_SECRET,
   } = deps;
@@ -33,7 +33,6 @@ export function registerEventRoutes(router, deps) {
   router.post('/events', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'event_emitted', { agent: agentId, project_id: req.body.project_id, type: req.body.type, summary: req.body.summary })) return;
     var type = req.body.type || 'custom';
     var projectId = req.body.project_id || null;
     var summary = escapeHtml(req.body.summary || '');
