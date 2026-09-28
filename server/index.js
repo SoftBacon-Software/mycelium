@@ -144,11 +144,12 @@ process.stdout.write('[boot] DB ready\n');
 initEmail();
 
 // The express app MUST exist before plugins load. Plugins that install a hook
-// on the app (guardrails' blocking check) receive it as `core.app`; when this
-// ran the other way round `core.app` was undefined, `registerHooks`' `if
-// (core.app)` never fired, and `checkGuardrails` fail-opened on EVERY request.
-// All 14 enforcement='block' call sites were no-ops from the day they landed.
-// Found 2026-08-08 by the dead-instrument audit.
+// on the app receive it as `core.app`; when this ran the other way round
+// `core.app` was undefined and `registerHooks`' `if (core.app)` never fired —
+// the guardrails plugin's blocking check silently missed every request that
+// way until 2026-08-08 (found by the dead-instrument audit; the plugin and
+// its fail-open seam were removed in trust-layer P0.3, but the ordering rule
+// stands for every future app hook).
 var app = express();
 
 // Load plugins (after DB init AND after `app` exists, before routes are used)

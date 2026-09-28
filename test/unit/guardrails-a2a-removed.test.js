@@ -11,14 +11,19 @@ import { fileURLToPath } from 'node:url'
 // (the "remove" verb of THE FOCUS) covers them.
 //
 // KEPT on purpose (asserted below so a future tidy doesn't sweep them):
-//   - checkGuardrails (routes/mycelium.js) — CORE middleware with 10+ live
-//     fan-in sites; it reads req.app._guardrailsCheck, the seam the plugin
-//     WOULD have installed, and fails open + warns when absent. Its coverage
-//     test (guardrails-route-coverage.test.js) stubs that field and never
-//     imports the plugin.
 //   - migrate-table-names.js dv_guardrail_* rows — old-DB upgrade path
 //     (task-170 precedent).
 //   - lib/ssrf-guard.js — webhooks.js and marketing still import it.
+//
+// REMOVED later, trust-layer P0.3 (2026-09-28): the checkGuardrails seam this
+// file used to keep went with its plugin. The keep-rationale above was "the
+// seam the plugin WOULD have installed" — but with the plugin deleted in the
+// same task 186, nothing in the repo could ever install req.app
+// ._guardrailsCheck again: the seam could only ever fail open, while its
+// warning text pointed readers at a plugin that no longer exists. A gate that
+// cannot gate is dead code that pretends to enforce; it and its 12 fan-in
+// sites are gone (asserted in trust-p03-dead-code-honesty.test.js, which
+// also replaces guardrails-route-coverage.test.js).
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -87,10 +92,11 @@ describe('guardrails + a2a-gateway removal (task 186 §5, the 185 shape)', () =>
     expect(contributing).toMatch(/6 plugins/)
   })
 
-  test('KEPT: checkGuardrails core middleware, ssrf-guard, migrate-table-names rows', () => {
+  test('KEPT: ssrf-guard, migrate-table-names rows; REMOVED (P0.3): the checkGuardrails seam', () => {
     expect(existsSync(join(REPO_ROOT, 'server', 'lib', 'ssrf-guard.js'))).toBe(true)
     var myceliumRoutes = readFileSync(join(REPO_ROOT, 'server', 'routes', 'mycelium.js'), 'utf8')
-    expect(myceliumRoutes).toContain('function checkGuardrails(')
+    expect(myceliumRoutes).not.toContain('checkGuardrails')
+    expect(existsSync(join(REPO_ROOT, 'test', 'unit', 'guardrails-route-coverage.test.js'))).toBe(false)
     var migrate = readFileSync(join(REPO_ROOT, 'server', 'migrate-table-names.js'), 'utf8')
     expect(migrate).toContain('dv_guardrail_rules')
   })

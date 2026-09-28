@@ -15,7 +15,7 @@ import {
 
 export function registerTaskRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin, checkAdmin,
     agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
     emitEvent,
     validateStringLength, checkProjectScope, warnSuspectTransition,
@@ -51,7 +51,6 @@ export function registerTaskRoutes(router, deps) {
   router.post('/tasks', agentWriteLimiter, asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'task_created', { agent: agentId, project_id: req.body.project_id, title: req.body.title })) return;
     var title = escapeHtml(req.body.title);
     if (!title) return res.status(400).json({ error: 'title is required' });
     if (!validateStringLength(res, req.body.title, MAX_TITLE, 'title')) return;
@@ -90,7 +89,6 @@ export function registerTaskRoutes(router, deps) {
   router.put('/tasks/:id', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'task_updated', { agent: agentId, task_id: req.params.id, status: req.body.status })) return;
     var task = getTask(parseIntParam(req.params.id));
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!checkProjectScope(req, res, task.project_id, task.assignee)) return;

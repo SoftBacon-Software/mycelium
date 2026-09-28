@@ -77,6 +77,19 @@ the `.env.example` shows how to generate them.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
+### No rule-engine / guardrails layer (trust layer P0.3)
+
+Mycelium ships **no guardrails rule engine** — there is no
+`enforcement='block'` rule table, no `/safety/*` routes, and no
+`checkGuardrails` seam. A guardrails plugin once existed but shipped
+disabled, never mounted, and was removed (its fail-open seam outlived
+it and was removed with trust-layer P0.3 before it could mislead an
+operator into thinking rules were enforced). Enforcement today is:
+authentication (above), per-route rate limits, the risk-tiered
+approvals, and the kill switch. If you need rule-based blocking,
+implement it as a proxy/reverse-plugin in front of the API rather
+than expecting a core hook.
+
 ### Third-party plugins
 
 Plugins run in the same process as the core server. Only install
