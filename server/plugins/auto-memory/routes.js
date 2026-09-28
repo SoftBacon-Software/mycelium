@@ -519,12 +519,21 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         fact.confidence || 0.8,
         'extraction', null
       );
-      created.push({ id: id, category: fact.category, fact_text: fact.fact_text, confidence: fact.confidence });
 
-      // Index in semantic memory if available
+      // Index in semantic memory if available — and SURFACE the outcome (§F4
+      // honesty): the status object used to be discarded here, so a fact that
+      // reached am_facts but not the searchable index vanished silently.
+      // indexFactInMemory unwraps the wrapper to the core db (F-mycelium 252).
+      var memoryIndex;
       try {
-        indexFactInMemory(db, id, fact, agentId, projectId);
-      } catch (e) { /* non-critical */ }
+        memoryIndex = indexFactInMemory(db, id, fact, agentId, projectId);
+      } catch (e) {
+        memoryIndex = { indexed: false, reason: e.message };
+      }
+      if (!memoryIndex.indexed) {
+        console.error('[auto-memory] extracted fact ' + id + ' is NOT searchable: ' + (memoryIndex.reason || 'unknown reason'));
+      }
+      created.push({ id: id, category: fact.category, fact_text: fact.fact_text, confidence: fact.confidence, memory_index: memoryIndex });
     }
 
     // Prune excess facts per agent
@@ -560,7 +569,23 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 // See MEMORY-FAILURE-STATES.md §F4.
 function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
   try {
+    // Accept the auto-memory wrapper too: extractFacts only ever holds the
+    // wrapper (createAutoMemoryDB), which has no .prepare of its own — hand
+    // it the core db it wraps. (F-mycelium 252; see db.js __coreDb.)
+    if (coreDb && coreDb.__coreDb) coreDb = coreDb.__coreDb;
     coreDb.prepare || (function () { throw new Error('no db'); })();
+    // TRUST LAYER P0 (review B, PR #192 blocker): source_authority NEVER comes
+    // off the passed object — for extractFacts that object is RAW MODEL OUTPUT,
+    // and a model (or a prompt-injected activity text it echoes) stamping
+    // source_authority 'directive' onto a fact re-opens the directive path
+    // PR #190 closed on /memory/index. The am_facts row is the authority of
+    // record — /facts validated it on write and extraction never sets one
+    // (createFact defaults 'inferred') — so read it back from the row itself.
+    var authority = 'inferred';
+    try {
+      var factRow = coreDb.prepare('SELECT source_authority FROM am_facts WHERE id = ?').get(factId);
+      if (factRow && factRow.source_authority) authority = factRow.source_authority;
+    } catch (_) { /* am_facts unreachable — stay 'inferred', never trust the object */ }
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
       INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by)
@@ -572,7 +597,7 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
         -- replaces whatever custody the row carried (a squatter's write under
         -- the next fact id does not survive the server's own upsert).
         written_by = excluded.written_by, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: fact.source_authority || 'inferred', confidence: fact.confidence }), agentId || null);
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: authority, confidence: fact.confidence }), agentId || null);
     return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };

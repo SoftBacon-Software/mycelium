@@ -1274,3 +1274,25 @@ describe('Review B item 9: /memory/index content size cap', () => {
     expect(String(bulk.body.error)).toContain('items[0]');
   });
 });
+
+describe('PR #192 review-B minor: PUT /memory/config accepts auto_index_messages', () => {
+  it('persists the message auto-index gate instead of silently ignoring it', async () => {
+    // handlers.js reads db.getConfig('auto_index_messages') from THIS config —
+    // a key missing from the PUT allowlist made the operator surface silently
+    // drop it while the gate stayed shut.
+    const put = await request(app).put('/api/mycelium/memory/config').set(adminKeyAuth)
+      .send({ auto_index_messages: 'true' });
+    expect(put.status).toBe(200);
+    const get = await request(app).get('/api/mycelium/memory/config').set(adminKeyAuth);
+    expect(get.status).toBe(200);
+    expect(get.body.auto_index_messages,
+      'the gate must be settable where the rest of the memory config lives').toBe('true');
+
+    // and back off — a real toggle, not a one-way latch
+    const off = await request(app).put('/api/mycelium/memory/config').set(adminKeyAuth)
+      .send({ auto_index_messages: 'false' });
+    expect(off.status).toBe(200);
+    const get2 = await request(app).get('/api/mycelium/memory/config').set(adminKeyAuth);
+    expect(get2.body.auto_index_messages).toBe('false');
+  });
+});

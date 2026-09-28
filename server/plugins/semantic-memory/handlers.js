@@ -13,6 +13,15 @@ export function registerHooks(core) {
     return db.getConfig('auto_index') !== 'false';
   }
 
+  // Messages are the exception: auto_index_messages DEFAULTS OFF — opting in
+  // is a separate, explicit decision. Agent-message auto-indexing is the
+  // widest memory-poisoning path the trust audit named: anything that can
+  // POST /messages would otherwise write straight into the recall corpus
+  // every agent's /memory/search reads. (TRUST LAYER P1.3; F-mycelium 252)
+  function isMessageAutoIndexEnabled() {
+    return db.getConfig('auto_index_messages') === 'true';
+  }
+
   function getEmbeddingConfig() {
     return db.getAllConfig();
   }
@@ -91,24 +100,46 @@ export function registerHooks(core) {
     }
   });
 
-  // Auto-index messages (non-trivial ones only)
-  core.onEvent('message_created', function (eventData) {
-    if (!isAutoIndexEnabled()) return;
+  // Auto-index messages (non-trivial ones only) — OFF unless
+  // auto_index_messages='true' (see isMessageAutoIndexEnabled above).
+  //
+  // F-mycelium 252: this handler listened for 'message_created' but the
+  // server emits 'message_sent' (server/routes/messages.js — the canonical
+  // name: schema.sql's default webhook events and dispatchWebhook use it
+  // too), so agent messages were never auto-indexed at all. The name alone
+  // was not the whole defect: message_sent's payload carries ONLY
+  // { message_id } — no content, no to_agent — and the old body would have
+  // indexed eventData.summary (the "X sent message to Y" display line).
+  // The message row is now read from the messages table for the real
+  // content and participants.
+  //
+  // When opted in, rows land as LOW-TRUST CANDIDATES (metadata.candidate,
+  // sender custody): visible and flagged, never silently trusted — the
+  // companion view keeps candidate rows out of fact-of-record recall.
+  core.onEvent('message_sent', function (eventData) {
+    if (!isMessageAutoIndexEnabled()) return;
     try {
       var data = parseEventData(eventData);
-      var content = data.content || eventData.summary || '';
+      var messageId = data.message_id || data.id || '';
+      if (!messageId) return;
+      var row = core.db.prepare(
+        'SELECT id, from_agent, to_agent, project_id, content, msg_type FROM messages WHERE id = ?'
+      ).get(messageId);
+      if (!row) return;
+      var content = row.content || '';
       if (content.length < 20) return; // skip short messages
       if (content.startsWith('AUTO-DISPATCH:')) return; // skip system dispatch messages
 
-      var messageId = data.message_id || data.id || '';
-      indexAndEmbed('message', String(messageId), content, {
+      indexAndEmbed('message', String(row.id), content, {
         metadata: {
-          from_agent: data.from_agent || eventData.agent,
-          to_agent: data.to_agent,
-          project_id: data.project_id || eventData.project_id,
-          msg_type: data.msg_type
+          from_agent: row.from_agent,
+          to_agent: row.to_agent,
+          project_id: row.project_id,
+          msg_type: row.msg_type,
+          auto_indexed: true,
+          candidate: true // auto-indexed speech: a candidate, never a fact of record
         },
-        written_by: eventOwner(data.from_agent || eventData.agent), // the SENDER owns the row
+        written_by: eventOwner(row.from_agent), // the SENDER owns the row
         force_written_by: true
       });
     } catch (e) {
