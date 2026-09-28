@@ -1371,7 +1371,11 @@ export default function (core) {
   router.put('/config', function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
-    var allowed = ['embedding_provider', 'embedding_model', 'embedding_url', 'embedding_api_key', 'embedding_dimensions', 'embedding_max_concurrency', 'chunk_size', 'auto_index'];
+    var allowed = ['embedding_provider', 'embedding_model', 'embedding_url', 'embedding_api_key', 'embedding_dimensions', 'embedding_max_concurrency', 'chunk_size', 'auto_index',
+      // PR #192 review-B minor: the message auto-index gate (handlers.js
+      // isMessageAutoIndexEnabled) is read from THIS config — left off the
+      // allowlist, PUT /memory/config silently dropped it.
+      'auto_index_messages'];
     for (var key of allowed) {
       if (req.body[key] !== undefined) {
         db.setConfig(key, String(req.body[key]));
