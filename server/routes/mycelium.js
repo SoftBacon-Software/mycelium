@@ -15,6 +15,7 @@ import nodePath from 'path';
 import https from 'https';
 import { sendEmail, isEmailEnabled, templatePasswordReset, templateOperatorAlert } from '../email.js';
 import { memoryAgentGuard } from '../lib/memory-auth.js';
+import { getCachedEnforcementRules } from '../enforcement-rules.js';
 
 // ---- Simple in-memory rate limiter (no dependency) ----
 var _rateLimitStore = {};
@@ -831,28 +832,24 @@ function checkApprovalGate(req, who, actionType) {
 }
 
 // ---- Enforcement rules: runtime convention enforcement on tool calls ----
-var _enforcementRulesCache = null;
-var _enforcementRulesCacheTime = 0;
-var ENFORCEMENT_CACHE_TTL = 60000; // 60s
-
+// Rules are read through the shared cache in server/enforcement-rules.js; the
+// context routes invalidate it on EVERY write to the key, so an operator's
+// change takes effect at once (trust layer P0 / F-253 retired the 60s window).
+// The loader keeps the reader's legacy tolerance for bare-array rows written
+// before the write-side validation existed.
 function getEnforcementRules() {
-  var now = Date.now();
-  if (_enforcementRulesCache && (now - _enforcementRulesCacheTime) < ENFORCEMENT_CACHE_TTL) {
-    return _enforcementRulesCache;
-  }
-  try {
-    var ctx = getContextKey('mycelium', 'enforcement_rules');
-    if (ctx && ctx.data) {
-      var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-      _enforcementRulesCache = Array.isArray(data) ? data : (data.rules || []);
-    } else {
-      _enforcementRulesCache = [];
+  return getCachedEnforcementRules(function () {
+    try {
+      var ctx = getContextKey('mycelium', 'enforcement_rules');
+      if (ctx && ctx.data) {
+        var data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+        return Array.isArray(data) ? data : (data.rules || []);
+      }
+    } catch {
+      return [];
     }
-  } catch {
-    _enforcementRulesCache = [];
-  }
-  _enforcementRulesCacheTime = now;
-  return _enforcementRulesCache;
+    return [];
+  });
 }
 
 function checkEnforcementRules(toolName, args, agentId) {

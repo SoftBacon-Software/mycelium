@@ -14,10 +14,13 @@ import { readFileSync, existsSync } from 'node:fs';
 // 314 = 309 + 2 (task 186: ensurePluginOrphanColumns, reconcilePluginOrphans) + 3 honest-pagination counters (2026-09-12, task 200:
 // countTasks, countPlans, countFilteredBugs — the list-envelope totals share
 // the list WHERE builders, task 200).
-const EXPECTED_EXPORT_COUNT = 314;
+// 315 = 314 + getContextKeysByIds (trust layer P0, task 253: bulk-delete
+// callers look up what they are about to delete so the enforcement cache can
+// be invalidated when the rules key is among the rows).
+const EXPECTED_EXPORT_COUNT = 315;
 
 describe('db.js export manifest (decomposition gate)', () => {
-  test('public surface matches snapshot — 314 exports, stable types+arities', async () => {
+  test('public surface matches snapshot — 315 exports, stable types+arities', async () => {
     const manifest = await buildManifest();
 
     if (!existsSync(SNAPSHOT_PATH)) {

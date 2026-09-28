@@ -9,6 +9,7 @@
 // server/db.js re-exports these via `export * from './db/context.js'` so no
 // consumer changes a single import.
 import { db, stmt } from './core.js';
+import { isSecurityContextKey } from '../enforcement-rules.js';
 
 // -- Context --
 
@@ -50,6 +51,12 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
 
   var existing = db.prepare("SELECT data, project_id FROM context_keys WHERE namespace = ? AND key = ?").get(namespace, key);
   var merged = data;
+  // A security-gating key (the census in ../enforcement-rules.js) is stored
+  // WHOLE, never merged: Object.assign-spread of a bare array over an object
+  // manufactures {"0":…,"1":…} — which getEnforcementRules reads as zero
+  // rules. The HTTP route validates the shape first; the invariant lives HERE
+  // because this is the layer that owns the merge (trust layer P0 / F-253).
+  var replace = !!(opts && opts.replace) || isSecurityContextKey(namespace, key);
   if (existing) {
     // Save previous value to history before overwriting. Stamp the history row
     // with the key's CURRENT project (preserved for existing keys) so history
@@ -59,17 +66,21 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
       // Keep only last 50 versions per key
       db.prepare("DELETE FROM context_history WHERE namespace = ? AND key = ? AND id NOT IN (SELECT id FROM context_history WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 50)").run(namespace, key, namespace, key);
     } catch (e) { /* non-critical — history table may not exist yet */ }
-    try {
-      var existingData = JSON.parse(existing.data);
-      var newData = typeof data === 'string' ? JSON.parse(data) : data;
-      // Sanitize against prototype pollution
-      if (newData && typeof newData === 'object') {
-        delete newData.__proto__;
-        delete newData.constructor;
-        delete newData.prototype;
+    if (!replace) {
+      try {
+        var existingData = JSON.parse(existing.data);
+        var newData = typeof data === 'string' ? JSON.parse(data) : data;
+        // Sanitize against prototype pollution
+        if (newData && typeof newData === 'object') {
+          delete newData.__proto__;
+          delete newData.constructor;
+          delete newData.prototype;
+        }
+        merged = JSON.stringify(Object.assign({}, existingData, newData));
+      } catch (e) {
+        merged = typeof data === 'string' ? data : JSON.stringify(data);
       }
-      merged = JSON.stringify(Object.assign({}, existingData, newData));
-    } catch (e) {
+    } else {
       merged = typeof data === 'string' ? data : JSON.stringify(data);
     }
   } else {
@@ -150,6 +161,15 @@ export function bulkDeleteContextKeys(ids) {
   var placeholders = ids.map(function () { return '?'; }).join(',');
   var result = db.prepare("DELETE FROM context_keys WHERE id IN (" + placeholders + ")").run(...ids);
   return result.changes;
+}
+
+// What a bulk-delete is ABOUT to delete (id, namespace, key) — the context
+// routes call this before bulkDeleteContextKeys so they can invalidate the
+// enforcement cache when the rules key is among the rows (trust layer P0).
+export function getContextKeysByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  var placeholders = ids.map(function () { return '?'; }).join(',');
+  return db.prepare("SELECT id, namespace, key FROM context_keys WHERE id IN (" + placeholders + ")").all(...ids);
 }
 
 // Search context keys with filters

@@ -133,6 +133,7 @@ getContext:function:1
 getContextHistory:function:3
 getContextHistoryEntry:function:1
 getContextKey:function:2
+getContextKeysByIds:function:1
 getDB:function:0
 getDroneDiagnostics:function:1
 getDroneJob:function:1
