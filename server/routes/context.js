@@ -8,8 +8,11 @@ import {
   searchContextKeys, listContextKeys, getContextKey, upsertContextKey,
   deleteContextKey, bulkDeleteContextKeys, getContextHistory, getContextHistoryEntry,
   rollbackContextKey, contextKeyStats, getAllContext, getContext,
-  upsertContext,
+  upsertContext, getContextKeysByIds,
 } from '../db.js';
+import {
+  isSecurityContextKey, isSecurityContextNamespace, validateEnforcementRulesData, invalidateEnforcementRulesCache,
+} from '../enforcement-rules.js';
 
 export function registerContextRoutes(router, deps) {
   const {
@@ -74,17 +77,56 @@ export function registerContextRoutes(router, deps) {
     if (!agentId) return;
     var data = req.body.data;
     if (data === undefined) return res.status(400).json({ error: 'data field is required' });
+    // Trust layer P0 (F-253): a key whose value a security check READS is
+    // admin-only — the principal a rule gates must not be able to rewrite or
+    // empty the rule. (The census of such keys: server/enforcement-rules.js.)
+    var securityKey = isSecurityContextKey(req.params.namespace, req.params.key);
+    if (securityKey && !req._authIsAdmin) {
+      return res.status(403).json({ error: 'Security context keys are admin-only' });
+    }
     // F1: if the key already exists, only its owning project (or admin) may
     // overwrite it — same 403 a cross-project task write already gets. A new key
     // is stamped with the writer's project (opts.projectId) below.
     var existing = getContextKey(req.params.namespace, req.params.key);
+    // Trust layer P0 (review B of PR #193): the census NAMESPACE is admin-owned
+    // for NEW keys. The namespace is injected wholesale into every agent's boot
+    // context (db.js platform keys + workContext) and its write pressure drives
+    // the per-namespace cap — a non-admin-creatable key there is a swarm-wide
+    // boot-injection vector, and the exact eviction pressure the cap exclusion
+    // (db/context.js) guards against. Nothing in the repo writes it
+    // legitimately as a non-admin: standups live in the writer's own
+    // namespace, role contracts in roles/<agentId>, project guidelines in
+    // <project>/guidelines, the api display caches in admin/*. An EXISTING key
+    // keeps the F1 project-scope path below (shared keys stay shared), and
+    // admin (key or admin-role JWT) keeps the namespace.
+    if (!existing && !req._authIsAdmin && isSecurityContextNamespace(req.params.namespace)) {
+      return res.status(403).json({ error: 'Security context namespace "' + req.params.namespace + '" is admin-only for new keys' });
+    }
     if (existing && !checkProjectScope(req, res, existing.project_id)) return;
     var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
     var opts = { projectId: req._authProjectId || null };
+    if (securityKey) {
+      // Census keys are durable by construction (trust layer P0, review A
+      // round 2 of PR #193): a ttl/expires_at on the gate key is REFUSED, not
+      // silently stripped — an admin asking for an expiry on an authorization
+      // control is a mistake worth naming, and silently ignoring it would
+      // grant a durability the caller never agreed to. (category is forced
+      // 'durable' at the db layer, which owns the row.)
+      if (req.body.ttl || req.body.expires_at) {
+        return res.status(400).json({ error: 'census keys are durable by construction: ttl/expires_at are refused' });
+      }
+      // Malformed value is 400, never stored — the reader tolerates loose
+      // shapes in ways that silently weaken or empty the gate (a bare array
+      // merges into {"0":…} and reads as zero rules).
+      var rulesCheck = validateEnforcementRulesData(data);
+      if (!rulesCheck.ok) return res.status(400).json({ error: rulesCheck.error });
+      dataStr = rulesCheck.value;
+    }
     if (req.body.category) opts.category = req.body.category;
     if (req.body.ttl) opts.ttl = parseInt(req.body.ttl, 10);
     if (req.body.expires_at) opts.expires_at = req.body.expires_at;
     upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
+    if (securityKey) invalidateEnforcementRulesCache();
     emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
     res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
   }));
@@ -93,7 +135,9 @@ export function registerContextRoutes(router, deps) {
   // scope anyway), so no agent can reach this path cross-project. Left as-is.
   router.delete('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
     if (!checkAdmin(req, res)) return;
+    var wasSecurityKey = isSecurityContextKey(req.params.namespace, req.params.key);
     deleteContextKey(req.params.namespace, req.params.key);
+    if (wasSecurityKey) invalidateEnforcementRulesCache();
     res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
   }));
 
@@ -107,7 +151,14 @@ export function registerContextRoutes(router, deps) {
     if (ids.length > 200) {
       return res.status(400).json({ error: 'Maximum 200 keys per bulk delete' });
     }
+    // A delete that takes in the rules key must drop the enforcement cache too
+    // (trust layer P0) — look BEFORE deleting, while the rows still carry
+    // namespace/key.
+    var deletedSecurityKey = getContextKeysByIds(ids).some(function (t) {
+      return isSecurityContextKey(t.namespace, t.key);
+    });
     var deleted = bulkDeleteContextKeys(ids);
+    if (deletedSecurityKey) invalidateEnforcementRulesCache();
     emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys');
     res.json({ ok: true, deleted: deleted });
   }));
@@ -136,9 +187,22 @@ export function registerContextRoutes(router, deps) {
     // restoring — fetch the history entry (carries project_id) and check scope.
     var entry = getContextHistoryEntry(historyId);
     if (!entry) return res.status(404).json({ error: 'History entry not found' });
+    // Trust layer P0 (F-253): restoring a security key's old value IS a write
+    // to it — admin-only, and only a value that passes the write-side shape
+    // validation (pre-fix history may hold a malformed ruleset; resurrecting
+    // it must not re-open the silent-empty hole).
+    var securityEntry = isSecurityContextKey(entry.namespace, entry.key);
+    if (securityEntry && !req._authIsAdmin) {
+      return res.status(403).json({ error: 'Security context keys are admin-only' });
+    }
+    if (securityEntry) {
+      var rulesCheck = validateEnforcementRulesData(entry.data);
+      if (!rulesCheck.ok) return res.status(400).json({ error: 'refusing to restore: ' + rulesCheck.error });
+    }
     if (!checkProjectScope(req, res, entry.project_id)) return;
     var restored = rollbackContextKey(historyId, agentId);
     if (!restored) return res.status(404).json({ error: 'History entry not found' });
+    if (securityEntry) invalidateEnforcementRulesCache();
     emitEvent('context_key_rollback', agentId, restored.namespace, agentId + ' rolled back ' + restored.namespace + ':' + restored.key + ' to version #' + historyId);
     res.json({ ok: true, namespace: restored.namespace, key: restored.key, restored_from: historyId });
   }));
@@ -155,6 +219,7 @@ export function registerContextRoutes(router, deps) {
       return res.status(400).json({ error: 'Maximum 50 keys per batch' });
     }
     var results = [];
+    var securityWrite = false;
     for (var entry of keys) {
       if (!entry.namespace || !entry.key || entry.data === undefined) {
         results.push({ namespace: entry.namespace, key: entry.key, error: 'namespace, key, and data are required' });
@@ -167,18 +232,50 @@ export function registerContextRoutes(router, deps) {
         results.push({ namespace: entry.namespace, key: entry.key, error: 'forbidden: cross-project' });
         continue;
       }
+      // Trust layer P0 (F-253): security keys are admin-only and validated on
+      // write, same as the single-key PUT — per-entry, so one poison entry
+      // doesn't take the batch down (the route's partial-success contract).
+      var securityEntry = isSecurityContextKey(entry.namespace, entry.key);
       var dataStr = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data);
       var opts = { projectId: req._authProjectId || null };
+      if (securityEntry) {
+        if (!req._authIsAdmin) {
+          results.push({ namespace: entry.namespace, key: entry.key, error: 'forbidden: admin-only' });
+          continue;
+        }
+        // Census keys are durable by construction (review A round 2 of PR
+        // #193) — per-entry refusal, same shape as the refusals above (the
+        // route's partial-success contract); category is forced durable at
+        // the db layer, which owns the row.
+        if (entry.ttl || entry.expires_at) {
+          results.push({ namespace: entry.namespace, key: entry.key, error: 'census keys are durable by construction: ttl/expires_at are refused' });
+          continue;
+        }
+        var rulesCheck = validateEnforcementRulesData(entry.data);
+        if (!rulesCheck.ok) {
+          results.push({ namespace: entry.namespace, key: entry.key, error: rulesCheck.error });
+          continue;
+        }
+        dataStr = rulesCheck.value;
+      } else if (!req._authIsAdmin && !existing && isSecurityContextNamespace(entry.namespace)) {
+        // Trust layer P0 (review B of PR #193): a NEW key in a census namespace
+        // is admin-only — per-entry, like the refusal above (the flood that
+        // drives the namespace cap must not be writable by the gated).
+        results.push({ namespace: entry.namespace, key: entry.key, error: 'forbidden: census namespace is admin-only for new keys' });
+        continue;
+      }
       if (entry.category) opts.category = entry.category;
       if (entry.ttl) opts.ttl = parseInt(entry.ttl, 10);
       if (entry.expires_at) opts.expires_at = entry.expires_at;
       try {
         upsertContextKey(entry.namespace, entry.key, dataStr, agentId, opts);
+        if (securityEntry) securityWrite = true;
         results.push({ namespace: entry.namespace, key: entry.key, ok: true });
       } catch (e) {
         results.push({ namespace: entry.namespace, key: entry.key, error: e.message });
       }
     }
+    if (securityWrite) invalidateEnforcementRulesCache();
     emitEvent('context_keys_bulk', agentId, null, agentId + ' bulk-updated ' + results.filter(function (r) { return r.ok; }).length + ' context keys');
     res.json({ ok: true, results: results });
   }));

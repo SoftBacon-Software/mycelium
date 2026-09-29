@@ -21,7 +21,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { execFileSync } from 'child_process';
 import jwt from 'jsonwebtoken';
-import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
+import { initDB, getDB, resolveStaleRequests, pruneWebhookDeliveries, purgeExpiredContextKeys, sanitizeSecurityContextKeys, cleanupContextHistory, cleanupSavepoints } from './db.js';
 import myceliumRoutes, { initPlugins, isAdminKey } from './routes/mycelium.js';
 import { initEmail } from './email.js';
 import { securityHeadersMiddleware } from './lib/security-headers.js';
@@ -133,6 +133,13 @@ try {
 } catch (e) {
   process.stdout.write('[boot] tasks review_metadata migration note: ' + e.message + '\n');
 }
+
+// Trust layer P0 (review A round 2 of PR #193): census keys are durable by
+// construction — heal any legacy expiry off one BEFORE the first purge can
+// even consider it (the sweeps themselves exclude census keys; this is the
+// boot-time half of the guarantee).
+var sanitizedCensus = sanitizeSecurityContextKeys();
+if (sanitizedCensus > 0) process.stdout.write('[boot] sanitized ' + sanitizedCensus + ' census context keys to durable\n');
 
 // Purge expired context keys on boot
 var purged = purgeExpiredContextKeys();
