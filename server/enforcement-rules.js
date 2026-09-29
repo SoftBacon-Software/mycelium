@@ -21,9 +21,17 @@
 //      cache (the gate reads intact until the TTL lapses, then reads zero
 //      rules). Review B of PR #193. The census NAMESPACE is additionally
 //      admin-owned for NEW keys on the context routes (isSecurityContextNamespace).
+//   5. it is durable BY CONSTRUCTION: the write paths refuse ttl/expires_at
+//      (400 / per-entry) and force category 'durable'; both expiry sweeps
+//      (purgeExpiredContextKeys, getContextKey's lazy-expiry DELETE) skip
+//      census keys; boot sanitizes any legacy row (sanitizeSecurityContextKeys).
+//      An expires_at on the census row would re-open #4's failure mode by
+//      clock instead of by write — the gate reads intact until the TTL lapses,
+//      then reads zero rules, no event, no admin present. Review A round 2 of
+//      PR #193.
 //
 // A future key that starts gating a security check joins SECURITY_CONTEXT_KEYS
-// and inherits all four.
+// and inherits all five.
 
 export const ENFORCEMENT_RULES_NS = 'mycelium';
 export const ENFORCEMENT_RULES_KEY = 'enforcement_rules';

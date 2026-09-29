@@ -106,6 +106,15 @@ export function registerContextRoutes(router, deps) {
     var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
     var opts = { projectId: req._authProjectId || null };
     if (securityKey) {
+      // Census keys are durable by construction (trust layer P0, review A
+      // round 2 of PR #193): a ttl/expires_at on the gate key is REFUSED, not
+      // silently stripped — an admin asking for an expiry on an authorization
+      // control is a mistake worth naming, and silently ignoring it would
+      // grant a durability the caller never agreed to. (category is forced
+      // 'durable' at the db layer, which owns the row.)
+      if (req.body.ttl || req.body.expires_at) {
+        return res.status(400).json({ error: 'census keys are durable by construction: ttl/expires_at are refused' });
+      }
       // Malformed value is 400, never stored — the reader tolerates loose
       // shapes in ways that silently weaken or empty the gate (a bare array
       // merges into {"0":…} and reads as zero rules).
@@ -232,6 +241,14 @@ export function registerContextRoutes(router, deps) {
       if (securityEntry) {
         if (!req._authIsAdmin) {
           results.push({ namespace: entry.namespace, key: entry.key, error: 'forbidden: admin-only' });
+          continue;
+        }
+        // Census keys are durable by construction (review A round 2 of PR
+        // #193) — per-entry refusal, same shape as the refusals above (the
+        // route's partial-success contract); category is forced durable at
+        // the db layer, which owns the row.
+        if (entry.ttl || entry.expires_at) {
+          results.push({ namespace: entry.namespace, key: entry.key, error: 'census keys are durable by construction: ttl/expires_at are refused' });
           continue;
         }
         var rulesCheck = validateEnforcementRulesData(entry.data);

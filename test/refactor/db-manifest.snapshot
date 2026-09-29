@@ -270,6 +270,7 @@ resolveStaleRequests:function:1
 resolveTaskDependencies:function:1
 resumeDrone:function:1
 rollbackContextKey:function:2
+sanitizeSecurityContextKeys:function:0
 searchContextKeys:function:1
 seedDefaultJobTemplates:function:0
 seedPlatformProfiles:function:0

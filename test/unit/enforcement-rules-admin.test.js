@@ -30,6 +30,15 @@ import request from 'supertest'
 //      lapsed and then read zero rules. The cap now never counts nor evicts a
 //      census key (describe F), and the census NAMESPACE is admin-owned for
 //      NEW keys (describe E — the decision and its why live on the routes).
+//   5. (review A round 2 of PR #193) an expires_at on the census row re-opened
+//      the same failure mode by CLOCK instead of by write: the boot + daily
+//      purge (purgeExpiredContextKeys) and getContextKey's lazy-expiry DELETE
+//      — a path the gate's own cold read exercises — could remove the key with
+//      no cache invalidation and no event, and nothing in the write path
+//      prevented that state (ttl/expires_at rode through unchecked). Census
+//      keys are now durable BY CONSTRUCTION: writes refuse/force expiry fields
+//      away, both sweeps skip census keys, and boot sanitizes legacy rows
+//      (describe G).
 //
 // What is deliberately NOT changed: the enforcement behaviour itself — block
 // → 403 + enforcement_rule field, warn → event only, no rules → everything
@@ -415,4 +424,129 @@ describe('F — the namespace cap never counts nor evicts a security key (review
     expect(blocked.status, 'a cap eviction must not be able to open the gate after the TTL').toBe(403)
     expect(blocked.body.enforcement_rule).toBe('no-passwords')
   }, 30000)
+})
+
+describe('G — census keys are durable by construction: no expiry sweep takes them (review A round 2 of PR #193)', () => {
+  // An expires_at on the census row re-opens review B's exact failure mode by
+  // CLOCK instead of by write: the gate reads intact until the TTL lapses, then
+  // reads zero rules — no event, no refusal, no admin present at removal time.
+  // Pre-fix the state was reachable (admin-set going forward, a legacy row set
+  // before the write paths were gated); post-fix it is unreachable — census
+  // writes refuse ttl/expires_at (400 / per-entry) and force category durable,
+  // both expiry sweeps skip census keys, and boot sanitizes any legacy row.
+  // The legacy state is simulated below with DIRECT db writes, the way review
+  // A armed it: a legacy or admin write the fixed routes would now refuse.
+
+  // Both removal paths in one probe: the boot/daily sweep (purgeExpiredContextKeys)
+  // AND a cold read through the lazy-expiry path — the exact read the
+  // enforcement loader's own getCachedEnforcementRules load makes.
+  test('a past expires_at on the row (legacy/admin write) does not let the boot/daily purge take the rules key — the gate holds cold', async () => {
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(put.status).toBe(200)
+    expect((await sendBlockedContent()).status).toBe(403) // gate armed, cache warm
+    // ISO past timestamp — the shape an API/legacy write actually leaves
+    // (upsertContextKey stores ttl as toISOString); 26 h back so the sweep's
+    // SQL comparison takes it regardless of format.
+    db.getDB().prepare(
+      "UPDATE context_keys SET expires_at = ? WHERE namespace = 'mycelium' AND key = 'enforcement_rules'"
+    ).run(new Date(Date.now() - 26 * 3600 * 1000).toISOString())
+    const purged = db.purgeExpiredContextKeys()
+    expect(purged, 'the boot/daily sweep must not report the census key as purged — an ' +
+      'authorization control must not be removable by clock, with no event and ' +
+      'no admin present').toBe(0)
+    expect(db.getContextKey('mycelium', 'enforcement_rules'), 'the rules key must survive the sweep').not.toBeNull()
+    // the gate reads COLD — invalidate the cache the way a TTL lapse would
+    const mod = await import('../../server/enforcement-rules.js')
+    mod.invalidateEnforcementRulesCache()
+    const blocked = await sendBlockedContent()
+    expect(blocked.status, 'the gate must still hold after the sweep with a cold cache').toBe(403)
+    expect(blocked.body.enforcement_rule).toBe('no-passwords')
+    expect(await readRules()).toEqual(GOOD)
+  })
+
+  test('the lazy-expiry read path (getContextKey) does not take the census key past expires_at', async () => {
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(put.status).toBe(200)
+    db.getDB().prepare(
+      "UPDATE context_keys SET expires_at = ? WHERE namespace = 'mycelium' AND key = 'enforcement_rules'"
+    ).run(new Date(Date.now() - 3600 * 1000).toISOString())
+    const row = db.getContextKey('mycelium', 'enforcement_rules')
+    expect(row, 'a cold read past expires_at must not delete the gate key — the enforcement ' +
+      "loader's own cold read runs through getContextKey, so the reader would be " +
+      'the remover').not.toBeNull()
+    expect((await sendBlockedContent()).status).toBe(403)
+  })
+
+  test('the routes refuse ttl/expires_at on the census key: PUT is 400, bulk per-entry, nothing changed', async () => {
+    // start from a clean armed row (the lazy-path test above leaves a
+    // simulated legacy expiry on it by design)
+    const clean = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(clean.status).toBe(200)
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD, ttl: 60 })
+    expect(put.status, 'a census key is durable by construction — an admin asking a TTL on the ' +
+      'gate key must be refused loudly, not silently granted and not silently ignored').toBe(400)
+    expect(put.body.error).toMatch(/durable|ttl|expires/i)
+    const bulk = await request(app)
+      .post(`${BASE}/context/keys/bulk`)
+      .set(admin())
+      .send({ keys: [{ namespace: 'mycelium', key: 'enforcement_rules', data: GOOD, expires_at: '2099-01-01T00:00:00.000Z' }] })
+    expect(bulk.status).toBe(200) // the batch itself still 200s (partial-success contract)
+    const entry = bulk.body.results[0]
+    expect(entry.ok).toBeUndefined()
+    expect(entry.error).toMatch(/durable|ttl|expires/i)
+    const read = await request(app).get(RULES).set(admin())
+    expect(JSON.parse(read.body.data)).toEqual(GOOD)
+    expect(read.body.expires_at == null, 'no expiry may ride through onto the census row').toBe(true)
+  })
+
+  test('category is forced durable on the census key however the write asks', async () => {
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD, category: 'ephemeral' })
+    expect(put.status).toBe(200)
+    const read = await request(app).get(RULES).set(admin())
+    expect(read.body.category, 'ephemeral would hand the census row to every TTL sweep — ' +
+      'durability is not negotiable').toBe('durable')
+  })
+
+  test('db layer: upsertContextKey stores the census key durable with no expiry even when the caller asks otherwise', async () => {
+    // The routes refuse/force; this pins the deeper invariant at the layer that
+    // owns the row — a writer that bypasses the routes (internal caller, legacy
+    // import, admin bulk load) cannot create an expiring census key either.
+    db.upsertContextKey('mycelium', 'enforcement_rules', JSON.stringify(GOOD), 'direct-writer', { ttl: 60, category: 'ephemeral' })
+    const read = await request(app).get(RULES).set(admin())
+    expect(read.status).toBe(200)
+    expect(read.body.category).toBe('durable')
+    expect(read.body.expires_at == null).toBe(true)
+  })
+
+  test('the boot sanitize clears a legacy expires_at/ephemeral on the census row (idempotent)', async () => {
+    db.getDB().prepare(
+      "UPDATE context_keys SET category = 'ephemeral', expires_at = '2030-01-01T00:00:00.000Z' WHERE namespace = 'mycelium' AND key = 'enforcement_rules'"
+    ).run()
+    const first = db.sanitizeSecurityContextKeys()
+    expect(first, 'the sanitize must have healed the legacy row').toBeGreaterThanOrEqual(1)
+    const row = db.getContextKey('mycelium', 'enforcement_rules')
+    expect(row.category).toBe('durable')
+    expect(row.expires_at == null).toBe(true)
+    const second = db.sanitizeSecurityContextKeys()
+    expect(second, 'the sanitize must be idempotent — a second boot changes nothing').toBe(0)
+  })
+
+  test('rollback restores the value but the row stays durable — no expiry resurrected or kept', async () => {
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(put.status).toBe(200)
+    // taint the row the way a legacy write would have, then roll back
+    db.getDB().prepare(
+      "UPDATE context_keys SET category = 'ephemeral', expires_at = ? WHERE namespace = 'mycelium' AND key = 'enforcement_rules'"
+    ).run(new Date(Date.now() - 3600 * 1000).toISOString())
+    const hist = await request(app).get(`${RULES}/history`).set(admin())
+    expect(hist.status).toBe(200)
+    expect(hist.body.length, 'the arming overwrite must have archived a version').toBeGreaterThan(0)
+    const res = await request(app).post(`${BASE}/context/keys/rollback/${hist.body[0].id}`).set(admin())
+    expect(res.status).toBe(200)
+    const read = await request(app).get(RULES).set(admin())
+    expect(read.status, 'the restored row must be readable — not lazily expired').toBe(200)
+    expect(read.body.category, 'a rollback is a census write — the row must come back durable').toBe('durable')
+    expect(read.body.expires_at == null, 'a rollback must not leave an expiry on the census row').toBe(true)
+    expect((await sendBlockedContent()).status).toBe(403)
+  })
 })
