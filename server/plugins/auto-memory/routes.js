@@ -488,12 +488,14 @@ Return a JSON object of the form {"facts":[{"category":"<one word>","fact_text":
 // F-mycelium 254: every field below comes back as MODEL OUTPUT, and until now
 // it was trusted verbatim — into am_facts AND the sm_embeddings metadata that
 // trust-weighted ranking (P1.6) reads. The prompt ASKS for one word from this
-// set; the validator ENFORCES it (off-set, mistyped or missing → 'other').
+// set; the validator ENFORCES it (off-set, mistyped or missing → 'general' —
+// the schema default, createFact's default and POST /facts' no-category value;
+// nothing else in the plugin emits 'other').
 var EXTRACTION_CATEGORIES = ['preference', 'decision', 'pattern', 'architecture', 'convention', 'insight'];
 
 function validExtractionCategory(raw) {
   var c = (typeof raw === 'string') ? raw.trim().toLowerCase() : '';
-  return EXTRACTION_CATEGORIES.indexOf(c) !== -1 ? c : 'other';
+  return EXTRACTION_CATEGORIES.indexOf(c) !== -1 ? c : 'general';
 }
 
 // Confidence is the model grading ITSELF — it may inform ranking but must
@@ -539,7 +541,12 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 
     var created = [];
     for (var fact of facts) {
-      if (!fact.fact_text || fact.fact_text.length < 10) continue;
+      // fact_text must BE a string before anything reads .length off it: an
+      // array (or any object with a length) passed the old check and blew up
+      // createFact's bind inside the outer try — one malformed fact dropped
+      // every later fact in the batch and logged as an extraction outage.
+      // Review B item 2 (PR #194): skip it and keep the batch alive.
+      if (!fact || typeof fact.fact_text !== 'string' || !fact.fact_text || fact.fact_text.length < 10) continue;
       // F-mycelium 254: category, confidence and fact_text are MODEL OUTPUT —
       // validated/clamped/capped BEFORE they reach am_facts or the index.
       var category = validExtractionCategory(fact.category);
@@ -638,7 +645,7 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
       console.warn('[auto-memory] indexFactInMemory: am_facts read-back failed for fact ' + factId + ' (authority stays inferred, metadata falls back to the caller): ' + e.message);
     }
     var authority = (factRow && factRow.source_authority) ? factRow.source_authority : 'inferred';
-    var metaCategory = (factRow && factRow.category != null) ? factRow.category : (fact.category != null ? fact.category : 'other');
+    var metaCategory = (factRow && factRow.category != null) ? factRow.category : (fact.category != null ? fact.category : 'general');
     var metaConfidence = (factRow && factRow.confidence != null) ? factRow.confidence : clampModelConfidence(fact.confidence);
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`

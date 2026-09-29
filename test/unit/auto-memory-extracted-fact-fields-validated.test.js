@@ -56,7 +56,7 @@ describe('auto-memory: extracted fact fields are validated, not trusted (F-mycel
   })
   afterEach(() => { raw.close(); global.fetch = realFetch })
 
-  test('category outside the extraction prompt set becomes "other" — in the echo, the row, and the index metadata', async () => {
+  test('category outside the extraction prompt set falls back to "general" — in the echo, the row, and the index metadata', async () => {
     global.fetch = mockOllama(() => ({ ok: true, status: 200, json: async () => JSON.parse(llmBody([
       { category: 'convention', fact_text: T, confidence: 0.5 },      // in the prompt's set — passes through
       { category: 'HACKING', fact_text: 'never store api keys in the repo readme file', confidence: 0.5 }, // unknown word
@@ -66,13 +66,13 @@ describe('auto-memory: extracted fact fields are validated, not trusted (F-mycel
     const created = await extractFacts(db, LLM_CONFIG, 'Activity log with durable facts: ' + T, 'm5max', null)
     expect(created.length).toBe(4)
     expect(created[0].category).toBe('convention')   // valid set passes through
-    expect(created[1].category).toBe('other')        // unknown word → 'other'
-    expect(created[2].category).toBe('other')        // near-miss → 'other'
-    expect(created[3].category).toBe('other')        // missing → 'other'
+    expect(created[1].category).toBe('general')      // unknown word → 'general' (the no-category default everywhere else)
+    expect(created[2].category).toBe('general')      // near-miss → 'general'
+    expect(created[3].category).toBe('general')      // missing → 'general'
     for (const c of created) {
       expect(db.getFact(c.id).category).toBe(c.category)  // the row of record agrees
     }
-    expect(metaFor(raw, created[1].id).category).toBe('other') // index metadata mirrors the row
+    expect(metaFor(raw, created[1].id).category).toBe('general') // index metadata mirrors the row
   })
 
   test('confidence is clamped to [0, 0.9]; missing/garbage keeps the 0.8 default', async () => {
@@ -128,7 +128,7 @@ describe('auto-memory: extracted fact fields are validated, not trusted (F-mycel
     expect(db.getFact(created[0].id).source_authority).toBe('inferred')  // PR #192, unchanged
     const meta = metaFor(raw, created[0].id)
     expect(meta.source_authority).toBe('inferred')
-    expect(meta.category).toBe('other')       // row truth, not the model's word
+    expect(meta.category).toBe('general')     // row truth, not the model's word
     expect(meta.confidence).toBe(0.9)         // row truth, not the model's 1.0
   })
 
@@ -149,11 +149,31 @@ describe('auto-memory: extracted fact fields are validated, not trusted (F-mycel
       expect(warn.mock.calls.some((c) => String(c[0]).indexOf('read-back') !== -1)).toBe(true)
       const meta = metaFor(raw, created[0].id)
       expect(meta.source_authority).toBe('inferred')
-      expect(meta.category).toBe('other')   // the fallback still validates — never raw model output
+      expect(meta.category).toBe('general') // the fallback still validates — never raw model output
       expect(meta.confidence).toBe(0.9)     // the fallback still clamps
     } finally {
       warn.mockRestore()
       raw.prepare = origPrepare
     }
+  })
+
+  test('a non-string fact_text is skipped before the length check — one malformed fact never drops the batch', async () => {
+    // Review B item 2: the old guard was `!fact.fact_text || fact.fact_text.length < 10`,
+    // which reads .length off WHATEVER arrived. An ARRAY is a non-string with a .length —
+    // ten elements pass the check — and createFact's bind then throws inside extractFacts'
+    // outer try, so the whole rest of the batch is lost and logged as an extraction
+    // outage. (A one-element array like ["aaaaaaaaaaaa"] is not the red case: it is
+    // already dropped by the length check, and better-sqlite3 would spread it into a
+    // plain string bind anyway. Length >= 10 is what reaches the bind.)
+    global.fetch = mockOllama(() => ({ ok: true, status: 200, json: async () => JSON.parse(llmBody([
+      { category: 'pattern', fact_text: ['aaaaaaaaaaaa', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], confidence: 0.5 }, // non-string, .length 10 — passes the OLD length check
+      { category: 'pattern', fact_text: T, confidence: 0.5 } // the healthy fact behind the malformed one
+    ])) }))
+    const created = await extractFacts(db, LLM_CONFIG, 'Activity log: ' + T, 'm5max', null)
+    expect(created.length).toBe(1)                       // the malformed entry is skipped, not fatal
+    expect(created[0].fact_text).toBe(T)                 // the valid fact is stored
+    expect(db.getFact(created[0].id).fact_text).toBe(T)  // …and is in the row of record
+    const errors = raw.prepare('SELECT COUNT(*) AS c FROM am_extraction_errors').get()
+    expect(errors.c).toBe(0)                             // a malformed fact is not an extraction outage
   })
 })
