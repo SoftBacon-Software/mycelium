@@ -485,6 +485,36 @@ Activity:
 
 Return a JSON object of the form {"facts":[{"category":"<one word>","fact_text":"...","confidence":0.5}]} (no markdown, no prose).`;
 
+// F-mycelium 254: every field below comes back as MODEL OUTPUT, and until now
+// it was trusted verbatim — into am_facts AND the sm_embeddings metadata that
+// trust-weighted ranking (P1.6) reads. The prompt ASKS for one word from this
+// set; the validator ENFORCES it (off-set, mistyped or missing → 'general' —
+// the schema default, createFact's default and POST /facts' no-category value;
+// nothing else in the plugin emits 'other').
+var EXTRACTION_CATEGORIES = ['preference', 'decision', 'pattern', 'architecture', 'convention', 'insight'];
+
+function validExtractionCategory(raw) {
+  var c = (typeof raw === 'string') ? raw.trim().toLowerCase() : '';
+  return EXTRACTION_CATEGORIES.indexOf(c) !== -1 ? c : 'general';
+}
+
+// Confidence is the model grading ITSELF — it may inform ranking but must
+// never outrank a verified fact, so it is clamped to [0, 0.9]. Missing or
+// non-numeric keeps the historical 0.8 default (createFact's own default).
+var MODEL_CONFIDENCE_CEILING = 0.9;
+
+function clampModelConfidence(raw) {
+  if (raw == null || raw === '') return 0.8;
+  var n = Number(raw);
+  if (!isFinite(n)) return 0.8;
+  return Math.min(MODEL_CONFIDENCE_CEILING, Math.max(0, n));
+}
+
+// The same 2000-char cap POST /auto-memory/facts enforces on writes. Here the
+// text is the model's own summary of paid-for activity, so DROP would silently
+// lose knowledge — TRUNCATE instead, and say so on the created[] echo.
+var FACT_TEXT_CAP = 2000;
+
 export async function extractFacts(db, config, text, agentId, projectId) {
   if (!text || text.length < 20) return [];
 
@@ -511,12 +541,27 @@ export async function extractFacts(db, config, text, agentId, projectId) {
 
     var created = [];
     for (var fact of facts) {
-      if (!fact.fact_text || fact.fact_text.length < 10) continue;
+      // fact_text must BE a string before anything reads .length off it: an
+      // array (or any object with a length) passed the old check and blew up
+      // createFact's bind inside the outer try — one malformed fact dropped
+      // every later fact in the batch and logged as an extraction outage.
+      // Review B item 2 (PR #194): skip it and keep the batch alive.
+      if (!fact || typeof fact.fact_text !== 'string' || !fact.fact_text || fact.fact_text.length < 10) continue;
+      // F-mycelium 254: category, confidence and fact_text are MODEL OUTPUT —
+      // validated/clamped/capped BEFORE they reach am_facts or the index.
+      var category = validExtractionCategory(fact.category);
+      var confidence = clampModelConfidence(fact.confidence);
+      var factText = fact.fact_text;
+      var truncated = false;
+      if (String(factText).length > FACT_TEXT_CAP) {
+        factText = String(factText).substring(0, FACT_TEXT_CAP);
+        truncated = true;
+      }
       var id = db.createFact(
         agentId, projectId,
-        fact.category || 'general',
-        fact.fact_text,
-        fact.confidence || 0.8,
+        category,
+        factText,
+        confidence,
         'extraction', null
       );
 
@@ -526,14 +571,19 @@ export async function extractFacts(db, config, text, agentId, projectId) {
       // indexFactInMemory unwraps the wrapper to the core db (F-mycelium 252).
       var memoryIndex;
       try {
-        memoryIndex = indexFactInMemory(db, id, fact, agentId, projectId);
+        // The object handed on carries the VALIDATED fields, never the raw
+        // model output — indexFactInMemory mirrors the am_facts row when it
+        // can and falls back to this object when it cannot. (254)
+        memoryIndex = indexFactInMemory(db, id, { fact_text: factText, category: category, confidence: confidence }, agentId, projectId);
       } catch (e) {
         memoryIndex = { indexed: false, reason: e.message };
       }
       if (!memoryIndex.indexed) {
         console.error('[auto-memory] extracted fact ' + id + ' is NOT searchable: ' + (memoryIndex.reason || 'unknown reason'));
       }
-      created.push({ id: id, category: fact.category, fact_text: fact.fact_text, confidence: fact.confidence, memory_index: memoryIndex });
+      var echo = { id: id, category: category, fact_text: factText, confidence: confidence, memory_index: memoryIndex };
+      if (truncated) echo.truncated = true;
+      created.push(echo);
     }
 
     // Prune excess facts per agent
@@ -581,11 +631,22 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
     // PR #190 closed on /memory/index. The am_facts row is the authority of
     // record — /facts validated it on write and extraction never sets one
     // (createFact defaults 'inferred') — so read it back from the row itself.
-    var authority = 'inferred';
+    // F-mycelium 254: category + confidence read back WITH it, so the index
+    // metadata mirrors the row of record instead of whatever the caller held
+    // (that caller object is the validated/clamped fields since 254, but the
+    // row is still the truth the metadata should agree with).
+    var factRow = null;
     try {
-      var factRow = coreDb.prepare('SELECT source_authority FROM am_facts WHERE id = ?').get(factId);
-      if (factRow && factRow.source_authority) authority = factRow.source_authority;
-    } catch (_) { /* am_facts unreachable — stay 'inferred', never trust the object */ }
+      factRow = coreDb.prepare('SELECT source_authority, category, confidence FROM am_facts WHERE id = ?').get(factId);
+    } catch (e) {
+      // Fail-soft to the caller's (validated) values, but never SILENTLY — an
+      // unreadable row of record is exactly what the honesty surfaces exist
+      // to expose, and a swallowed throw here read as a clean index write.
+      console.warn('[auto-memory] indexFactInMemory: am_facts read-back failed for fact ' + factId + ' (authority stays inferred, metadata falls back to the caller): ' + e.message);
+    }
+    var authority = (factRow && factRow.source_authority) ? factRow.source_authority : 'inferred';
+    var metaCategory = (factRow && factRow.category != null) ? factRow.category : (fact.category != null ? fact.category : 'general');
+    var metaConfidence = (factRow && factRow.confidence != null) ? factRow.confidence : clampModelConfidence(fact.confidence);
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
     coreDb.prepare(`
       INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by)
@@ -597,7 +658,7 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
         -- replaces whatever custody the row carried (a squatter's write under
         -- the next fact id does not survive the server's own upsert).
         written_by = excluded.written_by, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: fact.category, agent_id: agentId, project_id: projectId, source_authority: authority, confidence: fact.confidence }), agentId || null);
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: metaCategory, agent_id: agentId, project_id: projectId, source_authority: authority, confidence: metaConfidence }), agentId || null);
     return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };

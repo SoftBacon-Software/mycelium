@@ -124,9 +124,14 @@ export default function createAutoMemoryDB(db) {
     // agent_id when it disagreed with the authenticated identity — recorded,
     // flagged, never trusted (TRUST LAYER P0.2).
     createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId) {
+      // F-mycelium 254: an explicit 0 is "no confidence", not "missing" — the
+      // old `confidence || 0.8` inflated a caller's 0 to 0.8, both here and on
+      // every /facts POST with confidence: 0. Only a null/undefined confidence
+      // takes the 0.8 default.
+      var conf = (confidence == null) ? 0.8 : confidence;
       var result = db.prepare(
         "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?) RETURNING id"
-      ).get(agentId || null, projectId || null, category || 'general', factText, confidence || 0.8, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null);
+      ).get(agentId || null, projectId || null, category || 'general', factText, conf, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null);
       return result.id;
     },
 
