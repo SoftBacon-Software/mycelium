@@ -22,6 +22,14 @@ import request from 'supertest'
 //   3. Rule changes lagged up to ENFORCEMENT_CACHE_TTL (60s) behind a write.
 //      An admin disabling a block rule must take effect at once (and
 //      re-arming one must too).
+//   4. (review B of PR #193) the per-namespace key cap (enforceNamespaceCap,
+//      200 keys) evicted the oldest durable keys with no exception for the
+//      census, and ordinary NON-ADMIN writes into the same namespace drove it
+//      — the gate could be deleted without any write to it, and that delete
+//      bypassed the cache invalidation, so the gate read intact until the TTL
+//      lapsed and then read zero rules. The cap now never counts nor evicts a
+//      census key (describe F), and the census NAMESPACE is admin-owned for
+//      NEW keys (describe E — the decision and its why live on the routes).
 //
 // What is deliberately NOT changed: the enforcement behaviour itself — block
 // → 403 + enforcement_rule field, warn → event only, no rules → everything
@@ -128,7 +136,10 @@ describe('A — writes to a security context key are admin-only', () => {
       .set(agent())
       .send({ keys: [
         { namespace: 'mycelium', key: 'enforcement_rules', data: { rules: [] } },
-        { namespace: 'mycelium', key: 'unrelated', data: 'fine' },
+        // the control entry lives in the writer's OWN namespace — since review B
+        // of PR #193 a NEW key in the census namespace is refused per-entry too
+        // (describe E), so it can no longer serve as the "ordinary write" control
+        { namespace: 'enf-agent', key: 'unrelated', data: 'fine' },
       ] })
     expect(res.status).toBe(200) // the batch itself still 200s (partial-success contract)
     const poison = res.body.results.find((r) => r.key === 'enforcement_rules')
@@ -299,4 +310,109 @@ describe('D — the cache module contract (server/enforcement-rules.js)', () => 
     expect(mod.isSecurityContextKey('mycelium', 'anything_else')).toBe(false)
     expect(mod.isSecurityContextKey('roles', 'some-agent')).toBe(false)
   })
+})
+
+describe('E — the census namespace is admin-owned for NEW keys (review B of PR #193)', () => {
+  // Decision (implemented with the cap exclusion, one commit): non-admin
+  // writes of NEW keys into a census namespace are REFUSED. Why:
+  //   * Nothing in the repo legitimately writes `mycelium/*` as a non-admin —
+  //     standups live in the writer's own namespace (db/node-profiles.js),
+  //     role contracts in roles/<agentId>, project guidelines in
+  //     <project>/guidelines, the api display caches in admin/*.
+  //   * The namespace is injected WHOLESALE into every agent's boot context
+  //     (db.js platform keys + workContext), so a non-admin-creatable key
+  //     there is a swarm-wide boot-injection vector — the gated principal
+  //     must not be able to shape what the whole swarm boots with.
+  //   * It is the exact write pressure that drives the per-namespace cap;
+  //     refusing it at the route closes the flood, and the cap exclusion
+  //     (describe F) stays as the DB-layer invariant for every writer that
+  //     bypasses routes. EXISTING keys keep the F1 project-scope rules, and
+  //     admin (key or admin-role JWT) keeps the namespace.
+
+  test('an agent PUTting a NEW non-census key into the census namespace is refused 403 and nothing is stored', async () => {
+    const res = await request(app)
+      .put(`${BASE}/context/keys/mycelium/ns_probe_new`)
+      .set(agent())
+      .send({ data: { x: 1 } })
+    expect(res.status, 'the namespace whose write pressure drives the cap on the gate key ' +
+      'must not take new keys from the principals it gates').toBe(403)
+    const read = await request(app).get(`${BASE}/context/keys/mycelium/ns_probe_new`).set(admin())
+    expect(read.status).toBe(404)
+  })
+
+  test('an agent flooding the census namespace is refused per-entry, stores nothing, and the gate still reads 403 cold', async () => {
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(put.status).toBe(200)
+    expect((await sendBlockedContent()).status).toBe(403) // gate armed; cache warm
+    for (let b = 0; b < 5; b++) {
+      const keys = []
+      for (let i = 0; i < 45; i++) keys.push({ namespace: 'mycelium', key: `cap_http_flood_${b}_${i}`, data: { x: i } })
+      const res = await request(app)
+        .post(`${BASE}/context/keys/bulk`)
+        .set(agent())
+        .send({ keys })
+      expect(res.status, 'the batch itself still 200s (partial-success contract)').toBe(200)
+      for (const entry of res.body.results) {
+        expect(entry.error, `entry ${entry.key} must be refused per-entry`).toMatch(/forbidden|admin-only/i)
+      }
+    }
+    const stored = db.listContextKeys('mycelium').filter((k) => String(k.key).startsWith('cap_http_flood_'))
+    expect(stored.length, 'a refused flood must not store a single key').toBe(0)
+    expect(await readRules()).toEqual(GOOD)
+    // the gate reads COLD — invalidate the cache the way a TTL lapse would
+    const mod = await import('../../server/enforcement-rules.js')
+    mod.invalidateEnforcementRulesCache()
+    const blocked = await sendBlockedContent()
+    expect(blocked.status, 'after the flood the gate must still hold with a cold cache').toBe(403)
+    expect(blocked.body.enforcement_rule).toBe('no-passwords')
+  }, 30000)
+
+  test('the admin key can still create keys in the census namespace (control)', async () => {
+    const res = await request(app)
+      .put(`${BASE}/context/keys/mycelium/ns_admin_ok`)
+      .set(admin())
+      .send({ data: { x: 1 } })
+    expect(res.status).toBe(200)
+  })
+
+  test('a non-admin can still create keys in a NON-census namespace (control — the refusal does not leak)', async () => {
+    const res = await request(app)
+      .put(`${BASE}/context/keys/enf-agent/ns_agent_ok`)
+      .set(agent())
+      .send({ data: { x: 1 } })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('F — the namespace cap never counts nor evicts a security key (review B of PR #193)', () => {
+  test('flooding the namespace past the cap at the DB layer leaves the rules key intact and the gate up cold', async () => {
+    // Armed as admin, then made the OLDEST durable row in the namespace —
+    // exactly the shape the cap's oldest-first eviction took first.
+    const put = await request(app).put(RULES).set(admin()).send({ data: GOOD })
+    expect(put.status).toBe(200)
+    expect((await sendBlockedContent()).status).toBe(403)
+    await new Promise((r) => setTimeout(r, 1100)) // updated_at has 1 s resolution
+    // Direct DB writes — a writer that bypasses the routes (internal callers,
+    // legacy rows, admin bulk loads). The HTTP path is already refused by
+    // describe E; this layer must hold regardless.
+    for (let b = 0; b < 5; b++) {
+      for (let i = 0; i < 45; i++) {
+        db.upsertContextKey('mycelium', `cap_flood_${b}_${i}`, JSON.stringify({ x: i }), 'flood-writer')
+      }
+    }
+    const rules = await readRules()
+    expect(rules, 'the cap is driven by ordinary writes; it must never delete the one key ' +
+      'whose value is an authorization gate (evicted keys bypass the routes and so ' +
+      'cannot invalidate the enforcement cache)').toEqual(GOOD)
+    // The cap still works on the flood itself — census exclusion is not an
+    // unlimited namespace: non-census keys are held at 200.
+    const floodCount = db.listContextKeys('mycelium').filter((k) => String(k.key).startsWith('cap_flood_')).length
+    expect(floodCount).toBe(200)
+    // the gate reads COLD — invalidate the cache the way a TTL lapse would
+    const mod = await import('../../server/enforcement-rules.js')
+    mod.invalidateEnforcementRulesCache()
+    const blocked = await sendBlockedContent()
+    expect(blocked.status, 'a cap eviction must not be able to open the gate after the TTL').toBe(403)
+    expect(blocked.body.enforcement_rule).toBe('no-passwords')
+  }, 30000)
 })

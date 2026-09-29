@@ -11,7 +11,7 @@ import {
   upsertContext, getContextKeysByIds,
 } from '../db.js';
 import {
-  isSecurityContextKey, validateEnforcementRulesData, invalidateEnforcementRulesCache,
+  isSecurityContextKey, isSecurityContextNamespace, validateEnforcementRulesData, invalidateEnforcementRulesCache,
 } from '../enforcement-rules.js';
 
 export function registerContextRoutes(router, deps) {
@@ -88,6 +88,20 @@ export function registerContextRoutes(router, deps) {
     // overwrite it — same 403 a cross-project task write already gets. A new key
     // is stamped with the writer's project (opts.projectId) below.
     var existing = getContextKey(req.params.namespace, req.params.key);
+    // Trust layer P0 (review B of PR #193): the census NAMESPACE is admin-owned
+    // for NEW keys. The namespace is injected wholesale into every agent's boot
+    // context (db.js platform keys + workContext) and its write pressure drives
+    // the per-namespace cap — a non-admin-creatable key there is a swarm-wide
+    // boot-injection vector, and the exact eviction pressure the cap exclusion
+    // (db/context.js) guards against. Nothing in the repo writes it
+    // legitimately as a non-admin: standups live in the writer's own
+    // namespace, role contracts in roles/<agentId>, project guidelines in
+    // <project>/guidelines, the api display caches in admin/*. An EXISTING key
+    // keeps the F1 project-scope path below (shared keys stay shared), and
+    // admin (key or admin-role JWT) keeps the namespace.
+    if (!existing && !req._authIsAdmin && isSecurityContextNamespace(req.params.namespace)) {
+      return res.status(403).json({ error: 'Security context namespace "' + req.params.namespace + '" is admin-only for new keys' });
+    }
     if (existing && !checkProjectScope(req, res, existing.project_id)) return;
     var dataStr = typeof data === 'string' ? data : JSON.stringify(data);
     var opts = { projectId: req._authProjectId || null };
@@ -226,6 +240,12 @@ export function registerContextRoutes(router, deps) {
           continue;
         }
         dataStr = rulesCheck.value;
+      } else if (!req._authIsAdmin && !existing && isSecurityContextNamespace(entry.namespace)) {
+        // Trust layer P0 (review B of PR #193): a NEW key in a census namespace
+        // is admin-only — per-entry, like the refusal above (the flood that
+        // drives the namespace cap must not be writable by the gated).
+        results.push({ namespace: entry.namespace, key: entry.key, error: 'forbidden: census namespace is admin-only for new keys' });
+        continue;
       }
       if (entry.category) opts.category = entry.category;
       if (entry.ttl) opts.ttl = parseInt(entry.ttl, 10);

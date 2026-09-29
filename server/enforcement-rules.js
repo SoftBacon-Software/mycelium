@@ -12,10 +12,18 @@
 //      (validated on write — the old Object.assign merge turned a bare-array
 //      PUT into {"0":…,"1":…}, which `data.rules || []` reads as zero rules);
 //   3. a write takes effect at once (the cache invalidates on write — the
-//      60s TTL bounds re-reads only, never read-your-writes).
+//      60s TTL bounds re-reads only, never read-your-writes);
+//   4. the cap cannot remove it behind the cache's back: the per-namespace
+//      key cap (db/context.js enforceNamespaceCap) never counts nor evicts a
+//      census key — the cap is driven by ORDINARY writes to the namespace,
+//      so without this a non-admin flood deletes the key without any write
+//      to it, and a delete that bypasses the routes cannot invalidate the
+//      cache (the gate reads intact until the TTL lapses, then reads zero
+//      rules). Review B of PR #193. The census NAMESPACE is additionally
+//      admin-owned for NEW keys on the context routes (isSecurityContextNamespace).
 //
 // A future key that starts gating a security check joins SECURITY_CONTEXT_KEYS
-// and inherits all three.
+// and inherits all four.
 
 export const ENFORCEMENT_RULES_NS = 'mycelium';
 export const ENFORCEMENT_RULES_KEY = 'enforcement_rules';
@@ -38,6 +46,21 @@ export function isSecurityContextKey(namespace, key) {
   if (!namespace || !key) return false;
   return SECURITY_CONTEXT_KEYS.some(function (k) {
     return k.namespace === namespace && k.key === key;
+  });
+}
+
+// A census NAMESPACE (any namespace holding a census key) is admin-owned for
+// NEW keys on the context routes (review B of PR #193). Why the namespace and
+// not just the key: the namespace is injected wholesale into every agent's
+// boot context (db.js platform keys + workContext), so a non-admin-creatable
+// key there is a swarm-wide boot-injection vector — and it is the exact write
+// pressure that drives the per-namespace cap. Existing keys keep the context
+// routes' project-scope rules; admin (key or admin-role JWT) keeps the
+// namespace.
+export function isSecurityContextNamespace(namespace) {
+  if (!namespace) return false;
+  return SECURITY_CONTEXT_KEYS.some(function (k) {
+    return k.namespace === namespace;
   });
 }
 

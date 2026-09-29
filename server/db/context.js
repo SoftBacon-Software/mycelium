@@ -95,14 +95,37 @@ export function upsertContextKey(namespace, key, data, agentId, opts) {
 }
 
 function enforceNamespaceCap(namespace) {
+  // Trust layer P0 (review B of PR #193): census keys (isSecurityContextKey —
+  // e.g. mycelium/enforcement_rules, the value checkEnforcementRules turns
+  // into 403s) never count toward the cap and are never eviction candidates.
+  // The cap is driven by ORDINARY writes to the namespace, so without this a
+  // non-admin flood deletes the security key without any write to it — and a
+  // delete that bypasses the routes cannot invalidate the enforcement cache,
+  // so the gate reads intact until the TTL lapses and then reads zero rules.
+  // Excluding census keys from BOTH the count and the candidates means the
+  // cap neither evicts them nor evicts others early on their behalf; the
+  // context routes (routes/context.js) additionally refuse non-admin NEW keys
+  // in a census namespace, and this layer holds for every writer that
+  // bypasses the routes (internal callers, admin bulk loads, pre-existing
+  // rows, future census keys).
   var count = db.prepare("SELECT COUNT(*) as c FROM context_keys WHERE namespace = ?").get(namespace);
-  if (count.c > CONTEXT_MAX_KEYS_PER_NAMESPACE) {
-    // Delete oldest ephemeral keys first, then oldest durable
-    var excess = count.c - CONTEXT_MAX_KEYS_PER_NAMESPACE;
-    db.prepare(
-      "DELETE FROM context_keys WHERE id IN (SELECT id FROM context_keys WHERE namespace = ? ORDER BY CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)"
-    ).run(namespace, excess);
-  }
+  if (count.c <= CONTEXT_MAX_KEYS_PER_NAMESPACE) return;
+  var rows = db.prepare("SELECT id, key, category, updated_at FROM context_keys WHERE namespace = ?").all(namespace);
+  var evictable = rows.filter(function (r) { return !isSecurityContextKey(namespace, r.key); });
+  var excess = evictable.length - CONTEXT_MAX_KEYS_PER_NAMESPACE;
+  if (excess <= 0) return;
+  // Delete oldest ephemeral keys first, then oldest durable — the original
+  // eviction order (CASE WHEN category = 'ephemeral' THEN 0 ELSE 1 END, updated_at ASC).
+  evictable.sort(function (a, b) {
+    var ae = a.category === 'ephemeral' ? 0 : 1;
+    var be = b.category === 'ephemeral' ? 0 : 1;
+    if (ae !== be) return ae - be;
+    return String(a.updated_at || '').localeCompare(String(b.updated_at || ''));
+  });
+  var ids = evictable.slice(0, excess).map(function (r) { return r.id; });
+  db.prepare(
+    "DELETE FROM context_keys WHERE id IN (" + ids.map(function () { return '?'; }).join(',') + ")"
+  ).run(...ids);
 }
 
 export function cleanupContextHistory(retentionDays) {
