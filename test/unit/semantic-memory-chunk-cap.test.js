@@ -14,13 +14,33 @@
 // must hold on its own — and at the DEFAULT chunk size 4000 the 16 MB cap
 // itself can still yield the full 8389 chunks, so the cap must sit exactly
 // above what a legal max-size body produces. Test timeout raised accordingly.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import express from 'express';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+
+// Task 257 alert-#279 round-2 hook: when globalThis.__task257OverChunks is
+// set, the wrapped createMemoryDB hands back a db whose indexDoc/getDocChunks
+// "produce" that many chunks — the disagreement-with-the-preview leg the loop
+// guard exists for. Every other test leaves the flag unset and gets the REAL
+// module untouched (this file's other legs prove the real write path).
+vi.mock('../../server/plugins/semantic-memory/db.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const wrapped = function (db, opts) {
+    const real = actual.default(db, opts);
+    if (globalThis.__task257OverChunks) {
+      const mk = (n) => Array.from({ length: n }, (_, i) =>
+        ({ chunk_index: i, content_text: 'stub chunk', embedding: 1, written_by: 'tester' }));
+      real.indexDoc = () => mk(globalThis.__task257OverChunks);
+      real.getDocChunks = () => mk(globalThis.__task257OverChunks);
+    }
+    return real;
+  };
+  return { ...actual, default: wrapped };
+});
 
 import createMemoryRoutes from '../../server/plugins/semantic-memory/routes.js';
 
@@ -110,5 +130,26 @@ describe('semantic-memory chunk-count bound (task 240 #279)', () => {
       .send({ source_type: 'probe', source_id: 'cap-normal', content_text: 'a plain small doc' })
       .expect(200);
     expect(res.body.chunks).toBe(1);
+  });
+
+  // Task 257, alert #279 round 2: the loop itself re-pins the constant on the
+  // count the WRITE produced. The preview above cannot see a write that
+  // disagrees with it (indexDoc is opaque to the route), so this leg has the
+  // write produce MAX+1 chunks for content the preview admits, and asserts
+  // the loop guard refuses BEFORE the embed pass. RED without the guard (the
+  // route loops past the cap and answers 200), GREEN with it.
+  it('re-pins the cap at the loop when the write yields more chunks than the preview admitted', async function () {
+    globalThis.__task257OverChunks = MAX + 1;
+    try {
+      const ctx = await boot();
+      app = ctx.app; db = ctx.db;
+      var res = await request(app)
+        .post('/api/mycelium/memory/index')
+        .send({ source_type: 'probe', source_id: 'cap-loop', content_text: 'a plain small doc' })
+        .expect(413);
+      expect(res.body.error).toContain('MAX_CHUNKS_PER_DOC');
+    } finally {
+      delete globalThis.__task257OverChunks;
+    }
   });
 });

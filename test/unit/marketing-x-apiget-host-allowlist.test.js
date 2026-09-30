@@ -119,4 +119,32 @@ describe('x apiGet host allowlist + caller-side id validation (task 240 #267)', 
     expect(calls[0].url).toBe('https://api.twitter.com/2/users/me');
     expect(calls[0].opts.headers.Authorization).toMatch(/^OAuth /);
   });
+
+  // Task 257, alert #267 round 2: the static analysis does not model
+  // assertXId's regex refusal as a sanitizer, so the interpolation seam now
+  // encodes each id (xIdPath — encodeURIComponent is the sanitizer the
+  // request-forgery query recognizes). On the input assertXId admits the
+  // encode is a no-op (digits encode to themselves), which is why the exact-URL
+  // pins above are unchanged — no behavioral red/green exists for this layer,
+  // and the alert's close is CI's CodeQL run on the PR. What runtime CAN pin
+  // is the seam itself: this tripwire fails if an id is ever interpolated into
+  // a request path through anything but xIdPath (the layer that both refuses
+  // and encodes), e.g. a future caller reaching for bare `+ tweetId`
+  // concatenation again.
+  test('ids reach the request path only through the refusing+encoding seam', async function () {
+    stubFetch();
+    await getMentions('1234567890123456789', CREDS);
+    await getTweet('1800000000000000001', CREDS);
+    var raw = (await import('node:fs')).readFileSync(
+      new URL('../../server/plugins/marketing/x/twitter.js', import.meta.url), 'utf8');
+    // The exact URLs the two calls must have produced (encoded seam):
+    expect(calls[0].url).toMatch(/^https:\/\/api\.twitter\.com\/2\/users\/1234567890123456789\/mentions\?/);
+    expect(calls[1].url).toMatch(/^https:\/\/api\.twitter\.com\/2\/tweets\/1800000000000000001\?/);
+    // And the source no longer contains a bare id interpolation into a path:
+    // the identifier concatenated right after each path prefix must BE the
+    // refusing+encoding seam (captured, so whitespace backtracking can't
+    // dodge the check the way a bare negative lookahead would).
+    expect(raw.match(/\/2\/users\/'\s*\+\s*([A-Za-z_$][\w$]*)/)?.[1]).toBe('xIdPath');
+    expect(raw.match(/\/2\/tweets\/'\s*\+\s*([A-Za-z_$][\w$]*)/)?.[1]).toBe('xIdPath');
+  });
 });

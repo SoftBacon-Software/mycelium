@@ -67,7 +67,10 @@ export default function (core) {
         : 'owner-unknown (agent_id is NULL — written before write authority existed) — only the admin key may supersede or reverify it'));
     return true;
   }
-  router.get('/facts', function (req, res) {
+  // Rate-limited (task 257, alert #286): a recall-class read — 2400/min, the
+  // ceiling its POST sibling carries (#190): the bench reads back what it
+  // wrote, and neither leg may 429 a run.
+  router.get('/facts', rateLimited('auto-memory/facts-list', { windowMs: 60000, max: 2400 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var facts = db.listFacts({
@@ -96,7 +99,9 @@ export default function (core) {
   });
 
   // GET /auto-memory/facts/:id — get single fact
-  router.get('/facts/:id', function (req, res) {
+  // Rate-limited (task 257, alert #287): a single-row recall read — the same
+  // 1200/min class as the other recall reads (task 257).
+  router.get('/facts/:id', rateLimited('auto-memory/fact', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));

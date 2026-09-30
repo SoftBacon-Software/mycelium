@@ -401,6 +401,16 @@ export default function (core) {
       // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
       // 0..N-1 in place, so the rows align with the chunk texts.
       var stored = db.getDocChunks(source_type, source_id);
+      // Alert #279 (task 257): the loop below is bounded HERE, on the count the
+      // write actually produced. The preview above already refuses over-bound
+      // content BEFORE the write (chunkText is pure slicing, so its count is
+      // the write's count); this guard re-pins the same constant at the loop
+      // itself — fail-closed if the two ever disagree, and the bound shape the
+      // loop-bound analysis recognizes on the loop's own length read.
+      if (chunks.length > MAX_CHUNKS_PER_DOC) {
+        return apiError(res, 413, 'indexed chunk count (' + chunks.length +
+          ') exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC + ')');
+      }
       for (var ci = 0; ci < chunks.length; ci++) {
         autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
       }
@@ -865,7 +875,9 @@ export default function (core) {
   // GET /memory/list?source_type=preference&namespace=&limit= — query-free
   // retrieval by type, newest first. For always-on content the model must see
   // every turn (standing preferences), where query-ranked /search is wrong.
-  router.get('/list', function (req, res) {
+  // Rate-limited (task 257, alert #288): a recall-class read — the listing
+  // sibling of /memory/search, same 1200/min ceiling #190 measured for recall.
+  router.get('/list', rateLimited('memory/list', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var sourceType = req.query.source_type;
@@ -889,7 +901,9 @@ export default function (core) {
   // episodes needs no new route — POST /search with source_types:['episode']
   // already reaches them; this route exists because "all of Tuesday" is a
   // filter, not a query.)
-  router.get('/episodes', function (req, res) {
+  // Rate-limited (task 257, alert #289): recall-class read, 1200/min like
+  // /memory/search — the reconcile dry-run enumerates episodes per run.
+  router.get('/episodes', rateLimited('memory/episodes', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var rows = db.listEpisodes({
@@ -916,7 +930,9 @@ export default function (core) {
   // corrected lesson stops teaching the moment its correction lands;
   // ?include_superseded=1 reads them back with their supersede line and
   // provenance (history kept, never erased — the §3 rule).
-  router.get('/lessons', function (req, res) {
+  // Rate-limited (task 257, alert #290): recall-class read — q= switches to
+  // the same hybrid recall /search runs; same 1200/min ceiling.
+  router.get('/lessons', rateLimited('memory/lessons', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var filters = {
@@ -1224,7 +1240,9 @@ export default function (core) {
   // defined + accepted here: a verdict is a memory row with the same §1
   // metadata contract as a lesson (actor, learned_at, evidence required at the
   // route; task_class, repo, origin, outcome carrying the meaning).
-  router.get('/history', function (req, res) {
+  // Rate-limited (task 257, alert #291): recall-class read — "what happened
+  // last time" fires once per brief at recall cadence; 1200/min.
+  router.get('/history', rateLimited('memory/history', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var filters = {
@@ -1239,7 +1257,9 @@ export default function (core) {
     });
   });
 
-  router.get('/stats', function (req, res) {
+  // Rate-limited (task 257, alert #292): a console dashboard read over the
+  // whole index — never a loop; the house 120/min floor.
+  router.get('/stats', rateLimited('memory/stats', { windowMs: 60000, max: 120 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     res.json(db.stats());
@@ -1255,7 +1275,10 @@ export default function (core) {
   // namespace is a 400 (nonEmptyQuery — "no namespace" is the absence of the
   // param, not a namespace named ""). Agent- OR admin-key readable: the lab's
   // recall paths read their own coverage with agent keys.
-  router.get('/coverage', function (req, res) {
+  // Rate-limited (task 257, alert #293): recall-class ceiling, not the floor —
+  // the bench's embedding wait POLLS this route while embed jobs drain, so the
+  // ceiling must sit above a poll loop (1200/min, /search's number).
+  router.get('/coverage', rateLimited('memory/coverage', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     // "no namespace" is the ABSENCE of the param → the global shape. A param
@@ -1332,7 +1355,11 @@ export default function (core) {
   // drone reuses to claim work; TRUST LAYER P0.1 closed the any-studio-JWT
   // path this route used to share). Non-admin writes are scoped to the drone's own
   // claimed embed job when the drone_jobs linkage is available.
-  router.put('/embeddings/:sourceType/:sourceId', function (req, res) {
+  // Rate-limited (task 257, alert #294): a WRITE — one vector row per call on
+  // the drone callback. 1200/min matches the index path's per-minute row
+  // throughput contract (the bulk path's 120 calls x 100 items), and dwarfs a
+  // drone batch cadence.
+  router.put('/embeddings/:sourceType/:sourceId', rateLimited('memory/embeddings', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var sourceType = req.params.sourceType;
