@@ -256,7 +256,23 @@ var landingPage = path.join(publicPath, 'index.html');
 // ---- mycelium.fyi static site (multi-page: landing + Field Notes + Programs) ----
 // Serve the built static export from public/ so /, /notes/, /programs/, and the
 // /_next/ assets all resolve. (Was a single-file landing; now a full static site.)
-app.use(express.static(publicPath));
+//
+// Cache policy (lane/site-02-cache, audit blocker #6): /_next/static/ files are
+// content-hashed by the Next build → immutable for a year. HTML revalidates
+// every time (no-cache + ETag) so a deploy goes live on the next load. Other
+// statics (site portraits, og-card, favicon, avatars/, platform files) keep
+// stable but UNhashed names → short TTL so re-deploys aren't served stale.
+app.use(express.static(publicPath, {
+  setHeaders: function (res, filePath) {
+    if (filePath.startsWith(path.join(publicPath, '_next', 'static'))) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=600');
+    }
+  },
+}));
 
 // Landing page at GET / (after static so it doesn't shadow favicon/assets above)
 if (fs.existsSync(landingPage)) {
