@@ -137,8 +137,22 @@ export function getMe(creds) {
   return apiGet('https://api.twitter.com/2/users/me', {}, creds);
 }
 
+// Alert #267 (task 257): the ONLY seam where an id touches the outbound URL
+// path. What was user-controlled: the user-id and tweet-id path segments,
+// which flow from the marketing/x plugin's HTTP surface (routes.js reads
+// req.params.tweetId and a query/DM-derived user id) into getMentions/getTweet.
+// Two layers close it: assertXId refuses any non-decimal string at runtime,
+// and encodeURIComponent is the layer the static analysis recognizes as a
+// request-forgery sanitizer — and it is a no-op on every id assertXId admits
+// (digits encode to themselves), so accepted behaviour is unchanged. The
+// conversation_id / since_id values ride the query string, where apiGet's
+// builder already encodeURIComponent's every key and value.
+function xIdPath(kind, id) {
+  assertXId(kind, id);
+  return encodeURIComponent(id);
+}
+
 export function getMentions(userId, creds, sinceId) {
-  assertXId('user id', userId);
   var q = {
     'tweet.fields': 'author_id,created_at,conversation_id,in_reply_to_user_id',
     'expansions': 'author_id',
@@ -149,12 +163,11 @@ export function getMentions(userId, creds, sinceId) {
     assertXId('since_id', sinceId);
     q.since_id = sinceId;
   }
-  return apiGet('https://api.twitter.com/2/users/' + userId + '/mentions', q, creds);
+  return apiGet('https://api.twitter.com/2/users/' + xIdPath('user id', userId) + '/mentions', q, creds);
 }
 
 export function getTweet(tweetId, creds) {
-  assertXId('tweet id', tweetId);
-  return apiGet('https://api.twitter.com/2/tweets/' + tweetId, {
+  return apiGet('https://api.twitter.com/2/tweets/' + xIdPath('tweet id', tweetId), {
     'tweet.fields': 'author_id,created_at,conversation_id,public_metrics,referenced_tweets',
     'expansions': 'author_id,referenced_tweets.id',
     'user.fields': 'username,name'
