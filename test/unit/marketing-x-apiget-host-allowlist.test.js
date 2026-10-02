@@ -60,7 +60,7 @@ describe('x apiGet host allowlist + caller-side id validation (task 240 #267)', 
       'https://api.twitter.com/2/users/1234567890123456789/mentions' +
       '?expansions=author_id&max_results=25' +
       '&since_id=987654321098765432' +
-      '&tweet.fields=author_id%2Ccreated_at%2Cconversation_id%2Cin_reply_to_user_id' +
+      '&tweet.fields=author_id%2Ccreated_at%2Cconversation_id%2Cin_reply_to_user_id%2Cnote_tweet' +
       '&user.fields=username%2Cname'
     );
   });
@@ -73,7 +73,7 @@ describe('x apiGet host allowlist + caller-side id validation (task 240 #267)', 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('https://api.twitter.com/2/tweets/1800000000000000001' +
       '?expansions=author_id%2Creferenced_tweets.id' +
-      '&tweet.fields=author_id%2Ccreated_at%2Cconversation_id%2Cpublic_metrics%2Creferenced_tweets' +
+      '&tweet.fields=author_id%2Ccreated_at%2Cconversation_id%2Cnote_tweet%2Cpublic_metrics%2Creferenced_tweets' +
       '&user.fields=username%2Cname');
   });
 
@@ -86,7 +86,7 @@ describe('x apiGet host allowlist + caller-side id validation (task 240 #267)', 
     expect(calls[0].url).toBe('https://api.twitter.com/2/tweets/search/recent' +
       '?expansions=author_id&max_results=50' +
       '&query=conversation_id%3A1800000000000000002' +
-      '&tweet.fields=author_id%2Ccreated_at%2Cin_reply_to_user_id' +
+      '&tweet.fields=author_id%2Ccreated_at%2Cin_reply_to_user_id%2Cnote_tweet' +
       '&user.fields=username%2Cname');
     expect(calls[0].url).toContain('query=conversation_id%3A1800000000000000002');
   });
