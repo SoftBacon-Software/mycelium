@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import createXDB from './db.js';
-import { sendTweet, getCredentials, getMe, getMentions, getTweet, searchConversation } from './twitter.js';
+import { sendTweet, getCredentials, getMe, getMentions, getTweet, searchConversation, fullTextOf, withFullTexts } from './twitter.js';
 import { rateLimited } from '../../../lib/rate-limit.js';
 // Note: crypto still needed for thread UUID generation
 
@@ -64,7 +64,9 @@ export default function (core) {
         if (tweets.length) {
           core.db.prepare("INSERT OR REPLACE INTO plugin_config (plugin_name, key, value) VALUES ('x-posting', 'mentions_since_id', ?)").run(tweets[0].id);
         }
-        res.json({ mentions: tweets, includes: (r.data && r.data.includes) || {}, budget: { used: budget.used + 1, cap: budget.cap } });
+        // Task 262: each mention carries full_text (note_tweet.text when the
+        // post is long, else text) — callers never branch on the long-post rule.
+        res.json({ mentions: tweets.map(fullTextOf), includes: (r.data && r.data.includes) || {}, budget: { used: budget.used + 1, cap: budget.cap } });
       }).catch(function (e) { res.status(502).json(apiError('mentions error: ' + e.message)); });
     });
   });
@@ -79,11 +81,13 @@ export default function (core) {
         return res.status(502).json(apiError('tweet lookup failed (' + t.status + '): ' + JSON.stringify(t.data).slice(0, 300)));
       }
       var convo = t.data && t.data.data && t.data.data.conversation_id;
-      if (!convo || req.query.thread === '0') return res.json({ tweet: t.data, thread: null });
+      // Task 262: tweet + thread replies (and the referenced tweets in
+      // includes) carry full_text — the whole long post, not the truncation.
+      if (!convo || req.query.thread === '0') return res.json({ tweet: withFullTexts(t.data), thread: null });
       searchConversation(convo, creds).then(function (th) {
         db.recordRead('search', th.status);
-        res.json({ tweet: t.data, thread: th.status === 200 ? th.data : { unavailable: true, status: th.status, detail: JSON.stringify(th.data).slice(0, 200) } });
-      }).catch(function () { res.json({ tweet: t.data, thread: { unavailable: true } }); });
+        res.json({ tweet: withFullTexts(t.data), thread: th.status === 200 ? withFullTexts(th.data) : { unavailable: true, status: th.status, detail: JSON.stringify(th.data).slice(0, 200) } });
+      }).catch(function () { res.json({ tweet: withFullTexts(t.data), thread: { unavailable: true } }); });
     }).catch(function (e) { res.status(502).json(apiError('tweet error: ' + e.message)); });
   });
 
