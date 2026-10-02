@@ -154,7 +154,7 @@ function xIdPath(kind, id) {
 
 export function getMentions(userId, creds, sinceId) {
   var q = {
-    'tweet.fields': 'author_id,created_at,conversation_id,in_reply_to_user_id',
+    'tweet.fields': 'author_id,created_at,conversation_id,in_reply_to_user_id,note_tweet',
     'expansions': 'author_id',
     'user.fields': 'username,name',
     'max_results': 25
@@ -168,7 +168,7 @@ export function getMentions(userId, creds, sinceId) {
 
 export function getTweet(tweetId, creds) {
   return apiGet('https://api.twitter.com/2/tweets/' + xIdPath('tweet id', tweetId), {
-    'tweet.fields': 'author_id,created_at,conversation_id,public_metrics,referenced_tweets',
+    'tweet.fields': 'author_id,created_at,conversation_id,note_tweet,public_metrics,referenced_tweets',
     'expansions': 'author_id,referenced_tweets.id',
     'user.fields': 'username,name'
   }, creds);
@@ -179,9 +179,44 @@ export function searchConversation(conversationId, creds) {
   // search/recent may be tier-gated: callers surface the API's own verdict
   return apiGet('https://api.twitter.com/2/tweets/search/recent', {
     'query': 'conversation_id:' + conversationId,
-    'tweet.fields': 'author_id,created_at,in_reply_to_user_id',
+    'tweet.fields': 'author_id,created_at,in_reply_to_user_id,note_tweet',
     'expansions': 'author_id',
     'user.fields': 'username,name',
     'max_results': 50
   }, creds);
+}
+
+// ── Long posts (task 262) ──────────────────────────────────────────────────
+// A long post's whole body lives in note_tweet.text, which the v2 API returns
+// ONLY when tweet.fields includes note_tweet — every read path above asks for
+// the field. With it, text is the ~280-char display truncation and
+// note_tweet.text is the entire post. Every tweet body that leaves the routes
+// passes through these annotators, so the response carries ONE obvious field
+// — full_text = note_tweet.text when present, else text — and a caller never
+// has to know the long-post rule. Non-mutating: the route's caller may still
+// hold the original envelope.
+
+export function fullTextOf(tweet) {
+  if (!tweet || typeof tweet !== 'object') return tweet;
+  return Object.assign({}, tweet, {
+    full_text: (tweet.note_tweet && tweet.note_tweet.text) || tweet.text
+  });
+}
+
+// v2 envelope shape: { data: <tweet | tweet[]>, includes: { tweets?: [...] }, meta }.
+// includes.tweets (referenced/quoted expansions) can be long posts too.
+export function withFullTexts(envelope) {
+  if (!envelope || typeof envelope !== 'object') return envelope;
+  var out = envelope;
+  if (Array.isArray(out.data)) {
+    out = Object.assign({}, out, { data: out.data.map(fullTextOf) });
+  } else if (out.data) {
+    out = Object.assign({}, out, { data: fullTextOf(out.data) });
+  }
+  if (out.includes && Array.isArray(out.includes.tweets)) {
+    out = Object.assign({}, out, {
+      includes: Object.assign({}, out.includes, { tweets: out.includes.tweets.map(fullTextOf) })
+    });
+  }
+  return out;
 }
