@@ -7,6 +7,8 @@ import { chunkText } from './chunking.js';
 import companionView from './companion-view.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
+import { parseMeta, isQuarantined, applyRecallLabel } from '../../lib/memory-quarantine.js';
+import { promoteBySourceId } from './db.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 
 export default function (core) {
@@ -144,7 +146,7 @@ export default function (core) {
     results = results.map(function (r) {
       var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
       if (rest.embedded === undefined) rest.embedded = null;
-      return rest;
+      return applyRecallLabel(rest); // TRUST LAYER P1.3: quarantined rows recall labelled
     });
     if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page
 
@@ -821,7 +823,13 @@ export default function (core) {
       // record until the home side accepts it — recall stays with the home
       // row (the honesty law: he says where he learned it, he does not
       // silently become right). GET /me/memory still shows it, flagged.
-      if (meta.candidate) return false;
+      // TRUST LAYER P1.3: a QUARANTINED row (every foreign-network row, every
+      // auto-indexed message) is not the fact of record either — this search
+      // is the seed the phone interpolates as guidance, so a quarantined row
+      // is excluded here and only reaches the model through labelled recall
+      // (GET /me/memory, /memory/search) until its owner or an admin promotes
+      // it. The filter block below reports the cull either way.
+      if (meta.candidate || meta.quarantined) return false;
       return true;
     });
     var afterFilter = results.length; // measured BEFORE the page slice (review A r2 NIT 7): slicing is the caller's own limit at work, not a filter cull — attributing it to the filter lies about the corpus
@@ -871,6 +879,43 @@ export default function (core) {
     res.json({ ok: true, forgotten: id });
   });
 
+  // POST /memory/:id/promote — TRUST LAYER P1.3: the ONLY door out of
+  // quarantine. An auto-indexed message or a foreign-network row is recalled
+  // labelled (unverified) and never rides an instruction position; promoting
+  // is the owner (or an admin on the owner's behalf) vouching for the row in
+  // their own voice. Auth is the agent surface's usual gate
+  // (checkMemoryAgent); ownership is the row's OWN custody record —
+  // written_by for agent-written rows, metadata.owner for companion/fed rows
+  // — and anyone else is a 403 with the plain sentence. Promoting a row that
+  // is not quarantined answers promoted:false (an outbox replay gets the
+  // same shape as the first call, honestly).
+  // TODO(trust-layer P1.5 / F-mycelium 264): append the promotion to the
+  // hash-chained memory audit log (who, row id + content hash, why) once 264
+  // lands — the promote stamp below is the seam that call hangs on.
+  router.post('/:id/promote', rateLimited('memory/promote', { windowMs: 60000, max: 120 }), function (req, res) {
+    var who = checkMemoryAgent(req, res);
+    if (!who) return;
+    var id = String(req.params.id || '');
+    var row = db.anyBySourceId(id);
+    if (!row) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    var meta = parseMeta(row.metadata);
+    var isOwner = (row.written_by && row.written_by === who) ||
+      (meta.owner != null && String(meta.owner) === String(who));
+    if (!req._authIsAdmin && !isOwner) {
+      return apiError(res, 403, "'" + id + "' is quarantined — only the row's owner or an admin may promote it; '" + who + "' is neither");
+    }
+    if (!isQuarantined(meta) && !meta.candidate) {
+      return res.json({ ok: true, promoted: false, id: id, note: 'this memory is not quarantined — nothing to promote' });
+    }
+    var promoteAll = core.db.transaction(function () {
+      promoteBySourceId(core.db, row.source_type, row.source_id, who);
+    });
+    promoteAll();
+    res.json({ ok: true, promoted: true, id: id, promoted_by: who, source_type: row.source_type });
+  });
+
   // GET /memory/stats — index stats
   // GET /memory/list?source_type=preference&namespace=&limit= — query-free
   // retrieval by type, newest first. For always-on content the model must see
@@ -889,7 +934,7 @@ export default function (core) {
       namespace: req.query.namespace || null,
       limit: req.query.limit
     });
-    res.json({ results: rows, source_type: sourceType, count: rows.length });
+    res.json({ results: rows.map(applyRecallLabel), source_type: sourceType, count: rows.length });
   });
 
   // GET /memory/episodes?agent=&session_date=&namespace=&limit= — the §3 read
@@ -913,7 +958,7 @@ export default function (core) {
       limit: Math.min(parseInt(req.query.limit) || 20, 500)
     });
     res.json({
-      source_type: 'episode', count: rows.length, results: rows,
+      source_type: 'episode', count: rows.length, results: rows.map(applyRecallLabel),
       filters: { agent: nonEmptyQuery(req.query.agent), session_date: nonEmptyQuery(req.query.session_date) }
     });
   });
@@ -949,7 +994,7 @@ export default function (core) {
     if (!req.query.q) {
       var rows = db.listLessons(Object.assign({}, filters, { limit: limit, include_superseded: includeSuperseded }));
       return res.json({
-        source_type: 'lesson', count: rows.length, results: rows,
+        source_type: 'lesson', count: rows.length, results: rows.map(applyRecallLabel),
         filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since },
         include_superseded: includeSuperseded
       });
@@ -1252,7 +1297,7 @@ export default function (core) {
     var limit = Math.min(parseInt(req.query.limit) || 20, 100);
     var rows = db.listHistory(Object.assign({}, filters, { limit: limit }));
     res.json({
-      source_type: 'verdict', count: rows.length, results: rows,
+      source_type: 'verdict', count: rows.length, results: rows.map(applyRecallLabel),
       filters: { task_class: filters.task_class, repo: filters.repo }
     });
   });

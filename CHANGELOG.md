@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Memory quarantine by default (trust layer P1.3)** — rows that no
+  accountable writer deliberately placed land quarantined in metadata
+  (`quarantined: true` + `quarantine_reason`): message auto-index rows
+  (`auto-indexed`) and federation rows, both visited and imported
+  (`foreign-network`). Recall labels them `unverified: true` on
+  search/list/episodes/lessons/history, and the fact-of-record companion
+  search excludes them. Promotion is explicit and authenticated: new
+  `POST /memory/:id/promote` (owner agent or admin, 403 with a plain
+  sentence otherwise) and `POST /federation/import/:bundleId/accept` (the
+  importer's bearer, promoting the bundle's rows in one transaction).
+  Promotion strips the marks, stamps `promoted_at`/`promoted_by`, and leaves
+  `updated_at` alone. 18 new tests pin the contract end to end.
 - **Semantic Memory plugin README** — documents the two search halves
   (FTS5 keyword + optional vector), the config table with both write paths
   (`PUT /memory/config` and the platform plugin-config surface), the four

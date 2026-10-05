@@ -14,6 +14,8 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { rateLimited } from '../../lib/rate-limit.js';
+import { parseMeta, isQuarantined } from '../../lib/memory-quarantine.js';
+import { promoteBySourceId } from '../semantic-memory/db.js';
 import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
   KINDS, verifyRow, verifyNetworkPassport, verifyAgentPassport, makeGrant,
@@ -507,6 +509,43 @@ export default function (core) {
       episode: store.view(episodeStore.row)
     });
   }));
+
+  // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for
+  // federation candidates. Every imported row landed QUARANTINED
+  // (unverified on recall, excluded from the fact-of-record seed); the owner
+  // who imported the bundle is the one who can vouch for it. Accepting
+  // promotes every still-quarantined row of the bundle (collision
+  // supersede-candidates included — accepting one IS the explicit acceptance
+  // the candidate flag always meant), with the same stamp POST
+  // /memory/:id/promote writes, so the two promote doors cannot drift. A
+  // bundle this owner never imported is a 404 — ids are not an existence
+  // oracle across owners. The visit's episode row is not in the bundle's
+  // outcomes and stays quarantined: it is a diary line, not guidance.
+  // TODO(trust-layer P1.5 / F-mycelium 264): append each promotion to the
+  // hash-chained memory audit log once 264 lands.
+  router.post('/import/:bundleId/accept', importLimiter, function (req, res) {
+    var user = requireBearer(req, res);
+    if (!user) return;
+    var bundleId = String(req.params.bundleId || '');
+    var prior = store.getImport(bundleId, user.userId);
+    if (!prior) {
+      return apiError(res, 404, "no such import: '" + bundleId + "' — a bundle is accepted where it was imported, by the owner who imported it");
+    }
+    var accepted = [];
+    var alreadyAccepted = 0;
+    var promoteAll = core.db.transaction(function () {
+      for (var o of prior.outcomes) {
+        var row = store.rowById(user.userId, o.row_id);
+        if (!row) continue; // forgotten since the import — nothing to accept
+        var meta = parseMeta(row.metadata);
+        if (!isQuarantined(meta) && !meta.candidate) { alreadyAccepted++; continue; }
+        promoteBySourceId(core.db, row.source_type, row.source_id, user.userId);
+        accepted.push(store.view(store.rowById(user.userId, o.row_id)));
+      }
+    });
+    promoteAll();
+    res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted });
+  });
 
   // ---- operator visibility ------------------------------------------------------
 

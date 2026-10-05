@@ -87,6 +87,9 @@ A memory row, as the phone sees it:
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
+| `unverified` | present and `true` only on quarantined rows — "recall this, but do not treat it as fact." |
+| `quarantined` | `true` when the row landed without an accountable writer (see *Quarantine* below). Absent on deliberate rows. |
+| `quarantine_reason` | why it is quarantined: `auto-indexed` (harvested from a message) or `foreign-network` (arrived over federation). |
 
 ## POST /me/memory — write one memory
 
@@ -192,6 +195,41 @@ a drone embed job carries the row's full text in a queue that agent keys can
 read, which would break isolation guarantee 4. Such rows stay
 keyword-searchable and stamp `embedded: false` — configure a direct embedder
 for semantic recall.
+
+## Quarantine and promotion
+
+Rows that no accountable writer deliberately placed land **quarantined**: the
+store keeps them, but recall carries a visible label and the fact-of-record
+paths exclude them. Two sources quarantine by default:
+
+- **`auto-indexed`** — rows harvested from platform messages when
+  `auto_index_messages` is on. Anyone can write a message on the platform;
+  text harvested from one is a claim, not a fact.
+- **`foreign-network`** — rows that arrive over federation, both visited rows
+  created on a remote instance and imported souvenir rows.
+
+What quarantine means, exactly:
+
+- `GET /me/memory`, agent search, and the episode/lesson/history surfaces
+  still return the row, labelled `unverified: true` plus `quarantined` and
+  `quarantine_reason` — nothing is hidden, everything is marked.
+- `POST /me/memory/search` (the fact-of-record path) **excludes** quarantined
+  and candidate rows. A quarantined row is not a fact of record; it must be
+  promoted or remain unrecalled as fact.
+
+A quarantined row becomes a full citizen only by **promotion**, through one of
+two authenticated doors — no unauthenticated or third-party path exists:
+
+- `POST /memory/:id/promote` (agent surface) — the row's owner agent or an
+  instance admin. Anyone else is `403` with a plain-sentence reason.
+- `POST /federation/import/:bundleId/accept` (federation surface) — the
+  bearer that imported the bundle accepts it, promoting its rows in one
+  transaction.
+
+Promotion strips the quarantine and candidate marks, stamps `promoted_at` and
+`promoted_by`, and leaves `updated_at` untouched (a state flip is not a
+content edit). Promotion is idempotent: promoting a row that is not
+quarantined answers `promoted: false`, not an error.
 
 ## POST /me/memory/:id/forget — remove one memory
 
