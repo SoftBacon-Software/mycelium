@@ -4,6 +4,13 @@
 import { z } from 'zod';
 import { apiGet, apiPost, apiPut, apiDelete } from './api.js';
 import { getState, setWorkingOn, setBooted, startHeartbeat, sendHeartbeat, setClaimedItem, setCurrentStep, addProgressNote, touchToolCall } from './state.js';
+import {
+  renderSearchRecallView,
+  renderFactsRecallView,
+  bootSavepointSection,
+  savepointViewLines,
+  savepointDiffLines
+} from './recall-view.js';
 
 function text(s) {
   return { content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }] };
@@ -204,52 +211,14 @@ export function registerTools(server) {
           }
         }
 
-        // Session resume — but ONLY if no directives are pending
+        // Session resume — but ONLY if no directives are pending.
+        // TRUST LAYER P1.2: the savepoint recall (was_working_on, notes,
+        // progress entries, claimed/step titles — notes are cross-agent-
+        // writable via mycelium_leave_notes) is stored content, so it reaches
+        // the boot text only through the memory fence (recall-view.js).
         if (data.savepoint && data.savepoint.has_savepoint) {
-          var sp = data.savepoint;
-          var prevState = sp.previous_state || {};
-          var cleanShutdown = prevState.session_end === true;
-          lines.push('');
-          if (hasDirectives) {
-            // Minimal resume context when directives are pending — don't encourage continuing prior work
-            if (sp.was_working_on) lines.push('=== Session Resume (PAUSED — handle directives first) ===');
-            if (sp.was_working_on) lines.push('Last session: ' + sp.was_working_on);
-            if (sp.notes) lines.push('Notes: ' + sp.notes);
-          } else if (sp.was_working_on || prevState.claimed_item || prevState.current_step) {
-            lines.push('=== RESUME SESSION' + (cleanShutdown ? '' : ' (previous session did not shut down cleanly)') + ' ===');
-            if (sp.was_working_on) lines.push('You were: ' + sp.was_working_on);
-            if (prevState.claimed_item) {
-              var ci = prevState.claimed_item;
-              lines.push('Claimed: ' + (ci.type || 'item') + ' #' + ci.id + (ci.title ? ' — ' + ci.title : ''));
-            }
-            if (prevState.current_step) {
-              var cs = prevState.current_step;
-              lines.push('Plan step: plan #' + cs.plan_id + ' step #' + cs.step_id + (cs.title ? ' — ' + cs.title : ''));
-            }
-            if (prevState.progress && prevState.progress.length > 0) {
-              lines.push('Progress:');
-              for (var pn of prevState.progress) {
-                lines.push('  - ' + pn);
-              }
-            }
-            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-            if (sp.summary) {
-              var changeParts = [];
-              if (sp.summary.messages) changeParts.push(sp.summary.messages + ' new message(s)');
-              if (sp.summary.tasks) changeParts.push(sp.summary.tasks + ' task change(s)');
-              if (sp.summary.plans) changeParts.push(sp.summary.plans + ' plan change(s)');
-              if (sp.summary.bugs) changeParts.push(sp.summary.bugs + ' bug change(s)');
-              if (sp.summary.context) changeParts.push(sp.summary.context + ' context update(s)');
-              if (changeParts.length) lines.push('Changes while away: ' + changeParts.join(', '));
-            } else if (data.changes_since_last) {
-              lines.push('Changes while away: ' + data.changes_since_last);
-            }
-            lines.push('Action: Check messages/requests first if any pending, then continue where you left off.');
-          } else {
-            lines.push('=== Session Resume ===');
-            lines.push('Last session: idle');
-            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-            if (data.changes_since_last) lines.push('Changes: ' + data.changes_since_last);
+          for (var spLine of bootSavepointSection(data.savepoint, { hasDirectives: hasDirectives, changesSinceLast: data.changes_since_last })) {
+            lines.push(spLine);
           }
         }
 
@@ -1662,18 +1631,9 @@ export function registerTools(server) {
     async (args) => {
       var sp = await apiGet('/agents/' + args.agent_id + '/savepoint');
       if (!sp.has_savepoint && !sp.id) return text('No savepoint found for ' + args.agent_id);
-      var lines = [
-        '=== Savepoint for ' + args.agent_id + ' ===',
-        'Last heartbeat: ' + (sp.heartbeat_at || 'unknown'),
-        'Session: ' + (sp.session_id || 'none'),
-        'Working on: ' + (sp.working_on || 'nothing')
-      ];
-      if (sp.notes) lines.push('Notes: ' + sp.notes);
-      if (sp.state_snapshot && sp.state_snapshot !== '{}') {
-        try { lines.push('State: ' + JSON.stringify(JSON.parse(sp.state_snapshot), null, 2)); }
-        catch { lines.push('State: ' + sp.state_snapshot); }
-      }
-      return text(lines.join('\n'));
+      // TRUST LAYER P1.2: the stored fields (working_on, notes, state snapshot)
+      // are recalled content — fenced, not raw (see recall-view.js).
+      return text(savepointViewLines(sp).join('\n'));
     }
   );
 
@@ -1686,25 +1646,10 @@ export function registerTools(server) {
     async (args) => {
       var diff = await apiGet('/agents/' + args.agent_id + '/savepoint/diff');
       if (!diff.has_savepoint) return text('No savepoint found for ' + args.agent_id + ' — first session.');
-      var lines = [
-        '=== Changes since savepoint (' + diff.savepoint_at + ') ===',
-        'Was working on: ' + (diff.was_working_on || 'nothing')
-      ];
-      if (diff.notes) lines.push('NOTES FROM ADMIN: ' + diff.notes);
-      var s = diff.summary;
-      lines.push('');
-      lines.push('Changes:');
-      if (s.messages > 0) lines.push('  ' + s.messages + ' new messages');
-      if (s.tasks > 0) lines.push('  ' + s.tasks + ' tasks changed');
-      if (s.context > 0) lines.push('  ' + s.context + ' context keys updated');
-      if (s.plans > 0) lines.push('  ' + s.plans + ' plans changed');
-      if (s.bugs > 0) lines.push('  ' + s.bugs + ' bugs changed');
-      if (s.drone_jobs > 0) lines.push('  ' + s.drone_jobs + ' drone jobs changed');
-      if (s.events > 0) lines.push('  ' + s.events + ' events since');
-      if (s.messages === 0 && s.tasks === 0 && s.context === 0 && s.plans === 0 && s.bugs === 0 && s.drone_jobs === 0) {
-        lines.push('  No changes detected.');
-      }
-      return text(lines.join('\n'));
+      // TRUST LAYER P1.2: was_working_on + notes are the recalled handoff —
+      // fenced, not raw; the change counts are computed values and stay
+      // outside (see recall-view.js).
+      return text(savepointDiffLines(diff).join('\n'));
     }
   );
 
@@ -2125,8 +2070,27 @@ function buildPath(pathTemplate, args) {
   });
 }
 
+// TRUST LAYER P1.2: recall-shaped plugin tool responses get a fenced,
+// datamarked view of the recalled rows APPENDED as a second content block —
+// a model reading the tool result gets the fence for free, while the FIRST
+// block (the raw JSON) stays byte-identical for programs.
+var FENCED_RECALL_TOOLS = {
+  mycelium_memory_search: renderSearchRecallView,
+  mycelium_auto_memory_facts: renderFactsRecallView
+};
+
+function fencedRecallResult(toolName, result) {
+  var render = FENCED_RECALL_TOOLS[toolName];
+  if (!render) return null;
+  var fenced = render(result);
+  if (!fenced) return null;
+  var jsonText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+  return { content: [{ type: 'text', text: jsonText }, { type: 'text', text: fenced }] };
+}
+
 // Build a handler function for a plugin tool based on its endpoint config
-function buildPluginHandler(endpoint) {
+function buildPluginHandler(tool) {
+  var endpoint = tool.endpoint;
   var method = (endpoint.method || 'GET').toUpperCase();
   var pathTemplate = endpoint.path;
   var queryMap = endpoint.queryMap || {};
@@ -2144,7 +2108,7 @@ function buildPluginHandler(endpoint) {
       }
       var url = path + (params.length ? '?' + params.join('&') : '');
       var result = await apiGet(url);
-      return text(result);
+      return fencedRecallResult(tool.name, result) || text(result);
     }
 
     // POST / PUT / DELETE — build request body
@@ -2165,7 +2129,7 @@ function buildPluginHandler(endpoint) {
     var fn = { POST: apiPost, PUT: apiPut, DELETE: apiDelete }[method];
     if (!fn) throw new Error('Unsupported HTTP method: ' + method);
     var result = await fn(path, body);
-    return text(result);
+    return fencedRecallResult(tool.name, result) || text(result);
   };
 }
 
@@ -2185,7 +2149,7 @@ export async function registerPluginTools(server) {
     for (var tool of tools) {
       try {
         var schema = pluginSchemaToZod(tool.inputSchema || tool.schema);
-        var handler = buildPluginHandler(tool.endpoint);
+        var handler = buildPluginHandler(tool);
         registerDual(server, tool.name, tool.description, schema, handler);
         count++;
       } catch (err) {
