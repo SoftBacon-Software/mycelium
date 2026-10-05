@@ -24,8 +24,24 @@ export default function companionView(row, opts) {
     at: meta.at || null,
     created_at: row.created_at,
     superseded_by: row.superseded_by || null,
-    supersedes: meta.supersedes || null
+    supersedes: meta.supersedes || null,
+    // TRUST LAYER P1.1: WHO the row came from and how much it can be
+    // trusted — the fields the phone fences instruction positions on
+    // (PROGRAM §P0.4/P1.1: a row that is not the person's own never lands in
+    // an instruction slot). Unknown reads as the LOWEST trust, never the
+    // highest; a pre-migration row is origin null / trust 0.
+    origin: row.origin || null,
+    trust: (row.trust == null) ? 0 : row.trust
   };
+  // Derived rows keep their input refs so a client can show what the row
+  // was made from (and P1.4 deletion can walk the provenance graph).
+  if (row.derived_from) {
+    var refs = row.derived_from;
+    if (typeof refs === 'string') {
+      try { refs = JSON.parse(refs); } catch (e) { /* keep raw */ }
+    }
+    view.derived_from = refs;
+  }
   // Federation v0: an imported row that collided with a live home row is a
   // candidate (accepted explicitly, never a silent supersede); a row that
   // crossed a border carries its receipt.

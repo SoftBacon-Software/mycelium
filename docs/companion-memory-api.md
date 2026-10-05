@@ -72,7 +72,9 @@ A memory row, as the phone sees it:
   "at": "2026-09-21T20:15:00.000Z",
   "created_at": "2026-09-21 20:15:04",
   "superseded_by": null,
-  "supersedes": null
+  "supersedes": null,
+  "origin": "person",
+  "trust": 4
 }
 ```
 
@@ -87,6 +89,9 @@ A memory row, as the phone sees it:
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
+| `origin` | WHO the content came from — `person` \| `owner-agent` \| `tool` \| `model-derived` \| `foreign-network`; `null` = unknown (pre-trust-layer row). Companion-surface writes are always `person`; the fence rule (§instruction positions) reads this field. |
+| `trust` | the row's trust level on the origin ladder, 0–4 (`person`=4 … `foreign-network`=0). Unknown reads as **0 — the lowest, never the highest**. |
+| `derived_from` | on derived rows, the array of input row refs it was made from (`"sm:<source_type>:<source_id>"` / `"am:<fact_id>"`). A derived row's trust is the MIN of its inputs, resolved server-side at write time. |
 
 ## POST /me/memory — write one memory
 
