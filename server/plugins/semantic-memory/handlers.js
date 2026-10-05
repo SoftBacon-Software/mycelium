@@ -3,9 +3,13 @@
 import createMemoryDB from './db.js';
 import { generateEmbedding } from './embeddings.js';
 import { startBootDrain } from './boot-drain.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export function registerHooks(core) {
   var db = createMemoryDB(core.db);
+  // TRUST LAYER P1.5: the event-driven auto-index writes are audited too —
+  // the server itself is the honest actor when no real one owns the row.
+  var audit = createMemoryAudit(core.db);
 
   // Auto-index defaults ON — set auto_index='false' (PUT /memory/config) to disable.
   // (It used to default OFF, which kept platform-native content out of the index.)
@@ -69,12 +73,33 @@ export function registerHooks(core) {
     if (existing.length > 0) {
       var joined = existing.map(function (c) { return c.content_text; }).join('');
       var allEmbedded = existing.every(function (c) { return c.embedding; });
-      if (joined === contentText && allEmbedded) return;
+      if (joined === contentText && allEmbedded) return; // nothing written, nothing to audit
     }
-    var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
-    for (var i = 0; i < chunks.length; i++) {
-      autoEmbed(sourceType, sourceId, chunks[i], i);
-    }
+    var owner = opts.written_by || null;
+    core.db.transaction(function () {
+      var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
+      audit.append({
+        // A server-internal write names the server when no real agent owns
+        // the row ('system:auto-index'); otherwise the row's owner is both.
+        actor: owner || 'system:auto-index',
+        action: 'write',
+        source_type: sourceType,
+        source_id: sourceId,
+        row_owner: owner,
+        row_hash: contentHash({
+          kind: 'sm_row',
+          content: contentText,
+          namespace: opts.namespace || null,
+          metadata: opts.metadata || {},
+          written_by: owner,
+          superseded_by: null
+        }),
+        reason: 'auto-index ' + sourceType + ':' + sourceId
+      });
+      for (var i = 0; i < chunks.length; i++) {
+        autoEmbed(sourceType, sourceId, chunks[i], i);
+      }
+    })();
   }
 
   // Auto-index context key updates

@@ -5,11 +5,68 @@ import createAutoMemoryDB from './db.js';
 import { callLLM } from './llm.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
+
+// ---- TRUST LAYER P1.5: the fact audit helpers (module level — extractFacts
+// and runConsolidation are module exports and audit their own writes) --------
+// The canonical state of one am_facts row — what every row_hash hashes.
+function factState(fact) {
+  return {
+    kind: 'am_fact',
+    fact_text: fact.fact_text,
+    agent_id: fact.agent_id || null,
+    category: fact.category || null,
+    project_id: fact.project_id || null,
+    confidence: fact.confidence,
+    source_type: fact.source_type || null,
+    source_authority: fact.source_authority || null,
+    valid_from: fact.valid_from || null,
+    valid_to: fact.valid_to || null,
+    verified_at: fact.verified_at || null,
+    superseded_by: fact.superseded_by || null,
+    namespace: fact.namespace || null
+  };
+}
+
+// The extraction/consolidation paths run outside the plugin factory (handlers
+// call them with their own wrapper), so they share one audit instance PER RAW
+// DB — a WeakMap, not a module singleton: a singleton binds whichever db
+// arrives first and keeps writing to it after the db is swapped (every fresh
+// test db, or any future multi-db caller, would silently hit a stale handle).
+// The wrapper exposes the raw shared db as __coreDb (both callers pass the
+// wrapper).
+var auditsByDb = new WeakMap();
+function auditFor(db) {
+  var raw = db.__coreDb || db;
+  var a = auditsByDb.get(raw);
+  if (!a) {
+    a = createMemoryAudit(raw);
+    auditsByDb.set(raw, a);
+  }
+  return a;
+}
+
+function auditExtractFact(db, actor, action, fact, opts) {
+  opts = opts || {};
+  auditFor(db).append({
+    actor: actor,
+    action: action,
+    source_type: 'am_fact',
+    source_id: String(fact.id),
+    row_owner: fact.agent_id || null,
+    row_hash: contentHash(factState(fact)),
+    reason: opts.reason
+  });
+}
 
 export default function (core) {
   var router = Router();
   var db = createAutoMemoryDB(core.db);
-  var { checkAdmin } = core.auth;
+  var { checkAdmin, getAdminDisplayName } = core.auth;
+  // TRUST LAYER P1.5: fact writes/edits/deletes/purges are audited here (where
+  // the authenticated actor is known); housekeeping prunes are audited inside
+  // db.js's prune* as 'system:housekeeping'.
+  var audit = createMemoryAudit(core.db);
   // TRUST LAYER P0.1 (F-mycelium/250): the agent routes' gate — an agent key,
   // the admin key/JWT, or a role-'agent' studio token; any OTHER studio JWT is
   // refused. checkAgentOrAdmin's any-JWT-authenticates path was the hole the
@@ -22,6 +79,22 @@ export default function (core) {
   // two index shapes never mix. bench/memory/arms/arm_mycelium_timeline.mjs
   // carries the same constant (FACT_INDEX_SOURCE_TYPE) — keep them in sync.
   var FACT_INDEX_SOURCE_TYPE = 'am_fact';
+
+  // ---- TRUST LAYER P1.5: the fact audit helpers ------------------------------
+  // factState lives at module level (the extraction/consolidation writers
+  // audit their rows too); auditFact binds this factory's audit instance.
+  function auditFact(actor, action, fact, opts) {
+    opts = opts || {};
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: 'am_fact',
+      source_id: String(fact.id),
+      row_owner: fact.agent_id || null,
+      row_hash: contentHash(factState(fact)),
+      reason: opts.reason
+    });
+  }
 
   // A query/body namespace that is present-and-meaningful, else null — an empty
   // `namespace=` is "unscoped", not a namespace named "".
@@ -125,7 +198,15 @@ export default function (core) {
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
-    var indexRemoved = db.deleteFact(fact.id);
+    // P1.5 (#193 lesson): the delete is audited with the fact AS DELETED —
+    // captured before deleteFact, in the same transaction.
+    var indexRemoved = core.db.transaction(function () {
+      var removed = db.deleteFact(fact.id);
+      // getAdminDisplayName: the admin key/JWT's identity as a STRING —
+      // checkAdmin's return value is a boolean, and audit rows bind it.
+      auditFact(getAdminDisplayName(req), 'delete', fact, { reason: 'admin delete' });
+      return removed;
+    })();
     res.json({ ok: true, index_removed: indexRemoved });
   });
 
@@ -154,6 +235,18 @@ export default function (core) {
         'so an unscoped call refuses rather than guess');
     }
     var result = db.deleteFactsByNamespace(ns);
+    // P1.5 (#193 lesson): the bulk wipe is ONE purge row naming the namespace
+    // and the count — a purge the log cannot name never happened, as far as
+    // any reader could tell.
+    audit.append({
+      actor: getAdminDisplayName(req),
+      action: 'purge',
+      source_type: 'am_fact',
+      source_id: 'namespace=' + ns,
+      row_owner: null,
+      row_hash: contentHash({ kind: 'am_fact_purge', what: 'namespace', namespace: ns, deleted: result.deleted }),
+      reason: 'namespace purge: ' + result.deleted + ' facts'
+    });
     res.json({ deleted: result.deleted, namespaces: [ns] });
   });
 
@@ -207,8 +300,17 @@ export default function (core) {
       factAgentId = who;
       if (b.agent_id && b.agent_id !== who) claimedAgentId = b.agent_id;
     }
-    var id = db.createFact(factAgentId, b.project_id || null, b.category || 'general',
-      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null, claimedAgentId);
+    // P1.5: the create and its audit row commit together. actor = the
+    // AUTHENTICATED identity (never the body's agent_id claim); the audited
+    // owner is the fact's agent_id (same, unless the admin wrote on behalf
+    // of a named agent — then the named agent is the owner, the admin key
+    // the actor).
+    var id = core.db.transaction(function () {
+      var newId = db.createFact(factAgentId, b.project_id || null, b.category || 'general',
+        String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null, claimedAgentId);
+      auditFact(who, 'write', db.getFact(newId));
+      return newId;
+    })();
     // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
     // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
     // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
@@ -266,8 +368,15 @@ export default function (core) {
     // custody closed, one surface over. Owner (or admin) only.
     if (refuseNotFactOwner(res, fact, who, req._authIsAdmin, 'reverify')) return;
     var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
-    db.reverifyFact(id, conf);
-    res.json({ ok: true, fact: db.getFact(id) });
+    // P1.5: a re-verification edits the row's provenance (verified_at and
+    // possibly confidence) — audited as an edit on the fact.
+    var updated;
+    core.db.transaction(function () {
+      db.reverifyFact(id, conf);
+      updated = db.getFact(id);
+      auditFact(who, 'edit', updated, { reason: 'reverified' });
+    })();
+    res.json({ ok: true, fact: updated });
   });
 
   // POST /auto-memory/facts/:id/supersede — a newer fact replaces this one (Aria's UPDATE branch)
@@ -301,7 +410,14 @@ export default function (core) {
         (newFact.namespace ? "'" + newFact.namespace + "'" : '(legacy, unscoped)'));
     }
     var namespaced = !!oldFact.namespace;
-    var result = db.supersedeFact(oldId, newId, namespaced ? { keepIndexed: true } : undefined);
+    var result;
+    // P1.5: the supersede is an EDIT on the old fact — audited with its
+    // post-supersede state (superseded_by/valid_to set), the caller's
+    // authenticated identity as actor, the fact's agent as owner.
+    core.db.transaction(function () {
+      result = db.supersedeFact(oldId, newId, namespaced ? { keepIndexed: true } : undefined);
+      auditFact(who, 'edit', db.getFact(oldId), { reason: 'superseded by fact ' + newId });
+    })();
     if (namespaced) {
       var memoryIndex; // assigned on every path below before the response reads it
       // Re-index the old row in place: same (source_type, source_id) key, so the
@@ -569,6 +685,25 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         confidence,
         'extraction', null
       );
+      // P1.5: the extraction writer's facts are audited like any write —
+      // actor = the agent the extraction ran for (the authenticated caller
+      // on POST /extract; the message's agent on the event hooks). The
+      // row_hash read-back shares getFact with the 254 honesty surface, so
+      // when THAT read-back is failing the row still appends — row_hash then
+      // pins the validated write intent and the reason says so. A skipped
+      // audit row is the one failure this log may never have.
+      var factRow = null;
+      var readBackBroken = false;
+      try { factRow = db.getFact(id); } catch (e) { readBackBroken = true; }
+      auditExtractFact(db, agentId || 'system:auto-extract', 'write',
+        factRow || {
+          id: id, agent_id: agentId || null, project_id: projectId || null,
+          category: category, fact_text: factText, confidence: confidence,
+          source_type: 'extraction', source_authority: 'inferred',
+          valid_from: null, valid_to: null, verified_at: null,
+          superseded_by: null, namespace: null
+        },
+        { reason: readBackBroken ? 'extraction (row_hash pins the write intent — stored read-back failed)' : 'extraction' });
 
       // Index in semantic memory if available — and SURFACE the outcome (§F4
       // honesty): the status object used to be discarded here, so a fact that
@@ -850,6 +985,9 @@ export async function runConsolidation(db, config, _core, opts) {
         if (k.id && k.new_confidence !== undefined) {
           if (!canTouch(inputById[String(k.id)])) { factsRefused++; continue; }
           db.updateFactConfidence(k.id, k.new_confidence);
+          // P1.5: a confidence rewrite is an edit on the row.
+          auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(k.id),
+            { reason: 'consolidation confidence update' });
         }
       }
     }
@@ -865,6 +1003,9 @@ export async function runConsolidation(db, config, _core, opts) {
           for (var sid of m.supersede_ids) {
             if (!canTouch(inputById[String(sid)])) { factsRefused++; continue; }
             db.supersedeFact(sid, m.keep_id);
+            // P1.5: the merge is an edit on the superseded row.
+            auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(sid),
+              { reason: 'merged into fact ' + m.keep_id + ' by consolidation' });
             applied++;
           }
           if (applied > 0) factsMerged++;
@@ -877,7 +1018,10 @@ export async function runConsolidation(db, config, _core, opts) {
     if (Array.isArray(result.insights)) {
       for (var insight of result.insights) {
         if (insight.fact_text && insight.fact_text.length >= 10) {
-          db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
+          var insightId = db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
+          // P1.5: the consolidator's insight is a write — the server signs it
+          // ('system:consolidation'), owner-unknown (agent_id NULL, admin-only).
+          auditExtractFact(db, 'system:consolidation', 'write', db.getFact(insightId), { reason: 'consolidation insight' });
         }
       }
     }

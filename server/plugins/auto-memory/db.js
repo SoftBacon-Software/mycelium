@@ -1,5 +1,7 @@
 // Auto-Memory DB helpers
 
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
+
 export default function createAutoMemoryDB(db) {
   // Migration: add access tracking columns
   try { db.exec('ALTER TABLE am_facts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
@@ -88,6 +90,31 @@ export default function createAutoMemoryDB(db) {
   // reader interest.
   function factRow(id) {
     return db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+  }
+
+  // TRUST LAYER P1.5: the audit log (self-ensuring DDL — any harness works).
+  var audit = createMemoryAudit(db);
+
+  // Housekeeping prunes are audited as 'purge' rows signed
+  // 'system:housekeeping' — ONE summary row per prune call, appended ONLY
+  // when rows actually changed. (#193 lesson: a prune the log cannot name is
+  // silent data loss.)
+  function auditHousekeeping(what, doomed, extra) {
+    if (!doomed.length) return;
+    audit.append({
+      actor: 'system:housekeeping',
+      action: 'purge',
+      source_type: 'am_fact',
+      source_id: 'housekeeping:' + what,
+      row_owner: null,
+      row_hash: contentHash(Object.assign({
+        kind: 'am_fact_purge',
+        what: what,
+        deleted: doomed.length,
+        ids: doomed.slice(0, 200)
+      }, extra || {})),
+      reason: what + ': pruned ' + doomed.length + ' facts'
+    });
   }
 
   return {
@@ -295,6 +322,14 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Pruning --
+    // TRUST LAYER P1.5 (#193 lesson: audit every DELETE path): housekeeping
+    // prunes are audited as 'purge' rows signed 'system:housekeeping' — the
+    // server is the honest actor, and a prune the log cannot name is silent
+    // data loss. ONE summary row per prune call (the count + the id list, the
+    // id list capped at 200 in the hashed reason), appended ONLY when rows
+    // actually changed; the audit row lands in the same transaction as the
+    // prune it describes.
+
     pruneOldSuperseded(maxAge) {
       maxAge = maxAge || '30 days';
       // Collect ids BEFORE the delete — afterwards there is nothing left to join
@@ -306,6 +341,7 @@ export default function createAutoMemoryDB(db) {
       var result = db.prepare(
         "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
       ).run(maxAge);
+      auditHousekeeping('old-superseded', doomed, { max_age: maxAge });
       unindexFacts(doomed);
       return result.changes;
     },
@@ -353,6 +389,7 @@ export default function createAutoMemoryDB(db) {
       ).run(threshold);
       // Decay-pruned facts are the ones the system judged least trustworthy —
       // leaving them searchable would rank exactly the facts it decided to retire.
+      auditHousekeeping('low-confidence', doomed, { threshold: threshold });
       unindexFacts(doomed);
       return result.changes;
     },
@@ -370,6 +407,7 @@ export default function createAutoMemoryDB(db) {
       var result = db.prepare(
         'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
       ).run(agentId, toDelete);
+      auditHousekeeping('excess:' + agentId, doomed, { max_facts: maxFacts });
       unindexFacts(doomed);
       return result.changes;
     }

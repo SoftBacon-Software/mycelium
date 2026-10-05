@@ -8,6 +8,7 @@ import companionView from './companion-view.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export default function (core) {
   var router = Router();
@@ -24,6 +25,58 @@ export default function (core) {
   // explicit asyncHandler() wrap on a route is defense-in-depth, not load-
   // bearing — but it documents which routes can reject.
   var { apiError, parseIntParam, asyncHandler } = core;
+
+  // TRUST LAYER P1.5 (F-mycelium/264): the append-only, hash-chained audit
+  // log — ONE row per memory write / edit / delete / purge / embed across
+  // this plugin, auto-memory and federation. The storage half (schema,
+  // triggers, chain math) lives in server/lib/memory-audit.js, mirrored in
+  // server/schema.sql; the injections below are the write half. `actor` is
+  // always the identity the route already authenticated (never a body
+  // field); `row_hash` is the row's canonical content AFTER the action —
+  // deletes capture it AS DELETED, in the same transaction, so the chain
+  // pins what the delete removed.
+  var audit = createMemoryAudit(core.db);
+
+  // The canonical state of one sm_embeddings doc, in the exact shape every
+  // audit row_hash is computed from: content joins the doc's chunks back
+  // losslessly (chunking is pure slicing), metadata/written_by/superseded_by
+  // come off the live rows. Returns null for a doc that has no rows — so a
+  // write hashes what is actually STORED, never what the caller meant to
+  // write, and a delete's pre-capture is the same function's output.
+  function smRowState(sourceType, sourceId) {
+    var chunks = db.getDocChunks(sourceType, sourceId);
+    if (chunks.length === 0) return null;
+    var meta;
+    try { meta = JSON.parse(chunks[0].metadata || '{}'); } catch (e) { meta = {}; }
+    return {
+      content: chunks.map(function (c) { return c.content_text; }).join(''),
+      namespace: chunks[0].namespace || null,
+      metadata: meta,
+      written_by: chunks[0].written_by || null,
+      superseded_by: chunks[0].superseded_by || null
+    };
+  }
+
+  function smStateHash(state) {
+    return contentHash(Object.assign({ kind: 'sm_row' }, state));
+  }
+
+  // One audit row for a doc just written (or about to be reported on): the
+  // stored post-state is captured here so the write path and the delete
+  // path hash the same bytes.
+  function auditSmWrite(actor, action, sourceType, sourceId, opts) {
+    opts = opts || {};
+    var st = smRowState(sourceType, sourceId);
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: opts.row_owner !== undefined ? opts.row_owner : (st ? st.written_by : null),
+      row_hash: st ? smStateHash(st) : contentHash({ kind: 'sm_row', missing: true }),
+      reason: opts.reason
+    });
+  }
 
   // Fire-and-forget embedding after route-level indexing — same flow as the
   // event handlers. (POST /index used to store NULL embeddings forever; that
@@ -373,13 +426,17 @@ export default function (core) {
     if (refuseNotRowOwner(res, source_type, source_id, who, req._authIsAdmin)) return;
     var chunkCount = 1;
     if (chunk_index) {
-      // Explicit chunk_index = caller-managed chunking — store the row as-is
-      db.index(source_type, source_id, content_text, {
-        namespace: namespace,
-        chunk_index: chunk_index,
-        metadata: metadata,
-        written_by: who
-      });
+      // Explicit chunk_index = caller-managed chunking — store the row as-is,
+      // with its audit row in the SAME transaction (P1.5).
+      core.db.transaction(function () {
+        db.index(source_type, source_id, content_text, {
+          namespace: namespace,
+          chunk_index: chunk_index,
+          metadata: metadata,
+          written_by: who
+        });
+        auditSmWrite(who, 'write', source_type, source_id);
+      })();
       autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
       // Enforce the chunk bound BEFORE writing: chunkText is pure slicing, so
@@ -414,6 +471,9 @@ export default function (core) {
       for (var ci = 0; ci < chunks.length; ci++) {
         autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
       }
+      // P1.5: ONE audit row for the doc (the audit is per memory row, not per
+      // chunk — the row_hash pins the doc's whole joined content).
+      auditSmWrite(who, 'write', source_type, source_id);
     }
     core.emitEvent('memory_indexed', who, null,
       who + ' indexed ' + source_type + ':' + source_id, { source_type: source_type, source_id: source_id });
@@ -450,6 +510,13 @@ export default function (core) {
     // bulkIndex is chunk-aware — oversized items split into chunk rows;
     // it returns the rows actually written so each one embeds separately.
     var rows = db.bulkIndex(items, who);
+
+    // P1.5: ONE audit row per ITEM (a chunked item is one memory row).
+    core.db.transaction(function () {
+      for (var bi = 0; bi < items.length; bi++) {
+        auditSmWrite(who, 'write', items[bi].source_type, items[bi].source_id);
+      }
+    })();
 
     // Fire-and-forget embed for rows that didn't bring their own embedding —
     // EXCEPT unchanged rows (task 227): a byte-identical re-index kept its
@@ -496,7 +563,21 @@ export default function (core) {
     if (!who) return;
     if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
     if (refuseNotRowOwner(res, req.params.sourceType, req.params.sourceId, who, req._authIsAdmin, 'delete')) return;
-    db.remove(req.params.sourceType, req.params.sourceId);
+    // P1.5 (#193 lesson): the delete is audited with the content AS DELETED —
+    // captured before db.remove, in the same transaction.
+    core.db.transaction(function () {
+      var victim = smRowState(req.params.sourceType, req.params.sourceId);
+      db.remove(req.params.sourceType, req.params.sourceId);
+      audit.append({
+        actor: who,
+        action: 'delete',
+        source_type: req.params.sourceType,
+        source_id: req.params.sourceId,
+        row_owner: victim ? victim.written_by : null,
+        row_hash: victim ? smStateHash(victim) : contentHash({ kind: 'sm_row', missing: true }),
+        reason: null
+      });
+    })();
     res.json({ ok: true });
   });
 
@@ -530,6 +611,18 @@ export default function (core) {
       return apiError(res, 400, 'refusing unfiltered purge — pass source_type and/or namespace');
     }
     var deleted = db.purge({ source_type: sourceType, namespace: namespace });
+    // P1.5 (#193 lesson): the bulk wipe is audited as ONE purge row naming the
+    // exact filter and the count — a purge the log cannot name is a purge that
+    // never happened, as far as any reader could tell.
+    audit.append({
+      actor: getAdminDisplayName(req),
+      action: 'purge',
+      source_type: sourceType || '*',
+      source_id: 'namespace=' + (namespace || '*'),
+      row_owner: null,
+      row_hash: contentHash({ kind: 'purge', source_type: sourceType, namespace: namespace, deleted: deleted }),
+      reason: 'bulk purge: ' + deleted + ' rows'
+    });
     console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
       (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
@@ -672,6 +765,11 @@ export default function (core) {
     if (key) meta.key = key;
     if (supersedes) meta.supersedes = supersedes;
 
+    // P1.5: the actor is the authenticated bearer; the audited owner is the
+    // row's owner scope (the user id) — the person, not an agent.
+    var companionActor = '__user:' + (user.displayName || user.username);
+    var companionScope = String(user.userId);
+
     if (supersedes) {
       var oldRow = db.companionRow(supersedes);
       if (!oldRow || (oldRow.namespace || '') !== namespace) {
@@ -688,10 +786,18 @@ export default function (core) {
       var writeBoth = core.db.transaction(function () {
         db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
         db.companionMarkSuperseded(supersedes, id);
+        // P1.5: the write row AND the supersede's edit row — the edit's
+        // post-state hash is captured after companionMarkSuperseded, so the
+        // chain pins the row as superseded. Both rows, or neither.
+        auditSmWrite(companionActor, 'write', COMPANION_SOURCE_TYPE, id, { row_owner: companionScope });
+        auditSmWrite(companionActor, 'edit', COMPANION_SOURCE_TYPE, supersedes, { row_owner: companionScope, reason: 'superseded by ' + id });
       });
       writeBoth();
     } else {
-      db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+      core.db.transaction(function () {
+        db.index(COMPANION_SOURCE_TYPE, id, text, { namespace: namespace, metadata: meta });
+        auditSmWrite(companionActor, 'write', COMPANION_SOURCE_TYPE, id, { row_owner: companionScope });
+      })();
     }
 
     // Embed like every other row (fire-and-forget; no-op without a provider).
@@ -864,8 +970,20 @@ export default function (core) {
     // neither, and a forget that un-marks is no different — half-done, it
     // leaves the corrected fact AND its correction both recallable.
     var forgetAll = core.db.transaction(function () {
+      // P1.5 (#193 lesson): the delete is audited with the content AS DELETED,
+      // captured before db.remove — same transaction, both rows or neither.
+      var victim = smRowState(COMPANION_SOURCE_TYPE, id);
       db.companionClearSupersededBy(id);
       db.remove(COMPANION_SOURCE_TYPE, id);
+      audit.append({
+        actor: '__user:' + (user.displayName || user.username),
+        action: 'delete',
+        source_type: COMPANION_SOURCE_TYPE,
+        source_id: id,
+        row_owner: String(user.userId),
+        row_hash: victim ? smStateHash(victim) : contentHash({ kind: 'sm_row', missing: true }),
+        reason: null
+      });
     });
     forgetAll();
     res.json({ ok: true, forgotten: id });
@@ -1164,6 +1282,8 @@ export default function (core) {
           for (var ci = 0; ci < chunks.length; ci++) {
             autoEmbedUnembedded('lesson', newId, ci, stored[ci]);
           }
+          // P1.5: the correcting lesson is a write like any other.
+          auditSmWrite(who, 'write', 'lesson', newId);
         }
         // 241/F1 (review 239a): the flip goes through indexDoc, never a raw
         // chunk_index-0 db.index — indexDoc replaces the doc's chunk rows and
@@ -1207,6 +1327,14 @@ export default function (core) {
           }
           autoEmbedUnembedded('lesson', oldId, si, db.getDoc('lesson', oldId, si));
         }
+        // P1.5: the flip is an EDIT on the old row — audited with its content
+        // as now superseded, the ORIGINAL owner kept (the flip never steals
+        // the row), and the caller's reason verbatim. Inside writeBoth, so a
+        // rolled-back supersede leaves no audit row behind.
+        auditSmWrite(who, 'edit', 'lesson', oldId, {
+          row_owner: oldRow.written_by || null,
+          reason: reason
+        });
       });
       writeBoth();
     } catch (e) {
@@ -1382,6 +1510,24 @@ export default function (core) {
         "' is not the caller's row and no entitled embed job covers it — an agent key may store a vector only on a row it wrote, or as the row's owner / an admin-registered embedder holding the claimed embed job for it; ask the owner or use the admin key");
     }
     db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
+    // P1.5: the vector is part of the row, so a vector write is audited
+    // ('embed') — the hash pins WHICH vector landed (sha256 of the stored
+    // array), not its floats verbatim.
+    var embedOwner = db.getDoc(sourceType, sourceId, chunkIndex);
+    audit.append({
+      actor: who,
+      action: 'embed',
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: embedOwner ? (embedOwner.written_by || null) : null,
+      row_hash: contentHash({
+        kind: 'embedding',
+        chunk_index: chunkIndex,
+        vector: crypto.createHash('sha256').update(JSON.stringify(embedding)).digest('hex'),
+        model: model || 'unknown'
+      }),
+      reason: null
+    });
     res.json({ ok: true, source_type: sourceType, source_id: sourceId });
   });
 
@@ -1588,6 +1734,61 @@ export default function (core) {
       remaining: db.countUnembedded(owner) // caller-scoped: an agent's remaining is its own backlog
     });
   }));
+
+  // ======== TRUST LAYER P1.5: the audit read surface ==========================
+  // GET /memory/audit?row=<source_type>:<source_id> | ?since=<seq>
+  // Readable by the admin key/JWT and by the audited row's OWNER only —
+  // anyone else gets a plain-sentence 403 (a foreign row and a missing row
+  // read the same: ids are not an existence oracle across owners). Owner
+  // scope is the row_owner captured AT ACTION TIME (written_by for agent
+  // rows, the user id for companion rows), so it survives the row's deletion.
+  router.get('/audit', rateLimited('memory/audit', { windowMs: 60000, max: 120 }), function (req, res) {
+    var who = core.auth.checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var studio = getStudioUser(req);
+    var identity = studio ? ('__user:' + (studio.displayName || studio.username)) : who;
+    var ownerScopes = req._authIsAdmin ? null
+      : [identity, studio ? String(studio.userId) : null].filter(Boolean);
+    var limit = Math.min(parseInt(req.query.limit) || 200, 500);
+
+    if (req.query.row !== undefined) {
+      var spec = String(req.query.row);
+      var sep = spec.indexOf(':');
+      if (sep === -1 || sep === 0 || sep === spec.length - 1) {
+        return apiError(res, 400, "row must be <source_type>:<source_id> — the memory row the audit lines name");
+      }
+      var rowType = spec.slice(0, sep);
+      var rowId = spec.slice(sep + 1);
+      var rows = audit.rowsForRow(rowType, rowId, limit);
+      if (!req._authIsAdmin) {
+        // The owner at action time; for a row with no audit lines yet (a
+        // pre-P1.5 row), fall back to the live row's owner. An owner we
+        // cannot prove is refused — fail closed.
+        var owner = rows.length > 0 ? rows[0].row_owner : (function () {
+          var live = db.getDoc(rowType, rowId, 0);
+          return live ? (live.written_by || null) : null;
+        })();
+        if (owner === null || ownerScopes.indexOf(owner) === -1) {
+          return apiError(res, 403, "the audit log for '" + rowType + ':' + rowId +
+            "' is readable by the row's owner and the admin only" +
+            (owner ? " — the audit rows name '" + owner + "' as the owner" : ''));
+        }
+      }
+      return res.json({ rows: rows, count: rows.length });
+    }
+
+    var since = parseInt(req.query.since) || 0;
+    var sinceRows = audit.rowsSince(since, req._authIsAdmin ? null : ownerScopes, limit);
+    return res.json({ rows: sinceRows, count: sinceRows.length, since: since });
+  });
+
+  // GET /memory/audit/verify — recompute the whole chain (admin only):
+  // {ok, length, first_bad_seq}. O(n); an integrity read, not a hot path.
+  router.get('/audit/verify', rateLimited('memory/audit-verify', { windowMs: 60000, max: 60 }), function (req, res) {
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    res.json(audit.verify());
+  });
 
   return router;
 }
