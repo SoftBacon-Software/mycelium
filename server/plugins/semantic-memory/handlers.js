@@ -3,6 +3,7 @@
 import createMemoryDB from './db.js';
 import { generateEmbedding } from './embeddings.js';
 import { startBootDrain } from './boot-drain.js';
+import { QUARANTINE_AUTO_INDEXED } from '../../lib/memory-quarantine.js';
 import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export function registerHooks(core) {
@@ -171,7 +172,13 @@ export function registerHooks(core) {
           project_id: row.project_id,
           msg_type: row.msg_type,
           auto_indexed: true,
-          candidate: true // auto-indexed speech: a candidate, never a fact of record
+          candidate: true, // auto-indexed speech: a candidate, never a fact of record
+          // TRUST LAYER P1.3: quarantined by default — the platform did not
+          // vouch for this text, a speaker said it. Recalled labelled
+          // unverified; promoted by the owner or an admin
+          // (POST /memory/:id/promote). server/lib/memory-quarantine.js.
+          quarantined: true,
+          quarantine_reason: QUARANTINE_AUTO_INDEXED
         },
         written_by: eventOwner(row.from_agent), // the SENDER owns the row
         force_written_by: true

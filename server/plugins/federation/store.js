@@ -28,6 +28,7 @@
 
 import crypto from 'crypto';
 import companionView from '../semantic-memory/companion-view.js';
+import { QUARANTINE_FOREIGN_NETWORK } from '../../lib/memory-quarantine.js';
 
 export default function createFederationStore(db) {
   // The migration this plugin owns (task 247 §2): provenance columns on the
@@ -213,13 +214,25 @@ export default function createFederationStore(db) {
 
     // Insert one federated row (visited or imported). Idempotent per owner by
     // protocol id: returns { inserted: false, row } when the row already exists.
+    //
+    // TRUST LAYER P1.3: EVERY row that crossed a network border lands
+    // QUARANTINED (metadata.quarantined + quarantine_reason
+    // 'foreign-network') — a visit write on the host side and an import on
+    // the home side are the same foreign-network fact, and neither is vouched
+    // for by this platform until its owner (or an admin) promotes it:
+    // POST /memory/:id/promote, or the bundle accept route for imports.
+    // The collision `candidate` flag keeps its older, narrower meaning
+    // (supersede-candidate); quarantine is the wider state every fed row
+    // now carries. server/lib/memory-quarantine.js is the one definition.
     insertFedRow(ownerId, row, opts) {
       var meta = {
         owner: ownerId,
         kind: row.kind,
         source: row.source,
         at: row.at,
-        fed_id: row.id
+        fed_id: row.id,
+        quarantined: true,
+        quarantine_reason: QUARANTINE_FOREIGN_NETWORK
       };
       if (row.key) meta.key = row.key;
       if (row.supersedes) meta.supersedes = row.supersedes;
