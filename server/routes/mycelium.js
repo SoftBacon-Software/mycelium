@@ -235,6 +235,7 @@ import { registerTeamSettingsRoutes } from './team_settings.js';
 import { registerStudioRoutes } from './studio.js';
 import { registerPluginRoutes } from './plugins.js';
 import { registerAdminRoutes } from './admin.js';
+import { registerSafetyRoutes } from './safety.js';
 
 var ADMIN_KEY = process.env.ADMIN_KEY;
 function isAdminKey(key) {
@@ -1603,6 +1604,14 @@ registerEventRoutes(router, {
   asyncHandler, checkAgentOrAdmin, checkGuardrails,
   escapeHtml, parseLimit, emitEvent,
   sseClients, jwt, JWT_SECRET,
+});
+
+// ======== SAFETY (TRUST LAYER P1.5: the memory audit log's read surface —
+// the routes the dead mycelium_list_safety_events / mycelium_safety_stats MCP
+// tools point at) ========
+
+registerSafetyRoutes(router, {
+  checkAdmin,
 });
 
 registerRequestRoutes(router, {

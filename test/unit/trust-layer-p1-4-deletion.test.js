@@ -328,7 +328,10 @@ describe('P1.4 FORGET CASCADE: a forgotten fact is not recalled through a summar
     const insight = raw.prepare("SELECT * FROM am_facts WHERE source_type = 'consolidation' ORDER BY id DESC LIMIT 1").get();
     expect(insight).toBeTruthy();
     const refs = JSON.parse(insight.derived_from);
-    expect(refs.sort()).toEqual(['am_fact:' + f1, 'am_fact:' + f2, 'am_fact:' + f3, 'am_fact:' + f4, 'am_fact:' + f5].sort());
+    // P1.1's ref vocabulary (trust-origins.js is the one definition): the
+    // cascade walks THESE, so the writer must cite "am:<id>", not a private
+    // format.
+    expect(refs.sort()).toEqual(['am:' + f1, 'am:' + f2, 'am:' + f3, 'am:' + f4, 'am:' + f5].sort());
   });
 
   it('forgetting a fact deletes, unindexes and tombstones the summary derived from it — the fact is not recalled through the summary', async () => {

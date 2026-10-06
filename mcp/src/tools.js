@@ -4,6 +4,18 @@
 import { z } from 'zod';
 import { apiGet, apiPost, apiPut, apiDelete } from './api.js';
 import { getState, setWorkingOn, setBooted, startHeartbeat, sendHeartbeat, setClaimedItem, setCurrentStep, addProgressNote, touchToolCall } from './state.js';
+import {
+  renderSearchRecallView,
+  renderFactsRecallView,
+  renderContextRecallView,
+  renderProfileRecallView,
+  roleContractLines,
+  bootSavepointSection,
+  savepointViewLines,
+  savepointDiffLines,
+  agentRosterLines,
+  fencedRecallLines
+} from './recall-view.js';
 
 function text(s) {
   return { content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 2) }] };
@@ -52,13 +64,9 @@ function timeAgo(iso) {
   return Math.round(ms / 86400000) + 'd ago';
 }
 
-function formatAgent(a) {
-  var line = (a.status === 'online' ? '[ON] ' : '[OFF] ') + a.name + ' (' + a.id + ')';
-  if (a.project_id) line += ' — ' + a.project_id;
-  if (a.working_on) line += '\n  Working on: ' + a.working_on;
-  line += '\n  Heartbeat: ' + timeAgo(a.last_heartbeat);
-  return line;
-}
+// (the old formatAgent is gone: its "\n  Working on: " interpolation let
+// stored working_on text introduce raw line breaks into the overview render —
+// review A blocker. The overview uses agentRosterLines, which fences it.)
 
 function formatTask(t) {
   return '#' + t.id + ' [' + t.status + '] ' + t.title + (t.assignee ? ' →' + t.assignee : '') + (t.priority && t.priority !== 'normal' ? ' [' + t.priority + ']' : '');
@@ -146,23 +154,15 @@ export function registerTools(server) {
           lines.push('Context (' + cm.selected + '/' + cm.total_available + ' keys, ' + cm.method + ')');
         }
 
-        // Role contract
+        // Role contract — TRUST LAYER P1.2 (review A round 2 blocker): the
+        // contract lifts peer-authored stored text (roles/<agentId> context
+        // key, <project>/guidelines) into the boot seed; description,
+        // responsibilities, constraints and guidelines render through the
+        // memory fence as labelled datamarked rows (recall-view.js
+        // roleContractLines). Only admin-set metadata stays outside.
         if (data.role_contract) {
-          lines.push('');
-          lines.push('=== Role Contract ===');
-          var rc = data.role_contract;
-          if (typeof rc === 'string') {
-            lines.push(rc);
-          } else {
-            lines.push('Role: ' + (rc.role || '') + (rc.llm_backend ? ' (' + rc.llm_backend + '/' + (rc.llm_model || '?') + ')' : ''));
-            if (rc.description) lines.push(rc.description);
-            if (rc.responsibilities && rc.responsibilities.length) {
-              for (var resp of rc.responsibilities) lines.push('- ' + resp);
-            }
-            if (rc.constraints && rc.constraints.length) {
-              for (var con of rc.constraints) lines.push('! ' + con);
-            }
-            if (rc.capabilities && rc.capabilities.length) lines.push('Can: ' + rc.capabilities.join(', '));
+          for (var rcLine of roleContractLines(data.role_contract)) {
+            lines.push(rcLine);
           }
         }
 
@@ -195,61 +195,26 @@ export function registerTools(server) {
           }
         }
 
-        // Other agents
+        // Other agents — TRUST LAYER P1.2 (review A blocker): other agents'
+        // working_on is self-set stored text shown cross-agent, so the roster
+        // renders status/id metadata outside and every line of working_on
+        // inside the memory fence (recall-view.js agentRosterLines).
         if (data.other_agents && data.other_agents.length > 0) {
           lines.push('');
           lines.push('=== Agents ===');
-          for (var a of data.other_agents) {
-            lines.push('[' + (a.status === 'online' ? 'ON' : 'OFF') + '] ' + a.id + (a.working_on ? ': ' + a.working_on : ''));
+          for (var rosterLine of agentRosterLines(data.other_agents)) {
+            lines.push(rosterLine);
           }
         }
 
-        // Session resume — but ONLY if no directives are pending
+        // Session resume — but ONLY if no directives are pending.
+        // TRUST LAYER P1.2: the savepoint recall (was_working_on, notes,
+        // progress entries, claimed/step titles — notes are cross-agent-
+        // writable via mycelium_leave_notes) is stored content, so it reaches
+        // the boot text only through the memory fence (recall-view.js).
         if (data.savepoint && data.savepoint.has_savepoint) {
-          var sp = data.savepoint;
-          var prevState = sp.previous_state || {};
-          var cleanShutdown = prevState.session_end === true;
-          lines.push('');
-          if (hasDirectives) {
-            // Minimal resume context when directives are pending — don't encourage continuing prior work
-            if (sp.was_working_on) lines.push('=== Session Resume (PAUSED — handle directives first) ===');
-            if (sp.was_working_on) lines.push('Last session: ' + sp.was_working_on);
-            if (sp.notes) lines.push('Notes: ' + sp.notes);
-          } else if (sp.was_working_on || prevState.claimed_item || prevState.current_step) {
-            lines.push('=== RESUME SESSION' + (cleanShutdown ? '' : ' (previous session did not shut down cleanly)') + ' ===');
-            if (sp.was_working_on) lines.push('You were: ' + sp.was_working_on);
-            if (prevState.claimed_item) {
-              var ci = prevState.claimed_item;
-              lines.push('Claimed: ' + (ci.type || 'item') + ' #' + ci.id + (ci.title ? ' — ' + ci.title : ''));
-            }
-            if (prevState.current_step) {
-              var cs = prevState.current_step;
-              lines.push('Plan step: plan #' + cs.plan_id + ' step #' + cs.step_id + (cs.title ? ' — ' + cs.title : ''));
-            }
-            if (prevState.progress && prevState.progress.length > 0) {
-              lines.push('Progress:');
-              for (var pn of prevState.progress) {
-                lines.push('  - ' + pn);
-              }
-            }
-            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-            if (sp.summary) {
-              var changeParts = [];
-              if (sp.summary.messages) changeParts.push(sp.summary.messages + ' new message(s)');
-              if (sp.summary.tasks) changeParts.push(sp.summary.tasks + ' task change(s)');
-              if (sp.summary.plans) changeParts.push(sp.summary.plans + ' plan change(s)');
-              if (sp.summary.bugs) changeParts.push(sp.summary.bugs + ' bug change(s)');
-              if (sp.summary.context) changeParts.push(sp.summary.context + ' context update(s)');
-              if (changeParts.length) lines.push('Changes while away: ' + changeParts.join(', '));
-            } else if (data.changes_since_last) {
-              lines.push('Changes while away: ' + data.changes_since_last);
-            }
-            lines.push('Action: Check messages/requests first if any pending, then continue where you left off.');
-          } else {
-            lines.push('=== Session Resume ===');
-            lines.push('Last session: idle');
-            if (sp.notes) lines.push('*** NOTES: ' + sp.notes + ' ***');
-            if (data.changes_since_last) lines.push('Changes: ' + data.changes_since_last);
+          for (var spLine of bootSavepointSection(data.savepoint, { hasDirectives: hasDirectives, changesSinceLast: data.changes_since_last })) {
+            lines.push(spLine);
           }
         }
 
@@ -302,14 +267,11 @@ export function registerTools(server) {
     async () => {
       var agents = await apiGet('/agents');
       if (!agents.length) return text('No agents registered.');
+      // TRUST LAYER P1.2 (review A blocker): working_on is stored text shown
+      // cross-agent — metadata outside, every working_on line fenced.
       var lines = ['=== Agents (' + agents.length + ') ==='];
-      for (var a of agents) {
-        var status = a.status || 'unknown';
-        var line = '[' + status.toUpperCase() + '] ' + a.id;
-        if (a.display_name) line += ' (' + a.display_name + ')';
-        if (a.working_on) line += ': ' + a.working_on;
-        if (a.last_heartbeat) line += ' | heartbeat ' + timeAgo(a.last_heartbeat);
-        lines.push(line);
+      for (var rosterLine of agentRosterLines(agents, { formatHeartbeat: timeAgo })) {
+        lines.push(rosterLine);
       }
       return text(lines.join('\n'));
     }
@@ -741,12 +703,21 @@ export function registerTools(server) {
       key: z.string().optional().describe('Specific key to read (omit for all keys in namespace)')
     },
     async (args) => {
+      // TRUST LAYER P1.2 (review A minor 1): context values are stored memory
+      // a model reads, so the stored text gets the memory fence as a SECOND
+      // content block — the first block stays byte-identical for programs.
+      function textWithRecallView(val) {
+        var result = text(val);
+        var view = renderContextRecallView(val);
+        if (view) result.content.push({ type: 'text', text: view });
+        return result;
+      }
       if (args.key) {
         var val = await apiGet('/context/keys/' + encodeURIComponent(args.namespace) + '/' + encodeURIComponent(args.key));
-        return text(val);
+        return textWithRecallView(val);
       }
       var keys = await apiGet('/context/keys/' + encodeURIComponent(args.namespace));
-      return text(keys);
+      return textWithRecallView(keys);
     }
   );
 
@@ -1182,7 +1153,15 @@ export function registerTools(server) {
       }
 
       var profile = await apiGet('/agents/' + agentId + '/profile');
-      return text(profile);
+      // TRUST LAYER P1.2 (review B follow-up, folded into the round-2 fix
+      // pass): display_name / specializations / profile_data are self-set via
+      // PUT /agents/:id/profile and read CROSS-AGENT — the raw JSON first
+      // block stays byte-identical for programs, and the fenced view rides as
+      // a second block (the get_context pattern).
+      var result = text(profile);
+      var view = renderProfileRecallView(profile);
+      if (view) result.content.push({ type: 'text', text: view });
+      return result;
     }
   );
 
@@ -1662,18 +1641,9 @@ export function registerTools(server) {
     async (args) => {
       var sp = await apiGet('/agents/' + args.agent_id + '/savepoint');
       if (!sp.has_savepoint && !sp.id) return text('No savepoint found for ' + args.agent_id);
-      var lines = [
-        '=== Savepoint for ' + args.agent_id + ' ===',
-        'Last heartbeat: ' + (sp.heartbeat_at || 'unknown'),
-        'Session: ' + (sp.session_id || 'none'),
-        'Working on: ' + (sp.working_on || 'nothing')
-      ];
-      if (sp.notes) lines.push('Notes: ' + sp.notes);
-      if (sp.state_snapshot && sp.state_snapshot !== '{}') {
-        try { lines.push('State: ' + JSON.stringify(JSON.parse(sp.state_snapshot), null, 2)); }
-        catch { lines.push('State: ' + sp.state_snapshot); }
-      }
-      return text(lines.join('\n'));
+      // TRUST LAYER P1.2: the stored fields (working_on, notes, state snapshot)
+      // are recalled content — fenced, not raw (see recall-view.js).
+      return text(savepointViewLines(sp).join('\n'));
     }
   );
 
@@ -1686,25 +1656,10 @@ export function registerTools(server) {
     async (args) => {
       var diff = await apiGet('/agents/' + args.agent_id + '/savepoint/diff');
       if (!diff.has_savepoint) return text('No savepoint found for ' + args.agent_id + ' — first session.');
-      var lines = [
-        '=== Changes since savepoint (' + diff.savepoint_at + ') ===',
-        'Was working on: ' + (diff.was_working_on || 'nothing')
-      ];
-      if (diff.notes) lines.push('NOTES FROM ADMIN: ' + diff.notes);
-      var s = diff.summary;
-      lines.push('');
-      lines.push('Changes:');
-      if (s.messages > 0) lines.push('  ' + s.messages + ' new messages');
-      if (s.tasks > 0) lines.push('  ' + s.tasks + ' tasks changed');
-      if (s.context > 0) lines.push('  ' + s.context + ' context keys updated');
-      if (s.plans > 0) lines.push('  ' + s.plans + ' plans changed');
-      if (s.bugs > 0) lines.push('  ' + s.bugs + ' bugs changed');
-      if (s.drone_jobs > 0) lines.push('  ' + s.drone_jobs + ' drone jobs changed');
-      if (s.events > 0) lines.push('  ' + s.events + ' events since');
-      if (s.messages === 0 && s.tasks === 0 && s.context === 0 && s.plans === 0 && s.bugs === 0 && s.drone_jobs === 0) {
-        lines.push('  No changes detected.');
-      }
-      return text(lines.join('\n'));
+      // TRUST LAYER P1.2: was_working_on + notes are the recalled handoff —
+      // fenced, not raw; the change counts are computed values and stay
+      // outside (see recall-view.js).
+      return text(savepointDiffLines(diff).join('\n'));
     }
   );
 
@@ -1816,15 +1771,26 @@ export function registerTools(server) {
       var drones = await apiGet('/drones');
       if (!drones.length) return text('No drone workers registered.');
       var lines = ['=== Drone Workers (' + drones.length + ') ==='];
+      var recallRows = [];
       for (var d of drones) {
         var statusIcon = d.status === 'online' ? '[ON]' : '[OFF]';
         var caps = [];
         try { caps = JSON.parse(d.capabilities); } catch {}
-        var line = statusIcon + ' ' + d.name + ' (' + d.id + ')';
+        // TRUST LAYER P1.2 (round-2 re-census): a drone IS an agents row
+        // (db/drones.js) — its name is agents.name, settable by its own key
+        // via PUT /agents/:id — so the metadata line carries only id/status,
+        // and the name is fenced like the agent roster's.
+        var line = statusIcon + ' (' + d.id + ')';
         if (caps.length) line += ' [' + caps.join(', ') + ']';
-        if (d.working_on) line += '\n  Working on: ' + d.working_on;
         line += '\n  Last seen: ' + timeAgo(d.last_heartbeat);
         lines.push(line);
+        if (d.name) recallRows.push('name (' + d.id + '): ' + d.name);
+        // TRUST LAYER P1.2 (263b sweep): a drone's working_on is worker-set
+        // stored text shown cross-agent — fenced like the agent roster.
+        if (d.working_on) recallRows.push('working_on (' + d.id + '): ' + d.working_on);
+      }
+      for (var fencedLine of fencedRecallLines(recallRows)) {
+        lines.push(fencedLine);
       }
       return text(lines.join('\n'));
     }
@@ -1905,16 +1871,14 @@ export function registerTools(server) {
 function formatOverview(data) {
   var lines = [];
 
-  // Agents
+  // Agents — TRUST LAYER P1.2 (review A blocker): every render of working_on
+  // goes through the roster fence. Handles both slim rows (id, status,
+  // working_on, pre-formatted heartbeat) and full rows (last_heartbeat,
+  // display_name, project_id dropped with the old formatAgent).
   if (data.agents && data.agents.length > 0) {
     lines.push('=== Agents ===');
-    for (var a of data.agents) {
-      // Support both slim format (id, status, working_on, heartbeat) and full format
-      if (a.heartbeat) {
-        lines.push('[' + (a.status === 'online' ? 'ON' : 'OFF') + '] ' + a.id + (a.working_on ? ': ' + a.working_on : '') + ' (' + a.heartbeat + ')');
-      } else {
-        lines.push(formatAgent(a));
-      }
+    for (var rosterLine of agentRosterLines(data.agents, { formatHeartbeat: timeAgo })) {
+      lines.push(rosterLine);
     }
   }
 
@@ -1938,12 +1902,15 @@ function formatOverview(data) {
     }
   }
 
-  // Recent activity (slim format)
+  // Recent activity (slim format) — TRUST LAYER P1.2 (round-2 re-census):
+  // these are event summaries that embed agent-settable stored text verbatim
+  // (the heartbeat summary is `agentId + ': ' + working_on`), so the rows go
+  // through the memory fence like the roster, header outside.
   if (data.recent_activity && data.recent_activity.length > 0) {
     lines.push('');
     lines.push('=== Recent ===');
-    for (var act of data.recent_activity) {
-      lines.push(act);
+    for (var actLine of fencedRecallLines(data.recent_activity)) {
+      lines.push(actLine);
     }
   }
 
@@ -2125,8 +2092,27 @@ function buildPath(pathTemplate, args) {
   });
 }
 
+// TRUST LAYER P1.2: recall-shaped plugin tool responses get a fenced,
+// datamarked view of the recalled rows APPENDED as a second content block —
+// a model reading the tool result gets the fence for free, while the FIRST
+// block (the raw JSON) stays byte-identical for programs.
+var FENCED_RECALL_TOOLS = {
+  mycelium_memory_search: renderSearchRecallView,
+  mycelium_auto_memory_facts: renderFactsRecallView
+};
+
+function fencedRecallResult(toolName, result) {
+  var render = FENCED_RECALL_TOOLS[toolName];
+  if (!render) return null;
+  var fenced = render(result);
+  if (!fenced) return null;
+  var jsonText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+  return { content: [{ type: 'text', text: jsonText }, { type: 'text', text: fenced }] };
+}
+
 // Build a handler function for a plugin tool based on its endpoint config
-function buildPluginHandler(endpoint) {
+function buildPluginHandler(tool) {
+  var endpoint = tool.endpoint;
   var method = (endpoint.method || 'GET').toUpperCase();
   var pathTemplate = endpoint.path;
   var queryMap = endpoint.queryMap || {};
@@ -2144,7 +2130,7 @@ function buildPluginHandler(endpoint) {
       }
       var url = path + (params.length ? '?' + params.join('&') : '');
       var result = await apiGet(url);
-      return text(result);
+      return fencedRecallResult(tool.name, result) || text(result);
     }
 
     // POST / PUT / DELETE — build request body
@@ -2165,7 +2151,7 @@ function buildPluginHandler(endpoint) {
     var fn = { POST: apiPost, PUT: apiPut, DELETE: apiDelete }[method];
     if (!fn) throw new Error('Unsupported HTTP method: ' + method);
     var result = await fn(path, body);
-    return text(result);
+    return fencedRecallResult(tool.name, result) || text(result);
   };
 }
 
@@ -2185,7 +2171,7 @@ export async function registerPluginTools(server) {
     for (var tool of tools) {
       try {
         var schema = pluginSchemaToZod(tool.inputSchema || tool.schema);
-        var handler = buildPluginHandler(tool.endpoint);
+        var handler = buildPluginHandler(tool);
         registerDual(server, tool.name, tool.description, schema, handler);
         count++;
       } catch (err) {

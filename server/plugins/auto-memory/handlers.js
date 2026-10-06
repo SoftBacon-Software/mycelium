@@ -77,8 +77,8 @@ export function registerHooks(core) {
       if (config.llm_provider === 'none' || !config.llm_provider) return;
 
       // Fire-and-forget async extraction. TRUST LAYER P1.4: the task id rides
-      // along as the facts' derived_from, so deleting the task later cascades
-      // to the facts extracted from it.
+      // along on the facts' (source_type, source_id) columns, so deleting the
+      // task later cascades to the facts extracted from it.
       var sourceRef = (data.task_id != null) ? 'task:' + data.task_id : null;
       extractFacts(db, config, text, eventData.agent, data.project_id || eventData.project_id, sourceRef).catch(function (e) {
         console.error('[auto-memory] Observer extraction failed:', e.message);
@@ -135,9 +135,10 @@ export function registerHooks(core) {
   // ---- TRUST LAYER P1.4: SOURCE CASCADE (the fact-store half) ----------------
   // Deleting a source entity deletes the memory rows that came from it. The
   // semantic-memory plugin's own listeners forget the auto-indexed rows; this
-  // half forgets the FACTS extracted from the entity (their derived_from
-  // names it) — and the forget cascade walks derived_from transitively, so
-  // summaries built on those facts fall too. Parallel listener, raw SQL via
+  // half forgets the FACTS extracted from the entity (the extraction writer
+  // puts the source entity on the facts' source_type/source_id columns, which
+  // the cascade's root matcher reads) — and the forget cascade walks P1.1's
+  // derived_from transitively, so summaries built on those facts fall too. Parallel listener, raw SQL via
   // the shared db — no cross-plugin import (the DAG rule); the deleted_by is
   // the AUTHENTICATED actor the core route put on the event.
   function forgetByRef(ref, by) {

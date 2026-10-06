@@ -42,7 +42,10 @@ export function applyDecay(db) {
 
     // Only update if confidence actually changed meaningfully (avoid unnecessary writes)
     if (Math.abs(decayed - fact.confidence) > 0.001) {
-      db.updateFactConfidence(fact.id, Math.round(decayed * 1000) / 1000);
+      // TRUST LAYER P1.5 (review A B1): decayFactConfidence, not
+      // updateFactConfidence — the rewrite and its 'system:decay' audit row
+      // commit as one transaction, mirroring the consolidation branch.
+      db.decayFactConfidence(fact.id, Math.round(decayed * 1000) / 1000);
       updated++;
     }
   }

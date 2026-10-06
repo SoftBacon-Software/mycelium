@@ -14,6 +14,9 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { rateLimited } from '../../lib/rate-limit.js';
+import { parseMeta, isQuarantined } from '../../lib/memory-quarantine.js';
+import { promoteBySourceId } from '../semantic-memory/db.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
   KINDS, verifyRow, verifyNetworkPassport, verifyAgentPassport, makeGrant,
@@ -27,6 +30,63 @@ export default function (core) {
   var store = createFederationStore(core.db);
   var { checkAdmin, getStudioUser } = core.auth;
   var { apiError, asyncHandler } = core;
+  // TRUST LAYER P1.5: fed rows land in sm_embeddings as companion rows — a
+  // visit write and an import are memory writes and are audited like them.
+  var audit = createMemoryAudit(core.db);
+
+  // One audit row for a fed row just inserted: the actor is whoever the route
+  // authenticated (the grant-bound visitor / the importing owner); the owner
+  // scope is the local user the row landed under.
+  function auditFedRow(actor, action, localOwnerId, sourceId, row, reason) {
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: 'companion',
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'fed_row',
+        content: row.text,
+        kind_row: row.kind || null,
+        key: row.key || null,
+        at: row.at || null,
+        home: row.home || null,
+        agent: row.agent || null
+      }),
+      reason: reason
+    });
+  }
+
+  // One audit row for a PROMOTED fed row (the accept door). The row IS an
+  // sm_embeddings row, so the post-state hash is the same shape the
+  // semantic-memory routes pin for sm rows (kind 'sm_row', the stored
+  // columns verbatim — derived_from as the raw JSON string the column
+  // holds): a row's audit history hashes comparable states across its
+  // doors, and the promote stamp (promoted_by / promoted_at) is audited
+  // content. Callers run this INSIDE the promote's transaction.
+  function auditFedPromote(localOwnerId, sourceType, sourceId, storedRow, reason) {
+    var meta;
+    try { meta = JSON.parse(storedRow.metadata || '{}'); } catch (e) { meta = {}; }
+    audit.append({
+      actor: '__user:' + localOwnerId,
+      action: 'promote',
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'sm_row',
+        content: storedRow.content_text,
+        namespace: storedRow.namespace || null,
+        metadata: meta,
+        written_by: storedRow.written_by || null,
+        superseded_by: storedRow.superseded_by || null,
+        origin: storedRow.origin || null,
+        trust: (storedRow.trust == null) ? null : Number(storedRow.trust),
+        derived_from: storedRow.derived_from || null
+      }),
+      reason: reason
+    });
+  }
 
   var helloLimiter = rateLimited('federation/hello', { windowMs: 60000, max: 30 });
   var visitLimiter = rateLimited('federation/visit', { windowMs: 60000, max: 120 });
@@ -336,10 +396,25 @@ export default function (core) {
       return apiError(res, 400, 'row provenance does not match the grant (agent/home/network/visit)');
     }
 
-    var written = store.insertFedRow(g.visit.host_owner, row);
-    // TRUST LAYER P1.4: the author revoked this content id — the holder keeps
-    // nothing and says so. 410 (gone by the author's own instruction), and the
-    // body names the fate instead of echoing a row that was never stored.
+    // P1.5: the visitor's write is audited on the HOST — actor = the
+    // grant-bound visitor agent (the authenticated writer), owner = the host
+    // owner's user id. A replay (inserted:false) writes nothing new and is
+    // audited once, on the original insert. Review A M2: insert + audit are
+    // ONE transaction — a crash (or a fail-loud audit throw) must never leave
+    // a FOREIGN memory write with no row; the rollback takes both.
+    // TRUST LAYER P1.4: the store's resurrection guard runs INSIDE that same
+    // transaction — the author revoked this content id, so the holder keeps
+    // nothing and says so: 410 (gone by the author's own instruction), the
+    // body names the fate instead of echoing a row that was never stored, and
+    // a revoked id lands no row and earns no audit row.
+    var written = core.db.transaction(function () {
+      var w = store.insertFedRow(g.visit.host_owner, row);
+      if (w.inserted) {
+        auditFedRow(g.grant.agent_id, 'write', g.visit.host_owner, w.row.source_id, row,
+          'federation visit write from ' + g.grant.home_network + ' (visit ' + g.grant.visit_id + ')');
+      }
+      return w;
+    })();
     if (written.revoked) {
       return apiError(res, 410, 'this row was revoked by its author (revoke-v0); the holder keeps no copy');
     }
@@ -518,28 +593,47 @@ export default function (core) {
     });
 
     var adj = adjudicateImport(bundle, homeRows);
+    // P1.5: ONE import row per imported bundle row (the episode row is
+    // bookkeeping, not memory content — it is not audited). actor = the
+    // authenticated bearer; owner = the local user the rows landed under.
+    // Review A M2: each insert and its audit row are ONE transaction — a
+    // crash (or a fail-loud audit throw) must never leave a FOREIGN memory
+    // write with no row, and the import record must never name rows that did
+    // not land — so the episode row and recordImport ride the same
+    // transaction and a rollback takes all of it.
+    // TRUST LAYER P1.4: adjudication only sees live rows, so a revoked id
+    // looks importable to it — the store's resurrection guard (inside this
+    // same transaction) is the truth. A revoked row never lands, earns no
+    // audit row, and its outcome says so, never 'imported'.
+    var fedActor = '__user:' + (user.displayName || user.username);
+    var inserted = [];
     var refusedRevoked = false;
-    for (var i = 0; i < bundle.rows.length; i++) {
-      var outcome = adj.outcomes[i];
-      if (outcome.outcome === 'replayed') continue;
-      var written = store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
-      // TRUST LAYER P1.4: adjudication only sees live rows, so a revoked id
-      // looks importable to it — the store's resurrection guard is the truth.
-      // The row never landed and the outcome says so, never 'imported'.
-      if (written.revoked) {
-        outcome.outcome = 'revoked';
-        refusedRevoked = true;
+    var episodeStore;
+    core.db.transaction(function () {
+      for (var i = 0; i < bundle.rows.length; i++) {
+        var outcome = adj.outcomes[i];
+        if (outcome.outcome === 'replayed') continue;
+        var ins = store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
+        if (ins.revoked) {
+          outcome.outcome = 'revoked';
+          refusedRevoked = true;
+          continue;
+        }
+        inserted.push({ stored: ins.row, protocol: bundle.rows[i] });
+        auditFedRow(fedActor, 'import', user.userId, ins.row.source_id, bundle.rows[i],
+          'federation import of bundle ' + bundle.bundle_id + ' from ' +
+          ((bundle.host_passport && (bundle.host_passport.name || bundle.host_passport.network_id)) || 'host'));
       }
-    }
-    // The episode counts what was LEARNED — a bundle refused at the door is
-    // not remembered as more than it was.
-    var episode = adj.episode;
-    if (refusedRevoked) {
-      var landed = bundle.rows.filter(function (r, ix) { return adj.outcomes[ix].outcome !== 'revoked'; });
-      episode = episodeRow(Object.assign({}, bundle, { rows: landed }));
-    }
-    var episodeStore = store.insertFedRow(user.userId, episode);
-    store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+      // The episode counts what was LEARNED — a bundle refused at the door is
+      // not remembered as more than it was.
+      var episode = adj.episode;
+      if (refusedRevoked) {
+        var landed = bundle.rows.filter(function (r, ix) { return adj.outcomes[ix].outcome !== 'revoked'; });
+        episode = episodeRow(Object.assign({}, bundle, { rows: landed }));
+      }
+      episodeStore = store.insertFedRow(user.userId, episode);
+      store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+    })();
     res.status(201).json({
       ok: true,
       replayed: false,
@@ -569,6 +663,53 @@ export default function (core) {
     }
     var out = store.revokeRows(rev.agent_id, rev.row_ids);
     res.json({ ok: true, revoked: out.revoked, unknown: out.unknown });
+  });
+
+  // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for
+  // federation candidates. Every imported row landed QUARANTINED
+  // (unverified on recall, excluded from the fact-of-record seed); the owner
+  // who imported the bundle is the one who can vouch for it. Accepting
+  // promotes every still-quarantined row of the bundle (collision
+  // supersede-candidates included — accepting one IS the explicit acceptance
+  // the candidate flag always meant), with the same stamp the other promote
+  // doors write (POST /me/memory/:id/promote, POST /memory/:id/promote —
+  // one promoted_by shape, so the doors cannot drift). A bundle this owner
+  // never imported is a 404 — ids are not an existence oracle across owners.
+  // The visit's episode row is not in the bundle's outcomes and stays
+  // quarantined: it is a diary line, not guidance.
+  // TRUST LAYER P1.5 (264 merge — the old TODO is paid): EVERY promotion and
+  // its audit row are ONE transaction — a crash (or a fail-loud audit throw)
+  // must never leave a vouch the log cannot name, and one rollback takes the
+  // whole accept back. The actor is the authenticated bearer (the import
+  // route's fedActor shape); the row_hash is the POST-promote stored state
+  // (auditFedPromote, the sm-row shape), so the chain pins each stamp.
+  router.post('/import/:bundleId/accept', importLimiter, function (req, res) {
+    var user = requireBearer(req, res);
+    if (!user) return;
+    var bundleId = String(req.params.bundleId || '');
+    var prior = store.getImport(bundleId, user.userId);
+    if (!prior) {
+      return apiError(res, 404, "no such import: '" + bundleId + "' — a bundle is accepted where it was imported, by the owner who imported it");
+    }
+    var accepted = [];
+    var alreadyAccepted = 0;
+    var forgotten = 0; // review A NIT 1: a bundle row forgotten since the import is counted, not dropped silently
+    var promoteReason = 'federation accept of bundle ' + bundleId + ' — promoted_by __user:' + user.userId;
+    core.db.transaction(function () {
+      for (var o of prior.outcomes) {
+        var row = store.rowById(user.userId, o.row_id);
+        if (!row) { forgotten++; continue; } // forgotten since the import — nothing to accept
+        var meta = parseMeta(row.metadata);
+        if (!isQuarantined(meta) && !meta.candidate) { alreadyAccepted++; continue; }
+        // review A MINOR 2: the stamp is the owner-door shape ('__user:<id>'),
+        // not the bare numeric id — one promote_by shape across all doors.
+        promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
+        var now = store.rowById(user.userId, o.row_id);
+        accepted.push(store.view(now));
+        auditFedPromote(user.userId, row.source_type, row.source_id, now, promoteReason);
+      }
+    })();
+    res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted, forgotten: forgotten });
   });
 
   // ---- operator visibility ------------------------------------------------------

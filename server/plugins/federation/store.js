@@ -29,8 +29,13 @@
 import crypto from 'crypto';
 import companionView from '../semantic-memory/companion-view.js';
 import { forgetDocRaw } from '../semantic-memory/db.js';
+import { QUARANTINE_FOREIGN_NETWORK } from '../../lib/memory-quarantine.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export default function createFederationStore(db) {
+  // TRUST LAYER P1.5: the revoke path is a delete path — its audit row lands
+  // in the same transaction as the deletes it describes (see revokeRows).
+  var audit = createMemoryAudit(db);
   // The migration this plugin owns (task 247 §2): provenance columns on the
   // companion row class. Idempotent — safe on every boot and every ordering
   // of plugin loads.
@@ -39,7 +44,17 @@ export default function createFederationStore(db) {
     ['sm_embeddings', 'fed_network', 'TEXT'],
     ['sm_embeddings', 'fed_home', 'TEXT'],
     ['sm_embeddings', 'fed_visit', 'TEXT'],
-    ['sm_embeddings', 'fed_sig', 'TEXT']
+    ['sm_embeddings', 'fed_sig', 'TEXT'],
+    // TRUST LAYER P1.1 (F-mycelium/265): origin/trust are SEMANTIC-MEMORY's
+    // columns (its schema.sql + db.js migration are the owners and the
+    // definition — server/lib/trust-origins.js), but THIS plugin's insert
+    // stamps them ('foreign-network' at trust 0 — the row crossed a border,
+    // the bottom of the ladder), so they must exist whoever loads first.
+    // Declaring them here too is the same guarded idiom: on a fresh DB the
+    // ALTER is the swallowed duplicate case; the definitions agree.
+    ['sm_embeddings', 'origin', 'TEXT'],
+    ['sm_embeddings', 'trust', 'INTEGER DEFAULT 0'],
+    ['sm_embeddings', 'derived_from', 'TEXT']
   ]) {
     try {
       db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def).run();
@@ -230,13 +245,25 @@ export default function createFederationStore(db) {
       return !!tomb;
     },
 
+    //
+    // TRUST LAYER P1.3: EVERY row that crossed a network border lands
+    // QUARANTINED (metadata.quarantined + quarantine_reason
+    // 'foreign-network') — a visit write on the host side and an import on
+    // the home side are the same foreign-network fact, and neither is vouched
+    // for by this platform until its owner (or an admin) promotes it:
+    // POST /memory/:id/promote, or the bundle accept route for imports.
+    // The collision `candidate` flag keeps its older, narrower meaning
+    // (supersede-candidate); quarantine is the wider state every fed row
+    // now carries. server/lib/memory-quarantine.js is the one definition.
     insertFedRow(ownerId, row, opts) {
       var meta = {
         owner: ownerId,
         kind: row.kind,
         source: row.source,
         at: row.at,
-        fed_id: row.id
+        fed_id: row.id,
+        quarantined: true,
+        quarantine_reason: QUARANTINE_FOREIGN_NETWORK
       };
       if (row.key) meta.key = row.key;
       if (row.supersedes) meta.supersedes = row.supersedes;
@@ -248,8 +275,8 @@ export default function createFederationStore(db) {
       ).get(storageId);
       if (existing) return { inserted: false, row: existing };
       var res = db.prepare(
-        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig) ' +
-        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)"
+        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig, origin, trust) ' +
+        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'foreign-network', 0)"
       ).run(storageId, row.text, companionNamespace(ownerId), JSON.stringify(meta),
         row.agent || null, row.network || null, row.home || null, row.visit || null, row.sig || null);
       if (res.changes === 0) return { inserted: false, row: this.rowById(ownerId, row.id) };
@@ -321,6 +348,18 @@ export default function createFederationStore(db) {
           if (copies.length === 0) unknown.push(protocolIds[i]);
           forgetDocRaw(db, 'companion', protocolIds[i], { by: agentId, reason: 'federation-revoke' });
         }
+        // TRUST LAYER P1.5: ONE summary row names the whole revoke — actor,
+        // what was dead on arrival, what actually fell (#193: a delete the
+        // log cannot name never happened). Same transaction as the deletes.
+        audit.append({
+          actor: agentId,
+          action: 'delete',
+          source_type: 'companion',
+          source_id: 'revoke:' + agentId,
+          row_owner: null,
+          row_hash: contentHash({ kind: 'fed_revoke', agent: agentId, ids: protocolIds, revoked: revoked, unknown: unknown }),
+          reason: 'federation revoke: ' + revoked + ' copy(ies) across ' + protocolIds.length + ' id(s)'
+        });
       });
       txn();
       return { revoked: revoked, unknown: unknown };

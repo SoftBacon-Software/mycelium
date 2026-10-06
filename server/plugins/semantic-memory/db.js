@@ -3,6 +3,7 @@
 import { cosineSimilarity, embedQueueDepth, embedDrainSnapshot } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import { createVectorCache } from './vector-cache.js';
+import { parseMeta as parseQuarantineMeta, promotedMeta } from '../../lib/memory-quarantine.js';
 
 // -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
 // Benchmark harnesses write into the ONE index live recall reads from (task
@@ -27,6 +28,51 @@ export function benchOptIn(opts) {
       })) return true;
   if (typeof opts.namespace === 'string' && opts.namespace.indexOf(BENCH_NS_PREFIX) === 0) return true;
   return false;
+}
+
+// TRUST LAYER P1.1 (F-mycelium/265): the one-time origin/trust backfill.
+// Stamps existing rows from what is KNOWN, and only what is known: a row the
+// federation store marked (fed_home/fed_visit) is foreign-network at the
+// lowest trust; everything else stays unknown (NULL origin), which every
+// reader treats as the LOWEST trust — never the highest. Custody does not
+// imply origin, so written_by is deliberately not consulted. One-time by the
+// 'origin_trust_backfill_v1' marker in sm_config (clearing it re-arms, the
+// documented path the suite exercises); the run is idempotent regardless —
+// only unstamped fed rows match the UPDATE. Exported (not init-private) so
+// the migration is testable on a seeded DB: a silent migration is an
+// unverified one. Returns the applied counts; a held marker short-circuits
+// to { fed: 0, marker: 'held' }.
+export function backfillOriginTrust(db) {
+  // A raw harness DB may have sm_embeddings without sm_config — without the
+  // marker table the one-time guard cannot exist, so skip LOUDLY rather than
+  // throw the whole wrapper away (the init block logs the skip).
+  var hasConfig = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sm_config'").get();
+  if (!hasConfig) return { marker: 'skipped: no sm_config table on this database' };
+  var marker = db.prepare("SELECT value FROM sm_config WHERE key = 'origin_trust_backfill_v1'").get();
+  if (marker) return { fed: 0, marker: 'held' };
+  var fed = db.prepare(`
+    UPDATE sm_embeddings SET origin = 'foreign-network', trust = 0
+    WHERE (fed_home IS NOT NULL OR fed_visit IS NOT NULL)
+      AND (origin IS NULL AND (trust IS NULL OR trust = 0))
+  `).run().changes;
+  db.prepare("INSERT INTO sm_config (key, value) VALUES ('origin_trust_backfill_v1', ?)")
+    .run('applied: ' + fed + ' fed rows; all other pre-column rows unknown (lowest trust)');
+  return { fed: fed };
+}
+
+// TRUST LAYER P1.1: the read-side shape of the trust stamps. Every path that
+// hands a row to a client goes through this, so the fields come back
+// uniformly: derived_from is an ARRAY of refs (never the raw JSON string)
+// and trust is a NUMBER (NULL stamp = unknown = the lowest, 0 — "unknown is
+// the lowest trust" holds on the way out exactly as on the way in). Rows
+// written before the migration simply read trust 0, origin null.
+function decodeTrustRow(row) {
+  if (!row) return row;
+  if (typeof row.derived_from === 'string' && row.derived_from.length > 0) {
+    try { row.derived_from = JSON.parse(row.derived_from); } catch (e) { /* keep raw */ }
+  }
+  row.trust = (row.trust == null) ? 0 : row.trust;
+  return row;
 }
 
 // Static SQL for the exclusion — no parameters, the prefixes are the constants
@@ -226,6 +272,42 @@ export default function createMemoryDB(db, opts) {
     console.error('[semantic-memory] written_by backfill FAILED — affected rows stay admin-only (clear sm_config key written_by_backfill_v1 to re-arm):', e.message);
   }
 
+  // TRUST LAYER P1.1 (F-mycelium/265): trust + provenance columns. origin
+  // (who the content came from), trust (0..4; NULL reads as the LOWEST) and
+  // derived_from (JSON array of input refs on derived rows). Guarded ALTERs,
+  // the same idiom as superseded_by/written_by above. The one-time backfill
+  // stamps existing rows from what is KNOWN — and only that: a row that
+  // crossed a network border (fed_home/fed_visit set by the federation
+  // store) is foreign-network at the lowest trust; EVERYTHING else stays
+  // unknown, and unknown reads as the lowest trust, never the highest.
+  // Custody (written_by) deliberately does NOT imply origin: an agent key
+  // relaying a person's words is still an owner-agent row, and guessing
+  // upward is the one direction this migration must never go.
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN origin TEXT').run();
+  } catch (e) {
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN trust INTEGER DEFAULT 0').run();
+  } catch (e) {
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
+  try {
+    db.prepare('ALTER TABLE sm_embeddings ADD COLUMN derived_from TEXT').run();
+  } catch (e) {
+    if (!/duplicate column|already exists/.test(String(e.message))) throw e;
+  }
+  try {
+    var stamped = backfillOriginTrust(db);
+    if (stamped.fed > 0) {
+      console.log('[semantic-memory] origin/trust backfill: stamped ' + stamped.fed +
+        ' federated rows foreign-network; all other pre-column rows stay unknown (lowest trust) (F-mycelium/265)');
+    }
+  } catch (e) {
+    console.error('[semantic-memory] origin/trust backfill FAILED — pre-column rows stay unknown (lowest trust; clear sm_config key origin_trust_backfill_v1 to re-arm):', e.message);
+  }
+
   return {
 
     // -- Config --
@@ -335,6 +417,15 @@ export default function createMemoryDB(db, opts) {
       // TRUST LAYER P0.2: the write's owner, stamped by the route from the
       // AUTHENTICATED identity (never a body field). NULL on internal writers.
       var writtenBy = opts.written_by || null;
+      // TRUST LAYER P1.1: the row's origin, trust level and (on derived rows)
+      // its input refs — computed by the route (surface ceiling + min-of-
+      // inputs; see routes.js bindOriginAndTrust) or named explicitly by an
+      // internal writer that knows them (indexFactInMemory, the federation
+      // store). Omitted = NULL = unknown = reads as the LOWEST trust, never
+      // the highest.
+      var origin = opts.origin || null;
+      var trust = (opts.trust == null) ? null : Number(opts.trust);
+      var derivedFrom = opts.derived_from ? JSON.stringify(opts.derived_from) : null;
       // TRUST LAYER P0 (review B item 2): SERVER-side writers of server-owned
       // source types set force_written_by — the source's real owner replaces
       // whatever custody the row carried, so a squatter's claim cannot survive
@@ -352,8 +443,8 @@ export default function createMemoryDB(db, opts) {
       }
 
       db.prepare(`
-        INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by, origin, trust, derived_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_type, source_id, chunk_index)
         DO UPDATE SET content_text = excluded.content_text, namespace = excluded.namespace,
           metadata = excluded.metadata,
@@ -367,6 +458,21 @@ export default function createMemoryDB(db, opts) {
           written_by = ${forceWrittenBy
             ? 'excluded.written_by'
             : 'CASE WHEN sm_embeddings.written_by IS NULL\n            THEN excluded.written_by ELSE sm_embeddings.written_by END'},
+          -- TRUST LAYER P1.1: origin/trust/derived_from take the new write's
+          -- values when it states them. A write that OMITS them preserves the
+          -- row's stamps ONLY while the content is unchanged (a metadata-only
+          -- touch, an embedding backfill). A content REWRITE that omits them
+          -- drops the row to unknown: unknown reads as the LOWEST trust — the
+          -- fail-closed outcome — while keeping the stamp would let new
+          -- content inherit trust it never earned (review B of PR #201, B-1).
+          -- The lesson-supersede flip restates its stamps explicitly, so it
+          -- passes through the ELSE branch with its own values.
+          origin = CASE WHEN excluded.origin IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.origin ELSE excluded.origin END,
+          trust = CASE WHEN excluded.trust IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.trust ELSE excluded.trust END,
+          derived_from = CASE WHEN excluded.derived_from IS NULL AND sm_embeddings.content_text = excluded.content_text
+            THEN sm_embeddings.derived_from ELSE excluded.derived_from END,
           embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.embedding ELSE excluded.embedding END,
           embedding_model = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
@@ -375,7 +481,7 @@ export default function createMemoryDB(db, opts) {
             AND sm_embeddings.namespace = excluded.namespace
             AND sm_embeddings.metadata = excluded.metadata
             THEN sm_embeddings.updated_at ELSE datetime('now') END
-      `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel, writtenBy);
+      `).run(sourceType, sourceId, contentText, namespace, chunkIndex, metadata, embedding, embeddingModel, writtenBy, origin, trust, derivedFrom);
       vectorCache.onUpsert(sourceType, sourceId, chunkIndex);
       return { unchanged: false };
     },
@@ -402,7 +508,8 @@ export default function createMemoryDB(db, opts) {
             var one = self.index(item.source_type, item.source_id, item.content_text, {
               namespace: item.namespace, chunk_index: item.chunk_index,
               metadata: item.metadata, embedding: item.embedding,
-              embedding_model: item.embedding_model, written_by: owner
+              embedding_model: item.embedding_model, written_by: owner,
+              origin: item.origin, trust: item.trust, derived_from: item.derived_from
             });
             var oneUnchanged = !!(one && one.unchanged);
             if (oneUnchanged) unchangedItems++;
@@ -417,7 +524,8 @@ export default function createMemoryDB(db, opts) {
           var chunks = self.indexDoc(item.source_type, item.source_id, item.content_text, {
             namespace: item.namespace, metadata: item.metadata,
             embedding: item.embedding, embedding_model: item.embedding_model,
-            written_by: owner
+            written_by: owner,
+            origin: item.origin, trust: item.trust, derived_from: item.derived_from
           });
           // Content that is unchanged is unchanged for every chunk of the doc
           // (the split is deterministic), so the doc-level flag rides each row;
@@ -504,6 +612,23 @@ export default function createMemoryDB(db, opts) {
       ).get(sourceId);
     },
 
+    // TRUST LAYER P1.3: a row by source_id ALONE, any source_type — the
+    // promote route's :id (a row id on this surface is a source_id). The head
+    // chunk (chunk_index 0) resolves first so a multi-chunk doc promotes as
+    // one document; a real row is never 404'd over chunk ordering.
+    // opts.hide_companion (review A NIT 3): the COMPANION_HIDDEN_SQL class is
+    // invisible to non-admin callers on this surface — passing it keeps a
+    // companion id a 404 instead of leaking "this row exists" through the
+    // 403-vs-404 distinction.
+    anyBySourceId(sourceId, opts) {
+      var sql = 'SELECT * FROM sm_embeddings WHERE source_id = ?';
+      if (opts && opts.hide_companion) sql += ' AND ' + COMPANION_HIDDEN_SQL;
+      sql += ' ORDER BY (chunk_index = 0) DESC, chunk_index LIMIT 1';
+      return db.prepare(sql).get(sourceId);
+    },
+
+
+
     // A state flip, not a content change: content_text is untouched (so the
     // FTS triggers don't fire and the stored vector stays valid) and
     // updated_at is deliberately left alone (the vector cache's recency scan
@@ -536,7 +661,9 @@ export default function createMemoryDB(db, opts) {
       // provenance columns ride along (NULL on native rows, small TEXT) —
       // without them a visited/imported row's receipt is silently stripped by
       // the list/sync path, the exact path the phone reads provenance through.
-      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by, fed_agent, fed_network, fed_home, fed_visit, fed_sig FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
+      // TRUST LAYER P1.1: origin/trust/derived_from ride along (tiny columns) —
+      // the phone fences instruction positions on them (P0.4/P1.1).
+      var sql = "SELECT source_id, content_text, metadata, created_at, superseded_by, fed_agent, fed_network, fed_home, fed_visit, fed_sig, origin, trust, derived_from FROM sm_embeddings WHERE source_type = 'companion' AND namespace = @namespace";
       var params = { namespace: filters.namespace, limit: Math.max(1, Math.min(filters.limit || 100, 500)) }; // floor 1: SQLite reads a negative LIMIT as UNBOUNDED (review A r3 NIT 6)
       if (filters.kind) {
         sql += " AND json_extract(metadata, '$.kind') = @kind";
@@ -552,7 +679,11 @@ export default function createMemoryDB(db, opts) {
         params.since = filters.since;
       }
       sql += ' ORDER BY created_at DESC, id DESC LIMIT @limit';
-      return db.prepare(sql).all(params);
+      return db.prepare(sql).all(params).map(function (r) {
+        // companionView reads these (P1.1); normalizing here keeps the raw
+        // list path consistent with the search arms.
+        return decodeTrustRow(r);
+      });
     },
 
     // Admin bulk purge by exact filter — how a finished benchmark run cleans up
@@ -641,7 +772,7 @@ export default function createMemoryDB(db, opts) {
           if (!full) return null;
           try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
           full.score = -r.rank; // FTS5 rank is negative (lower = better)
-          return stampEmbedded(full); // task 213: the row states its own embeddedness
+          return decodeTrustRow(stampEmbedded(full)); // task 213 embeddedness + P1.1 trust stamps
         }).filter(Boolean);
         return this.collapseChunks(enriched).slice(0, limit);
       } catch (e) {
@@ -662,7 +793,7 @@ export default function createMemoryDB(db, opts) {
         likeParams.push(fetchLimit);
         var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
-        ).all(...likeParams);
+        ).all(...likeParams).map(decodeTrustRow);
         return this.collapseChunks(likeRows.map(function (r) {
           try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
           r.score = 1.0; // no ranking for LIKE fallback
@@ -706,7 +837,7 @@ export default function createMemoryDB(db, opts) {
     finishScored(scored, limit) {
       var topIds = this.collapseChunks(scored).slice(0, limit);
       return topIds.map(function (s) {
-        var full = db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id);
+        var full = decodeTrustRow(db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id));
         if (!full) return null;
         try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
         full.score = s.score;
@@ -895,12 +1026,13 @@ export default function createMemoryDB(db, opts) {
       opts = opts || {};
       var namespace = opts.namespace || null;
       var limit = Math.min(parseInt(opts.limit, 10) || 20, 100);
-      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at '
+      // TRUST LAYER P1.1: the trust stamps ride the query-free listing too.
+      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at, origin, trust, derived_from '
               + 'FROM sm_embeddings WHERE source_type = ? AND chunk_index = 0';
       var args = [sourceType];
       if (namespace) { sql += ' AND namespace = ?'; args.push(namespace); }
       sql += ' ORDER BY created_at DESC LIMIT ?'; args.push(limit);
-      return db.prepare(sql).all(...args);
+      return db.prepare(sql).all(...args).map(decodeTrustRow);
     },
 
     // -- Lessons & history (2026-09-10, F-mycelium/186) ---------------------------
@@ -932,13 +1064,15 @@ export default function createMemoryDB(db, opts) {
         where.push("COALESCE(json_extract(metadata, '$.learned_at'), created_at) >= ?");
         args.push(opts.since);
       }
-      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at, updated_at '
+      // TRUST LAYER P1.1: the trust stamps ride the lesson/history views.
+      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at, updated_at, origin, trust, derived_from '
               + 'FROM sm_embeddings WHERE ' + where.join(' AND ')
               + " ORDER BY COALESCE(json_extract(metadata, '$.learned_at'), created_at) DESC, created_at DESC LIMIT ?";
       args.push(limit);
       var rows = db.prepare(sql).all(...args);
       for (var r of rows) {
         try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
+        decodeTrustRow(r);
       }
       return rows;
     },
@@ -1137,4 +1271,28 @@ export function forgetDocRaw(db, sourceType, sourceId, opts) {
     try { vc.onRemoveMany(sourceType, [String(sourceId)]); } catch (e) { /* cache absent — the signature reconcile is the net */ }
   }
   return changes;
+}
+
+// TRUST LAYER P1.3: the one PROMOTE write. Both doors — POST
+// /memory/:id/promote and the federation accept route — come through here so
+// the raw UPDATE lives in this one file (the vector-cache gate allows no raw
+// sm_embeddings UPDATE outside it). A promote is a STATE flip, not a content
+// change, in exactly the companionMarkSuperseded class: content_text is
+// untouched (the FTS triggers stay silent, the stored vector stays valid)
+// and updated_at is deliberately left alone (the cache's recency scan does
+// not reshuffle because a row was vouched for). The metadata rewrite moves
+// neither COUNT nor MAX(id) — the signature-blind gap vector-cache.js's
+// header documents for precisely this shape. A named export taking the host
+// db (NOT a memoryDB method): the federation door calls it with core.db, and
+// constructing a second createMemoryDB there would evict the attached vector
+// cache.
+export function promoteBySourceId(db, sourceType, sourceId, promotedBy, claimedBy) {
+  var rows = db.prepare(
+    'SELECT id, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ?'
+  ).all(sourceType, sourceId);
+  for (var i = 0; i < rows.length; i++) {
+    db.prepare('UPDATE sm_embeddings SET metadata = ? WHERE id = ?')
+      .run(JSON.stringify(promotedMeta(parseQuarantineMeta(rows[i].metadata), promotedBy, claimedBy)), rows[i].id);
+  }
+  return rows.length;
 }
