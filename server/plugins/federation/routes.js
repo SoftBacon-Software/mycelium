@@ -14,6 +14,8 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { rateLimited } from '../../lib/rate-limit.js';
+import { parseMeta, isQuarantined } from '../../lib/memory-quarantine.js';
+import { promoteBySourceId } from '../semantic-memory/db.js';
 import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
@@ -50,6 +52,37 @@ export default function (core) {
         at: row.at || null,
         home: row.home || null,
         agent: row.agent || null
+      }),
+      reason: reason
+    });
+  }
+
+  // One audit row for a PROMOTED fed row (the accept door). The row IS an
+  // sm_embeddings row, so the post-state hash is the same shape the
+  // semantic-memory routes pin for sm rows (kind 'sm_row', the stored
+  // columns verbatim — derived_from as the raw JSON string the column
+  // holds): a row's audit history hashes comparable states across its
+  // doors, and the promote stamp (promoted_by / promoted_at) is audited
+  // content. Callers run this INSIDE the promote's transaction.
+  function auditFedPromote(localOwnerId, sourceType, sourceId, storedRow, reason) {
+    var meta;
+    try { meta = JSON.parse(storedRow.metadata || '{}'); } catch (e) { meta = {}; }
+    audit.append({
+      actor: '__user:' + localOwnerId,
+      action: 'promote',
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'sm_row',
+        content: storedRow.content_text,
+        namespace: storedRow.namespace || null,
+        metadata: meta,
+        written_by: storedRow.written_by || null,
+        superseded_by: storedRow.superseded_by || null,
+        origin: storedRow.origin || null,
+        trust: (storedRow.trust == null) ? null : Number(storedRow.trust),
+        derived_from: storedRow.derived_from || null
       }),
       reason: reason
     });
@@ -564,6 +597,53 @@ export default function (core) {
       episode: store.view(episodeStore.row)
     });
   }));
+
+  // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for
+  // federation candidates. Every imported row landed QUARANTINED
+  // (unverified on recall, excluded from the fact-of-record seed); the owner
+  // who imported the bundle is the one who can vouch for it. Accepting
+  // promotes every still-quarantined row of the bundle (collision
+  // supersede-candidates included — accepting one IS the explicit acceptance
+  // the candidate flag always meant), with the same stamp the other promote
+  // doors write (POST /me/memory/:id/promote, POST /memory/:id/promote —
+  // one promoted_by shape, so the doors cannot drift). A bundle this owner
+  // never imported is a 404 — ids are not an existence oracle across owners.
+  // The visit's episode row is not in the bundle's outcomes and stays
+  // quarantined: it is a diary line, not guidance.
+  // TRUST LAYER P1.5 (264 merge — the old TODO is paid): EVERY promotion and
+  // its audit row are ONE transaction — a crash (or a fail-loud audit throw)
+  // must never leave a vouch the log cannot name, and one rollback takes the
+  // whole accept back. The actor is the authenticated bearer (the import
+  // route's fedActor shape); the row_hash is the POST-promote stored state
+  // (auditFedPromote, the sm-row shape), so the chain pins each stamp.
+  router.post('/import/:bundleId/accept', importLimiter, function (req, res) {
+    var user = requireBearer(req, res);
+    if (!user) return;
+    var bundleId = String(req.params.bundleId || '');
+    var prior = store.getImport(bundleId, user.userId);
+    if (!prior) {
+      return apiError(res, 404, "no such import: '" + bundleId + "' — a bundle is accepted where it was imported, by the owner who imported it");
+    }
+    var accepted = [];
+    var alreadyAccepted = 0;
+    var forgotten = 0; // review A NIT 1: a bundle row forgotten since the import is counted, not dropped silently
+    var promoteReason = 'federation accept of bundle ' + bundleId + ' — promoted_by __user:' + user.userId;
+    core.db.transaction(function () {
+      for (var o of prior.outcomes) {
+        var row = store.rowById(user.userId, o.row_id);
+        if (!row) { forgotten++; continue; } // forgotten since the import — nothing to accept
+        var meta = parseMeta(row.metadata);
+        if (!isQuarantined(meta) && !meta.candidate) { alreadyAccepted++; continue; }
+        // review A MINOR 2: the stamp is the owner-door shape ('__user:<id>'),
+        // not the bare numeric id — one promote_by shape across all doors.
+        promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
+        var now = store.rowById(user.userId, o.row_id);
+        accepted.push(store.view(now));
+        auditFedPromote(user.userId, row.source_type, row.source_id, now, promoteReason);
+      }
+    })();
+    res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted, forgotten: forgotten });
+  });
 
   // ---- operator visibility ------------------------------------------------------
 

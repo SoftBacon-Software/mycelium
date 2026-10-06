@@ -7,6 +7,8 @@ import { chunkText } from './chunking.js';
 import companionView from './companion-view.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
+import { parseMeta, isQuarantined, applyRecallLabel } from '../../lib/memory-quarantine.js';
+import { promoteBySourceId } from './db.js';
 import { ORIGINS, ORIGIN_TRUST, bindOriginClaim } from '../../lib/trust-origins.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
 import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
@@ -217,7 +219,7 @@ export default function (core) {
     results = results.map(function (r) {
       var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
       if (rest.embedded === undefined) rest.embedded = null;
-      return rest;
+      return applyRecallLabel(rest); // TRUST LAYER P1.3: quarantined rows recall labelled
     });
     if (overfetch) results = results.slice(0, limit); // collapse the overfetch back to the requested page
 
@@ -1073,7 +1075,13 @@ export default function (core) {
       // record until the home side accepts it — recall stays with the home
       // row (the honesty law: he says where he learned it, he does not
       // silently become right). GET /me/memory still shows it, flagged.
-      if (meta.candidate) return false;
+      // TRUST LAYER P1.3: a QUARANTINED row (every foreign-network row, every
+      // auto-indexed message) is not the fact of record either — this search
+      // is the seed the phone interpolates as guidance, so a quarantined row
+      // is excluded here and only reaches the model through labelled recall
+      // (GET /me/memory, /memory/search) until its owner or an admin promotes
+      // it. The filter block below reports the cull either way.
+      if (meta.candidate || meta.quarantined) return false;
       return true;
     });
     var afterFilter = results.length; // measured BEFORE the page slice (review A r2 NIT 7): slicing is the caller's own limit at work, not a filter cull — attributing it to the filter lies about the corpus
@@ -1135,6 +1143,110 @@ export default function (core) {
     res.json({ ok: true, forgotten: id });
   });
 
+  // POST /me/memory/:id/promote — TRUST LAYER P1.3 (review A MAJOR 2): the
+  // OWNER's door out of quarantine. The agent-surface promote below runs the
+  // agent gate, and the visited rows of a federation visit are
+  // metadata.owner = a user id with written_by NULL — an id no agent identity
+  // ever matches — so without this route the owner of a visited row had no
+  // self-serve door at all (only the admin key could promote it). The
+  // companion surface is where the owner already manages these rows (list /
+  // search / forget); promotion belongs beside them. Scoping is the forget
+  // route's: the row must live in THIS owner's namespace, anything else is
+  // 404 exactly like an unknown id — ids are not an existence oracle across
+  // owners. The stamp is the owner shape ('__user:<userId>'), the same one
+  // the federation accept door writes.
+  // TRUST LAYER P1.5 (264 merge — the old TODO is paid): the promote and its
+  // audit row are ONE transaction — a promote is the vouch the chain exists
+  // to attribute, and on the M2 shape (promote commits, then the append) a
+  // failed append would vouch for a row the log never pinned. The row_hash
+  // is the POST-promote state read back off the stored rows, so the chain
+  // pins the stamp (promoted_by / promoted_at) as audited content. Actor is
+  // the surface's authenticated identity (the forget route's shape);
+  // row_owner is the owner scope this route already enforced.
+  router.post('/me/memory/:id/promote', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var id = String(req.params.id || '');
+    var row = db.companionRow(id);
+    if (!row || (row.namespace || '') !== companionNamespace(user.userId)) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    var meta = parseMeta(row.metadata);
+    if (!isQuarantined(meta) && !meta.candidate) {
+      return res.json({ ok: true, promoted: false, id: id, note: 'this memory is not quarantined — nothing to promote' });
+    }
+    core.db.transaction(function () {
+      promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
+      auditSmWrite('__user:' + (user.displayName || user.username), 'promote', row.source_type, row.source_id, {
+        row_owner: String(user.userId),
+        reason: 'quarantine promote — promoted_by __user:' + user.userId
+      });
+    })();
+    res.json({ ok: true, promoted: true, id: id, promoted_by: '__user:' + user.userId, source_type: row.source_type });
+  });
+
+  // POST /memory/:id/promote — TRUST LAYER P1.3: the ONLY agent-surface door
+  // out of quarantine. An auto-indexed message or a foreign-network row is
+  // recalled labelled (unverified) and never rides an instruction position;
+  // promoting is the owner (or an admin on the owner's behalf) vouching for
+  // the row in their own voice. Auth is the agent surface's usual gate
+  // (checkMemoryAgent); ownership is the row's OWN custody record —
+  // written_by for agent-written rows, metadata.owner for companion/fed rows
+  // — and anyone else is a 403 with the plain sentence. Promoting a row that
+  // is not quarantined answers promoted:false (an outbox replay gets the
+  // same shape as the first call, honestly).
+  // The STAMP is the authenticated principal, never a header claim (review A
+  // MAJOR 1): on the admin-key path checkAgentOrAdmin returns X-Acting-As
+  // verbatim — a claim anyone with the admin key can make about anyone. A
+  // vouch must not be forgeable, so the admin key stamps `__system__` (the
+  // key is the platform's own voice) and the claim rides separately as
+  // `promoted_by_claimed` — the same claimed-vs-principal split the P0.2 law
+  // records elsewhere. The studio-JWT and agent-key paths need no split:
+  // their `who` is already the verified identity.
+  // TRUST LAYER P1.5 (264 merge — the old TODO is paid): the promote and its
+  // audit row are ONE transaction (a failed append rolls the vouch back), the
+  // row_hash pins the POST-promote state — the stamp (promoted_by, and
+  // promoted_by_claimed when the admin-key path carried a claim) is audited
+  // content — and row_owner is the row's OWN custody record at action time,
+  // the same written_by / metadata.owner split the ownership gate above runs.
+  router.post('/:id/promote', rateLimited('memory/promote', { windowMs: 60000, max: 120 }), function (req, res) {
+    var who = checkMemoryAgent(req, res);
+    if (!who) return;
+    var claimedBy = null;
+    var studioUser = core.auth && typeof core.auth.getStudioUser === 'function' ? core.auth.getStudioUser(req) : null;
+    if (!studioUser && req._authIsAdmin && req.headers['x-acting-as']) {
+      claimedBy = String(req.headers['x-acting-as']);
+      who = '__system__';
+    }
+    var id = String(req.params.id || '');
+    // hide_companion for non-admin callers (review A NIT 3): the companion
+    // class is invisible to them on this surface — a probe must 404 like an
+    // unknown id, not leak existence through the 403.
+    var row = db.anyBySourceId(id, { hide_companion: !req._authIsAdmin });
+    if (!row) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    var meta = parseMeta(row.metadata);
+    var isOwner = (row.written_by && row.written_by === who) ||
+      (meta.owner != null && String(meta.owner) === String(who));
+    if (!req._authIsAdmin && !isOwner) {
+      return apiError(res, 403, "'" + id + "' is quarantined — only the row's owner or an admin may promote it; '" + who + "' is neither");
+    }
+    if (!isQuarantined(meta) && !meta.candidate) {
+      return res.json({ ok: true, promoted: false, id: id, note: 'this memory is not quarantined — nothing to promote' });
+    }
+    core.db.transaction(function () {
+      promoteBySourceId(core.db, row.source_type, row.source_id, who, claimedBy);
+      auditSmWrite(who, 'promote', row.source_type, row.source_id, {
+        row_owner: row.written_by || (meta.owner != null ? String(meta.owner) : null),
+        reason: claimedBy ? 'quarantine promote — X-Acting-As claim: ' + claimedBy : 'quarantine promote'
+      });
+    })();
+    var out = { ok: true, promoted: true, id: id, promoted_by: who, source_type: row.source_type };
+    if (claimedBy) out.promoted_by_claimed = claimedBy;
+    res.json(out);
+  });
+
   // GET /memory/stats — index stats
   // GET /memory/list?source_type=preference&namespace=&limit= — query-free
   // retrieval by type, newest first. For always-on content the model must see
@@ -1153,7 +1265,7 @@ export default function (core) {
       namespace: req.query.namespace || null,
       limit: req.query.limit
     });
-    res.json({ results: rows, source_type: sourceType, count: rows.length });
+    res.json({ results: rows.map(applyRecallLabel), source_type: sourceType, count: rows.length });
   });
 
   // GET /memory/episodes?agent=&session_date=&namespace=&limit= — the §3 read
@@ -1177,7 +1289,7 @@ export default function (core) {
       limit: Math.min(parseInt(req.query.limit) || 20, 500)
     });
     res.json({
-      source_type: 'episode', count: rows.length, results: rows,
+      source_type: 'episode', count: rows.length, results: rows.map(applyRecallLabel),
       filters: { agent: nonEmptyQuery(req.query.agent), session_date: nonEmptyQuery(req.query.session_date) }
     });
   });
@@ -1213,7 +1325,7 @@ export default function (core) {
     if (!req.query.q) {
       var rows = db.listLessons(Object.assign({}, filters, { limit: limit, include_superseded: includeSuperseded }));
       return res.json({
-        source_type: 'lesson', count: rows.length, results: rows,
+        source_type: 'lesson', count: rows.length, results: rows.map(applyRecallLabel),
         filters: { task_class: filters.task_class, repo: filters.repo, since: filters.since },
         include_superseded: includeSuperseded
       });
@@ -1261,7 +1373,7 @@ export default function (core) {
       });
       results = results.map(function (r) {
         var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
-        return rest;
+        return applyRecallLabel(rest); // review A MINOR 1: the q-branch labels like the no-q branch — one definition
       }).slice(0, limit);
       var response = {
         source_type: 'lesson', query: String(req.query.q), mode: effectiveMode,
@@ -1555,7 +1667,7 @@ export default function (core) {
     var limit = Math.min(parseInt(req.query.limit) || 20, 100);
     var rows = db.listHistory(Object.assign({}, filters, { limit: limit }));
     res.json({
-      source_type: 'verdict', count: rows.length, results: rows,
+      source_type: 'verdict', count: rows.length, results: rows.map(applyRecallLabel),
       filters: { task_class: filters.task_class, repo: filters.repo }
     });
   });

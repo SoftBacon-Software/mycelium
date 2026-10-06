@@ -3,6 +3,7 @@
 import { cosineSimilarity, embedQueueDepth, embedDrainSnapshot } from './embeddings.js';
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import { createVectorCache } from './vector-cache.js';
+import { parseMeta as parseQuarantineMeta, promotedMeta } from '../../lib/memory-quarantine.js';
 
 // -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
 // Benchmark harnesses write into the ONE index live recall reads from (task
@@ -568,6 +569,23 @@ export default function createMemoryDB(db, opts) {
         "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0"
       ).get(sourceId);
     },
+
+    // TRUST LAYER P1.3: a row by source_id ALONE, any source_type — the
+    // promote route's :id (a row id on this surface is a source_id). The head
+    // chunk (chunk_index 0) resolves first so a multi-chunk doc promotes as
+    // one document; a real row is never 404'd over chunk ordering.
+    // opts.hide_companion (review A NIT 3): the COMPANION_HIDDEN_SQL class is
+    // invisible to non-admin callers on this surface — passing it keeps a
+    // companion id a 404 instead of leaking "this row exists" through the
+    // 403-vs-404 distinction.
+    anyBySourceId(sourceId, opts) {
+      var sql = 'SELECT * FROM sm_embeddings WHERE source_id = ?';
+      if (opts && opts.hide_companion) sql += ' AND ' + COMPANION_HIDDEN_SQL;
+      sql += ' ORDER BY (chunk_index = 0) DESC, chunk_index LIMIT 1';
+      return db.prepare(sql).get(sourceId);
+    },
+
+
 
     // A state flip, not a content change: content_text is untouched (so the
     // FTS triggers don't fire and the stored vector stays valid) and
@@ -1171,4 +1189,28 @@ export default function createMemoryDB(db, opts) {
       };
     }
   };
+}
+
+// TRUST LAYER P1.3: the one PROMOTE write. Both doors — POST
+// /memory/:id/promote and the federation accept route — come through here so
+// the raw UPDATE lives in this one file (the vector-cache gate allows no raw
+// sm_embeddings UPDATE outside it). A promote is a STATE flip, not a content
+// change, in exactly the companionMarkSuperseded class: content_text is
+// untouched (the FTS triggers stay silent, the stored vector stays valid)
+// and updated_at is deliberately left alone (the cache's recency scan does
+// not reshuffle because a row was vouched for). The metadata rewrite moves
+// neither COUNT nor MAX(id) — the signature-blind gap vector-cache.js's
+// header documents for precisely this shape. A named export taking the host
+// db (NOT a memoryDB method): the federation door calls it with core.db, and
+// constructing a second createMemoryDB there would evict the attached vector
+// cache.
+export function promoteBySourceId(db, sourceType, sourceId, promotedBy, claimedBy) {
+  var rows = db.prepare(
+    'SELECT id, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ?'
+  ).all(sourceType, sourceId);
+  for (var i = 0; i < rows.length; i++) {
+    db.prepare('UPDATE sm_embeddings SET metadata = ? WHERE id = ?')
+      .run(JSON.stringify(promotedMeta(parseQuarantineMeta(rows[i].metadata), promotedBy, claimedBy)), rows[i].id);
+  }
+  return rows.length;
 }

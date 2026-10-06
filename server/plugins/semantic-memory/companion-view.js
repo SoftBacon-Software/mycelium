@@ -46,6 +46,15 @@ export default function companionView(row, opts) {
   // candidate (accepted explicitly, never a silent supersede); a row that
   // crossed a border carries its receipt.
   if (meta.candidate) view.candidate = true;
+  // TRUST LAYER P1.3: a quarantined row (every foreign-network row, every
+  // auto-indexed agent message) is recalled WITH the visible unverified
+  // label — the client renders it; the platform does not vouch for the text.
+  // server/lib/memory-quarantine.js is the one definition of the state.
+  if (meta.quarantined) {
+    view.unverified = true;
+    view.quarantined = true;
+    view.quarantine_reason = meta.quarantine_reason || null;
+  }
   if (row.fed_agent || row.fed_network || row.fed_visit) {
     view.provenance = {
       id: meta.fed_id || null, // the protocol's content-addressed id
