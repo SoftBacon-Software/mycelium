@@ -11,7 +11,8 @@ import {
   bootSavepointSection,
   savepointViewLines,
   savepointDiffLines,
-  agentRosterLines
+  agentRosterLines,
+  fencedRecallLines
 } from './recall-view.js';
 
 function text(s) {
@@ -1768,15 +1769,21 @@ export function registerTools(server) {
       var drones = await apiGet('/drones');
       if (!drones.length) return text('No drone workers registered.');
       var lines = ['=== Drone Workers (' + drones.length + ') ==='];
+      var recallRows = [];
       for (var d of drones) {
         var statusIcon = d.status === 'online' ? '[ON]' : '[OFF]';
         var caps = [];
         try { caps = JSON.parse(d.capabilities); } catch {}
         var line = statusIcon + ' ' + d.name + ' (' + d.id + ')';
         if (caps.length) line += ' [' + caps.join(', ') + ']';
-        if (d.working_on) line += '\n  Working on: ' + d.working_on;
         line += '\n  Last seen: ' + timeAgo(d.last_heartbeat);
         lines.push(line);
+        // TRUST LAYER P1.2 (263b sweep): a drone's working_on is worker-set
+        // stored text shown cross-agent — fenced like the agent roster.
+        if (d.working_on) recallRows.push('working_on (' + d.id + '): ' + d.working_on);
+      }
+      for (var fencedLine of fencedRecallLines(recallRows)) {
+        lines.push(fencedLine);
       }
       return text(lines.join('\n'));
     }

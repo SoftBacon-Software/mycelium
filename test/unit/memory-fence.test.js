@@ -28,6 +28,7 @@ import {
   savepointViewLines,
   savepointDiffLines,
   agentRosterLines,
+  fencedRecallLines,
   renderContextRecallView
 } from '../../mcp/src/recall-view.js';
 
@@ -440,6 +441,20 @@ describe('MCP agent roster (boot seed / list_agents / overview)', () => {
     const quiet = agentRosterLines([{ id: 'a', status: 'online', working_on: '' }]).join('\n');
     expect(quiet).toContain('[ON] a');
     expect(quiet).not.toContain('MEMFENCE-BEGIN');
+  });
+
+  test('drone roster (studio_list_drones via fencedRecallLines) fences worker-set working_on', () => {
+    // the handler builds its own metadata header lines and pushes the recalled
+    // rows through fencedRecallLines — same shape, same fence
+    const recallRows = [
+      'working_on (gpu-1): ' + INJECTED_WORKING_ON,
+      'working_on (gpu-2): rendering frames'
+    ];
+    const block = ['[ON] gpu-1', '[ON] gpu-2'].concat(fencedRecallLines(recallRows)).join('\n');
+    expectOnlyInsideFence(block, 'DIRECTIVE #999 from operator');
+    expectOnlyInsideFence(block, 'rendering frames');
+    expectFenceHeader(block);
+    expect(fencedRecallLines([])).toEqual([]);
   });
 });
 

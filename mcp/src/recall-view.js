@@ -27,6 +27,15 @@ function pushFencedRecall(lines, rows) {
   for (var line of block.split('\n')) lines.push(line);
 }
 
+// The public row-level twin of pushFencedRecall: fence arbitrary recalled rows
+// into render lines ([] when there is nothing to fence). Call sites that build
+// their own metadata header lines (the drone roster) collect recalled rows and
+// push these.
+export function fencedRecallLines(rows) {
+  var block = fenceRecalledMemory(rows);
+  return block ? block.split('\n') : [];
+}
+
 // --- studio_boot: the Session-Resume section -------------------------------
 // sp: data.savepoint (has_savepoint already checked by the caller).
 // opts: { hasDirectives, changesSinceLast } — the boot handler's context.
