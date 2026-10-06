@@ -30,6 +30,21 @@ CREATE TABLE IF NOT EXISTS sm_embeddings (
   -- admin key may overwrite or delete it. The guarded ALTER in db.js adds
   -- this to databases that predate the column (fresh DBs get it here).
   written_by TEXT,
+  -- TRUST LAYER P1.1 (F-mycelium/265): trust + provenance that survive
+  -- derivation. origin = WHO the content came from (person | owner-agent |
+  -- tool | model-derived | foreign-network; NULL = unknown — server/lib/
+  -- trust-origins.js is the one definition). trust = the row's trust level
+  -- (0..4 on the origin ladder; NULL = no stamp, read as the LOWEST).
+  -- derived_from = JSON array of input row refs ("sm:<source_type>:<source_id>"
+  -- or "am:<fact_id>") on DERIVED rows — summaries, consolidations, lessons,
+  -- extracted facts — whose trust is the MIN of those inputs, resolved
+  -- server-side at write time. A body claim above the writer's surface
+  -- ceiling is ignored and flagged (metadata.claimed_origin) — the P0
+  -- claimed_actor pattern. The guarded ALTERs in db.js carry all three to
+  -- existing databases.
+  origin TEXT,
+  trust INTEGER DEFAULT 0,
+  derived_from TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(source_type, source_id, chunk_index)

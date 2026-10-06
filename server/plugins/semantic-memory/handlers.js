@@ -78,6 +78,12 @@ export function registerHooks(core) {
     var owner = opts.written_by || null;
     core.db.transaction(function () {
       var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
+      // TRUST LAYER P1.1 (264d merge): the stamps the upsert actually SETTLED,
+      // read back off the stored row — a content-unchanged rewrite PRESERVES
+      // the row's existing stamps (the upsert's CASE), so hashing the intent
+      // here could pin stamps the row does not carry. Same stamp shape the
+      // routes' smRowState hashes.
+      var storedRow = db.getDocChunks(sourceType, sourceId)[0] || {};
       audit.append({
         // A server-internal write names the server when no real agent owns
         // the row ('system:auto-index'); otherwise the row's owner is both.
@@ -92,7 +98,10 @@ export function registerHooks(core) {
           namespace: opts.namespace || null,
           metadata: opts.metadata || {},
           written_by: owner,
-          superseded_by: null
+          superseded_by: null,
+          origin: storedRow.origin || null,
+          trust: (storedRow.trust == null) ? null : Number(storedRow.trust),
+          derived_from: storedRow.derived_from || null
         }),
         reason: 'auto-index ' + sourceType + ':' + sourceId
       });
