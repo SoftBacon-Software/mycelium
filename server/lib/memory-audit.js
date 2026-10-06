@@ -30,7 +30,9 @@
 // grant-bound visitor agent). No body field ever reaches it. The one
 // exception is server-internal writers, which sign 'system:<role>' — a
 // server-internal write is attributable to the server itself, which is the
-// honest actor.
+// honest actor. The one asterisk (review A threat model): the admin key's
+// X-Acting-As attribution IS a header-set actor — reachable only behind
+// checkAdmin, so no header a NON-admin can set ever reaches this field.
 //
 // `row_owner` is the target memory row's owner AT ACTION TIME (written_by /
 // am_fact agent_id / companion owner id) — the read-side scope: the audit

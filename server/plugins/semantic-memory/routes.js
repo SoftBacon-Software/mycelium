@@ -27,7 +27,7 @@ export default function (core) {
   var { apiError, parseIntParam, asyncHandler } = core;
 
   // TRUST LAYER P1.5 (F-mycelium/264): the append-only, hash-chained audit
-  // log — ONE row per memory write / edit / delete / purge / embed across
+  // log — ONE row per memory write / edit / delete / purge / import across
   // this plugin, auto-memory and federation. The storage half (schema,
   // triggers, chain math) lives in server/lib/memory-audit.js, mirrored in
   // server/schema.sql; the injections below are the write half. `actor` is
@@ -35,6 +35,15 @@ export default function (core) {
   // field); `row_hash` is the row's canonical content AFTER the action —
   // deletes capture it AS DELETED, in the same transaction, so the chain
   // pins what the delete removed.
+  //
+  // Vectors carry NO row (review A M4): an embedding is derived content — a
+  // function of the content_text the chain already pins — so neither the
+  // server-internal refreshes (autoEmbed route + hook, boot-drain, /reindex,
+  // /backfill-embeddings) nor a caller-supplied PUT /embeddings append an
+  // audit row. What governs who may store a vector is the routes' P0.2
+  // write-authority gates, not the chain; the chain is for content that can
+  // be lost, not for a re-derivable value whose current state is always
+  // observable on the row.
   var audit = createMemoryAudit(core.db);
 
   // The canonical state of one sm_embeddings doc, in the exact shape every
@@ -509,11 +518,24 @@ export default function (core) {
 
     // bulkIndex is chunk-aware — oversized items split into chunk rows;
     // it returns the rows actually written so each one embeds separately.
-    var rows = db.bulkIndex(items, who);
-
-    // P1.5: ONE audit row per ITEM (a chunked item is one memory row).
+    // TRUST LAYER P1.5 (review A M1/M2a): the writes and their audit rows are
+    // ONE transaction — bulkIndex's own transaction becomes a savepoint, so a
+    // crash (or a fail-loud audit throw) rolls the writes back WITH the rows
+    // they owe. Only the rows bulkIndex actually WROTE are audited: a
+    // byte-identical re-index is `unchanged` — nothing written, nothing to
+    // audit (the rule the auto-index hook already applies), because an audit
+    // log that records writes which did not happen is wrong in the other
+    // direction.
+    var rows;
     core.db.transaction(function () {
+      rows = db.bulkIndex(items, who);
+      var written = {};
+      for (var ri = 0; ri < rows.length; ri++) {
+        if (!rows[ri].unchanged) written[rows[ri].source_type + '\u0000' + rows[ri].source_id] = true;
+      }
       for (var bi = 0; bi < items.length; bi++) {
+        if (!written[items[bi].source_type + '\u0000' + items[bi].source_id]) continue;
+        // P1.5: ONE audit row per ITEM (a chunked item is one memory row).
         auditSmWrite(who, 'write', items[bi].source_type, items[bi].source_id);
       }
     })();
@@ -1510,24 +1532,9 @@ export default function (core) {
         "' is not the caller's row and no entitled embed job covers it — an agent key may store a vector only on a row it wrote, or as the row's owner / an admin-registered embedder holding the claimed embed job for it; ask the owner or use the admin key");
     }
     db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
-    // P1.5: the vector is part of the row, so a vector write is audited
-    // ('embed') — the hash pins WHICH vector landed (sha256 of the stored
-    // array), not its floats verbatim.
-    var embedOwner = db.getDoc(sourceType, sourceId, chunkIndex);
-    audit.append({
-      actor: who,
-      action: 'embed',
-      source_type: sourceType,
-      source_id: sourceId,
-      row_owner: embedOwner ? (embedOwner.written_by || null) : null,
-      row_hash: contentHash({
-        kind: 'embedding',
-        chunk_index: chunkIndex,
-        vector: crypto.createHash('sha256').update(JSON.stringify(embedding)).digest('hex'),
-        model: model || 'unknown'
-      }),
-      reason: null
-    });
+    // No audit row (review A M4): the vector is derived content — the chain
+    // pins the content_text it was computed from, and this module's header
+    // states that law. The P0.2 gate above is what governed THIS write.
     res.json({ ok: true, source_type: sourceType, source_id: sourceId });
   });
 
@@ -1769,9 +1776,11 @@ export default function (core) {
           return live ? (live.written_by || null) : null;
         })();
         if (owner === null || ownerScopes.indexOf(owner) === -1) {
-          return apiError(res, 403, "the audit log for '" + rowType + ':' + rowId +
-            "' is readable by the row's owner and the admin only" +
-            (owner ? " — the audit rows name '" + owner + "' as the owner" : ''));
+          // Review A M3: ONE STATIC sentence for a foreign row AND a missing
+          // row — the body names neither the owner (no existence + ownership
+          // oracle across owners) nor even the requested id, so every refusal
+          // on this route reads byte-identical.
+          return apiError(res, 403, "the audit log of a memory row is readable by the row's owner and the admin only");
         }
       }
       return res.json({ rows: rows, count: rows.length });

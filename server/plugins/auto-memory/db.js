@@ -2,6 +2,28 @@
 
 import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
+// The canonical state of one am_facts row — what every row_hash hashes.
+// Lives here (not in routes.js) so every writer of an audited fact field —
+// the routes, the extraction/consolidation paths and the decay pass — hashes
+// the same bytes (review A B1: decay audits its confidence rewrite too).
+export function factState(fact) {
+  return {
+    kind: 'am_fact',
+    fact_text: fact.fact_text,
+    agent_id: fact.agent_id || null,
+    category: fact.category || null,
+    project_id: fact.project_id || null,
+    confidence: fact.confidence,
+    source_type: fact.source_type || null,
+    source_authority: fact.source_authority || null,
+    valid_from: fact.valid_from || null,
+    valid_to: fact.valid_to || null,
+    verified_at: fact.verified_at || null,
+    superseded_by: fact.superseded_by || null,
+    namespace: fact.namespace || null
+  };
+}
+
 export default function createAutoMemoryDB(db) {
   // Migration: add access tracking columns
   try { db.exec('ALTER TABLE am_facts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
@@ -16,6 +38,9 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('ALTER TABLE am_facts ADD COLUMN verified_at TEXT'); } catch (e) { /* already exists */ }
   try { db.exec("ALTER TABLE am_facts ADD COLUMN source_authority TEXT NOT NULL DEFAULT 'inferred'"); } catch (e) { /* already exists */ }
   // Backfill existing rows so as-of queries are correct from day one.
+  // (Review A nit: these backfills rewrite audited-content fields on legacy
+  // DBs BEFORE the audit table exists — a one-time, unaudited migration per
+  // install, not a runtime write path; there is no log to append to yet.)
   try { db.exec('UPDATE am_facts SET valid_from = created_at WHERE valid_from IS NULL'); } catch (e) { /* */ }
   try { db.exec('UPDATE am_facts SET valid_to = updated_at WHERE superseded_by IS NOT NULL AND valid_to IS NULL'); } catch (e) { /* */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_valid ON am_facts(valid_to)'); } catch (e) { /* */ }
@@ -245,6 +270,28 @@ export default function createAutoMemoryDB(db) {
 
     updateFactConfidence(id, confidence) {
       db.prepare("UPDATE am_facts SET confidence = ?, updated_at = datetime('now') WHERE id = ?").run(confidence, id);
+    },
+
+    // TRUST LAYER P1.5 (review A B1): the decay pass's confidence rewrite is
+    // the identical operation runConsolidation audits as a system:consolidation
+    // edit row — so it is audited too: ONE 'system:decay' edit row per changed
+    // fact, in the SAME transaction as the update (a crash leaves neither the
+    // rewrite nor its row). Signed by the server like the housekeeping prunes:
+    // the actor is the scheduled pass, not any caller.
+    decayFactConfidence(id, confidence) {
+      db.transaction(function () {
+        db.prepare("UPDATE am_facts SET confidence = ?, updated_at = datetime('now') WHERE id = ?").run(confidence, id);
+        var fact = db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+        audit.append({
+          actor: 'system:decay',
+          action: 'edit',
+          source_type: 'am_fact',
+          source_id: String(id),
+          row_owner: fact ? (fact.agent_id || null) : null,
+          row_hash: contentHash(factState(fact)),
+          reason: 'confidence decay'
+        });
+      })();
     },
 
     // -- Provenance / bi-temporal (memory-rework slice 1) --

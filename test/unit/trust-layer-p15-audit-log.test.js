@@ -159,17 +159,38 @@ describe('P1.5 every memory write appends ONE hash-chained audit row', () => {
     expect(rows[0].action).toBe('write');
   });
 
-  test('PUT /memory/embeddings: a vector write is audited (action embed)', async () => {
-    // The vector gate (P0.2) lets only the row's writer or the admin store a
-    // vector — tl264-admin-1 was written by the admin key, so admin embeds it.
+  test('PUT /memory/embeddings: a vector write appends NO audit row (vectors are derived)', async () => {
+    // Review A M4: the chain pins CONTENT; an embedding is a function of the
+    // content_text the chain already pins, so vector writes carry no audit
+    // row — server-internal refreshes and caller-supplied PUTs alike. What
+    // guards a vector write is the route's P0.2 write-authority gate, not the
+    // chain. (The vector gate lets only the row's writer or the admin store a
+    // vector — tl264-admin-1 was written by the admin key, so admin embeds it.)
+    const before = auditRows().length;
     const res = await request(app).put('/api/mycelium/memory/embeddings/note/tl264-admin-1')
       .set(adminKeyAuth)
       .send({ embedding: [0.1, 0.2, 0.3], model: 'test-model' });
     expect(res.status).toBe(200);
-    const rows = auditRows("action = 'embed' AND source_type = 'note' AND source_id = 'tl264-admin-1'");
-    expect(rows.length).toBe(1);
-    expect(rows[0].actor).toBe('__system__');
-    expect(rows[0].row_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(auditRows("action = 'embed'").length).toBe(0);
+    expect(auditRows().length).toBe(before); // the PUT appended nothing at all
+  });
+
+  test('POST /memory/index/bulk: a byte-identical re-index appends NO audit row (nothing was written)', async () => {
+    // Review A M1: the audit loop follows the rows bulkIndex actually wrote —
+    // an `unchanged` item churned nothing, and an audit log that records
+    // writes which did not happen is wrong in the other direction (the same
+    // rule the auto-index hook applies: nothing written, nothing to audit).
+    const item = { source_type: 'lesson', source_id: 'tl264-bulk-same', content_text: 'byte-identical content', metadata: { actor: 'lucy-tl264', learned_at: '2026-10-05', evidence: 'e' } };
+    const first = await request(app).post('/api/mycelium/memory/index/bulk').set(agentA).send({ items: [item] });
+    expect(first.status).toBe(200);
+    expect(first.body.unchanged).toBe(0);
+    const writeRow = "action = 'write' AND source_type = 'lesson' AND source_id = 'tl264-bulk-same'";
+    expect(auditRows(writeRow).length).toBe(1); // the first write IS audited
+
+    const again = await request(app).post('/api/mycelium/memory/index/bulk').set(agentA).send({ items: [item] });
+    expect(again.status).toBe(200);
+    expect(again.body.unchanged).toBe(1); // bulkIndex wrote nothing
+    expect(auditRows(writeRow).length).toBe(1); // so no second audit row
   });
 });
 
@@ -251,6 +272,24 @@ describe('P1.5 companion memory: audited with the owner, readable by the owner',
     const asForeignAgent = await request(app).get(
       '/api/mycelium/memory/audit?row=preference:tl264-write-1').set(agentB);
     expect(asForeignAgent.status).toBe(403);
+  });
+
+  test('a foreign row and a missing row 403 with the SAME sentence (no owner id in the body)', async () => {
+    // Review A M3: the 403 body must not be an existence + ownership oracle —
+    // one static sentence for both cases, and never the owner's id (for agent
+    // rows that would leak the owner's agent id to any authenticated peer).
+    const w = await request(app).post('/api/mycelium/memory/me/memory')
+      .set('Authorization', 'Bearer ' + ownerAtoken)
+      .send({ text: 'a row only its owner knows exists', source: 'chat', at: '2026-10-05T10:02:00Z', kind: 'aboutYou' });
+    const rowId = w.body.row.id;
+    const foreign = await request(app).get('/api/mycelium/memory/audit?row=companion:' + encodeURIComponent(rowId))
+      .set('Authorization', 'Bearer ' + ownerBtoken);
+    const missing = await request(app).get('/api/mycelium/memory/audit?row=companion:tl264-no-such-row')
+      .set('Authorization', 'Bearer ' + ownerBtoken);
+    expect(foreign.status).toBe(403);
+    expect(missing.status).toBe(403);
+    expect(missing.body.error).toBe(foreign.body.error); // one static sentence
+    expect(foreign.body.error).not.toContain('owner-a'); // no owner id leaks
   });
 });
 
@@ -352,6 +391,45 @@ describe('P1.5 auto-memory: facts create/edit/delete/purge are audited', () => {
   });
 });
 
+// ---- 5b. Review A B1: the decay pass is audited -------------------------------
+
+describe('P1.5 review A B1: the decay pass appends a system:decay edit row per confidence change', () => {
+  test('applyDecay: the audit row count rises by exactly the number of facts changed', async () => {
+    // Decay is a scheduled, default-on confidence REWRITE — confidence is an
+    // audited-content field, and this is the identical operation
+    // runConsolidation audits as a system:consolidation edit row. Two facts
+    // old enough to decay: the audit rows must rise by exactly the number of
+    // facts applyDecay changed — one edit row each, in the same transaction
+    // as the update.
+    const createAutoMemoryDB = (await import('../../server/plugins/auto-memory/db.js')).default;
+    const am = createAutoMemoryDB(db.getDB());
+    const a = await request(app).post('/api/mycelium/auto-memory/facts').set(agentA).send({
+      fact_text: 'decay probe one (will age 400 days)', category: 'general'
+    });
+    const b = await request(app).post('/api/mycelium/auto-memory/facts').set(agentA).send({
+      fact_text: 'decay probe two (will age 400 days)', category: 'decision'
+    });
+    const backdate = db.getDB().prepare(
+      "UPDATE am_facts SET last_accessed_at = datetime('now', '-400 days'), updated_at = datetime('now', '-400 days') WHERE id = ?"
+    );
+    backdate.run(a.body.id);
+    backdate.run(b.body.id);
+
+    const before = auditRows().length;
+    const { applyDecay } = await import('../../server/plugins/auto-memory/decay.js');
+    const changed = applyDecay(am);
+    expect(changed).toBe(2); // both probes decayed, nothing else did
+    expect(auditRows().length - before).toBe(changed); // ONE row per confidence change
+    for (const id of [a.body.id, b.body.id]) {
+      const rows = auditRows("action = 'edit' AND source_type = 'am_fact' AND source_id = ?", [String(id)]);
+      expect(rows.length).toBe(1);
+      expect(rows[0].actor).toBe('system:decay');
+      expect(rows[0].row_owner).toBe('lucy-tl264');
+      expect(rows[0].row_hash).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+});
+
 // ---- 6. append-only at the storage layer ------------------------------------
 
 describe('P1.5 the storage layer is append-only', () => {
@@ -446,7 +524,8 @@ describe('P1.5 the dead safety MCP tools read the audit log', () => {
 describe('P1.5 federation: visit writes and imports are audited', () => {
   // The same harness shape as federation-routes.test.js (two minimal apps with
   // the real plugin routers) — the audit table self-ensures from the lib.
-  let hostApp; let homeApp; let visitor; let grantRes; let bundle; let rawHost; let rawHome;
+  let hostApp; let homeApp; let visitor; let grantRes; let bundle; let bundle2; let rawHost; let rawHome;
+  let transport; let HOST_ID;
 
   const HOST_SEED = crypto.createHash('sha256').update('p15-host').digest('hex');
   const GUEST_SEED = crypto.createHash('sha256').update('p15-guest').digest('hex');
@@ -498,7 +577,7 @@ describe('P1.5 federation: visit writes and imports are audited', () => {
   beforeAll(async () => {
     const { makeVisitor } = await import('../../server/plugins/federation/client.js');
     const { keyFromSeed, idForKey } = await import('../../server/plugins/federation/keys.js');
-    const HOST_ID = idForKey(keyFromSeed(HOST_SEED));
+    HOST_ID = idForKey(keyFromSeed(HOST_SEED));
     const made1 = await makeFedApp(); const made2 = await makeFedApp();
     hostApp = made1.app; rawHost = made1.raw;
     homeApp = made2.app; rawHome = made2.raw;
@@ -520,7 +599,7 @@ describe('P1.5 federation: visit writes and imports are audited', () => {
       homeSeed: GUEST_SEED, agentSeed: crypto.createHash('sha256').update('p15-agent').digest('hex'),
       homeName: 'p15-home', agentName: 'P15 Visitor'
     });
-    const transport = {
+    transport = {
       async post(path, body, headers) {
         const req = request(hostApp).post(path);
         for (const [k, v] of Object.entries(headers || {})) req.set(k, v);
@@ -567,5 +646,79 @@ describe('P1.5 federation: visit writes and imports are audited', () => {
       expect(r.row_owner).toBe('22');
       expect(r.row_hash).toMatch(/^[0-9a-f]{64}$/);
     }
+  });
+
+  test('review A M2: a visit write whose audit fails rolls the WRITE back (one transaction)', async () => {
+    // The first souvenir ENDS its visit (issued_at pins to ended_at), so each
+    // phase mints its own visit. Visit #2 stays intact: one audited write,
+    // whose souvenir (bundle2) feeds the import test below. Then visit #3 is
+    // the rollback probe: no audit table → every append throws (fail-loud) —
+    // and the visit write must roll back WITH the audit row it owes: a crash
+    // between the two statements must never leave a FOREIGN memory write
+    // with no row.
+    const grant2 = await request(hostApp).post('/federation/grant')
+      .set('Authorization', 'Bearer ' + hostApp.tokenHost)
+      .send({ agent_passport: visitor.agentPassport });
+    expect(grant2.status).toBe(201);
+    const dance2 = await visitor.writeMemory(transport, grant2.body.visit_id, HOST_ID, {
+      kind: 'aboutYou', key: 'p15.visit.rollback', text: 'rollback probe — visit write',
+      source: 'visit', at: '2026-10-05T10:05:00Z', supersedes: null
+    });
+    expect([200, 201]).toContain(dance2.status);
+    const souv2 = await visitor.requestSouvenir(transport, grant2.body.visit_id);
+    expect(souv2.status).toBe(200);
+    bundle2 = souv2.body.bundle;
+    expect(bundle2.rows.length).toBe(1);
+
+    const grant3 = await request(hostApp).post('/federation/grant')
+      .set('Authorization', 'Bearer ' + hostApp.tokenHost)
+      .send({ agent_passport: visitor.agentPassport });
+    expect(grant3.status).toBe(201);
+    rawHost.exec('DROP TABLE memory_audit');
+    const probe = 'rollback probe — must not persist';
+    const dance3 = await visitor.writeMemory(transport, grant3.body.visit_id, HOST_ID, {
+      kind: 'aboutYou', key: 'p15.visit.doomed', text: probe,
+      source: 'visit', at: '2026-10-05T10:06:00Z', supersedes: null
+    });
+    expect(dance3.status).toBe(500); // the audit throw propagates — fail-loud
+    const left = rawHost.prepare(
+      "SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND content_text = ?"
+    ).get(probe);
+    expect(left.c).toBe(0); // the write rolled back WITH its audit row
+  });
+
+  test('review A M2: an import whose audit fails rolls the new ROWS back (one transaction)', async () => {
+    rawHome.exec('DROP TABLE memory_audit');
+    // bundle2 carries the M2b visit row — new to the home. Its insert and its
+    // audit row are one transaction: the throw must roll the insert back.
+    const imp = await request(homeApp).post('/federation/import')
+      .set('Authorization', 'Bearer ' + homeApp.tokenHome)
+      .send({ bundle: bundle2 });
+    expect(imp.status).toBe(500); // the audit throw propagates — fail-loud
+    const left = rawHome.prepare(
+      "SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND content_text = ?"
+    ).get('rollback probe — visit write');
+    expect(left.c).toBe(0); // the imported row rolled back WITH its audit row
+  });
+});
+
+// ---- 9. Review A M2: /index/bulk writes and audits in ONE transaction --------
+
+describe('P1.5 review A M2: /index/bulk write+audit is ONE transaction', () => {
+  test('a bulk index whose audit fails rolls the WRITES back', async () => {
+    // No audit table → every append throws (fail-loud). The bulk route's
+    // writes must roll back WITH the audit rows they owe — an audited-content
+    // write with no row is the one failure the module docstring says it may
+    // never have. Runs LAST in this file: dropping the table breaks every
+    // later append by design.
+    db.getDB().exec('DROP TABLE memory_audit');
+    const res = await request(app).post('/api/mycelium/memory/index/bulk').set(agentA).send({
+      items: [{ source_type: 'lesson', source_id: 'tl264-bulk-rollback', content_text: 'must roll back', metadata: { actor: 'lucy-tl264', learned_at: '2026-10-05', evidence: 'e' } }]
+    });
+    expect(res.status).toBe(500); // the audit throw propagates — fail-loud
+    const left = db.getDB().prepare(
+      "SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'lesson' AND source_id = 'tl264-bulk-rollback'"
+    ).get();
+    expect(left.c).toBe(0); // the write rolled back WITH its audit row
   });
 });

@@ -1,7 +1,7 @@
 // Auto-Memory plugin routes
 
 import { Router } from 'express';
-import createAutoMemoryDB from './db.js';
+import createAutoMemoryDB, { factState } from './db.js';
 import { callLLM } from './llm.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
@@ -9,24 +9,9 @@ import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 // ---- TRUST LAYER P1.5: the fact audit helpers (module level — extractFacts
 // and runConsolidation are module exports and audit their own writes) --------
-// The canonical state of one am_facts row — what every row_hash hashes.
-function factState(fact) {
-  return {
-    kind: 'am_fact',
-    fact_text: fact.fact_text,
-    agent_id: fact.agent_id || null,
-    category: fact.category || null,
-    project_id: fact.project_id || null,
-    confidence: fact.confidence,
-    source_type: fact.source_type || null,
-    source_authority: fact.source_authority || null,
-    valid_from: fact.valid_from || null,
-    valid_to: fact.valid_to || null,
-    verified_at: fact.verified_at || null,
-    superseded_by: fact.superseded_by || null,
-    namespace: fact.namespace || null
-  };
-}
+// factState (the canonical audited state of one am_facts row) lives in db.js
+// and is imported above — every writer of an audited fact field hashes the
+// same bytes, the decay pass included (review A B1).
 
 // The extraction/consolidation paths run outside the plugin factory (handlers
 // call them with their own wrapper), so they share one audit instance PER RAW
