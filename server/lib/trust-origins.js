@@ -69,9 +69,12 @@ export function validateDerivedRefs(refs) {
 
 // One ref → the STORED trust of that row (0 when the row does not exist —
 // unknown inputs contribute the lowest trust, fail-closed). sm refs resolve
-// against the shared sm_embeddings (all chunks share a stamp; MAX is that
-// stamp); am refs against am_facts, which may not exist on deployments
-// without auto-memory — absence reads as 0, not an error.
+// at the MIN across the doc's chunks: one doc's chunks can diverge (the
+// upsert preserves stamps only across content-unchanged rewrites — review B
+// of PR #201, B-1), and a derived row takes each input at its WEAKEST chunk —
+// the same law as across inputs. am refs resolve against am_facts, which may
+// not exist on deployments without auto-memory — absence reads as 0, not an
+// error.
 export function resolveInputTrust(coreDb, ref) {
   try {
     if (ref.indexOf('sm:') === 0) {
@@ -80,7 +83,7 @@ export function resolveInputTrust(coreDb, ref) {
       var sourceType = rest.slice(0, sep);
       var sourceId = rest.slice(sep + 1);
       var row = coreDb.prepare(
-        'SELECT MAX(COALESCE(trust, 0)) AS t FROM sm_embeddings WHERE source_type = ? AND source_id = ?'
+        'SELECT MIN(COALESCE(trust, 0)) AS t FROM sm_embeddings WHERE source_type = ? AND source_id = ?'
       ).get(sourceType, sourceId);
       return (row && row.t != null) ? row.t : 0;
     }

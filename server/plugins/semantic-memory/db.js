@@ -458,14 +458,19 @@ export default function createMemoryDB(db, opts) {
             ? 'excluded.written_by'
             : 'CASE WHEN sm_embeddings.written_by IS NULL\n            THEN excluded.written_by ELSE sm_embeddings.written_by END'},
           -- TRUST LAYER P1.1: origin/trust/derived_from take the new write's
-          -- values when it states them; an internal re-index that omits them
-          -- (the lesson-supersede flip, a metadata-only touch) PRESERVES the
-          -- row's stamps — a rewrite must never launder a row to unknown.
-          origin = CASE WHEN excluded.origin IS NULL
+          -- values when it states them. A write that OMITS them preserves the
+          -- row's stamps ONLY while the content is unchanged (a metadata-only
+          -- touch, an embedding backfill). A content REWRITE that omits them
+          -- drops the row to unknown: unknown reads as the LOWEST trust — the
+          -- fail-closed outcome — while keeping the stamp would let new
+          -- content inherit trust it never earned (review B of PR #201, B-1).
+          -- The lesson-supersede flip restates its stamps explicitly, so it
+          -- passes through the ELSE branch with its own values.
+          origin = CASE WHEN excluded.origin IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.origin ELSE excluded.origin END,
-          trust = CASE WHEN excluded.trust IS NULL
+          trust = CASE WHEN excluded.trust IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.trust ELSE excluded.trust END,
-          derived_from = CASE WHEN excluded.derived_from IS NULL
+          derived_from = CASE WHEN excluded.derived_from IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.derived_from ELSE excluded.derived_from END,
           embedding = CASE WHEN excluded.embedding IS NULL AND sm_embeddings.content_text = excluded.content_text
             THEN sm_embeddings.embedding ELSE excluded.embedding END,
