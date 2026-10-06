@@ -262,6 +262,46 @@ export function episodeRow(bundle) {
 }
 
 // ---------------------------------------------------------------------------
+// §2.75 Revoke (TRUST LAYER P1.4) — the owner of federated rows instructs
+// every holder to forget them. A souvenir you forget at home is forgotten
+// where it went: the message names protocol row ids, signs with the SAME
+// agent key that signed the rows, and a holder that verifies it deletes its
+// copies (never keeps them, never re-imports them). Self-signed like a row —
+// the statement stands alone in a holder's tombstones — and carried in an
+// agent-signed envelope at the transport layer, the same as every message.
+// `reason` is optional free text for the holder's audit trail.
+
+export function makeRevoke(agentKey, agentId, homeNetwork, rowIds, fields) {
+  fields = fields || {};
+  var revoke = {
+    type: 'revoke-v0',
+    agent_id: agentId,
+    home_network: homeNetwork,
+    row_ids: rowIds,
+    reason: fields.reason || null,
+    issued_at: fields.issued_at
+  };
+  revoke.sig = sign(agentKey, revoke);
+  return revoke;
+}
+
+// Verify one revoke in isolation: shape, then the signature over the full
+// body minus sig. A tampered row_ids list (one added id, one swapped id)
+// fails revoke-sig — the signature is the only thing that makes the list
+// the author's.
+export function verifyRevoke(revoke) {
+  if (!revoke || revoke.type !== 'revoke-v0') return fail('revoke-type');
+  if (!isStr(revoke.agent_id) || !isStr(revoke.home_network) || !isStr(revoke.issued_at)) return fail('revoke-shape');
+  if (!isStrArray(revoke.row_ids) || revoke.row_ids.length === 0) return fail('revoke-rows');
+  if (revoke.reason !== null && !isStr(revoke.reason)) return fail('revoke-reason');
+  if (!isStr(revoke.sig)) return fail('revoke-sig');
+  var body = Object.assign({}, revoke, { sig: undefined });
+  delete body.sig;
+  if (!verify(revoke.agent_id, revoke.sig, body)) return fail('revoke-sig');
+  return ok({ agent_id: revoke.agent_id, row_ids: revoke.row_ids });
+}
+
+// ---------------------------------------------------------------------------
 // §2.7 Import adjudication — pure: given a VERIFIED bundle and the live home
 // rows (shape {id, kind, key, superseded_by, candidate}), decide per-row
 // outcomes without touching a store.

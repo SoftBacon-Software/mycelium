@@ -125,8 +125,11 @@ export default function (core) {
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
-    var indexRemoved = db.deleteFact(fact.id);
-    res.json({ ok: true, index_removed: indexRemoved });
+    // TRUST LAYER P1.4: the forget cascade — the named fact, every row derived
+    // from it, their index rows, and tombstones on all of it. `who` is the
+    // authenticated actor that goes on the record.
+    var result = db.deleteFact(fact.id, { by: String(who), reason: 'forget' });
+    res.json({ ok: true, index_removed: result.index_removed, deleted: result.deleted, cascaded: result.cascaded });
   });
 
   // DELETE /auto-memory/facts?namespace=<ns> — purge a whole namespace (admin)
@@ -153,7 +156,7 @@ export default function (core) {
         'rows with no namespace (legacy rows, Aria\'s internal writer) are unreachable from this route by design, ' +
         'so an unscoped call refuses rather than guess');
     }
-    var result = db.deleteFactsByNamespace(ns);
+    var result = db.deleteFactsByNamespace(ns, { by: String(who), reason: 'purge' });
     res.json({ deleted: result.deleted, namespaces: [ns] });
   });
 
@@ -520,7 +523,11 @@ function clampModelConfidence(raw) {
 // lose knowledge — TRUNCATE instead, and say so on the created[] echo.
 var FACT_TEXT_CAP = 2000;
 
-export async function extractFacts(db, config, text, agentId, projectId) {
+// `sourceRef` (TRUST LAYER P1.4, optional): '<store>:<id>' naming the entity
+// this text came from ('task:41') when the caller knows it — recorded as the
+// facts' derived_from so deleting that entity later cascades to them. Callers
+// that don't know the entity omit it; the column stays NULL (no invention).
+export async function extractFacts(db, config, text, agentId, projectId, sourceRef) {
   if (!text || text.length < 20) return [];
 
   var prompt = EXTRACTION_PROMPT.replace('{content}', text.substring(0, 4000));
@@ -567,7 +574,8 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         category,
         factText,
         confidence,
-        'extraction', null
+        'extraction', null, 'inferred', null, null, null,
+        sourceRef ? JSON.stringify([String(sourceRef)]) : null
       );
 
       // Index in semantic memory if available — and SURFACE the outcome (§F4
@@ -826,7 +834,17 @@ export async function runConsolidation(db, config, _core, opts) {
     return 'ID:' + f.id + ' [' + f.category + '] (confidence:' + f.confidence + ') ' + f.fact_text;
   }).join('\n');
 
-  var prompt = CONSOLIDATION_PROMPT.replace('{facts}', factsText.substring(0, 6000));
+  // TRUST LAYER P1.4: the minimal provenance link — the ids the LLM ACTUALLY
+  // saw. The prompt is truncated at 6000 chars; a fact whose 'ID:<id>' marker
+  // was cut off is not an input of whatever the model answers and must not be
+  // named in an insight's derived_from (the forget cascade walks that column,
+  // so an over-claim there deletes rows that were never derived).
+  var promptSlice = factsText.substring(0, 6000);
+  var promptSeenIds = recentFacts
+    .filter(function (f) { return promptSlice.indexOf('ID:' + f.id + ' [') !== -1; })
+    .map(function (f) { return 'am_fact:' + f.id; });
+
+  var prompt = CONSOLIDATION_PROMPT.replace('{facts}', promptSlice);
 
   try {
     var response = await callLLM(config, prompt);
@@ -873,11 +891,29 @@ export async function runConsolidation(db, config, _core, opts) {
       }
     }
 
-    // Add new insights
+    // Add new insights. TRUST LAYER P1.4: each insight records the input ids
+    // it was derived from (the prompt-seen set), so forgetting any of them
+    // later takes the insight with it — a forgotten fact is not recalled
+    // through its summary.
     if (Array.isArray(result.insights)) {
       for (var insight of result.insights) {
         if (insight.fact_text && insight.fact_text.length >= 10) {
-          db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
+          var insCategory = insight.category || 'insight';
+          var insConfidence = insight.confidence || 0.7;
+          var insId = db.createFact(null, null, insCategory, insight.fact_text, insConfidence, 'consolidation', null, 'inferred', null, null, null, JSON.stringify(promptSeenIds));
+          // The summary is a memory row: index it through the same seam
+          // extraction uses, or it is written-but-not-retrievable (§F4) —
+          // before this slice a consolidation insight NEVER reached
+          // sm_embeddings, so no summary was ever searchable at all.
+          var insIndex;
+          try {
+            insIndex = indexFactInMemory(db, insId, { fact_text: insight.fact_text, category: insCategory, confidence: insConfidence }, null, null);
+          } catch (idxErr) {
+            insIndex = { indexed: false, reason: idxErr.message };
+          }
+          if (!insIndex.indexed) {
+            console.error('[auto-memory] consolidation insight ' + insId + ' is NOT searchable: ' + (insIndex.reason || 'unknown reason'));
+          }
         }
       }
     }

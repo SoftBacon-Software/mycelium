@@ -28,6 +28,7 @@
 
 import crypto from 'crypto';
 import companionView from '../semantic-memory/companion-view.js';
+import { forgetDocRaw } from '../semantic-memory/db.js';
 
 export default function createFederationStore(db) {
   // The migration this plugin owns (task 247 §2): provenance columns on the
@@ -203,6 +204,32 @@ export default function createFederationStore(db) {
 
     // Insert one federated row (visited or imported). Idempotent per owner by
     // protocol id: returns { inserted: false, row } when the row already exists.
+    // TRUST LAYER P1.4: the resurrection guard — a row id the AUTHOR has
+    // revoked is refused at the door, whatever transport replays it: a visit
+    // write and a souvenir import are the two doors in, and both come through
+    // here. Two tombstone shapes fire the guard, because revocation is of the
+    // CONTENT, not of one holder's copy:
+    //   source_id = <storage id>  — this holder deleted its copy (the handler
+    //                               tombstones what it actually removed);
+    //   source_id = <protocol id> — the standing ban the revoke handler writes
+    //                               so a copy under an owner that never held it
+    //                               (a fresh import) is refused too. Storage
+    //                               ids and protocol ids are both sha256 hex
+    //                               of distinct domains — a cross-hit would be
+    //                               a hash collision, and both shapes mean the
+    //                               same thing anyway: this content id is dead
+    //                               here.
+    // The caller sees { inserted: false, revoked: true } and answers honestly.
+    // Has the author revoked this content id as far as THIS owner's door is
+    // concerned? The guard insertFedRow enforces — and the import replay path
+    // reads, so a 'replayed' verdict is never given to a dead row.
+    revokedForOwner(ownerId, protocolId) {
+      var tomb = db.prepare(
+        'SELECT id FROM sm_tombstones WHERE source_type = ? AND source_id IN (?, ?) LIMIT 1'
+      ).get('companion', this.fedRowId(ownerId, protocolId), protocolId);
+      return !!tomb;
+    },
+
     insertFedRow(ownerId, row, opts) {
       var meta = {
         owner: ownerId,
@@ -214,6 +241,7 @@ export default function createFederationStore(db) {
       if (row.key) meta.key = row.key;
       if (row.supersedes) meta.supersedes = row.supersedes;
       if (opts && opts.candidate) meta.candidate = true;
+      if (this.revokedForOwner(ownerId, row.id)) return { inserted: false, revoked: true, row: null };
       var storageId = this.fedRowId(ownerId, row.id);
       var existing = db.prepare(
         "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0"
@@ -255,6 +283,47 @@ export default function createFederationStore(db) {
         visit: row.fed_visit || null,
         sig: row.fed_sig || null
       };
+    },
+
+    // ---- revocation (TRUST LAYER P1.4) ----------------------------------------
+
+    // The storage ids this instance holds for one protocol row id, across
+    // every owner (the author owns the content; a holder keeps no claim to
+    // it). Empty when nothing here carries it.
+    storageIdsForProtocolIds(agentId, protocolIds) {
+      var out = [];
+      for (var i = 0; i < protocolIds.length; i++) {
+        var rows = db.prepare(
+          "SELECT source_id, namespace FROM sm_embeddings WHERE source_type = 'companion' AND fed_agent = ? AND json_extract(metadata, '$.fed_id') = ?"
+        ).all(agentId, protocolIds[i]);
+        for (var r of rows) out.push({ storage_id: r.source_id, namespace: r.namespace, protocol_id: protocolIds[i] });
+      }
+      return out;
+    },
+
+    // The holder-side of a verifyRevoke'd message: delete every copy this
+    // instance holds — ANY owner's (the author owns the content; a holder
+    // keeps no claim to it) — tombstone each, and write the standing ban on
+    // the protocol id itself so a copy an owner that never held it tries to
+    // bring in later (souvenir import, replayed visit write) is refused by
+    // insertFedRow's resurrection guard. One transaction; per-row bookkeeping
+    // comes back as { revoked: copies deleted, unknown: ids nothing here held }.
+    revokeRows(agentId, protocolIds) {
+      var self = this;
+      var revoked = 0;
+      var unknown = [];
+      var txn = db.transaction(function () {
+        for (var i = 0; i < protocolIds.length; i++) {
+          var copies = self.storageIdsForProtocolIds(agentId, [protocolIds[i]]);
+          for (var c of copies) {
+            revoked += forgetDocRaw(db, 'companion', c.storage_id, { by: agentId, reason: 'federation-revoke' });
+          }
+          if (copies.length === 0) unknown.push(protocolIds[i]);
+          forgetDocRaw(db, 'companion', protocolIds[i], { by: agentId, reason: 'federation-revoke' });
+        }
+      });
+      txn();
+      return { revoked: revoked, unknown: unknown };
     },
 
     // ---- imports --------------------------------------------------------------

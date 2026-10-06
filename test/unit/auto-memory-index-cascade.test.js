@@ -63,7 +63,10 @@ describe('auto-memory removes facts from the search index (bug #20)', () => {
 
     expect(am.getFact(id)).toBeFalsy();
     expect(indexedRows(db, id)).toBe(0);
-    expect(removed).toBe(1); // reported honestly, so the route can surface it
+    // P1.4: deleteFact routes through forgetFacts and reports the whole
+    // cascade honestly — the row, any derived rows that followed it, and the
+    // index chunks — so the route can surface all three.
+    expect(removed).toEqual({ deleted: 1, cascaded: 0, index_removed: 1 });
   });
 
   it('deleteFact removes EVERY chunk of a chunk-split fact', () => {
@@ -73,7 +76,7 @@ describe('auto-memory removes facts from the search index (bug #20)', () => {
     indexFact(db, id, 'chunk two', 2);
     expect(indexedRows(db, id)).toBe(3);
 
-    expect(am.deleteFact(id)).toBe(3);
+    expect(am.deleteFact(id).index_removed).toBe(3);
     expect(indexedRows(db, id)).toBe(0);
   });
 
@@ -167,6 +170,7 @@ describe('auto-memory removes facts from the search index (bug #20)', () => {
 
     expect(function () { bareAm.deleteFact(id); }).not.toThrow();
     expect(bareAm.getFact(id)).toBeFalsy();
-    expect(bareAm.deleteFact(id)).toBe(0); // nothing to unindex, reported as 0
+    // nothing to unindex, reported as all-zero (P1.4 shape)
+    expect(bareAm.deleteFact(id)).toEqual({ deleted: 0, cascaded: 0, index_removed: 0 });
   });
 });

@@ -76,8 +76,11 @@ export function registerHooks(core) {
       var config = getConfig();
       if (config.llm_provider === 'none' || !config.llm_provider) return;
 
-      // Fire-and-forget async extraction
-      extractFacts(db, config, text, eventData.agent, data.project_id || eventData.project_id).catch(function (e) {
+      // Fire-and-forget async extraction. TRUST LAYER P1.4: the task id rides
+      // along as the facts' derived_from, so deleting the task later cascades
+      // to the facts extracted from it.
+      var sourceRef = (data.task_id != null) ? 'task:' + data.task_id : null;
+      extractFacts(db, config, text, eventData.agent, data.project_id || eventData.project_id, sourceRef).catch(function (e) {
         console.error('[auto-memory] Observer extraction failed:', e.message);
         try { db.logExtractionError(eventData.agent, data.project_id || eventData.project_id, 'task_completed', e.message, text.substring(0, 500)); } catch (_) {}
       });
@@ -127,6 +130,65 @@ export function registerHooks(core) {
     } catch (e) {
       console.error('[auto-memory] context_key_updated hook error:', e.message);
     }
+  });
+
+  // ---- TRUST LAYER P1.4: SOURCE CASCADE (the fact-store half) ----------------
+  // Deleting a source entity deletes the memory rows that came from it. The
+  // semantic-memory plugin's own listeners forget the auto-indexed rows; this
+  // half forgets the FACTS extracted from the entity (their derived_from
+  // names it) — and the forget cascade walks derived_from transitively, so
+  // summaries built on those facts fall too. Parallel listener, raw SQL via
+  // the shared db — no cross-plugin import (the DAG rule); the deleted_by is
+  // the AUTHENTICATED actor the core route put on the event.
+  function forgetByRef(ref, by) {
+    try {
+      var res = db.forgetFacts([ref], { by: by || null, reason: 'source-deleted' });
+      if (res.deleted > 0) console.log('[auto-memory] source cascade ' + ref + ': ' + res.deleted + ' fact(s) forgotten (' + res.cascaded + ' derived)');
+    } catch (e) {
+      console.error('[auto-memory] source cascade ' + ref + ' failed:', e.message);
+    }
+  }
+
+  core.onEvent('task_deleted', function (eventData) {
+    try {
+      var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
+      if (data.task_id == null) return;
+      forgetByRef('task:' + data.task_id, data.deleted_by);
+    } catch (e) { console.error('[auto-memory] task_deleted hook error:', e.message); }
+  });
+
+  core.onEvent('concept_deleted', function (eventData) {
+    try {
+      var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
+      if (data.concept_id == null) return;
+      forgetByRef('concept:' + data.concept_id, data.deleted_by);
+    } catch (e) { console.error('[auto-memory] concept_deleted hook error:', e.message); }
+  });
+
+  core.onEvent('plan_deleted', function (eventData) {
+    try {
+      var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
+      if (data.plan_id == null) return;
+      forgetByRef('plan:' + data.plan_id, data.deleted_by);
+    } catch (e) { console.error('[auto-memory] plan_deleted hook error:', e.message); }
+  });
+
+  core.onEvent('context_key_deleted', function (eventData) {
+    try {
+      var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
+      if (!data.namespace || !data.key) return;
+      forgetByRef('context_key:' + data.namespace + ':' + data.key, data.deleted_by);
+    } catch (e) { console.error('[auto-memory] context_key_deleted hook error:', e.message); }
+  });
+
+  core.onEvent('context_keys_bulk_delete', function (eventData) {
+    try {
+      var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
+      var keys = Array.isArray(data.keys) ? data.keys : [];
+      for (var k of keys) {
+        if (k && k.namespace && k.key) forgetByRef('context_key:' + k.namespace + ':' + k.key, data.deleted_by);
+      }
+    } catch (e) { console.error('[auto-memory] context_keys_bulk_delete hook error:', e.message); }
   });
 
   // Reflector: periodic consolidation timer

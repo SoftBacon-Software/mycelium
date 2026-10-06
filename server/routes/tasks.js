@@ -315,12 +315,18 @@ export function registerTaskRoutes(router, deps) {
   }));
 
   router.delete('/tasks/:id', asyncHandler(function (req, res) {
-    if (!checkAdmin(req, res)) return;
+    var who = checkAdmin(req, res);
+    if (!who) return;
     var id = parseIntParam(req.params.id);
     var task = getTask(id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     deleteTask(id);
-    emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title);
+    // TRUST LAYER P1.4: the data payload carries the id and the AUTHENTICATED
+    // deleter — the deletion-cascade listeners (semantic-memory's auto-indexed
+    // row, auto-memory's extracted facts) key off it, and the tombstones they
+    // write record who the platform authenticated, not a body claim.
+    emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title,
+      { task_id: id, deleted_by: String(who) });
     res.json({ ok: true, id: id });
   }));
 

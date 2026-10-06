@@ -62,6 +62,25 @@ CREATE TRIGGER IF NOT EXISTS sm_fts_update AFTER UPDATE OF content_text ON sm_em
   VALUES (new.id, new.content_text, new.source_type, new.namespace);
 END;
 
+-- TRUST LAYER P1.4 (F-mycelium/267): deletion that propagates. Every true
+-- delete of an index row leaves a tombstone — the row's identity, when it
+-- died, the AUTHENTICATED actor that deleted it, and why. Deliberately NO
+-- content column: a tombstone remembers THAT a row died, never WHAT it said
+-- (the whole row is checked for content in trust-layer-p1-4-deletion.test.js).
+-- Two jobs: the deletion record the audit reads, and the resurrection guard
+-- the federation import door consults (a row forgotten here is refused at
+-- the border, so a replayed souvenir cannot raise it). Append-only: a row
+-- deleted, legitimately re-indexed and deleted again gets a second row.
+CREATE TABLE IF NOT EXISTS sm_tombstones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  deleted_at TEXT DEFAULT (datetime('now')),
+  deleted_by TEXT,                    -- authenticated actor (agent id / admin display); NULL = internal writer
+  reason TEXT NOT NULL DEFAULT 'delete'
+);
+CREATE INDEX IF NOT EXISTS idx_sm_tombstones_row ON sm_tombstones(source_type, source_id);
+
 -- Embedding provider config
 CREATE TABLE IF NOT EXISTS sm_config (
   key TEXT PRIMARY KEY,

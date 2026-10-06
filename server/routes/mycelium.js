@@ -819,7 +819,11 @@ function notifyOperators(alertTitle, alertBodyHtml, actionUrl) {
 function checkApprovalGate(req, who, actionType) {
   // Admin/studio users and system bypass gates
   if (who === '__admin__' || who === '__system__' || !who || req._authIsAdmin) return { ok: true };
-  var approvalId = req.body.approval_id || req.query.approval_id;
+  // TRUST LAYER P1.4 (found by the source-cascade test): a bodyless DELETE
+  // (no Content-Type → express.json leaves req.body undefined) crashed this
+  // gate with a TypeError → 500, on every gated route it guards.
+  var body = req.body || {};
+  var approvalId = body.approval_id || req.query.approval_id;
   if (!approvalId) {
     return { ok: false, soft: true, warning: 'This action (' + actionType + ') should use the approval system. Call mycelium_request_approval first.' };
   }

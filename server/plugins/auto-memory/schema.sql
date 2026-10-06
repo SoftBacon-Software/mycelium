@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS am_facts (
   valid_to TEXT,                                      -- world-time it stopped (NULL = currently valid)
   verified_at TEXT,                                   -- last ground-truth re-check
   source_authority TEXT NOT NULL DEFAULT 'inferred',  -- how-validated: verified | directive | inferred
+  -- TRUST LAYER P1.4 (F-mycelium/267): the minimal provenance link the
+  -- derived writers already know — the input ids, as JSON array of
+  -- '<store>:<id>' strings. Consolidation insights carry the input fact ids
+  -- they were derived from ('am_fact:<id>'); extraction carries the source
+  -- entity when the observer knows it ('task:<id>', 'context_key:<ns>:<key>').
+  -- NULL = no known derivation. The forget cascade walks this column: a
+  -- forgotten fact falls through every row derived from it. Added here for
+  -- fresh DBs; the guarded ALTER in db.js adds it to existing ones.
+  derived_from TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -27,6 +36,20 @@ CREATE INDEX IF NOT EXISTS idx_am_facts_confidence ON am_facts(confidence DESC);
 -- AFTER the ALTER TABLE ADD COLUMN calls. They must NOT live here: on an existing DB, the
 -- CREATE TABLE above is a no-op, so a CREATE INDEX on a not-yet-added column would throw and
 -- fail the whole plugin load (caught live 2026-07-22).
+
+-- TRUST LAYER P1.4 (F-mycelium/267): the fact-store half of the tombstone
+-- law — the mirror of semantic-memory's sm_tombstones. Every true delete of
+-- a fact (forget, cascade, namespace purge, and the housekeeping prunes)
+-- leaves one: the fact's id, when, the authenticated actor (NULL = internal
+-- writer), why. NO content column, ever. Append-only.
+CREATE TABLE IF NOT EXISTS am_tombstones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fact_id INTEGER NOT NULL,
+  deleted_at TEXT DEFAULT (datetime('now')),
+  deleted_by TEXT,
+  reason TEXT NOT NULL DEFAULT 'delete'
+);
+CREATE INDEX IF NOT EXISTS idx_am_tombstones_fact ON am_tombstones(fact_id);
 
 -- Consolidation log
 CREATE TABLE IF NOT EXISTS am_consolidation_log (

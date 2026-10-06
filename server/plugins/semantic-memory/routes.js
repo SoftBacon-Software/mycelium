@@ -496,7 +496,9 @@ export default function (core) {
     if (!who) return;
     if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
     if (refuseNotRowOwner(res, req.params.sourceType, req.params.sourceId, who, req._authIsAdmin, 'delete')) return;
-    db.remove(req.params.sourceType, req.params.sourceId);
+    // TRUST LAYER P1.4: the tombstone records the AUTHENTICATED actor, never
+    // a body claim — `who` is what checkMemoryAgent resolved from the key.
+    db.remove(req.params.sourceType, req.params.sourceId, { by: String(who), reason: 'delete' });
     res.json({ ok: true });
   });
 
@@ -529,7 +531,9 @@ export default function (core) {
     if (!sourceType && !namespace) {
       return apiError(res, 400, 'refusing unfiltered purge — pass source_type and/or namespace');
     }
-    var deleted = db.purge({ source_type: sourceType, namespace: namespace });
+    // TRUST LAYER P1.4: housekeeping is deletes (#193) — every row this purge
+    // takes is tombstoned with the admin actor on the record.
+    var deleted = db.purge({ source_type: sourceType, namespace: namespace }, { by: getAdminDisplayName(req), reason: 'purge' });
     console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
       (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
@@ -865,7 +869,9 @@ export default function (core) {
     // leaves the corrected fact AND its correction both recallable.
     var forgetAll = core.db.transaction(function () {
       db.companionClearSupersededBy(id);
-      db.remove(COMPANION_SOURCE_TYPE, id);
+      // TRUST LAYER P1.4: the tombstone records the owner scope (derived from
+      // the verified token — never a body field) as the actor.
+      db.remove(COMPANION_SOURCE_TYPE, id, { by: companionNamespace(user.userId), reason: 'forget' });
     });
     forgetAll();
     res.json({ ok: true, forgotten: id });

@@ -83,7 +83,10 @@ export function registerConceptRoutes(router, deps) {
     var concept = getConcept(parseIntParam(req.params.id));
     if (!concept) return res.status(404).json({ error: 'Concept not found' });
     deleteConcept(concept.id);
-    emitEvent('concept_deleted', who, null, who + ' deleted concept: ' + concept.name);
+    // TRUST LAYER P1.4: the payload carries the id + authenticated deleter —
+    // the deletion-cascade listeners key off it (the old payload had neither).
+    emitEvent('concept_deleted', who, null, who + ' deleted concept: ' + concept.name,
+      { concept_id: concept.id, deleted_by: String(who) });
     var result = { ok: true };
     if (gate.warning) result.approval_warning = gate.warning;
     res.json(result);

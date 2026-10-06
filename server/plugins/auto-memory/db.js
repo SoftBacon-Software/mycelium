@@ -38,6 +38,27 @@ export default function createAutoMemoryDB(db) {
   // column-dependent-migration rule the namespace note above states.
   try { db.exec('ALTER TABLE am_facts ADD COLUMN claimed_agent_id TEXT'); } catch (e) { /* already exists */ }
 
+  // TRUST LAYER P1.4 (F-mycelium/267): the minimal provenance link — the
+  // input ids the derived writers already know, as a JSON array of
+  // '<store>:<id>' strings (consolidation: 'am_fact:<id>'; extraction: the
+  // source entity, 'task:<id>' / 'context_key:<ns>:<key>'). NULL = no known
+  // derivation. Declared in schema.sql for fresh DBs; this ALTER reaches the
+  // existing ones (same column-dependent-migration rule as namespace above).
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN derived_from TEXT'); } catch (e) { /* already exists */ }
+
+  // The tombstone store (P1.4): every true delete of a fact leaves one — id,
+  // when, authenticated actor, why — never the content. Declared in
+  // schema.sql for fresh DBs; CREATE TABLE IF NOT EXISTS is idempotent on
+  // existing ones (a new TABLE has no column-order hazard, unlike the ALTERs).
+  db.exec("CREATE TABLE IF NOT EXISTS am_tombstones (\n" +
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
+    "  fact_id INTEGER NOT NULL,\n" +
+    "  deleted_at TEXT DEFAULT (datetime('now')),\n" +
+    "  deleted_by TEXT,\n" +
+    "  reason TEXT NOT NULL DEFAULT 'delete'\n" +
+    ")");
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_tombstones_fact ON am_tombstones(fact_id)'); } catch (e) { /* */ }
+
   // The inverse of indexFactInMemory() in routes.js. Every path that stops a fact
   // being CURRENT must also stop it being SEARCHABLE — otherwise a retracted or
   // superseded fact keeps ranking in /memory/search as though it were live, with
@@ -53,7 +74,8 @@ export default function createAutoMemoryDB(db) {
   // deleteBySource (db.js:151). Returns rows removed; 0 when sm_embeddings does
   // not exist, i.e. the semantic-memory plugin is not loaded — that is a normal
   // deployment, not an error, which is why it is caught rather than surfaced.
-  function unindexFacts(ids) {
+  function unindexFacts(ids, opts) {
+    opts = opts || {};
     if (!ids || !ids.length) return 0;
     try {
       // Both fact index shapes: legacy rows index under 'memory' (indexFactInMemory),
@@ -64,7 +86,22 @@ export default function createAutoMemoryDB(db) {
       var removedIds = [];
       for (var id of ids) {
         var changes = stmt.run(String(id)).changes;
-        if (changes > 0) { removed += changes; removedIds.push(String(id)); }
+        if (changes > 0) {
+          removed += changes;
+          removedIds.push(String(id));
+          // TRUST LAYER P1.4: a true delete of index rows leaves the
+          // index-store half of the tombstone law — id, when, actor, why,
+          // never the content. Only for ids that HAD rows (a tombstone
+          // records something that was actually removed); fault-tolerant on
+          // its own so an absent sm_tombstones table can't turn a done
+          // delete into a reported failure.
+          if (opts.tombstone) {
+            try {
+              db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
+                .run('am_fact', String(id), opts.by || null, opts.reason || 'delete');
+            } catch (e2) { /* tombstone store absent — the delete itself already landed */ }
+          }
+        }
       }
       // F-mycelium/196: keep semantic-memory's decoded-vector cache exact in
       // the same tick. Before this, every delete here moved the freshness
@@ -123,15 +160,15 @@ export default function createAutoMemoryDB(db) {
     // claimed_agent_id=NULL = an honest write). claimedAgentId is the body's
     // agent_id when it disagreed with the authenticated identity — recorded,
     // flagged, never trusted (TRUST LAYER P0.2).
-    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId) {
+    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId, derivedFrom) {
       // F-mycelium 254: an explicit 0 is "no confidence", not "missing" — the
       // old `confidence || 0.8` inflated a caller's 0 to 0.8, both here and on
       // every /facts POST with confidence: 0. Only a null/undefined confidence
       // takes the 0.8 default.
       var conf = (confidence == null) ? 0.8 : confidence;
       var result = db.prepare(
-        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?) RETURNING id"
-      ).get(agentId || null, projectId || null, category || 'general', factText, conf, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null);
+        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id, derived_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?) RETURNING id"
+      ).get(agentId || null, projectId || null, category || 'general', factText, conf, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null, derivedFrom || null);
       return result.id;
     },
 
@@ -166,9 +203,83 @@ export default function createAutoMemoryDB(db) {
       ).all(...params);
     },
 
-    deleteFact(id) {
-      db.prepare('DELETE FROM am_facts WHERE id = ?').run(id);
-      return unindexFacts([id]);
+    // TRUST LAYER P1.4 — the forget cascade. `refs` name the ROOTS to forget,
+    // as '<store>:<id>' strings: an explicit fact ('am_fact:<id>'), or the
+    // entity a fact was extracted from ('task:<id>', 'context_key:<ns>:<key>').
+    // A root matches a fact when the fact's (source_type, source_id) columns
+    // carry it OR its derived_from names it. From the roots the closure walks
+    // derived_from TRANSITIVELY — every summary/consolidation built on a
+    // falling row falls with it — so a forgotten fact is not recalled through
+    // its summary. One transaction: tombstone (fact-store AND index halves),
+    // delete, unindex. Returns { deleted, cascaded, index_removed } — deleted
+    // counts every row that fell, cascaded the ones that fell only because a
+    // row they were derived from did.
+    forgetFacts(refs, opts) {
+      opts = opts || {};
+      var by = opts.by || null;
+      var rootReason = opts.reason || 'delete';
+      var out = { deleted: 0, cascaded: 0, index_removed: 0 };
+      var txn = db.transaction(function () {
+        var seen = {};   // id -> 'root' | 'derived'
+        var queue = [];
+        var rootCount = 0;
+        for (var i = 0; i < (refs || []).length; i++) {
+          var ref = String(refs[i]);
+          var fid = /^am_fact:\d+$/.test(ref) ? Number(ref.split(':')[1]) : null;
+          if (fid != null) {
+            // An explicit fact id roots AT that row (its own source_type is
+            // 'extraction'/'consolidation', never 'am_fact' — the generic
+            // probes below would only find its DERIVED rows, not it).
+            if (!seen[fid] && db.prepare('SELECT id FROM am_facts WHERE id = ?').get(fid)) {
+              seen[fid] = 'root'; queue.push(fid); rootCount++;
+            }
+            continue;
+          }
+          var colon = ref.indexOf(':');
+          var rtype = colon === -1 ? ref : ref.substring(0, colon);
+          var rid = colon === -1 ? null : ref.substring(colon + 1);
+          var rows = db.prepare(
+            "SELECT id FROM am_facts WHERE (source_type = ? AND source_id IS NOT NULL AND source_id = ?)" +
+            " OR (derived_from IS NOT NULL AND derived_from LIKE ?)"
+          ).all(rtype, rid, '%"' + ref + '"%');
+          for (var r of rows) {
+            if (!seen[r.id]) { seen[r.id] = 'root'; queue.push(r.id); rootCount++; }
+          }
+        }
+        // The transitive walk: anything naming a falling row as input falls.
+        while (queue.length) {
+          var cur = queue.shift();
+          var kids = db.prepare(
+            "SELECT id FROM am_facts WHERE derived_from IS NOT NULL AND derived_from LIKE ?"
+          ).all('%"am_fact:' + cur + '"%');
+          for (var k of kids) {
+            if (!seen[k.id]) { seen[k.id] = 'derived'; queue.push(k.id); }
+          }
+        }
+        var ids = Object.keys(seen).map(Number);
+        if (!ids.length) return out;
+        var tstmt = db.prepare('INSERT INTO am_tombstones (fact_id, deleted_by, reason) VALUES (?, ?, ?)');
+        var dstmt = db.prepare('DELETE FROM am_facts WHERE id = ?');
+        for (var id of ids) {
+          // The record before the delete, both halves. A derived row's why is
+          // the root's why plus '-cascade' — it died because its input died.
+          try { tstmt.run(id, by, seen[id] === 'derived' ? rootReason + '-cascade' : rootReason); } catch (e) { /* the record never blocks the delete */ }
+          dstmt.run(id);
+        }
+        out.cascaded = ids.length - rootCount;
+        out.deleted = ids.length;
+        out.index_removed = unindexFacts(ids, { tombstone: true, by: by, reason: rootReason });
+        return out;
+      });
+      return txn();
+    },
+
+    // A single-fact forget: the cascade root is the fact itself.
+    // opts {by, reason} land on the tombstones; supersedeFact is the
+    // NON-delete sibling and must never come through here (a superseded row
+    // stays alive — no tombstone, no cascade).
+    deleteFact(id, opts) {
+      return this.forgetFacts(['am_fact:' + id], opts);
     },
 
     // Bulk purge by namespace (task 211, BRIEF-lab-alive-memory §3): the bench
@@ -180,22 +291,31 @@ export default function createAutoMemoryDB(db) {
     // table), then takes every index row out through the SAME seam every other
     // removal path uses (unindexFacts above — both index shapes + the vector-
     // cache hook), so the namespace stops answering /memory/search in the same
-    // request.
+    // request. TRUST LAYER P1.4: a purge is deletes — every doomed row is
+    // tombstoned (both halves) before it goes (#193: housekeeping is deletes).
     //
     // NO namespace = no purge, by construction: the WHERE clause is
     // `namespace = ?` and SQL NULL never equals anything, so legacy rows
     // (namespace IS NULL — Aria's internal writer's rows) are unreachable from
     // here whatever the caller passes. The route refuses an unnamed namespace
     // before this runs; this predicate is the second layer of that refusal.
-    deleteFactsByNamespace(namespace) {
+    deleteFactsByNamespace(namespace, opts) {
+      opts = opts || {};
       // Ids BEFORE the delete (the pruneOldSuperseded rule): afterwards there is
       // nothing left to join against and the index rows would orphan.
       var doomed = db.prepare('SELECT id FROM am_facts WHERE namespace = ?').all(namespace)
         .map(function (r) { return r.id; });
       if (!doomed.length) return { deleted: 0, index_removed: 0 };
-      var result = db.prepare('DELETE FROM am_facts WHERE namespace = ?').run(namespace);
-      var indexRemoved = unindexFacts(doomed);
-      return { deleted: result.changes, index_removed: indexRemoved };
+      var txn = db.transaction(function () {
+        var tstmt = db.prepare('INSERT INTO am_tombstones (fact_id, deleted_by, reason) VALUES (?, ?, ?)');
+        for (var id of doomed) {
+          try { tstmt.run(id, opts.by || null, opts.reason || 'purge'); } catch (e) { /* the record never blocks the delete */ }
+        }
+        var result = db.prepare('DELETE FROM am_facts WHERE namespace = ?').run(namespace);
+        var indexRemoved = unindexFacts(doomed, { tombstone: true, by: opts.by || null, reason: opts.reason || 'purge' });
+        return { deleted: result.changes, index_removed: indexRemoved };
+      });
+      return txn();
     },
 
     // opts.keepIndexed (namespaced facts only): the old row STAYS indexed. A
@@ -306,6 +426,12 @@ export default function createAutoMemoryDB(db) {
       var result = db.prepare(
         "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
       ).run(maxAge);
+      // TRUST LAYER P1.4: housekeeping is deletes (#193) — the row is gone,
+      // so the record is left. (Their index rows went at supersede time; a
+      // doomed row here normally has nothing left to unindex.)
+      for (var id of doomed) {
+        try { db.prepare('INSERT INTO am_tombstones (fact_id, deleted_by, reason) VALUES (?, ?, ?)').run(id, null, 'prune-old-superseded'); } catch (e) { /* */ }
+      }
       unindexFacts(doomed);
       return result.changes;
     },
@@ -370,7 +496,12 @@ export default function createAutoMemoryDB(db) {
       var result = db.prepare(
         'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
       ).run(agentId, toDelete);
-      unindexFacts(doomed);
+      // TRUST LAYER P1.4: housekeeping is deletes (#193) — both tombstone
+      // halves for rows that truly went.
+      for (var id of doomed) {
+        try { db.prepare('INSERT INTO am_tombstones (fact_id, deleted_by, reason) VALUES (?, ?, ?)').run(id, null, 'prune-excess'); } catch (e) { /* */ }
+      }
+      unindexFacts(doomed, { tombstone: true, reason: 'prune-excess' });
       return result.changes;
     }
   };
