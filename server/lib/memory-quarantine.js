@@ -16,9 +16,10 @@
 //            record search drops it, and no boot/system assembly carries
 //            memory-row text at all.
 //   PROMOTE  only the row's owner or an admin clears the state, through
-//            POST /memory/:id/promote (agent surface) or the federation
+//            POST /me/memory/:id/promote (the owner's companion surface),
+//            POST /memory/:id/promote (agent surface), or the federation
 //            accept route (an imported bundle). The stamp below is the ONE
-//            promote shape, so the two routes cannot drift.
+//            promote shape, so the routes cannot drift.
 //
 // The state lives in METADATA, not a column, on purpose: no migration, no
 // schema coupling, and the sibling P1.1 branch (265) owns the origin/trust
@@ -63,12 +64,20 @@ export function applyRecallLabel(row) {
 // collision candidate — accepting a candidate is exactly what promote is),
 // record who promoted and when. Callers persist this per chunk of the row's
 // source_id; the routes own the auth check and the transaction.
-export function promotedMeta(meta, promotedBy) {
+//
+// The stamp shape (review A MAJOR 1/MINOR 2): `promoted_by` is ALWAYS an
+// AUTHENTICATED principal — an agent id, or `__user:<userId>` on the
+// owner-bearer doors, or `__system__` for the admin key. A claim that arrived
+// in a header (`X-Acting-As`) is never the stamp: the admin-key door passes
+// it as `claimedBy` and it lands in `promoted_by_claimed`, so a vouch can
+// never be forged by naming someone in a header.
+export function promotedMeta(meta, promotedBy, claimedBy) {
   var next = Object.assign({}, meta);
   delete next.quarantined;
   delete next.quarantine_reason;
   delete next.candidate;
   next.promoted_at = new Date().toISOString();
   next.promoted_by = promotedBy;
+  if (claimedBy) next.promoted_by_claimed = claimedBy;
   return next;
 }

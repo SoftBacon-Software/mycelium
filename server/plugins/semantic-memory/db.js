@@ -467,10 +467,15 @@ export default function createMemoryDB(db, opts) {
     // promote route's :id (a row id on this surface is a source_id). The head
     // chunk (chunk_index 0) resolves first so a multi-chunk doc promotes as
     // one document; a real row is never 404'd over chunk ordering.
-    anyBySourceId(sourceId) {
-      return db.prepare(
-        'SELECT * FROM sm_embeddings WHERE source_id = ? ORDER BY (chunk_index = 0) DESC, chunk_index LIMIT 1'
-      ).get(sourceId);
+    // opts.hide_companion (review A NIT 3): the COMPANION_HIDDEN_SQL class is
+    // invisible to non-admin callers on this surface — passing it keeps a
+    // companion id a 404 instead of leaking "this row exists" through the
+    // 403-vs-404 distinction.
+    anyBySourceId(sourceId, opts) {
+      var sql = 'SELECT * FROM sm_embeddings WHERE source_id = ?';
+      if (opts && opts.hide_companion) sql += ' AND ' + COMPANION_HIDDEN_SQL;
+      sql += ' ORDER BY (chunk_index = 0) DESC, chunk_index LIMIT 1';
+      return db.prepare(sql).get(sourceId);
     },
 
 
@@ -1083,13 +1088,13 @@ export default function createMemoryDB(db, opts) {
 // db (NOT a memoryDB method): the federation door calls it with core.db, and
 // constructing a second createMemoryDB there would evict the attached vector
 // cache.
-export function promoteBySourceId(db, sourceType, sourceId, promotedBy) {
+export function promoteBySourceId(db, sourceType, sourceId, promotedBy, claimedBy) {
   var rows = db.prepare(
     'SELECT id, metadata FROM sm_embeddings WHERE source_type = ? AND source_id = ?'
   ).all(sourceType, sourceId);
   for (var i = 0; i < rows.length; i++) {
     db.prepare('UPDATE sm_embeddings SET metadata = ? WHERE id = ?')
-      .run(JSON.stringify(promotedMeta(parseQuarantineMeta(rows[i].metadata), promotedBy)), rows[i].id);
+      .run(JSON.stringify(promotedMeta(parseQuarantineMeta(rows[i].metadata), promotedBy, claimedBy)), rows[i].id);
   }
   return rows.length;
 }

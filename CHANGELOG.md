@@ -16,11 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`foreign-network`). Recall labels them `unverified: true` on
   search/list/episodes/lessons/history, and the fact-of-record companion
   search excludes them. Promotion is explicit and authenticated: new
+  `POST /me/memory/:id/promote` (the owner's door for visited rows),
   `POST /memory/:id/promote` (owner agent or admin, 403 with a plain
   sentence otherwise) and `POST /federation/import/:bundleId/accept` (the
-  importer's bearer, promoting the bundle's rows in one transaction).
-  Promotion strips the marks, stamps `promoted_at`/`promoted_by`, and leaves
-  `updated_at` alone. 18 new tests pin the contract end to end.
+  importer's bearer, promoting the bundle's rows in one transaction, receipt
+  counting rows forgotten since the import). The `promoted_by` stamp is
+  always an authenticated principal (agent id, `__user:<userId>`,
+  `__system__`) — an `X-Acting-As` claim is recorded separately as
+  `promoted_by_claimed`, never as the promoter. Promotion strips the marks,
+  stamps `promoted_at`/`promoted_by`, and leaves `updated_at` alone. 26 tests
+  pin the contract end to end (8 added addressing review A).
 - **Semantic Memory plugin README** — documents the two search halves
   (FTS5 keyword + optional vector), the config table with both write paths
   (`PUT /memory/config` and the platform plugin-config surface), the four

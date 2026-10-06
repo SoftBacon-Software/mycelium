@@ -204,7 +204,10 @@ paths exclude them. Two sources quarantine by default:
 
 - **`auto-indexed`** — rows harvested from platform messages when
   `auto_index_messages` is on. Anyone can write a message on the platform;
-  text harvested from one is a claim, not a fact.
+  text harvested from one is a claim, not a fact. (The message auto-index is
+  the only auto-index that quarantines: `context_key` updates are also
+  auto-indexed, but land active — a context key is a deliberate placement by
+  its writer, not harvested speech.)
 - **`foreign-network`** — rows that arrive over federation, both visited rows
   created on a remote instance and imported souvenir rows.
 
@@ -218,8 +221,13 @@ What quarantine means, exactly:
   promoted or remain unrecalled as fact.
 
 A quarantined row becomes a full citizen only by **promotion**, through one of
-two authenticated doors — no unauthenticated or third-party path exists:
+three authenticated doors — no unauthenticated or third-party path exists:
 
+- `POST /me/memory/:id/promote` (companion surface) — the row's OWNER, for
+  the rows only its owner can reach: a visited row carries the owner's user
+  id and no agent writer, so this is the door that makes "promoted by the
+  owner" true for the owner's own hand. Another owner's id (or an unknown
+  one) is `404` — ids are not an existence oracle across owners.
 - `POST /memory/:id/promote` (agent surface) — the row's owner agent or an
   instance admin. Anyone else is `403` with a plain-sentence reason.
 - `POST /federation/import/:bundleId/accept` (federation surface) — the
@@ -228,8 +236,12 @@ two authenticated doors — no unauthenticated or third-party path exists:
 
 Promotion strips the quarantine and candidate marks, stamps `promoted_at` and
 `promoted_by`, and leaves `updated_at` untouched (a state flip is not a
-content edit). Promotion is idempotent: promoting a row that is not
-quarantined answers `promoted: false`, not an error.
+content edit). `promoted_by` is always an **authenticated** principal: an
+agent id, or `__user:<userId>` on the owner-bearer doors, or `__system__` for
+the admin key — an `X-Acting-As` header is a claim, not an identity, and is
+recorded beside the stamp as `promoted_by_claimed` instead of becoming the
+promoter. Promotion is idempotent: promoting a row that is not quarantined
+answers `promoted: false`, not an error.
 
 ## POST /me/memory/:id/forget — remove one memory
 

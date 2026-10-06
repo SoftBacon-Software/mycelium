@@ -516,11 +516,12 @@ export default function (core) {
   // who imported the bundle is the one who can vouch for it. Accepting
   // promotes every still-quarantined row of the bundle (collision
   // supersede-candidates included — accepting one IS the explicit acceptance
-  // the candidate flag always meant), with the same stamp POST
-  // /memory/:id/promote writes, so the two promote doors cannot drift. A
-  // bundle this owner never imported is a 404 — ids are not an existence
-  // oracle across owners. The visit's episode row is not in the bundle's
-  // outcomes and stays quarantined: it is a diary line, not guidance.
+  // the candidate flag always meant), with the same stamp the other promote
+  // doors write (POST /me/memory/:id/promote, POST /memory/:id/promote —
+  // one promoted_by shape, so the doors cannot drift). A bundle this owner
+  // never imported is a 404 — ids are not an existence oracle across owners.
+  // The visit's episode row is not in the bundle's outcomes and stays
+  // quarantined: it is a diary line, not guidance.
   // TODO(trust-layer P1.5 / F-mycelium 264): append each promotion to the
   // hash-chained memory audit log once 264 lands.
   router.post('/import/:bundleId/accept', importLimiter, function (req, res) {
@@ -533,18 +534,21 @@ export default function (core) {
     }
     var accepted = [];
     var alreadyAccepted = 0;
+    var forgotten = 0; // review A NIT 1: a bundle row forgotten since the import is counted, not dropped silently
     var promoteAll = core.db.transaction(function () {
       for (var o of prior.outcomes) {
         var row = store.rowById(user.userId, o.row_id);
-        if (!row) continue; // forgotten since the import — nothing to accept
+        if (!row) { forgotten++; continue; } // forgotten since the import — nothing to accept
         var meta = parseMeta(row.metadata);
         if (!isQuarantined(meta) && !meta.candidate) { alreadyAccepted++; continue; }
-        promoteBySourceId(core.db, row.source_type, row.source_id, user.userId);
+        // review A MINOR 2: the stamp is the owner-door shape ('__user:<id>'),
+        // not the bare numeric id — one promote_by shape across all doors.
+        promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
         accepted.push(store.view(store.rowById(user.userId, o.row_id)));
       }
     });
     promoteAll();
-    res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted });
+    res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted, forgotten: forgotten });
   });
 
   // ---- operator visibility ------------------------------------------------------

@@ -879,24 +879,74 @@ export default function (core) {
     res.json({ ok: true, forgotten: id });
   });
 
-  // POST /memory/:id/promote — TRUST LAYER P1.3: the ONLY door out of
-  // quarantine. An auto-indexed message or a foreign-network row is recalled
-  // labelled (unverified) and never rides an instruction position; promoting
-  // is the owner (or an admin on the owner's behalf) vouching for the row in
-  // their own voice. Auth is the agent surface's usual gate
+  // POST /me/memory/:id/promote — TRUST LAYER P1.3 (review A MAJOR 2): the
+  // OWNER's door out of quarantine. The agent-surface promote below runs the
+  // agent gate, and the visited rows of a federation visit are
+  // metadata.owner = a user id with written_by NULL — an id no agent identity
+  // ever matches — so without this route the owner of a visited row had no
+  // self-serve door at all (only the admin key could promote it). The
+  // companion surface is where the owner already manages these rows (list /
+  // search / forget); promotion belongs beside them. Scoping is the forget
+  // route's: the row must live in THIS owner's namespace, anything else is
+  // 404 exactly like an unknown id — ids are not an existence oracle across
+  // owners. The stamp is the owner shape ('__user:<userId>'), the same one
+  // the federation accept door writes.
+  // TODO(trust-layer P1.5 / F-mycelium 264): append the promotion to the
+  // hash-chained memory audit log once 264 lands.
+  router.post('/me/memory/:id/promote', companionLimiter, function (req, res) {
+    var user = companionOwner(req, res);
+    if (!user) return;
+    var id = String(req.params.id || '');
+    var row = db.companionRow(id);
+    if (!row || (row.namespace || '') !== companionNamespace(user.userId)) {
+      return apiError(res, 404, "no such memory: '" + id + "'");
+    }
+    var meta = parseMeta(row.metadata);
+    if (!isQuarantined(meta) && !meta.candidate) {
+      return res.json({ ok: true, promoted: false, id: id, note: 'this memory is not quarantined — nothing to promote' });
+    }
+    var promoteAll = core.db.transaction(function () {
+      promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
+    });
+    promoteAll();
+    res.json({ ok: true, promoted: true, id: id, promoted_by: '__user:' + user.userId, source_type: row.source_type });
+  });
+
+  // POST /memory/:id/promote — TRUST LAYER P1.3: the ONLY agent-surface door
+  // out of quarantine. An auto-indexed message or a foreign-network row is
+  // recalled labelled (unverified) and never rides an instruction position;
+  // promoting is the owner (or an admin on the owner's behalf) vouching for
+  // the row in their own voice. Auth is the agent surface's usual gate
   // (checkMemoryAgent); ownership is the row's OWN custody record —
   // written_by for agent-written rows, metadata.owner for companion/fed rows
   // — and anyone else is a 403 with the plain sentence. Promoting a row that
   // is not quarantined answers promoted:false (an outbox replay gets the
   // same shape as the first call, honestly).
+  // The STAMP is the authenticated principal, never a header claim (review A
+  // MAJOR 1): on the admin-key path checkAgentOrAdmin returns X-Acting-As
+  // verbatim — a claim anyone with the admin key can make about anyone. A
+  // vouch must not be forgeable, so the admin key stamps `__system__` (the
+  // key is the platform's own voice) and the claim rides separately as
+  // `promoted_by_claimed` — the same claimed-vs-principal split the P0.2 law
+  // records elsewhere. The studio-JWT and agent-key paths need no split:
+  // their `who` is already the verified identity.
   // TODO(trust-layer P1.5 / F-mycelium 264): append the promotion to the
   // hash-chained memory audit log (who, row id + content hash, why) once 264
   // lands — the promote stamp below is the seam that call hangs on.
   router.post('/:id/promote', rateLimited('memory/promote', { windowMs: 60000, max: 120 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
+    var claimedBy = null;
+    var studioUser = core.auth && typeof core.auth.getStudioUser === 'function' ? core.auth.getStudioUser(req) : null;
+    if (!studioUser && req._authIsAdmin && req.headers['x-acting-as']) {
+      claimedBy = String(req.headers['x-acting-as']);
+      who = '__system__';
+    }
     var id = String(req.params.id || '');
-    var row = db.anyBySourceId(id);
+    // hide_companion for non-admin callers (review A NIT 3): the companion
+    // class is invisible to them on this surface — a probe must 404 like an
+    // unknown id, not leak existence through the 403.
+    var row = db.anyBySourceId(id, { hide_companion: !req._authIsAdmin });
     if (!row) {
       return apiError(res, 404, "no such memory: '" + id + "'");
     }
@@ -910,10 +960,12 @@ export default function (core) {
       return res.json({ ok: true, promoted: false, id: id, note: 'this memory is not quarantined — nothing to promote' });
     }
     var promoteAll = core.db.transaction(function () {
-      promoteBySourceId(core.db, row.source_type, row.source_id, who);
+      promoteBySourceId(core.db, row.source_type, row.source_id, who, claimedBy);
     });
     promoteAll();
-    res.json({ ok: true, promoted: true, id: id, promoted_by: who, source_type: row.source_type });
+    var out = { ok: true, promoted: true, id: id, promoted_by: who, source_type: row.source_type };
+    if (claimedBy) out.promoted_by_claimed = claimedBy;
+    res.json(out);
   });
 
   // GET /memory/stats — index stats
@@ -1042,7 +1094,7 @@ export default function (core) {
       });
       results = results.map(function (r) {
         var { embedding: _embedding, ...rest } = r; // vector deliberately dropped
-        return rest;
+        return applyRecallLabel(rest); // review A MINOR 1: the q-branch labels like the no-q branch — one definition
       }).slice(0, limit);
       var response = {
         source_type: 'lesson', query: String(req.query.q), mode: effectiveMode,
