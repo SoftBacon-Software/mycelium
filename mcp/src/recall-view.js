@@ -11,7 +11,12 @@
 //
 // Boundary (deliberate, recorded in the P1.2 PR): directives, requests and
 // work-queue items stay OUTSIDE the fence — they are the live work channel,
-// authority-carrying by design; recalled handoff/memory content is not.
+// authority-carrying by design; recalled handoff/memory content is not. The
+// agent roster's working_on lines sit on the RECALLED side of that line even
+// though they are not "memory search results": they are self-set stored text
+// rendered CROSS-AGENT (review A blocker @ b89ca693 — a multi-line working_on
+// reached the boot seed raw), so agentRosterLines below fences them like any
+// other recalled row.
 
 import { fenceRecalledMemory } from '../../server/lib/memory-fence.js';
 
@@ -163,4 +168,44 @@ export function renderFactsRecallView(facts) {
     return 'ID:' + f.id + ' [' + (f.category || 'general') + '] (confidence:' + f.confidence + ') ' + (f.fact_text || '');
   });
   return fenceRecalledMemory(rows) || null;
+}
+
+// --- the agent roster (boot seed / list_agents / the overview's Agents) ------
+// working_on is SELF-SET stored text rendered CROSS-AGENT — the boot seed
+// lists every other agent's line next to the savepoint recall. Stored text is
+// stored text: every line of it travels inside the memory fence as a labelled
+// datamarked row. Status flag, agent id, display_name and heartbeat are
+// server-owned metadata (the heartbeat route enum-validates status) and stay
+// outside. opts.formatHeartbeat — optional ISO→relative formatter for rows
+// carrying a raw last_heartbeat (list/overview call sites); boot's slim rows
+// carry either no heartbeat or a pre-formatted one.
+export function agentRosterLines(agents, opts) {
+  var list = Array.isArray(agents) ? agents : [];
+  var formatHeartbeat = (opts && opts.formatHeartbeat) || null;
+  var lines = [];
+  var rows = [];
+  for (var a of list) {
+    if (!a || !a.id) continue;
+    var line = '[' + (a.status === 'online' ? 'ON' : String(a.status || 'offline').toUpperCase()) + '] ' + a.id;
+    if (a.display_name || a.name) line += ' (' + (a.display_name || a.name) + ')';
+    if (a.project_id) line += ' — ' + a.project_id;
+    var heartbeat = a.heartbeat || (formatHeartbeat && a.last_heartbeat ? formatHeartbeat(a.last_heartbeat) : '');
+    if (heartbeat) line += ' | heartbeat ' + heartbeat;
+    lines.push(line);
+    if (a.working_on) rows.push('working_on (' + a.id + '): ' + a.working_on);
+  }
+  pushFencedRecall(lines, rows);
+  return lines;
+}
+
+// --- studio_get_context: the fenced view of stored context values ------------
+// Context keys are memory too (the auto-index path indexes every context-key
+// update), and a model reads the tool result — so the stored value gets the
+// same fenced second block memory_search got. The caller keeps its FIRST
+// content block byte-identical and appends this as a second block.
+export function renderContextRecallView(value) {
+  if (value === null || value === undefined) return null;
+  var rendered = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  if (!rendered.trim()) return null;
+  return fenceRecalledMemory(['context: ' + rendered]) || null;
 }

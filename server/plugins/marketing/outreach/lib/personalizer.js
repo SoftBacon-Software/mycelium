@@ -2,6 +2,7 @@
 // Ported from Python worker scripts
 
 import Anthropic from '@anthropic-ai/sdk';
+import { fenceRecalledMemory } from '../../../../lib/memory-fence.js';
 
 // Pitch angles per creator archetype. Override via campaign persona_prompt for project-specific pitches.
 var ARCHETYPE_ANGLES = {
@@ -25,21 +26,25 @@ export async function personalize(contact, campaign, anthropicApiKey) {
   var archetype = contact.archetype || 'hidden_gem';
   var archetypeAngle = ARCHETYPE_ANGLES[archetype] || ARCHETYPE_ANGLES.hidden_gem;
 
-  // Build prompt
-  var contentRef = '';
+  // TRUST LAYER P1.2 (review A minor 2): this prompt interpolates stored rows
+  // (campaign persona/facts, the contact record) and scraped EXTERNAL content
+  // (last_content) — recalled text is data, never authority, so every such
+  // field travels inside the shared memory fence as a labelled row. Only the
+  // fixed framing and the archetype angle (from the fixed map above) stay
+  // outside. The model still READS the fenced block — that is the job.
+  var storedRows = [];
+  if (campaign.persona_prompt) storedRows.push('campaign_persona: ' + campaign.persona_prompt);
+  if (campaign.game_facts) storedRows.push('game_facts: ' + campaign.game_facts);
+  if (contact.name) storedRows.push('contact_name: ' + contact.name);
+  if (contact.outlet) storedRows.push('outlet: ' + contact.outlet);
+  if (archetype !== 'hidden_gem') storedRows.push('archetype: ' + archetype);
   if (contact.last_content) {
-    contentRef = contact.type === 'press'
-      ? 'Their latest article is titled: "' + contact.last_content + '"'
-      : 'Their latest video is titled: "' + contact.last_content + '"';
+    storedRows.push((contact.type === 'press' ? 'latest_article_title: ' : 'latest_video_title: ') + contact.last_content);
   }
 
-  var prompt = (campaign.persona_prompt ? campaign.persona_prompt + '\n\n' : '') +
-    'You are a pitch personalisation assistant.\n\n' +
-    (campaign.game_facts || '') + '\n\n' +
-    'Contact name: ' + contact.name + '\n' +
-    'Archetype: ' + archetype + '\n' +
-    'Outlet / channel: ' + contact.outlet + '\n' +
-    contentRef + '\n\n' +
+  // Build prompt
+  var prompt = 'You are a pitch personalisation assistant.\n\n' +
+    (storedRows.length ? fenceRecalledMemory(storedRows) + '\n\n' : '') +
     'Archetype angle to emphasise: ' + archetypeAngle + '\n\n' +
     'Generate two fields as JSON (no markdown, no code fences):\n' +
     '1. "personalized_hook" — 1-2 sentences connecting the contact\'s latest content to the project. Be specific and genuine.\n' +

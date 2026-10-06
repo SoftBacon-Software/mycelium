@@ -501,7 +501,10 @@ Return a JSON object of the form {"facts":[{"category":"<one word>","fact_text":
 // datamarked data region (fence applied after the cap, so a cap can never
 // truncate away the closing delimiter). The output schema above is UNCHANGED.
 export function buildExtractionPrompt(activityText) {
-  return EXTRACTION_PROMPT.replace('{content}', fenceRecalledMemory(activityText, { maxChars: 4000 }));
+  // Function replacement (review A nit 1): a string replacement expands $& /
+  // $' / $` inside the recalled text as replace-template fragments — a
+  // function inserts the fenced block verbatim.
+  return EXTRACTION_PROMPT.replace('{content}', function () { return fenceRecalledMemory(activityText, { maxChars: 4000 }); });
 }
 
 // F-mycelium 254: every field below comes back as MODEL OUTPUT, and until now
@@ -820,7 +823,8 @@ export function buildConsolidationPrompt(factRows) {
   var factsText = factRows.map(function (f) {
     return 'ID:' + f.id + ' [' + f.category + '] (confidence:' + f.confidence + ') ' + f.fact_text;
   }).join('\n');
-  return CONSOLIDATION_PROMPT.replace('{facts}', fenceRecalledMemory(factsText, { maxChars: 6000 }));
+  // Function replacement (review A nit 1) — see buildExtractionPrompt.
+  return CONSOLIDATION_PROMPT.replace('{facts}', function () { return fenceRecalledMemory(factsText, { maxChars: 6000 }); });
 }
 
 export async function runConsolidation(db, config, _core, opts) {

@@ -65,7 +65,7 @@ function recalledLines(rows) {
     if (row === null || row === undefined) continue;
     var text = String(row);
     if (text.length === 0) continue;
-    var split = text.split(/\r?\n/);
+    var split = text.replace(/\r\n?/g, '\n').split('\n');
     for (var line of split) lines.push(line);
   }
   return lines;

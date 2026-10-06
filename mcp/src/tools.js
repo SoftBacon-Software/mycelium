@@ -7,9 +7,11 @@ import { getState, setWorkingOn, setBooted, startHeartbeat, sendHeartbeat, setCl
 import {
   renderSearchRecallView,
   renderFactsRecallView,
+  renderContextRecallView,
   bootSavepointSection,
   savepointViewLines,
-  savepointDiffLines
+  savepointDiffLines,
+  agentRosterLines
 } from './recall-view.js';
 
 function text(s) {
@@ -59,13 +61,9 @@ function timeAgo(iso) {
   return Math.round(ms / 86400000) + 'd ago';
 }
 
-function formatAgent(a) {
-  var line = (a.status === 'online' ? '[ON] ' : '[OFF] ') + a.name + ' (' + a.id + ')';
-  if (a.project_id) line += ' — ' + a.project_id;
-  if (a.working_on) line += '\n  Working on: ' + a.working_on;
-  line += '\n  Heartbeat: ' + timeAgo(a.last_heartbeat);
-  return line;
-}
+// (the old formatAgent is gone: its "\n  Working on: " interpolation let
+// stored working_on text introduce raw line breaks into the overview render —
+// review A blocker. The overview uses agentRosterLines, which fences it.)
 
 function formatTask(t) {
   return '#' + t.id + ' [' + t.status + '] ' + t.title + (t.assignee ? ' →' + t.assignee : '') + (t.priority && t.priority !== 'normal' ? ' [' + t.priority + ']' : '');
@@ -202,12 +200,15 @@ export function registerTools(server) {
           }
         }
 
-        // Other agents
+        // Other agents — TRUST LAYER P1.2 (review A blocker): other agents'
+        // working_on is self-set stored text shown cross-agent, so the roster
+        // renders status/id metadata outside and every line of working_on
+        // inside the memory fence (recall-view.js agentRosterLines).
         if (data.other_agents && data.other_agents.length > 0) {
           lines.push('');
           lines.push('=== Agents ===');
-          for (var a of data.other_agents) {
-            lines.push('[' + (a.status === 'online' ? 'ON' : 'OFF') + '] ' + a.id + (a.working_on ? ': ' + a.working_on : ''));
+          for (var rosterLine of agentRosterLines(data.other_agents)) {
+            lines.push(rosterLine);
           }
         }
 
@@ -271,14 +272,11 @@ export function registerTools(server) {
     async () => {
       var agents = await apiGet('/agents');
       if (!agents.length) return text('No agents registered.');
+      // TRUST LAYER P1.2 (review A blocker): working_on is stored text shown
+      // cross-agent — metadata outside, every working_on line fenced.
       var lines = ['=== Agents (' + agents.length + ') ==='];
-      for (var a of agents) {
-        var status = a.status || 'unknown';
-        var line = '[' + status.toUpperCase() + '] ' + a.id;
-        if (a.display_name) line += ' (' + a.display_name + ')';
-        if (a.working_on) line += ': ' + a.working_on;
-        if (a.last_heartbeat) line += ' | heartbeat ' + timeAgo(a.last_heartbeat);
-        lines.push(line);
+      for (var rosterLine of agentRosterLines(agents, { formatHeartbeat: timeAgo })) {
+        lines.push(rosterLine);
       }
       return text(lines.join('\n'));
     }
@@ -710,12 +708,21 @@ export function registerTools(server) {
       key: z.string().optional().describe('Specific key to read (omit for all keys in namespace)')
     },
     async (args) => {
+      // TRUST LAYER P1.2 (review A minor 1): context values are stored memory
+      // a model reads, so the stored text gets the memory fence as a SECOND
+      // content block — the first block stays byte-identical for programs.
+      function textWithRecallView(val) {
+        var result = text(val);
+        var view = renderContextRecallView(val);
+        if (view) result.content.push({ type: 'text', text: view });
+        return result;
+      }
       if (args.key) {
         var val = await apiGet('/context/keys/' + encodeURIComponent(args.namespace) + '/' + encodeURIComponent(args.key));
-        return text(val);
+        return textWithRecallView(val);
       }
       var keys = await apiGet('/context/keys/' + encodeURIComponent(args.namespace));
-      return text(keys);
+      return textWithRecallView(keys);
     }
   );
 
@@ -1850,16 +1857,14 @@ export function registerTools(server) {
 function formatOverview(data) {
   var lines = [];
 
-  // Agents
+  // Agents — TRUST LAYER P1.2 (review A blocker): every render of working_on
+  // goes through the roster fence. Handles both slim rows (id, status,
+  // working_on, pre-formatted heartbeat) and full rows (last_heartbeat,
+  // display_name, project_id dropped with the old formatAgent).
   if (data.agents && data.agents.length > 0) {
     lines.push('=== Agents ===');
-    for (var a of data.agents) {
-      // Support both slim format (id, status, working_on, heartbeat) and full format
-      if (a.heartbeat) {
-        lines.push('[' + (a.status === 'online' ? 'ON' : 'OFF') + '] ' + a.id + (a.working_on ? ': ' + a.working_on : '') + ' (' + a.heartbeat + ')');
-      } else {
-        lines.push(formatAgent(a));
-      }
+    for (var rosterLine of agentRosterLines(data.agents, { formatHeartbeat: timeAgo })) {
+      lines.push(rosterLine);
     }
   }
 
