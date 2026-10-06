@@ -16,7 +16,15 @@
 // though they are not "memory search results": they are self-set stored text
 // rendered CROSS-AGENT (review A blocker @ b89ca693 — a multi-line working_on
 // reached the boot seed raw), so agentRosterLines below fences them like any
-// other recalled row.
+// other recalled row. The same side holds for the roster's display_name — it
+// is agents.name, AGENT-settable via PUT /agents/:id (review A round 2 blocker
+// @ 8e5e6909) — for the boot seed's role contract (description, responsibilities,
+// constraints, guidelines: stored text lifted from the peer-authored
+// roles/<agentId> context key into `-`/`!` scaffolding; write side closed by
+// making roles/ admin-owned for new keys), for agent_profiles (self-set via
+// PUT /agents/:id/profile, rendered cross-agent by studio_agent_profile), and
+// for the overview's recent_activity lines (event summaries embed working_on
+// verbatim).
 
 import { fenceRecalledMemory } from '../../server/lib/memory-fence.js';
 
@@ -179,13 +187,25 @@ export function renderFactsRecallView(facts) {
   return fenceRecalledMemory(rows) || null;
 }
 
+// Collapse newlines to spaces — a metadata line stays one physical line no
+// matter what stored text carries. NOT a fence substitute: agent-settable
+// fields go INSIDE the fence (rows below); this only keeps the server-owned
+// metadata that remains outside single-line by construction.
+function singleLine(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .replace(/\r\n?/g, '\n').split('\n').join(' ');
+}
+
 // --- the agent roster (boot seed / list_agents / the overview's Agents) ------
 // working_on is SELF-SET stored text rendered CROSS-AGENT — the boot seed
-// lists every other agent's line next to the savepoint recall. Stored text is
-// stored text: every line of it travels inside the memory fence as a labelled
-// datamarked row. Status flag, agent id, display_name and heartbeat are
-// server-owned metadata (the heartbeat route enum-validates status) and stay
-// outside. opts.formatHeartbeat — optional ISO→relative formatter for rows
+// lists every other agent's line next to the savepoint recall — and so is the
+// display name (agents.name, settable by the agent itself via PUT /agents/:id;
+// review A round 2 blocker @ 8e5e6909). Stored text is stored text: every line
+// of both travels inside the memory fence as a labelled datamarked row.
+// Status flag, agent id, project and heartbeat are server-owned metadata (the
+// heartbeat route enum-validates status; project and id are admin-set at
+// creation and on the admin-only PUT block) and stay outside, single-line by
+// construction. opts.formatHeartbeat — optional ISO→relative formatter for rows
 // carrying a raw last_heartbeat (list/overview call sites); boot's slim rows
 // carry either no heartbeat or a pre-formatted one.
 export function agentRosterLines(agents, opts) {
@@ -195,16 +215,78 @@ export function agentRosterLines(agents, opts) {
   var rows = [];
   for (var a of list) {
     if (!a || !a.id) continue;
-    var line = '[' + (a.status === 'online' ? 'ON' : String(a.status || 'offline').toUpperCase()) + '] ' + a.id;
-    if (a.display_name || a.name) line += ' (' + (a.display_name || a.name) + ')';
-    if (a.project_id) line += ' — ' + a.project_id;
+    var line = '[' + (a.status === 'online' ? 'ON' : singleLine(a.status || 'offline').toUpperCase()) + '] ' + a.id;
+    if (a.project_id) line += ' — ' + singleLine(a.project_id);
     var heartbeat = a.heartbeat || (formatHeartbeat && a.last_heartbeat ? formatHeartbeat(a.last_heartbeat) : '');
-    if (heartbeat) line += ' | heartbeat ' + heartbeat;
+    if (heartbeat) line += ' | heartbeat ' + singleLine(heartbeat);
     lines.push(line);
+    if (a.display_name || a.name) rows.push('name (' + a.id + '): ' + (a.display_name || a.name));
     if (a.working_on) rows.push('working_on (' + a.id + '): ' + a.working_on);
   }
   pushFencedRecall(lines, rows);
   return lines;
+}
+
+// --- the boot seed's role contract --------------------------------------------
+// buildRoleContract (server/db.js) lifts description / responsibilities /
+// constraints / guidelines from the roles/<agentId> context key — peer-authored
+// stored text (write side: roles/ is admin-owned for NEW keys since review A
+// round 2; existing keys stay project-scoped) — and guidelines also from
+// <project>/guidelines. The old render wrapped them in `- responsibility` /
+// `! constraint` scaffolding RAW, so stored text wore authority-shaped framing
+// in the boot seed. Every line now travels inside the memory fence as a
+// labelled datamarked row. The metadata line keeps only admin-set fields
+// (role via the admin-only PUT block; capabilities via admin creation/PUT),
+// single-line by construction; llm_backend/llm_model are AGENT-settable
+// (PUT /agents/:id self-fields + the heartbeat whitelist) so they are fenced
+// rows too.
+export function roleContractLines(rc) {
+  var lines = ['', '=== Role Contract ==='];
+  if (typeof rc === 'string') {
+    // Defensive legacy shape — nothing in the repo produces a string role
+    // contract today; if one ever does it is stored-shape text and gets the
+    // fence like every other recalled row.
+    pushFencedRecall(lines, ['role_contract: ' + rc]);
+    return lines;
+  }
+  var contract = rc || {};
+  lines.push('Role: ' + singleLine(contract.role || 'agent'));
+  var rows = [];
+  if (contract.llm_backend || contract.llm_model) {
+    rows.push('llm: ' + singleLine(contract.llm_backend || '?') + '/' + singleLine(contract.llm_model || '?'));
+  }
+  if (contract.description) rows.push('description: ' + contract.description);
+  if (contract.responsibilities && contract.responsibilities.length) {
+    for (var resp of contract.responsibilities) rows.push('responsibility: ' + resp);
+  }
+  if (contract.constraints && contract.constraints.length) {
+    for (var con of contract.constraints) rows.push('constraint: ' + con);
+  }
+  if (contract.guidelines) rows.push('guidelines: ' + contract.guidelines);
+  pushFencedRecall(lines, rows);
+  if (contract.capabilities && contract.capabilities.length) {
+    lines.push('Can: ' + contract.capabilities.map(singleLine).join(', '));
+  }
+  return lines;
+}
+
+// --- studio_agent_profile: the fenced view of self-set profile fields ---------
+// display_name / specializations / preferred_projects / profile_data are set by
+// the agent itself (PUT /agents/:id/profile) and the tool hands the profile to
+// OTHER agents. The tool keeps its FIRST content block byte-identical (the raw
+// JSON programs parse) and appends this fence as a second block — the same
+// shape studio_get_context got in review A minor 1.
+export function renderProfileRecallView(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  var rows = [];
+  if (profile.display_name) rows.push('display_name: ' + profile.display_name);
+  if (profile.specializations) rows.push('specializations: ' + profile.specializations);
+  if (profile.preferred_projects) rows.push('preferred_projects: ' + profile.preferred_projects);
+  if (profile.profile_data !== undefined && profile.profile_data !== null) {
+    rows.push('profile_data: ' + (typeof profile.profile_data === 'string' ? profile.profile_data : JSON.stringify(profile.profile_data)));
+  }
+  if (!rows.length) return null;
+  return fenceRecalledMemory(rows) || null;
 }
 
 // --- studio_get_context: the fenced view of stored context values ------------

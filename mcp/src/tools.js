@@ -8,6 +8,8 @@ import {
   renderSearchRecallView,
   renderFactsRecallView,
   renderContextRecallView,
+  renderProfileRecallView,
+  roleContractLines,
   bootSavepointSection,
   savepointViewLines,
   savepointDiffLines,
@@ -152,23 +154,15 @@ export function registerTools(server) {
           lines.push('Context (' + cm.selected + '/' + cm.total_available + ' keys, ' + cm.method + ')');
         }
 
-        // Role contract
+        // Role contract — TRUST LAYER P1.2 (review A round 2 blocker): the
+        // contract lifts peer-authored stored text (roles/<agentId> context
+        // key, <project>/guidelines) into the boot seed; description,
+        // responsibilities, constraints and guidelines render through the
+        // memory fence as labelled datamarked rows (recall-view.js
+        // roleContractLines). Only admin-set metadata stays outside.
         if (data.role_contract) {
-          lines.push('');
-          lines.push('=== Role Contract ===');
-          var rc = data.role_contract;
-          if (typeof rc === 'string') {
-            lines.push(rc);
-          } else {
-            lines.push('Role: ' + (rc.role || '') + (rc.llm_backend ? ' (' + rc.llm_backend + '/' + (rc.llm_model || '?') + ')' : ''));
-            if (rc.description) lines.push(rc.description);
-            if (rc.responsibilities && rc.responsibilities.length) {
-              for (var resp of rc.responsibilities) lines.push('- ' + resp);
-            }
-            if (rc.constraints && rc.constraints.length) {
-              for (var con of rc.constraints) lines.push('! ' + con);
-            }
-            if (rc.capabilities && rc.capabilities.length) lines.push('Can: ' + rc.capabilities.join(', '));
+          for (var rcLine of roleContractLines(data.role_contract)) {
+            lines.push(rcLine);
           }
         }
 
@@ -1159,7 +1153,15 @@ export function registerTools(server) {
       }
 
       var profile = await apiGet('/agents/' + agentId + '/profile');
-      return text(profile);
+      // TRUST LAYER P1.2 (review B follow-up, folded into the round-2 fix
+      // pass): display_name / specializations / profile_data are self-set via
+      // PUT /agents/:id/profile and read CROSS-AGENT — the raw JSON first
+      // block stays byte-identical for programs, and the fenced view rides as
+      // a second block (the get_context pattern).
+      var result = text(profile);
+      var view = renderProfileRecallView(profile);
+      if (view) result.content.push({ type: 'text', text: view });
+      return result;
     }
   );
 
@@ -1774,10 +1776,15 @@ export function registerTools(server) {
         var statusIcon = d.status === 'online' ? '[ON]' : '[OFF]';
         var caps = [];
         try { caps = JSON.parse(d.capabilities); } catch {}
-        var line = statusIcon + ' ' + d.name + ' (' + d.id + ')';
+        // TRUST LAYER P1.2 (round-2 re-census): a drone IS an agents row
+        // (db/drones.js) — its name is agents.name, settable by its own key
+        // via PUT /agents/:id — so the metadata line carries only id/status,
+        // and the name is fenced like the agent roster's.
+        var line = statusIcon + ' (' + d.id + ')';
         if (caps.length) line += ' [' + caps.join(', ') + ']';
         line += '\n  Last seen: ' + timeAgo(d.last_heartbeat);
         lines.push(line);
+        if (d.name) recallRows.push('name (' + d.id + '): ' + d.name);
         // TRUST LAYER P1.2 (263b sweep): a drone's working_on is worker-set
         // stored text shown cross-agent — fenced like the agent roster.
         if (d.working_on) recallRows.push('working_on (' + d.id + '): ' + d.working_on);
@@ -1895,12 +1902,15 @@ function formatOverview(data) {
     }
   }
 
-  // Recent activity (slim format)
+  // Recent activity (slim format) — TRUST LAYER P1.2 (round-2 re-census):
+  // these are event summaries that embed agent-settable stored text verbatim
+  // (the heartbeat summary is `agentId + ': ' + working_on`), so the rows go
+  // through the memory fence like the roster, header outside.
   if (data.recent_activity && data.recent_activity.length > 0) {
     lines.push('');
     lines.push('=== Recent ===');
-    for (var act of data.recent_activity) {
-      lines.push(act);
+    for (var actLine of fencedRecallLines(data.recent_activity)) {
+      lines.push(actLine);
     }
   }
 

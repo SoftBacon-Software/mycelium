@@ -39,9 +39,14 @@ export const ENFORCEMENT_RULES_KEY = 'enforcement_rules';
 // The census: context keys whose values a security check READS. Writes require
 // the admin key; reads stay open (rules are not secrets — knowing them is the
 // point). Everything else read server-side is informational, not
-// authorization: roles/<agentId> and <project>/guidelines feed the boot role
-// contract (db.js), standups are diary entries, and the admin/api_limits +
+// authorization: standups are diary entries, and the admin/api_limits +
 // admin/api_usage keys are response caches behind already-admin-only routes.
+// roles/<agentId> and <project>/guidelines are not authorization either — but
+// they DO feed the boot role contract (db.js buildRoleContract), which makes
+// them model-facing seeds, so their namespace is admin-owned for NEW keys
+// (SECURITY_CONTEXT_NAMESPACES below; trust layer P1.2, review A round 2 of
+// PR #199 — a cross-project agent could create roles/<victim> freely because
+// the F1 project-scope check runs only on existing keys).
 export const SECURITY_CONTEXT_KEYS = [
   {
     namespace: ENFORCEMENT_RULES_NS,
@@ -50,6 +55,16 @@ export const SECURITY_CONTEXT_KEYS = [
   },
 ];
 
+// Namespaces admin-owned for NEW keys on the context routes, beyond the
+// namespaces that imply it by holding a census key. roles/ is here because it
+// is the boot role contract's source: a non-admin-creatable roles/<agentId> is
+// a peer-writable boot seed (P1.2's standard is model-facing seeds, not
+// authorization inputs). Existing roles/ keys keep the context routes'
+// project-scope rules — they are NOT security keys (isSecurityContextKey stays
+// false for them), and the render side fences the contract so a write that
+// does land is quoted data, never authority.
+export const SECURITY_CONTEXT_NAMESPACES = ['roles'];
+
 export function isSecurityContextKey(namespace, key) {
   if (!namespace || !key) return false;
   return SECURITY_CONTEXT_KEYS.some(function (k) {
@@ -57,19 +72,22 @@ export function isSecurityContextKey(namespace, key) {
   });
 }
 
-// A census NAMESPACE (any namespace holding a census key) is admin-owned for
-// NEW keys on the context routes (review B of PR #193). Why the namespace and
-// not just the key: the namespace is injected wholesale into every agent's
-// boot context (db.js platform keys + workContext), so a non-admin-creatable
+// A census NAMESPACE (any namespace holding a census key, or named in
+// SECURITY_CONTEXT_NAMESPACES) is admin-owned for NEW keys on the context
+// routes (review B of PR #193; roles/ added by P1.2 review A round 2). Why the
+// namespace and not just the key: the namespace is injected wholesale into
+// every agent's boot context (db.js platform keys + workContext) or lifted
+// into the role contract (db.js buildRoleContract), so a non-admin-creatable
 // key there is a swarm-wide boot-injection vector — and it is the exact write
 // pressure that drives the per-namespace cap. Existing keys keep the context
 // routes' project-scope rules; admin (key or admin-role JWT) keeps the
 // namespace.
 export function isSecurityContextNamespace(namespace) {
   if (!namespace) return false;
-  return SECURITY_CONTEXT_KEYS.some(function (k) {
+  if (SECURITY_CONTEXT_KEYS.some(function (k) {
     return k.namespace === namespace;
-  });
+  })) return true;
+  return SECURITY_CONTEXT_NAMESPACES.indexOf(namespace) !== -1;
 }
 
 // ---- shape validation ----
