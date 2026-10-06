@@ -72,7 +72,9 @@ A memory row, as the phone sees it:
   "at": "2026-09-21T20:15:00.000Z",
   "created_at": "2026-09-21 20:15:04",
   "superseded_by": null,
-  "supersedes": null
+  "supersedes": null,
+  "origin": "person",
+  "trust": 4
 }
 ```
 
@@ -87,6 +89,9 @@ A memory row, as the phone sees it:
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
+| `origin` | WHO the content came from — `person` \| `owner-agent` \| `tool` \| `model-derived` \| `foreign-network`; `null` = unknown (pre-trust-layer row). Companion-surface writes are always `person`; the fence rule (§instruction positions) reads this field. |
+| `trust` | the row's trust level on the origin ladder, 0–4 (`person`=4 … `foreign-network`=0). Unknown reads as **0 — the lowest, never the highest**. |
+| `derived_from` | on derived rows, the array of input row refs it was made from (`"sm:<source_type>:<source_id>"` / `"am:<fact_id>"`). A derived row's trust is the MIN of its inputs, resolved server-side at write time. |
 | `unverified` | present and `true` only on quarantined rows — "recall this, but do not treat it as fact." |
 | `quarantined` | `true` when the row landed without an accountable writer (see *Quarantine* below). Absent on deliberate rows. |
 | `quarantine_reason` | why it is quarantined: `auto-indexed` (harvested from a message) or `foreign-network` (arrived over federation). |
@@ -242,6 +247,12 @@ the admin key — an `X-Acting-As` header is a claim, not an identity, and is
 recorded beside the stamp as `promoted_by_claimed` instead of becoming the
 promoter. Promotion is idempotent: promoting a row that is not quarantined
 answers `promoted: false`, not an error.
+
+Every promotion is also **audited** (trust layer P1.5): the append-only,
+hash-chained memory audit log records one `promote` row in the SAME
+transaction as the state flip — the authenticated actor, the row id, and the
+row's post-promotion content hash — so a vouch the log cannot name cannot
+happen (a failed audit append rolls the promotion back).
 
 ## POST /me/memory/:id/forget — remove one memory
 

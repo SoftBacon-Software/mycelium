@@ -16,6 +16,7 @@ import { Router } from 'express';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { parseMeta, isQuarantined } from '../../lib/memory-quarantine.js';
 import { promoteBySourceId } from '../semantic-memory/db.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
   KINDS, verifyRow, verifyNetworkPassport, verifyAgentPassport, makeGrant,
@@ -29,6 +30,63 @@ export default function (core) {
   var store = createFederationStore(core.db);
   var { checkAdmin, getStudioUser } = core.auth;
   var { apiError, asyncHandler } = core;
+  // TRUST LAYER P1.5: fed rows land in sm_embeddings as companion rows — a
+  // visit write and an import are memory writes and are audited like them.
+  var audit = createMemoryAudit(core.db);
+
+  // One audit row for a fed row just inserted: the actor is whoever the route
+  // authenticated (the grant-bound visitor / the importing owner); the owner
+  // scope is the local user the row landed under.
+  function auditFedRow(actor, action, localOwnerId, sourceId, row, reason) {
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: 'companion',
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'fed_row',
+        content: row.text,
+        kind_row: row.kind || null,
+        key: row.key || null,
+        at: row.at || null,
+        home: row.home || null,
+        agent: row.agent || null
+      }),
+      reason: reason
+    });
+  }
+
+  // One audit row for a PROMOTED fed row (the accept door). The row IS an
+  // sm_embeddings row, so the post-state hash is the same shape the
+  // semantic-memory routes pin for sm rows (kind 'sm_row', the stored
+  // columns verbatim — derived_from as the raw JSON string the column
+  // holds): a row's audit history hashes comparable states across its
+  // doors, and the promote stamp (promoted_by / promoted_at) is audited
+  // content. Callers run this INSIDE the promote's transaction.
+  function auditFedPromote(localOwnerId, sourceType, sourceId, storedRow, reason) {
+    var meta;
+    try { meta = JSON.parse(storedRow.metadata || '{}'); } catch (e) { meta = {}; }
+    audit.append({
+      actor: '__user:' + localOwnerId,
+      action: 'promote',
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'sm_row',
+        content: storedRow.content_text,
+        namespace: storedRow.namespace || null,
+        metadata: meta,
+        written_by: storedRow.written_by || null,
+        superseded_by: storedRow.superseded_by || null,
+        origin: storedRow.origin || null,
+        trust: (storedRow.trust == null) ? null : Number(storedRow.trust),
+        derived_from: storedRow.derived_from || null
+      }),
+      reason: reason
+    });
+  }
 
   var helloLimiter = rateLimited('federation/hello', { windowMs: 60000, max: 30 });
   var visitLimiter = rateLimited('federation/visit', { windowMs: 60000, max: 120 });
@@ -334,7 +392,20 @@ export default function (core) {
       return apiError(res, 400, 'row provenance does not match the grant (agent/home/network/visit)');
     }
 
-    var written = store.insertFedRow(g.visit.host_owner, row);
+    // P1.5: the visitor's write is audited on the HOST — actor = the
+    // grant-bound visitor agent (the authenticated writer), owner = the host
+    // owner's user id. A replay (inserted:false) writes nothing new and is
+    // audited once, on the original insert. Review A M2: insert + audit are
+    // ONE transaction — a crash (or a fail-loud audit throw) must never leave
+    // a FOREIGN memory write with no row; the rollback takes both.
+    var written = core.db.transaction(function () {
+      var w = store.insertFedRow(g.visit.host_owner, row);
+      if (w.inserted) {
+        auditFedRow(g.grant.agent_id, 'write', g.visit.host_owner, w.row.source_id, row,
+          'federation visit write from ' + g.grant.home_network + ' (visit ' + g.grant.visit_id + ')');
+      }
+      return w;
+    })();
     res.status(written.inserted ? 201 : 200).json({
       ok: true,
       replayed: !written.inserted,
@@ -495,13 +566,30 @@ export default function (core) {
     });
 
     var adj = adjudicateImport(bundle, homeRows);
-    for (var i = 0; i < bundle.rows.length; i++) {
-      var outcome = adj.outcomes[i];
-      if (outcome.outcome === 'replayed') continue;
-      store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
-    }
-    var episodeStore = store.insertFedRow(user.userId, adj.episode);
-    store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+    // P1.5: ONE import row per imported bundle row (the episode row is
+    // bookkeeping, not memory content — it is not audited). actor = the
+    // authenticated bearer; owner = the local user the rows landed under.
+    // Review A M2: each insert and its audit row are ONE transaction — a
+    // crash (or a fail-loud audit throw) must never leave a FOREIGN memory
+    // write with no row, and the import record must never name rows that did
+    // not land — so the episode row and recordImport ride the same
+    // transaction and a rollback takes all of it.
+    var fedActor = '__user:' + (user.displayName || user.username);
+    var inserted = [];
+    var episodeStore;
+    core.db.transaction(function () {
+      for (var i = 0; i < bundle.rows.length; i++) {
+        var outcome = adj.outcomes[i];
+        if (outcome.outcome === 'replayed') continue;
+        var ins = store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
+        inserted.push({ stored: ins.row, protocol: bundle.rows[i] });
+        auditFedRow(fedActor, 'import', user.userId, ins.row.source_id, bundle.rows[i],
+          'federation import of bundle ' + bundle.bundle_id + ' from ' +
+          ((bundle.host_passport && (bundle.host_passport.name || bundle.host_passport.network_id)) || 'host'));
+      }
+      episodeStore = store.insertFedRow(user.userId, adj.episode);
+      store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+    })();
     res.status(201).json({
       ok: true,
       replayed: false,
@@ -522,8 +610,12 @@ export default function (core) {
   // never imported is a 404 — ids are not an existence oracle across owners.
   // The visit's episode row is not in the bundle's outcomes and stays
   // quarantined: it is a diary line, not guidance.
-  // TODO(trust-layer P1.5 / F-mycelium 264): append each promotion to the
-  // hash-chained memory audit log once 264 lands.
+  // TRUST LAYER P1.5 (264 merge — the old TODO is paid): EVERY promotion and
+  // its audit row are ONE transaction — a crash (or a fail-loud audit throw)
+  // must never leave a vouch the log cannot name, and one rollback takes the
+  // whole accept back. The actor is the authenticated bearer (the import
+  // route's fedActor shape); the row_hash is the POST-promote stored state
+  // (auditFedPromote, the sm-row shape), so the chain pins each stamp.
   router.post('/import/:bundleId/accept', importLimiter, function (req, res) {
     var user = requireBearer(req, res);
     if (!user) return;
@@ -535,7 +627,8 @@ export default function (core) {
     var accepted = [];
     var alreadyAccepted = 0;
     var forgotten = 0; // review A NIT 1: a bundle row forgotten since the import is counted, not dropped silently
-    var promoteAll = core.db.transaction(function () {
+    var promoteReason = 'federation accept of bundle ' + bundleId + ' — promoted_by __user:' + user.userId;
+    core.db.transaction(function () {
       for (var o of prior.outcomes) {
         var row = store.rowById(user.userId, o.row_id);
         if (!row) { forgotten++; continue; } // forgotten since the import — nothing to accept
@@ -544,10 +637,11 @@ export default function (core) {
         // review A MINOR 2: the stamp is the owner-door shape ('__user:<id>'),
         // not the bare numeric id — one promote_by shape across all doors.
         promoteBySourceId(core.db, row.source_type, row.source_id, '__user:' + user.userId);
-        accepted.push(store.view(store.rowById(user.userId, o.row_id)));
+        var now = store.rowById(user.userId, o.row_id);
+        accepted.push(store.view(now));
+        auditFedPromote(user.userId, row.source_type, row.source_id, now, promoteReason);
       }
-    });
-    promoteAll();
+    })();
     res.json({ ok: true, bundle_id: bundleId, accepted: accepted, already_accepted: alreadyAccepted, forgotten: forgotten });
   });
 

@@ -1,15 +1,77 @@
 // Auto-Memory plugin routes
 
 import { Router } from 'express';
-import createAutoMemoryDB from './db.js';
+import createAutoMemoryDB, { factState } from './db.js';
 import { callLLM } from './llm.js';
 import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
+// TRUST LAYER P1.1: the ONE definition of the origin ladder, the ref grammar,
+// ref→trust resolution and the min law — the same core semantic-memory's
+// routes bind through. Never a cross-plugin import.
+import { bindOriginClaim, originTrust, minTrust, resolveInputTrust } from '../../lib/trust-origins.js';
+
+// ---- TRUST LAYER P1.5: the fact audit helpers (module level — extractFacts
+// and runConsolidation are module exports and audit their own writes) --------
+// factState (the canonical audited state of one am_facts row) lives in db.js
+// and is imported above — every writer of an audited fact field hashes the
+// same bytes, the decay pass included (review A B1). The merged hash carries
+// P1.1's stamps (origin/trust/derived_from) with the rest of the row.
+
+// The extraction/consolidation paths run outside the plugin factory (handlers
+// call them with their own wrapper), so they share one audit instance PER RAW
+// DB — a WeakMap, not a module singleton: a singleton binds whichever db
+// arrives first and keeps writing to it after the db is swapped (every fresh
+// test db, or any future multi-db caller, would silently hit a stale handle).
+// The wrapper exposes the raw shared db as __coreDb (both callers pass the
+// wrapper).
+var auditsByDb = new WeakMap();
+function auditFor(db) {
+  var raw = db.__coreDb || db;
+  var a = auditsByDb.get(raw);
+  if (!a) {
+    a = createMemoryAudit(raw);
+    auditsByDb.set(raw, a);
+  }
+  return a;
+}
+
+function auditExtractFact(db, actor, action, fact, opts) {
+  opts = opts || {};
+  auditFor(db).append({
+    actor: actor,
+    action: action,
+    source_type: 'am_fact',
+    source_id: String(fact.id),
+    row_owner: fact.agent_id || null,
+    row_hash: contentHash(factState(fact)),
+    reason: opts.reason
+  });
+}
+
+// A fact row out → the client shape: trust NULL (an unstamped pre-P1.1 row)
+// reads as the LOWEST, and derived_from comes back as the array of refs it
+// was written as, not the JSON string the column stores.
+function decodeFactTrust(fact) {
+  if (!fact) return fact;
+  fact.trust = (fact.trust == null) ? 0 : fact.trust;
+  if (fact.derived_from) {
+    try {
+      var refs = JSON.parse(fact.derived_from);
+      if (Array.isArray(refs)) fact.derived_from = refs;
+    } catch (e) { /* keep the raw string */ }
+  }
+  return fact;
+}
 
 export default function (core) {
   var router = Router();
   var db = createAutoMemoryDB(core.db);
-  var { checkAdmin } = core.auth;
+  var { checkAdmin, getAdminDisplayName } = core.auth;
+  // TRUST LAYER P1.5: fact writes/edits/deletes/purges are audited here (where
+  // the authenticated actor is known); housekeeping prunes are audited inside
+  // db.js's prune* as 'system:housekeeping'.
+  var audit = createMemoryAudit(core.db);
   // TRUST LAYER P0.1 (F-mycelium/250): the agent routes' gate — an agent key,
   // the admin key/JWT, or a role-'agent' studio token; any OTHER studio JWT is
   // refused. checkAgentOrAdmin's any-JWT-authenticates path was the hole the
@@ -22,6 +84,22 @@ export default function (core) {
   // two index shapes never mix. bench/memory/arms/arm_mycelium_timeline.mjs
   // carries the same constant (FACT_INDEX_SOURCE_TYPE) — keep them in sync.
   var FACT_INDEX_SOURCE_TYPE = 'am_fact';
+
+  // ---- TRUST LAYER P1.5: the fact audit helpers ------------------------------
+  // factState lives at module level (the extraction/consolidation writers
+  // audit their rows too); auditFact binds this factory's audit instance.
+  function auditFact(actor, action, fact, opts) {
+    opts = opts || {};
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: 'am_fact',
+      source_id: String(fact.id),
+      row_owner: fact.agent_id || null,
+      row_hash: contentHash(factState(fact)),
+      reason: opts.reason
+    });
+  }
 
   // A query/body namespace that is present-and-meaningful, else null — an empty
   // `namespace=` is "unscoped", not a namespace named "".
@@ -82,7 +160,7 @@ export default function (core) {
       limit: parseInt(req.query.limit) || 50,
       offset: parseInt(req.query.offset) || 0
     });
-    res.json(facts);
+    res.json(facts.map(decodeFactTrust));
   });
 
   // GET /auto-memory/facts/due-reverification — the re-verify queue: CURRENT inferred facts never
@@ -111,7 +189,7 @@ export default function (core) {
     // list (agent_id = who) — another agent's fact is "not there": a plain
     // 404 that neither confirms the row nor names its owner. Admin excepted.
     if (!req._authIsAdmin && fact.agent_id !== who) return apiError(res, 404, 'Fact not found');
-    res.json(fact);
+    res.json(decodeFactTrust(fact));
   });
 
   // DELETE /auto-memory/facts/:id — delete a fact (admin)
@@ -125,7 +203,15 @@ export default function (core) {
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
-    var indexRemoved = db.deleteFact(fact.id);
+    // P1.5 (#193 lesson): the delete is audited with the fact AS DELETED —
+    // captured before deleteFact, in the same transaction.
+    var indexRemoved = core.db.transaction(function () {
+      var removed = db.deleteFact(fact.id);
+      // getAdminDisplayName: the admin key/JWT's identity as a STRING —
+      // checkAdmin's return value is a boolean, and audit rows bind it.
+      auditFact(getAdminDisplayName(req), 'delete', fact, { reason: 'admin delete' });
+      return removed;
+    })();
     res.json({ ok: true, index_removed: indexRemoved });
   });
 
@@ -153,7 +239,25 @@ export default function (core) {
         'rows with no namespace (legacy rows, Aria\'s internal writer) are unreachable from this route by design, ' +
         'so an unscoped call refuses rather than guess');
     }
-    var result = db.deleteFactsByNamespace(ns);
+    // TRUST LAYER P1.5 (review A round 2 N3): the wipe and its audit row are
+    // ONE transaction — the M2 shape (DELETE commits, then the append) would
+    // 500 AFTER the namespace is gone: silent data loss with no trace.
+    var result;
+    core.db.transaction(function () {
+      result = db.deleteFactsByNamespace(ns);
+      // P1.5 (#193 lesson): the bulk wipe is ONE purge row naming the namespace
+      // and the count — a purge the log cannot name never happened, as far as
+      // any reader could tell.
+      audit.append({
+        actor: getAdminDisplayName(req),
+        action: 'purge',
+        source_type: 'am_fact',
+        source_id: 'namespace=' + ns,
+        row_owner: null,
+        row_hash: contentHash({ kind: 'am_fact_purge', what: 'namespace', namespace: ns, deleted: result.deleted }),
+        reason: 'namespace purge: ' + result.deleted + ' facts'
+      });
+    })();
     res.json({ deleted: result.deleted, namespaces: [ns] });
   });
 
@@ -188,6 +292,21 @@ export default function (core) {
     if (authority === 'directive' && !req._authIsAdmin) {
       return apiError(res, 403, "source_authority 'directive' is reserved for the admin key — an agent's facts are verified or inferred, never directives");
     }
+    // TRUST LAYER P1.1: origin + trust + derived refs, bound through the same
+    // shared core POST /memory/index uses. The agent surface's ceiling is
+    // owner-agent — an agent key AND the admin key alike on this route — so a
+    // body origin above it (person) is flagged, never applied.
+    var boundOrigin = bindOriginClaim(b, 'owner-agent', core.db);
+    if (boundOrigin.error) return apiError(res, 400, boundOrigin.error);
+    // THE AUTHORITY LAW: nothing written by a model or a tool can RAISE trust
+    // or authority. 'verified' asserts a ground-truth check happened — a
+    // model-derived or tool-origin write claiming it is self-certification,
+    // refused (the row's source_authority stays what the caller can honestly
+    // hold: inferred, until a person or the owner's agent confirms it).
+    if ((boundOrigin.origin === 'model-derived' || boundOrigin.origin === 'tool') && authority === 'verified') {
+      return apiError(res, 403, "source_authority 'verified' is refused for origin '" + boundOrigin.origin +
+        "' — a model- or tool-written fact cannot self-certify; ground truth is confirmed by a person or the owner's agent");
+    }
     if (b.namespace != null && (typeof b.namespace !== 'string' || b.namespace.trim().length === 0 || b.namespace.length > 200)) {
       return apiError(res, 400, 'namespace must be a non-empty string (<= 200 chars)');
     }
@@ -207,8 +326,20 @@ export default function (core) {
       factAgentId = who;
       if (b.agent_id && b.agent_id !== who) claimedAgentId = b.agent_id;
     }
-    var id = db.createFact(factAgentId, b.project_id || null, b.category || 'general',
-      String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null, claimedAgentId);
+    // P1.5: the create and its audit row commit together. actor = the
+    // AUTHENTICATED identity (never the body's agent_id claim); the audited
+    // owner is the fact's agent_id (same, unless the admin wrote on behalf
+    // of a named agent — then the named agent is the owner, the admin key
+    // the actor).
+    var id = core.db.transaction(function () {
+      var newId = db.createFact(factAgentId, b.project_id || null, b.category || 'general',
+        String(b.fact_text), conf, b.source_type || 'aria', b.source_id || null, authority, b.valid_from || null, b.namespace || null, claimedAgentId,
+        // TRUST LAYER P1.1: the resolved stamps (the min law already ran inside
+        // bindOriginClaim — the row stores the RESOLVED trust, never the claim).
+        boundOrigin.origin, boundOrigin.trust, boundOrigin.derivedFrom);
+      auditFact(who, 'write', db.getFact(newId));
+      return newId;
+    })();
     // Surface whether the fact actually reached the searchable index. A 200 {ok:true}
     // used to hide BOTH "indexed, keyword-searchable, vector pending backfill" AND
     // "NOT indexed at all (semantic-memory absent / schema drift)". (§F4)
@@ -225,6 +356,10 @@ export default function (core) {
           confidence: conf,
           agent_id: factAgentId,
           claimed_agent_id: claimedAgentId || undefined, // omitted from the stored JSON when absent
+          // TRUST LAYER P1.1: above-ceiling claims ride along flagged — the
+          // same channel claimed_agent_id uses (visible, never trusted).
+          claimed_origin: boundOrigin.claimedOrigin || undefined,
+          claimed_trust: (boundOrigin.claimedTrust != null) ? boundOrigin.claimedTrust : undefined,
           project_id: b.project_id || null,
           fact_source_id: b.source_id || null,
           valid_from: fact.valid_from || null,
@@ -244,7 +379,7 @@ export default function (core) {
     // An honest write carries no claim field at all — the column reads NULL
     // and the key is dropped rather than serialized as null.
     if (!fact.claimed_agent_id) delete fact.claimed_agent_id;
-    res.json({ ok: true, id: id, fact: fact, memory_index: memoryIndex });
+    res.json({ ok: true, id: id, fact: decodeFactTrust(fact), memory_index: memoryIndex });
   });
 
   // POST /auto-memory/facts/:id/reverify — a ground-truth re-check CONFIRMED it (stamp verified_at)
@@ -266,8 +401,15 @@ export default function (core) {
     // custody closed, one surface over. Owner (or admin) only.
     if (refuseNotFactOwner(res, fact, who, req._authIsAdmin, 'reverify')) return;
     var conf = (req.body && req.body.confidence != null) ? Number(req.body.confidence) : null;
-    db.reverifyFact(id, conf);
-    res.json({ ok: true, fact: db.getFact(id) });
+    // P1.5: a re-verification edits the row's provenance (verified_at and
+    // possibly confidence) — audited as an edit on the fact.
+    var updated;
+    core.db.transaction(function () {
+      db.reverifyFact(id, conf);
+      updated = db.getFact(id);
+      auditFact(who, 'edit', updated, { reason: 'reverified' });
+    })();
+    res.json({ ok: true, fact: decodeFactTrust(updated) });
   });
 
   // POST /auto-memory/facts/:id/supersede — a newer fact replaces this one (Aria's UPDATE branch)
@@ -301,7 +443,14 @@ export default function (core) {
         (newFact.namespace ? "'" + newFact.namespace + "'" : '(legacy, unscoped)'));
     }
     var namespaced = !!oldFact.namespace;
-    var result = db.supersedeFact(oldId, newId, namespaced ? { keepIndexed: true } : undefined);
+    var result;
+    // P1.5: the supersede is an EDIT on the old fact — audited with its
+    // post-supersede state (superseded_by/valid_to set), the caller's
+    // authenticated identity as actor, the fact's agent as owner.
+    core.db.transaction(function () {
+      result = db.supersedeFact(oldId, newId, namespaced ? { keepIndexed: true } : undefined);
+      auditFact(who, 'edit', db.getFact(oldId), { reason: 'superseded by fact ' + newId });
+    })();
     if (namespaced) {
       var memoryIndex; // assigned on every path below before the response reads it
       // Re-index the old row in place: same (source_type, source_id) key, so the
@@ -326,7 +475,7 @@ export default function (core) {
       } catch (e) {
         memoryIndex = { indexed: false, reason: e.message };
       }
-      res.json({ ok: true, fact: result.old, replacement: result.replacement, memory_index: memoryIndex });
+      res.json({ ok: true, fact: decodeFactTrust(result.old), replacement: decodeFactTrust(result.replacement), memory_index: memoryIndex });
       return;
     }
     res.json({ ok: true });
@@ -562,13 +711,49 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         factText = String(factText).substring(0, FACT_TEXT_CAP);
         truncated = true;
       }
-      var id = db.createFact(
-        agentId, projectId,
-        category,
-        factText,
-        confidence,
-        'extraction', null
-      );
+      // Review A round 2 N5: the write and its audit row are ONE transaction —
+      // per write+audit pair, never across an await (this loop is async). A
+      // failed append rolls the fact back instead of leaving it persisted with
+      // its audit row owed.
+      var txdb = db.__coreDb || db;
+      var id = null;
+      txdb.transaction(function () {
+        // TRUST LAYER P1.1: a model wrote this — origin model-derived at the
+        // ladder's own trust (1), whatever seat ran the extraction. The route
+        // surface's verified-authority gate keeps such a row from ever calling
+        // itself ground truth.
+        id = db.createFact(
+          agentId, projectId,
+          category,
+          factText,
+          confidence,
+          'extraction', null,
+          null, null, null, null,
+          'model-derived', originTrust('model-derived'), null
+        );
+        // P1.5: the extraction writer's facts are audited like any write —
+        // actor = the agent the extraction ran for (the authenticated caller
+        // on POST /extract; the message's agent on the event hooks). The
+        // row_hash read-back shares getFact with the 254 honesty surface, so
+        // when THAT read-back is failing the row still appends — row_hash then
+        // pins the validated write intent and the reason says so. A skipped
+        // audit row is the one failure this log may never have. (264d merge:
+        // the fallback carries P1.1's stamps too — model-derived at trust 1 —
+        // so its hash pins the same fields the stored row's hash would.)
+        var factRow = null;
+        var readBackBroken = false;
+        try { factRow = db.getFact(id); } catch (e) { readBackBroken = true; }
+        auditExtractFact(db, agentId || 'system:auto-extract', 'write',
+          factRow || {
+            id: id, agent_id: agentId || null, project_id: projectId || null,
+            category: category, fact_text: factText, confidence: confidence,
+            source_type: 'extraction', source_authority: 'inferred',
+            valid_from: null, valid_to: null, verified_at: null,
+            superseded_by: null, namespace: null,
+            origin: 'model-derived', trust: originTrust('model-derived'), derived_from: null
+          },
+          { reason: readBackBroken ? 'extraction (row_hash pins the write intent — stored read-back failed)' : 'extraction' });
+      })();
 
       // Index in semantic memory if available — and SURFACE the outcome (§F4
       // honesty): the status object used to be discarded here, so a fact that
@@ -642,7 +827,7 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
     // row is still the truth the metadata should agree with).
     var factRow = null;
     try {
-      factRow = coreDb.prepare('SELECT source_authority, category, confidence FROM am_facts WHERE id = ?').get(factId);
+      factRow = coreDb.prepare('SELECT source_authority, category, confidence, origin, trust, derived_from FROM am_facts WHERE id = ?').get(factId);
     } catch (e) {
       // Fail-soft to the caller's (validated) values, but never SILENTLY — an
       // unreadable row of record is exactly what the honesty surfaces exist
@@ -653,17 +838,26 @@ function indexFactInMemory(coreDb, factId, fact, agentId, projectId) {
     var metaCategory = (factRow && factRow.category != null) ? factRow.category : (fact.category != null ? fact.category : 'general');
     var metaConfidence = (factRow && factRow.confidence != null) ? factRow.confidence : clampModelConfidence(fact.confidence);
     // The sm_embeddings table may not exist if the semantic-memory plugin isn't loaded.
+    // TRUST LAYER P1.1: the mirror row carries the fact row's OWN stamps
+    // (read back off the row of record, like authority above) — the search
+    // surface answers with the same origin/trust the fact table holds.
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by)
-      VALUES ('memory', ?, ?, ?, ?)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, metadata, written_by, origin, trust, derived_from)
+      VALUES ('memory', ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, metadata = excluded.metadata,
         -- TRUST LAYER P0 (review B item 2): this is a SERVER write of a
         -- server-owned type — the fact's agent_id is the row's real owner and
         -- replaces whatever custody the row carried (a squatter's write under
         -- the next fact id does not survive the server's own upsert).
-        written_by = excluded.written_by, updated_at = datetime('now')
-    `).run(String(factId), fact.fact_text, JSON.stringify({ category: metaCategory, agent_id: agentId, project_id: projectId, source_authority: authority, confidence: metaConfidence }), agentId || null);
+        written_by = excluded.written_by, updated_at = datetime('now'),
+        -- TRUST LAYER P1.1: and the row of record's stamps — forced like
+        -- custody, since the am_facts row is the truth the mirror agrees with.
+        origin = excluded.origin, trust = excluded.trust, derived_from = excluded.derived_from
+    `).run(String(factId), fact.fact_text, JSON.stringify({ category: metaCategory, agent_id: agentId, project_id: projectId, source_authority: authority, confidence: metaConfidence }), agentId || null,
+      (factRow && factRow.origin) || null,
+      (factRow && factRow.trust != null) ? factRow.trust : null,
+      (factRow && factRow.derived_from) || null);
     return { indexed: true, embedded: false, vector_search: 'pending backfill (POST /memory/reindex or /memory/backfill-embeddings)' };
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
@@ -750,16 +944,27 @@ async function indexFactSemantic(coreDb, factId, contentText, metadata, namespac
     // /facts route) — stamped on insert and FORCED on conflict, so a squatter
     // who pre-wrote the fact's id under a NULL/other written_by loses the row
     // to the server's own write instead of inheriting custody.
+    // TRUST LAYER P1.1: the mirror carries the fact ROW's own stamps (read
+    // back off the row of record — the supersede path re-indexes through here
+    // and must not launder the old row's origin by re-deriving it).
+    var stamps = null;
+    try {
+      stamps = coreDb.prepare('SELECT origin, trust, derived_from FROM am_facts WHERE id = ?').get(factId);
+    } catch (e) { /* no am_facts → unstamped mirror */ }
     coreDb.prepare(`
-      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by)
-      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL, ?)
+      INSERT INTO sm_embeddings (source_type, source_id, content_text, namespace, chunk_index, metadata, embedding, embedding_model, written_by, origin, trust, derived_from)
+      VALUES ('am_fact', ?, ?, ?, 0, ?, NULL, NULL, ?, ?, ?, ?)
       ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
         content_text = excluded.content_text, namespace = excluded.namespace,
         metadata = excluded.metadata, embedding = excluded.embedding,
         embedding_model = excluded.embedding_model,
-        written_by = excluded.written_by, updated_at = datetime('now')
+        written_by = excluded.written_by, updated_at = datetime('now'),
+        origin = excluded.origin, trust = excluded.trust, derived_from = excluded.derived_from
     `).run(String(factId), contentText, namespace, JSON.stringify(metadata || {}),
-      (metadata && metadata.agent_id) || null);
+      (metadata && metadata.agent_id) || null,
+      (stamps && stamps.origin) || null,
+      (stamps && stamps.trust != null) ? stamps.trust : null,
+      (stamps && stamps.derived_from) || null);
   } catch (e) {
     return { indexed: false, embedded: false, reason: 'semantic-memory not available: ' + e.message };
   }
@@ -849,7 +1054,14 @@ export async function runConsolidation(db, config, _core, opts) {
       for (var k of result.keep) {
         if (k.id && k.new_confidence !== undefined) {
           if (!canTouch(inputById[String(k.id)])) { factsRefused++; continue; }
-          db.updateFactConfidence(k.id, k.new_confidence);
+          // Review A round 2 N5: write + audit row are ONE transaction, per
+          // pair (the legs below stay per-statement, never across an await).
+          (db.__coreDb || db).transaction(function () {
+            db.updateFactConfidence(k.id, k.new_confidence);
+            // P1.5: a confidence rewrite is an edit on the row.
+            auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(k.id),
+              { reason: 'consolidation confidence update' });
+          })();
         }
       }
     }
@@ -864,7 +1076,12 @@ export async function runConsolidation(db, config, _core, opts) {
           var applied = 0;
           for (var sid of m.supersede_ids) {
             if (!canTouch(inputById[String(sid)])) { factsRefused++; continue; }
-            db.supersedeFact(sid, m.keep_id);
+            (db.__coreDb || db).transaction(function () {
+              db.supersedeFact(sid, m.keep_id);
+              // P1.5: the merge is an edit on the superseded row.
+              auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(sid),
+                { reason: 'merged into fact ' + m.keep_id + ' by consolidation' });
+            })();
             applied++;
           }
           if (applied > 0) factsMerged++;
@@ -875,9 +1092,25 @@ export async function runConsolidation(db, config, _core, opts) {
 
     // Add new insights
     if (Array.isArray(result.insights)) {
+      // TRUST LAYER P1.1: an insight is the purest derived row — the model
+      // wrote it FROM the reviewed set, so it cites every input it was shown
+      // (the refs P1.4 deletion walks) and takes the MIN of their trusts on
+      // top of its own model-derived ceiling. All reviewed ids, not just the
+      // touched ones: the model saw them all, so all of them inform it. (The
+      // API's MAX_DERIVED_FROM bound fences callers; the server's own writer
+      // here does not silently drop provenance to fit a caller cap.)
+      var inputRefs = recentFacts.map(function (f) { return 'am:' + f.id; });
+      var inputTrusts = inputRefs.map(function (r) { return resolveInputTrust(_core && _core.db ? _core.db : db.__coreDb, r); });
+      var insightTrust = minTrust(inputTrusts.concat([originTrust('model-derived')]));
       for (var insight of result.insights) {
         if (insight.fact_text && insight.fact_text.length >= 10) {
-          db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
+          (db.__coreDb || db).transaction(function () {
+            var insightId = db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null,
+              null, null, null, null, 'model-derived', insightTrust, inputRefs);
+            // P1.5: the consolidator's insight is a write — the server signs it
+            // ('system:consolidation'), owner-unknown (agent_id NULL, admin-only).
+            auditExtractFact(db, 'system:consolidation', 'write', db.getFact(insightId), { reason: 'consolidation insight' });
+          })();
         }
       }
     }

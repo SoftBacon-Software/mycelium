@@ -184,11 +184,12 @@ describe('docs inventory accuracy', () => {
       [/291/, `the endpoint count is ${ROUTE_COUNT}, not 291`],
       // (The historical "not 56 tables" ban was removed 2026-09-09: route_usage made 56 the
       // REAL table count, so mustContain above now REQUIRES "56 tables" and this ban would
-      // have contradicted it — the gate could never pass at 56. The 57-ban below stays.)
-      // 57 is the number the bare-keyword derivation most recently blessed into the docs
-      // (two comment lines quoting CREATE TABLE), so it is the one that would creep back
-      // through this list's blind spot. Both stale numbers banned; see TABLE_COUNT above.
-      [/57\s+tables/i, `the table count is ${TABLE_COUNT}, not 57 — the bare-keyword count included two schema.sql comment lines`],
+      // have contradicted it — the gate could never pass at 56.)
+      // (The "not 57 tables" ban was removed 2026-10-05 for the same reason: the trust
+      // layer's memory_audit table (P1.5) made 57 the REAL count — one real CREATE TABLE,
+      // not the old two-comment-line miscount — so mustContain above now REQUIRES
+      // "57 tables" and a 57-ban would make this gate unpassable. If the bare-keyword
+      // derivation ever blesses a wrong count again, ban THAT number here.)
       [/150\+/, '"150+" tests was retired'],
       [/40\s+files/, `the test-file count is ${TEST_FILE_COUNT}, not 40`],
       [/no linter/i, 'ESLint is configured (eslint.config.js) and runs in CI'],

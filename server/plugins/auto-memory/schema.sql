@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS am_facts (
   valid_to TEXT,                                      -- world-time it stopped (NULL = currently valid)
   verified_at TEXT,                                   -- last ground-truth re-check
   source_authority TEXT NOT NULL DEFAULT 'inferred',  -- how-validated: verified | directive | inferred
+  -- TRUST LAYER P1.1 (F-mycelium/265): same columns, same law as sm_embeddings
+  -- (semantic-memory/schema.sql) — origin = WHO the content came from
+  -- (server/lib/trust-origins.js is the one definition), trust 0..4 with NULL
+  -- read as the LOWEST, derived_from = JSON array of input refs on derived
+  -- rows ("am:<id>" for consolidation inputs). The guarded ALTERs in db.js
+  -- carry all three to existing databases.
+  origin TEXT,
+  trust INTEGER DEFAULT 0,
+  derived_from TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
