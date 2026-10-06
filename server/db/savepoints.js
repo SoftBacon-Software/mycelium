@@ -70,8 +70,13 @@ export function createSavepoint(agentId, data) {
 }
 
 export function getLatestSavepoint(agentId) {
+  // rowid tiebreaker (review A minor 3): heartbeat_at is second-granularity, so
+  // a heartbeat auto-savepoint and an explicit savepoint written in the same
+  // second tied and the pick was arbitrary — observed live the notes-less
+  // heartbeat row won over the just-written notes row. The higher rowid is
+  // always the later insert, which is what "latest" means.
   return db.prepare(
-    'SELECT * FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC LIMIT 1'
+    'SELECT * FROM agent_savepoints WHERE agent_id = ? ORDER BY heartbeat_at DESC, id DESC LIMIT 1'
   ).get(agentId);
 }
 

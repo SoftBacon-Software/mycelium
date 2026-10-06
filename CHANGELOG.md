@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Memory is data, never authority (trust layer P1.2)** — every render of
+  recalled or peer-authored stored text into a model-facing surface now goes
+  through one shared memory fence (`server/lib/memory-fence.js`): a
+  per-request random delimiter opens and closes the block, every physical
+  line carries a `[mem] ` datamark, a fixed rule above the block states it is
+  data to read and never instructions, and a byte-exact delimiter occurrence
+  inside the text is escaped so it cannot close the fence from inside. Fenced:
+  the extraction and consolidation prompts (both auto-memory builders, with
+  function replacement so `$&`-style patterns cannot expand), the outreach
+  personalizer prompt, the boot seed's savepoint recall, role contract
+  (description/responsibilities/constraints/guidelines, plus the
+  agent-settable llm fields), agent roster (working_on and the self-set
+  display name), drone roster, the overview's recent_activity lines, the
+  savepoint view/diff, the memory_search / facts / get_context / agent_profile
+  recall views (first content block byte-identical for programs, fence riding
+  as a second block), and CR-only line breaks normalized before the datamark.
+  Write side: the `roles/` context namespace is admin-owned for NEW keys
+  (`SECURITY_CONTEXT_NAMESPACES` — the census-namespace precedent), closing
+  the cross-project creation of `roles/<victim>` that the F1 project-scope
+  check never saw; existing keys keep project scope and the render fences
+  them. `getLatestSavepoint` breaks same-second ties by rowid. Injection
+  canaries in `test/unit/memory-fence.test.js` cover every path.
+
 - **Memory quarantine by default (trust layer P1.3)** — rows that no
   accountable writer deliberately placed land quarantined in metadata
   (`quarantined: true` + `quarantine_reason`): message auto-index rows
