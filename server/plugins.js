@@ -400,9 +400,16 @@ export async function loadPlugins(core, router) {
           // prefix baked into the path, so their patterns are already
           // mount-qualified; this catch-all matches no Express route, so
           // those requests record the global '<unmatched>' sentinel.)
+          // http-proxy-middleware is a devDependency, not shipped: its
+          // micromatch -> braces chain has NO patched release (CVE-2026-93687,
+          // every braces <= 3.0.3 vulnerable), and this import already degrades
+          // gracefully without it. Worker MCP tool routes still mount; the
+          // catch-all is the only loss, and it says so.
           var { createProxyMiddleware } = await import('http-proxy-middleware').catch(function () { return {}; });
           if (createProxyMiddleware) {
             router.use(prefix, createProxyMiddleware({ target: 'http://127.0.0.1:' + workerPort, changeOrigin: true }));
+          } else {
+            console.warn('[plugins] worker ' + manifest.name + ': http-proxy-middleware not installed — catch-all proxy under ' + prefix + ' NOT mounted (MCP tool routes still work). Add http-proxy-middleware locally to enable it.');
           }
         }
 
