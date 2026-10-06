@@ -457,32 +457,51 @@ export default function (core) {
           ' chunks at chunk_size ' + db.getChunkSize() + '); raise chunk_size or split the doc');
       }
       // Chunk-aware: oversized content splits into chunk rows, and stale
-      // chunks from a previous (larger) version of the doc are removed
-      var chunks = db.indexDoc(source_type, source_id, content_text, {
-        namespace: namespace,
-        metadata: metadata,
-        written_by: who
-      });
-      chunkCount = chunks.length;
-      // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
-      // 0..N-1 in place, so the rows align with the chunk texts.
-      var stored = db.getDocChunks(source_type, source_id);
-      // Alert #279 (task 257): the loop below is bounded HERE, on the count the
-      // write actually produced. The preview above already refuses over-bound
-      // content BEFORE the write (chunkText is pure slicing, so its count is
-      // the write's count); this guard re-pins the same constant at the loop
-      // itself — fail-closed if the two ever disagree, and the bound shape the
-      // loop-bound analysis recognizes on the loop's own length read.
-      if (chunks.length > MAX_CHUNKS_PER_DOC) {
-        return apiError(res, 413, 'indexed chunk count (' + chunks.length +
-          ') exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC + ')');
+      // chunks from a previous (larger) version of the doc are removed.
+      // TRUST LAYER P1.5 (review A round 2 N2): this is the plugin's DEFAULT
+      // write branch — indexDoc and its audit row are ONE transaction
+      // (indexDoc's own transaction becomes a savepoint here), so a failed
+      // append cannot leave the doc persisted with its audit row owed. The
+      // embed refresh below stays OUTSIDE: it is a derived vector (M4), and
+      // it must not fire for a write that did not land.
+      var chunks;
+      var stored;
+      try {
+        core.db.transaction(function () {
+          chunks = db.indexDoc(source_type, source_id, content_text, {
+            namespace: namespace,
+            metadata: metadata,
+            written_by: who
+          });
+          chunkCount = chunks.length;
+          // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
+          // 0..N-1 in place, so the rows align with the chunk texts.
+          stored = db.getDocChunks(source_type, source_id);
+          // Alert #279 (task 257): the loop below is bounded HERE, on the count the
+          // write actually produced. The preview above already refuses over-bound
+          // content BEFORE the write (chunkText is pure slicing, so its count is
+          // the write's count); this guard re-pins the same constant at the loop
+          // itself — fail-closed if the two ever disagree, and the bound shape the
+          // loop-bound analysis recognizes on the loop's own length read. Thrown
+          // (not returned) so the disagreement rolls the write back too; the mark
+          // maps it back to the route's 413 contract.
+          if (chunks.length > MAX_CHUNKS_PER_DOC) {
+            var overBound = new Error('indexed chunk count (' + chunks.length +
+              ') exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC + ')');
+            overBound.chunkBound = true;
+            throw overBound;
+          }
+          // P1.5: ONE audit row for the doc (the audit is per memory row, not per
+          // chunk — the row_hash pins the doc's whole joined content).
+          auditSmWrite(who, 'write', source_type, source_id);
+        })();
+      } catch (e) {
+        if (e && e.chunkBound) return apiError(res, 413, e.message);
+        throw e;
       }
       for (var ci = 0; ci < chunks.length; ci++) {
         autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
       }
-      // P1.5: ONE audit row for the doc (the audit is per memory row, not per
-      // chunk — the row_hash pins the doc's whole joined content).
-      auditSmWrite(who, 'write', source_type, source_id);
     }
     core.emitEvent('memory_indexed', who, null,
       who + ' indexed ' + source_type + ':' + source_id, { source_type: source_type, source_id: source_id });
@@ -632,19 +651,27 @@ export default function (core) {
     if (!sourceType && !namespace) {
       return apiError(res, 400, 'refusing unfiltered purge — pass source_type and/or namespace');
     }
-    var deleted = db.purge({ source_type: sourceType, namespace: namespace });
-    // P1.5 (#193 lesson): the bulk wipe is audited as ONE purge row naming the
-    // exact filter and the count — a purge the log cannot name is a purge that
-    // never happened, as far as any reader could tell.
-    audit.append({
-      actor: getAdminDisplayName(req),
-      action: 'purge',
-      source_type: sourceType || '*',
-      source_id: 'namespace=' + (namespace || '*'),
-      row_owner: null,
-      row_hash: contentHash({ kind: 'purge', source_type: sourceType, namespace: namespace, deleted: deleted }),
-      reason: 'bulk purge: ' + deleted + ' rows'
-    });
+    // TRUST LAYER P1.5 (review A round 2 N1): the wipe and its audit row are
+    // ONE transaction — a purge is the most destructive path in the plugin,
+    // and on the M2 shape (DELETE commits, then the audit append) a failed
+    // append 500s AFTER the rows are gone: silent data loss with no trace,
+    // the exact #193 class this log exists to close.
+    var deleted;
+    core.db.transaction(function () {
+      deleted = db.purge({ source_type: sourceType, namespace: namespace });
+      // P1.5 (#193 lesson): the bulk wipe is audited as ONE purge row naming the
+      // exact filter and the count — a purge the log cannot name is a purge that
+      // never happened, as far as any reader could tell.
+      audit.append({
+        actor: getAdminDisplayName(req),
+        action: 'purge',
+        source_type: sourceType || '*',
+        source_id: 'namespace=' + (namespace || '*'),
+        row_owner: null,
+        row_hash: contentHash({ kind: 'purge', source_type: sourceType, namespace: namespace, deleted: deleted }),
+        reason: 'bulk purge: ' + deleted + ' rows'
+      });
+    })();
     console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
       (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });

@@ -219,19 +219,25 @@ export default function (core) {
         'rows with no namespace (legacy rows, Aria\'s internal writer) are unreachable from this route by design, ' +
         'so an unscoped call refuses rather than guess');
     }
-    var result = db.deleteFactsByNamespace(ns);
-    // P1.5 (#193 lesson): the bulk wipe is ONE purge row naming the namespace
-    // and the count — a purge the log cannot name never happened, as far as
-    // any reader could tell.
-    audit.append({
-      actor: getAdminDisplayName(req),
-      action: 'purge',
-      source_type: 'am_fact',
-      source_id: 'namespace=' + ns,
-      row_owner: null,
-      row_hash: contentHash({ kind: 'am_fact_purge', what: 'namespace', namespace: ns, deleted: result.deleted }),
-      reason: 'namespace purge: ' + result.deleted + ' facts'
-    });
+    // TRUST LAYER P1.5 (review A round 2 N3): the wipe and its audit row are
+    // ONE transaction — the M2 shape (DELETE commits, then the append) would
+    // 500 AFTER the namespace is gone: silent data loss with no trace.
+    var result;
+    core.db.transaction(function () {
+      result = db.deleteFactsByNamespace(ns);
+      // P1.5 (#193 lesson): the bulk wipe is ONE purge row naming the namespace
+      // and the count — a purge the log cannot name never happened, as far as
+      // any reader could tell.
+      audit.append({
+        actor: getAdminDisplayName(req),
+        action: 'purge',
+        source_type: 'am_fact',
+        source_id: 'namespace=' + ns,
+        row_owner: null,
+        row_hash: contentHash({ kind: 'am_fact_purge', what: 'namespace', namespace: ns, deleted: result.deleted }),
+        reason: 'namespace purge: ' + result.deleted + ' facts'
+      });
+    })();
     res.json({ deleted: result.deleted, namespaces: [ns] });
   });
 
@@ -663,32 +669,40 @@ export async function extractFacts(db, config, text, agentId, projectId) {
         factText = String(factText).substring(0, FACT_TEXT_CAP);
         truncated = true;
       }
-      var id = db.createFact(
-        agentId, projectId,
-        category,
-        factText,
-        confidence,
-        'extraction', null
-      );
-      // P1.5: the extraction writer's facts are audited like any write —
-      // actor = the agent the extraction ran for (the authenticated caller
-      // on POST /extract; the message's agent on the event hooks). The
-      // row_hash read-back shares getFact with the 254 honesty surface, so
-      // when THAT read-back is failing the row still appends — row_hash then
-      // pins the validated write intent and the reason says so. A skipped
-      // audit row is the one failure this log may never have.
-      var factRow = null;
-      var readBackBroken = false;
-      try { factRow = db.getFact(id); } catch (e) { readBackBroken = true; }
-      auditExtractFact(db, agentId || 'system:auto-extract', 'write',
-        factRow || {
-          id: id, agent_id: agentId || null, project_id: projectId || null,
-          category: category, fact_text: factText, confidence: confidence,
-          source_type: 'extraction', source_authority: 'inferred',
-          valid_from: null, valid_to: null, verified_at: null,
-          superseded_by: null, namespace: null
-        },
-        { reason: readBackBroken ? 'extraction (row_hash pins the write intent — stored read-back failed)' : 'extraction' });
+      // Review A round 2 N5: the write and its audit row are ONE transaction —
+      // per write+audit pair, never across an await (this loop is async). A
+      // failed append rolls the fact back instead of leaving it persisted with
+      // its audit row owed.
+      var txdb = db.__coreDb || db;
+      var id = null;
+      txdb.transaction(function () {
+        id = db.createFact(
+          agentId, projectId,
+          category,
+          factText,
+          confidence,
+          'extraction', null
+        );
+        // P1.5: the extraction writer's facts are audited like any write —
+        // actor = the agent the extraction ran for (the authenticated caller
+        // on POST /extract; the message's agent on the event hooks). The
+        // row_hash read-back shares getFact with the 254 honesty surface, so
+        // when THAT read-back is failing the row still appends — row_hash then
+        // pins the validated write intent and the reason says so. A skipped
+        // audit row is the one failure this log may never have.
+        var factRow = null;
+        var readBackBroken = false;
+        try { factRow = db.getFact(id); } catch (e) { readBackBroken = true; }
+        auditExtractFact(db, agentId || 'system:auto-extract', 'write',
+          factRow || {
+            id: id, agent_id: agentId || null, project_id: projectId || null,
+            category: category, fact_text: factText, confidence: confidence,
+            source_type: 'extraction', source_authority: 'inferred',
+            valid_from: null, valid_to: null, verified_at: null,
+            superseded_by: null, namespace: null
+          },
+          { reason: readBackBroken ? 'extraction (row_hash pins the write intent — stored read-back failed)' : 'extraction' });
+      })();
 
       // Index in semantic memory if available — and SURFACE the outcome (§F4
       // honesty): the status object used to be discarded here, so a fact that
@@ -969,10 +983,14 @@ export async function runConsolidation(db, config, _core, opts) {
       for (var k of result.keep) {
         if (k.id && k.new_confidence !== undefined) {
           if (!canTouch(inputById[String(k.id)])) { factsRefused++; continue; }
-          db.updateFactConfidence(k.id, k.new_confidence);
-          // P1.5: a confidence rewrite is an edit on the row.
-          auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(k.id),
-            { reason: 'consolidation confidence update' });
+          // Review A round 2 N5: write + audit row are ONE transaction, per
+          // pair (the legs below stay per-statement, never across an await).
+          (db.__coreDb || db).transaction(function () {
+            db.updateFactConfidence(k.id, k.new_confidence);
+            // P1.5: a confidence rewrite is an edit on the row.
+            auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(k.id),
+              { reason: 'consolidation confidence update' });
+          })();
         }
       }
     }
@@ -987,10 +1005,12 @@ export async function runConsolidation(db, config, _core, opts) {
           var applied = 0;
           for (var sid of m.supersede_ids) {
             if (!canTouch(inputById[String(sid)])) { factsRefused++; continue; }
-            db.supersedeFact(sid, m.keep_id);
-            // P1.5: the merge is an edit on the superseded row.
-            auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(sid),
-              { reason: 'merged into fact ' + m.keep_id + ' by consolidation' });
+            (db.__coreDb || db).transaction(function () {
+              db.supersedeFact(sid, m.keep_id);
+              // P1.5: the merge is an edit on the superseded row.
+              auditExtractFact(db, 'system:consolidation', 'edit', db.getFact(sid),
+                { reason: 'merged into fact ' + m.keep_id + ' by consolidation' });
+            })();
             applied++;
           }
           if (applied > 0) factsMerged++;
@@ -1003,10 +1023,12 @@ export async function runConsolidation(db, config, _core, opts) {
     if (Array.isArray(result.insights)) {
       for (var insight of result.insights) {
         if (insight.fact_text && insight.fact_text.length >= 10) {
-          var insightId = db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
-          // P1.5: the consolidator's insight is a write — the server signs it
-          // ('system:consolidation'), owner-unknown (agent_id NULL, admin-only).
-          auditExtractFact(db, 'system:consolidation', 'write', db.getFact(insightId), { reason: 'consolidation insight' });
+          (db.__coreDb || db).transaction(function () {
+            var insightId = db.createFact(null, null, insight.category || 'insight', insight.fact_text, insight.confidence || 0.7, 'consolidation', null);
+            // P1.5: the consolidator's insight is a write — the server signs it
+            // ('system:consolidation'), owner-unknown (agent_id NULL, admin-only).
+            auditExtractFact(db, 'system:consolidation', 'write', db.getFact(insightId), { reason: 'consolidation insight' });
+          })();
         }
       }
     }

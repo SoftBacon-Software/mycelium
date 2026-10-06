@@ -374,8 +374,10 @@ export default function createAutoMemoryDB(db) {
     // server is the honest actor, and a prune the log cannot name is silent
     // data loss. ONE summary row per prune call (the count + the id list, the
     // id list capped at 200 in the hashed reason), appended ONLY when rows
-    // actually changed; the audit row lands in the same transaction as the
-    // prune it describes.
+    // actually changed. Review A round 2 N4: the prune, its audit row and its
+    // index cleanup are ONE transaction (the decayFactConfidence shape, B1) —
+    // a failed append rolls the prune back instead of leaving rows deleted
+    // with their audit row owed.
 
     pruneOldSuperseded(maxAge) {
       maxAge = maxAge || '30 days';
@@ -385,12 +387,16 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         "SELECT id FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
       ).all(maxAge).map(function (r) { return r.id; });
-      var result = db.prepare(
-        "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
-      ).run(maxAge);
-      auditHousekeeping('old-superseded', doomed, { max_age: maxAge });
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
+        ).run(maxAge);
+        changes = result.changes;
+        auditHousekeeping('old-superseded', doomed, { max_age: maxAge });
+        unindexFacts(doomed);
+      })();
+      return changes;
     },
 
     logExtractionError(agentId, projectId, sourceEvent, errorMessage, inputPreview) {
@@ -431,14 +437,18 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         "SELECT id FROM am_facts WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
       ).all(threshold).map(function (r) { return r.id; });
-      var result = db.prepare(
-        "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
-      ).run(threshold);
-      // Decay-pruned facts are the ones the system judged least trustworthy —
-      // leaving them searchable would rank exactly the facts it decided to retire.
-      auditHousekeeping('low-confidence', doomed, { threshold: threshold });
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
+        ).run(threshold);
+        changes = result.changes;
+        // Decay-pruned facts are the ones the system judged least trustworthy —
+        // leaving them searchable would rank exactly the facts it decided to retire.
+        auditHousekeeping('low-confidence', doomed, { threshold: threshold });
+        unindexFacts(doomed);
+      })();
+      return changes;
     },
 
     pruneExcessFacts(agentId, maxFacts) {
@@ -451,12 +461,16 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         'SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?'
       ).all(agentId, toDelete).map(function (r) { return r.id; });
-      var result = db.prepare(
-        'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
-      ).run(agentId, toDelete);
-      auditHousekeeping('excess:' + agentId, doomed, { max_facts: maxFacts });
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
+        ).run(agentId, toDelete);
+        changes = result.changes;
+        auditHousekeeping('excess:' + agentId, doomed, { max_facts: maxFacts });
+        unindexFacts(doomed);
+      })();
+      return changes;
     }
   };
 }
