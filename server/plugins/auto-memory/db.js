@@ -1,6 +1,38 @@
 // Auto-Memory DB helpers
 
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 import { originTrust } from '../../lib/trust-origins.js';
+
+// The canonical state of one am_facts row — what every row_hash hashes.
+// Lives here (not in routes.js) so every writer of an audited fact field —
+// the routes, the extraction/consolidation paths and the decay pass — hashes
+// the same bytes (review A B1: decay audits its confidence rewrite too).
+// TRUST LAYER P1.1 (264d merge): origin/trust/derived_from are audited
+// CONTENT — P1.1 made the stamps part of the row's meaning (a re-stamp is a
+// mutation the chain must pin; two rows differing only in their stamps are
+// different rows). The stored shapes hash verbatim: origin as the string,
+// trust as the stored integer (NULL = unknown = the LOWEST, never highest —
+// 0 hashes as 0, not null), derived_from as the JSON string the column holds.
+export function factState(fact) {
+  return {
+    kind: 'am_fact',
+    fact_text: fact.fact_text,
+    agent_id: fact.agent_id || null,
+    category: fact.category || null,
+    project_id: fact.project_id || null,
+    confidence: fact.confidence,
+    source_type: fact.source_type || null,
+    source_authority: fact.source_authority || null,
+    valid_from: fact.valid_from || null,
+    valid_to: fact.valid_to || null,
+    verified_at: fact.verified_at || null,
+    superseded_by: fact.superseded_by || null,
+    namespace: fact.namespace || null,
+    origin: fact.origin || null,
+    trust: (fact.trust == null) ? null : Number(fact.trust),
+    derived_from: fact.derived_from || null
+  };
+}
 
 // TRUST LAYER P1.1 (F-mycelium/265): the ONE-TIME backfill of what is KNOWN
 // about pre-column rows. A directive fact came from the operator's own hand
@@ -43,6 +75,9 @@ export default function createAutoMemoryDB(db) {
   try { db.exec('ALTER TABLE am_facts ADD COLUMN verified_at TEXT'); } catch (e) { /* already exists */ }
   try { db.exec("ALTER TABLE am_facts ADD COLUMN source_authority TEXT NOT NULL DEFAULT 'inferred'"); } catch (e) { /* already exists */ }
   // Backfill existing rows so as-of queries are correct from day one.
+  // (Review A nit: these backfills rewrite audited-content fields on legacy
+  // DBs BEFORE the audit table exists — a one-time, unaudited migration per
+  // install, not a runtime write path; there is no log to append to yet.)
   try { db.exec('UPDATE am_facts SET valid_from = created_at WHERE valid_from IS NULL'); } catch (e) { /* */ }
   try { db.exec('UPDATE am_facts SET valid_to = updated_at WHERE superseded_by IS NOT NULL AND valid_to IS NULL'); } catch (e) { /* */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_am_facts_valid ON am_facts(valid_to)'); } catch (e) { /* */ }
@@ -136,6 +171,31 @@ export default function createAutoMemoryDB(db) {
   // reader interest.
   function factRow(id) {
     return db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+  }
+
+  // TRUST LAYER P1.5: the audit log (self-ensuring DDL — any harness works).
+  var audit = createMemoryAudit(db);
+
+  // Housekeeping prunes are audited as 'purge' rows signed
+  // 'system:housekeeping' — ONE summary row per prune call, appended ONLY
+  // when rows actually changed. (#193 lesson: a prune the log cannot name is
+  // silent data loss.)
+  function auditHousekeeping(what, doomed, extra) {
+    if (!doomed.length) return;
+    audit.append({
+      actor: 'system:housekeeping',
+      action: 'purge',
+      source_type: 'am_fact',
+      source_id: 'housekeeping:' + what,
+      row_owner: null,
+      row_hash: contentHash(Object.assign({
+        kind: 'am_fact_purge',
+        what: what,
+        deleted: doomed.length,
+        ids: doomed.slice(0, 200)
+      }, extra || {})),
+      reason: what + ': pruned ' + doomed.length + ' facts'
+    });
   }
 
   return {
@@ -272,6 +332,28 @@ export default function createAutoMemoryDB(db) {
       db.prepare("UPDATE am_facts SET confidence = ?, updated_at = datetime('now') WHERE id = ?").run(confidence, id);
     },
 
+    // TRUST LAYER P1.5 (review A B1): the decay pass's confidence rewrite is
+    // the identical operation runConsolidation audits as a system:consolidation
+    // edit row — so it is audited too: ONE 'system:decay' edit row per changed
+    // fact, in the SAME transaction as the update (a crash leaves neither the
+    // rewrite nor its row). Signed by the server like the housekeeping prunes:
+    // the actor is the scheduled pass, not any caller.
+    decayFactConfidence(id, confidence) {
+      db.transaction(function () {
+        db.prepare("UPDATE am_facts SET confidence = ?, updated_at = datetime('now') WHERE id = ?").run(confidence, id);
+        var fact = db.prepare('SELECT * FROM am_facts WHERE id = ?').get(id);
+        audit.append({
+          actor: 'system:decay',
+          action: 'edit',
+          source_type: 'am_fact',
+          source_id: String(id),
+          row_owner: fact ? (fact.agent_id || null) : null,
+          row_hash: contentHash(factState(fact)),
+          reason: 'confidence decay'
+        });
+      })();
+    },
+
     // -- Provenance / bi-temporal (memory-rework slice 1) --
 
     // A ground-truth re-check CONFIRMED the fact: stamp verified_at, optionally refresh
@@ -347,6 +429,16 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Pruning --
+    // TRUST LAYER P1.5 (#193 lesson: audit every DELETE path): housekeeping
+    // prunes are audited as 'purge' rows signed 'system:housekeeping' — the
+    // server is the honest actor, and a prune the log cannot name is silent
+    // data loss. ONE summary row per prune call (the count + the id list, the
+    // id list capped at 200 in the hashed reason), appended ONLY when rows
+    // actually changed. Review A round 2 N4: the prune, its audit row and its
+    // index cleanup are ONE transaction (the decayFactConfidence shape, B1) —
+    // a failed append rolls the prune back instead of leaving rows deleted
+    // with their audit row owed.
+
     pruneOldSuperseded(maxAge) {
       maxAge = maxAge || '30 days';
       // Collect ids BEFORE the delete — afterwards there is nothing left to join
@@ -355,11 +447,16 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         "SELECT id FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
       ).all(maxAge).map(function (r) { return r.id; });
-      var result = db.prepare(
-        "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
-      ).run(maxAge);
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          "DELETE FROM am_facts WHERE superseded_by IS NOT NULL AND updated_at < datetime('now', '-' || ?)"
+        ).run(maxAge);
+        changes = result.changes;
+        auditHousekeeping('old-superseded', doomed, { max_age: maxAge });
+        unindexFacts(doomed);
+      })();
+      return changes;
     },
 
     logExtractionError(agentId, projectId, sourceEvent, errorMessage, inputPreview) {
@@ -400,13 +497,18 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         "SELECT id FROM am_facts WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
       ).all(threshold).map(function (r) { return r.id; });
-      var result = db.prepare(
-        "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
-      ).run(threshold);
-      // Decay-pruned facts are the ones the system judged least trustworthy —
-      // leaving them searchable would rank exactly the facts it decided to retire.
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          "UPDATE am_facts SET superseded_by = id, valid_to = datetime('now') WHERE superseded_by IS NULL AND confidence < ? AND updated_at < datetime('now', '-7 days')"
+        ).run(threshold);
+        changes = result.changes;
+        // Decay-pruned facts are the ones the system judged least trustworthy —
+        // leaving them searchable would rank exactly the facts it decided to retire.
+        auditHousekeeping('low-confidence', doomed, { threshold: threshold });
+        unindexFacts(doomed);
+      })();
+      return changes;
     },
 
     pruneExcessFacts(agentId, maxFacts) {
@@ -419,11 +521,16 @@ export default function createAutoMemoryDB(db) {
       var doomed = db.prepare(
         'SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?'
       ).all(agentId, toDelete).map(function (r) { return r.id; });
-      var result = db.prepare(
-        'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
-      ).run(agentId, toDelete);
-      unindexFacts(doomed);
-      return result.changes;
+      var changes = 0;
+      db.transaction(function () {
+        var result = db.prepare(
+          'DELETE FROM am_facts WHERE id IN (SELECT id FROM am_facts WHERE agent_id = ? ORDER BY CASE WHEN superseded_by IS NOT NULL THEN 0 ELSE 1 END, updated_at ASC LIMIT ?)'
+        ).run(agentId, toDelete);
+        changes = result.changes;
+        auditHousekeeping('excess:' + agentId, doomed, { max_facts: maxFacts });
+        unindexFacts(doomed);
+      })();
+      return changes;
     }
   };
 }

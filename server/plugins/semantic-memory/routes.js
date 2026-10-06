@@ -9,6 +9,7 @@ import { rateLimited } from '../../lib/rate-limit.js';
 import { memoryAgentGuard } from '../../lib/memory-auth.js';
 import { ORIGINS, ORIGIN_TRUST, bindOriginClaim } from '../../lib/trust-origins.js';
 import { generateEmbedding, generateEmbeddingBatch, createDroneEmbedJob } from './embeddings.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export default function (core) {
   var router = Router();
@@ -25,6 +26,77 @@ export default function (core) {
   // explicit asyncHandler() wrap on a route is defense-in-depth, not load-
   // bearing — but it documents which routes can reject.
   var { apiError, parseIntParam, asyncHandler } = core;
+
+  // TRUST LAYER P1.5 (F-mycelium/264): the append-only, hash-chained audit
+  // log — ONE row per memory write / edit / delete / purge / import across
+  // this plugin, auto-memory and federation. The storage half (schema,
+  // triggers, chain math) lives in server/lib/memory-audit.js, mirrored in
+  // server/schema.sql; the injections below are the write half. `actor` is
+  // always the identity the route already authenticated (never a body
+  // field); `row_hash` is the row's canonical content AFTER the action —
+  // deletes capture it AS DELETED, in the same transaction, so the chain
+  // pins what the delete removed.
+  //
+  // Vectors carry NO row (review A M4): an embedding is derived content — a
+  // function of the content_text the chain already pins — so neither the
+  // server-internal refreshes (autoEmbed route + hook, boot-drain, /reindex,
+  // /backfill-embeddings) nor a caller-supplied PUT /embeddings append an
+  // audit row. What governs who may store a vector is the routes' P0.2
+  // write-authority gates, not the chain; the chain is for content that can
+  // be lost, not for a re-derivable value whose current state is always
+  // observable on the row.
+  var audit = createMemoryAudit(core.db);
+
+  // The canonical state of one sm_embeddings doc, in the exact shape every
+  // audit row_hash is computed from: content joins the doc's chunks back
+  // losslessly (chunking is pure slicing), metadata/written_by/superseded_by
+  // come off the live rows. Returns null for a doc that has no rows — so a
+  // write hashes what is actually STORED, never what the caller meant to
+  // write, and a delete's pre-capture is the same function's output.
+  function smRowState(sourceType, sourceId) {
+    var chunks = db.getDocChunks(sourceType, sourceId);
+    if (chunks.length === 0) return null;
+    var meta;
+    try { meta = JSON.parse(chunks[0].metadata || '{}'); } catch (e) { meta = {}; }
+    return {
+      content: chunks.map(function (c) { return c.content_text; }).join(''),
+      namespace: chunks[0].namespace || null,
+      metadata: meta,
+      written_by: chunks[0].written_by || null,
+      superseded_by: chunks[0].superseded_by || null,
+      // TRUST LAYER P1.1 (264d merge): the row's stamps are audited content —
+      // a re-stamp is a mutation the chain must pin, and two rows differing
+      // only in their stamps are different rows. Doc-level values come off the
+      // first chunk (like metadata/written_by above); the stored shapes hash
+      // verbatim — origin as the string, trust as the stored integer (NULL =
+      // unknown = the LOWEST, never highest; 0 hashes as 0), derived_from as
+      // the JSON string the column holds.
+      origin: chunks[0].origin || null,
+      trust: (chunks[0].trust == null) ? null : Number(chunks[0].trust),
+      derived_from: chunks[0].derived_from || null
+    };
+  }
+
+  function smStateHash(state) {
+    return contentHash(Object.assign({ kind: 'sm_row' }, state));
+  }
+
+  // One audit row for a doc just written (or about to be reported on): the
+  // stored post-state is captured here so the write path and the delete
+  // path hash the same bytes.
+  function auditSmWrite(actor, action, sourceType, sourceId, opts) {
+    opts = opts || {};
+    var st = smRowState(sourceType, sourceId);
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: sourceType,
+      source_id: sourceId,
+      row_owner: opts.row_owner !== undefined ? opts.row_owner : (st ? st.written_by : null),
+      row_hash: st ? smStateHash(st) : contentHash({ kind: 'sm_row', missing: true }),
+      reason: opts.reason
+    });
+  }
 
   // Fire-and-forget embedding after route-level indexing — same flow as the
   // event handlers. (POST /index used to store NULL embeddings forever; that
@@ -429,16 +501,22 @@ export default function (core) {
     metadata = bound.metadata;
     var chunkCount = 1;
     if (chunk_index) {
-      // Explicit chunk_index = caller-managed chunking — store the row as-is
-      db.index(source_type, source_id, content_text, {
-        namespace: namespace,
-        chunk_index: chunk_index,
-        metadata: metadata,
-        written_by: who,
-        origin: bound.origin,
-        trust: bound.trust,
-        derived_from: bound.derived_from
-      });
+      // Explicit chunk_index = caller-managed chunking — store the row as-is,
+      // with its audit row in the SAME transaction (P1.5).
+      core.db.transaction(function () {
+        db.index(source_type, source_id, content_text, {
+          namespace: namespace,
+          chunk_index: chunk_index,
+          metadata: metadata,
+          written_by: who,
+          // TRUST LAYER P1.1: the bound stamps ride the write (the min law ran
+          // in bindOriginAndTrust above).
+          origin: bound.origin,
+          trust: bound.trust,
+          derived_from: bound.derived_from
+        });
+        auditSmWrite(who, 'write', source_type, source_id);
+      })();
       autoEmbedUnembedded(source_type, source_id, chunk_index);
     } else {
       // Enforce the chunk bound BEFORE writing: chunkText is pure slicing, so
@@ -450,28 +528,51 @@ export default function (core) {
           ' chunks at chunk_size ' + db.getChunkSize() + '); raise chunk_size or split the doc');
       }
       // Chunk-aware: oversized content splits into chunk rows, and stale
-      // chunks from a previous (larger) version of the doc are removed
-      var chunks = db.indexDoc(source_type, source_id, content_text, {
-        namespace: namespace,
-        metadata: metadata,
-        written_by: who,
-        origin: bound.origin,
-        trust: bound.trust,
-        derived_from: bound.derived_from
-      });
-      chunkCount = chunks.length;
-      // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
-      // 0..N-1 in place, so the rows align with the chunk texts.
-      var stored = db.getDocChunks(source_type, source_id);
-      // Alert #279 (task 257): the loop below is bounded HERE, on the count the
-      // write actually produced. The preview above already refuses over-bound
-      // content BEFORE the write (chunkText is pure slicing, so its count is
-      // the write's count); this guard re-pins the same constant at the loop
-      // itself — fail-closed if the two ever disagree, and the bound shape the
-      // loop-bound analysis recognizes on the loop's own length read.
-      if (chunks.length > MAX_CHUNKS_PER_DOC) {
-        return apiError(res, 413, 'indexed chunk count (' + chunks.length +
-          ') exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC + ')');
+      // chunks from a previous (larger) version of the doc are removed.
+      // TRUST LAYER P1.5 (review A round 2 N2): this is the plugin's DEFAULT
+      // write branch — indexDoc and its audit row are ONE transaction
+      // (indexDoc's own transaction becomes a savepoint here), so a failed
+      // append cannot leave the doc persisted with its audit row owed. The
+      // embed refresh below stays OUTSIDE: it is a derived vector (M4), and
+      // it must not fire for a write that did not land.
+      var chunks;
+      var stored;
+      try {
+        core.db.transaction(function () {
+          chunks = db.indexDoc(source_type, source_id, content_text, {
+            namespace: namespace,
+            metadata: metadata,
+            written_by: who,
+            // TRUST LAYER P1.1: the bound stamps ride every chunk of the doc.
+            origin: bound.origin,
+            trust: bound.trust,
+            derived_from: bound.derived_from
+          });
+          chunkCount = chunks.length;
+          // getDocChunks is chunk_index-ordered and indexDoc leaves exactly
+          // 0..N-1 in place, so the rows align with the chunk texts.
+          stored = db.getDocChunks(source_type, source_id);
+          // Alert #279 (task 257): the loop below is bounded HERE, on the count the
+          // write actually produced. The preview above already refuses over-bound
+          // content BEFORE the write (chunkText is pure slicing, so its count is
+          // the write's count); this guard re-pins the same constant at the loop
+          // itself — fail-closed if the two ever disagree, and the bound shape the
+          // loop-bound analysis recognizes on the loop's own length read. Thrown
+          // (not returned) so the disagreement rolls the write back too; the mark
+          // maps it back to the route's 413 contract.
+          if (chunks.length > MAX_CHUNKS_PER_DOC) {
+            var overBound = new Error('indexed chunk count (' + chunks.length +
+              ') exceeds MAX_CHUNKS_PER_DOC (' + MAX_CHUNKS_PER_DOC + ')');
+            overBound.chunkBound = true;
+            throw overBound;
+          }
+          // P1.5: ONE audit row for the doc (the audit is per memory row, not per
+          // chunk — the row_hash pins the doc's whole joined content).
+          auditSmWrite(who, 'write', source_type, source_id);
+        })();
+      } catch (e) {
+        if (e && e.chunkBound) return apiError(res, 413, e.message);
+        throw e;
       }
       for (var ci = 0; ci < chunks.length; ci++) {
         autoEmbedUnembedded(source_type, source_id, ci, stored[ci]);
@@ -519,7 +620,27 @@ export default function (core) {
 
     // bulkIndex is chunk-aware — oversized items split into chunk rows;
     // it returns the rows actually written so each one embeds separately.
-    var rows = db.bulkIndex(items, who);
+    // TRUST LAYER P1.5 (review A M1/M2a): the writes and their audit rows are
+    // ONE transaction — bulkIndex's own transaction becomes a savepoint, so a
+    // crash (or a fail-loud audit throw) rolls the writes back WITH the rows
+    // they owe. Only the rows bulkIndex actually WROTE are audited: a
+    // byte-identical re-index is `unchanged` — nothing written, nothing to
+    // audit (the rule the auto-index hook already applies), because an audit
+    // log that records writes which did not happen is wrong in the other
+    // direction.
+    var rows;
+    core.db.transaction(function () {
+      rows = db.bulkIndex(items, who);
+      var written = {};
+      for (var ri = 0; ri < rows.length; ri++) {
+        if (!rows[ri].unchanged) written[rows[ri].source_type + '\u0000' + rows[ri].source_id] = true;
+      }
+      for (var bi = 0; bi < items.length; bi++) {
+        if (!written[items[bi].source_type + '\u0000' + items[bi].source_id]) continue;
+        // P1.5: ONE audit row per ITEM (a chunked item is one memory row).
+        auditSmWrite(who, 'write', items[bi].source_type, items[bi].source_id);
+      }
+    })();
 
     // Fire-and-forget embed for rows that didn't bring their own embedding —
     // EXCEPT unchanged rows (task 227): a byte-identical re-index kept its
@@ -566,7 +687,21 @@ export default function (core) {
     if (!who) return;
     if (refuseCompanionScoped(req.params.sourceType, null, res)) return;
     if (refuseNotRowOwner(res, req.params.sourceType, req.params.sourceId, who, req._authIsAdmin, 'delete')) return;
-    db.remove(req.params.sourceType, req.params.sourceId);
+    // P1.5 (#193 lesson): the delete is audited with the content AS DELETED —
+    // captured before db.remove, in the same transaction.
+    core.db.transaction(function () {
+      var victim = smRowState(req.params.sourceType, req.params.sourceId);
+      db.remove(req.params.sourceType, req.params.sourceId);
+      audit.append({
+        actor: who,
+        action: 'delete',
+        source_type: req.params.sourceType,
+        source_id: req.params.sourceId,
+        row_owner: victim ? victim.written_by : null,
+        row_hash: victim ? smStateHash(victim) : contentHash({ kind: 'sm_row', missing: true }),
+        reason: null
+      });
+    })();
     res.json({ ok: true });
   });
 
@@ -599,7 +734,27 @@ export default function (core) {
     if (!sourceType && !namespace) {
       return apiError(res, 400, 'refusing unfiltered purge — pass source_type and/or namespace');
     }
-    var deleted = db.purge({ source_type: sourceType, namespace: namespace });
+    // TRUST LAYER P1.5 (review A round 2 N1): the wipe and its audit row are
+    // ONE transaction — a purge is the most destructive path in the plugin,
+    // and on the M2 shape (DELETE commits, then the audit append) a failed
+    // append 500s AFTER the rows are gone: silent data loss with no trace,
+    // the exact #193 class this log exists to close.
+    var deleted;
+    core.db.transaction(function () {
+      deleted = db.purge({ source_type: sourceType, namespace: namespace });
+      // P1.5 (#193 lesson): the bulk wipe is audited as ONE purge row naming the
+      // exact filter and the count — a purge the log cannot name is a purge that
+      // never happened, as far as any reader could tell.
+      audit.append({
+        actor: getAdminDisplayName(req),
+        action: 'purge',
+        source_type: sourceType || '*',
+        source_id: 'namespace=' + (namespace || '*'),
+        row_owner: null,
+        row_hash: contentHash({ kind: 'purge', source_type: sourceType, namespace: namespace, deleted: deleted }),
+        reason: 'bulk purge: ' + deleted + ' rows'
+      });
+    })();
     console.log('[semantic-memory] purge: deleted ' + deleted + ' rows (source_type=' +
       (sourceType || '-') + ', namespace=' + (namespace || '-') + ') by ' + getAdminDisplayName(req));
     res.json({ ok: true, deleted: deleted, source_type: sourceType, namespace: namespace });
@@ -742,6 +897,11 @@ export default function (core) {
     if (key) meta.key = key;
     if (supersedes) meta.supersedes = supersedes;
 
+    // P1.5: the actor is the authenticated bearer; the audited owner is the
+    // row's owner scope (the user id) — the person, not an agent.
+    var companionActor = '__user:' + (user.displayName || user.username);
+    var companionScope = String(user.userId);
+
     if (supersedes) {
       var oldRow = db.companionRow(supersedes);
       if (!oldRow || (oldRow.namespace || '') !== namespace) {
@@ -765,15 +925,25 @@ export default function (core) {
           trust: ORIGIN_TRUST['person']
         });
         db.companionMarkSuperseded(supersedes, id);
+        // P1.5: the write row AND the supersede's edit row — the edit's
+        // post-state hash is captured after companionMarkSuperseded, so the
+        // chain pins the row as superseded. Both rows, or neither.
+        auditSmWrite(companionActor, 'write', COMPANION_SOURCE_TYPE, id, { row_owner: companionScope });
+        auditSmWrite(companionActor, 'edit', COMPANION_SOURCE_TYPE, supersedes, { row_owner: companionScope, reason: 'superseded by ' + id });
       });
       writeBoth();
     } else {
-      db.index(COMPANION_SOURCE_TYPE, id, text, {
-        namespace: namespace,
-        metadata: meta,
-        origin: 'person',
-        trust: ORIGIN_TRUST['person']
-      });
+      core.db.transaction(function () {
+        // TRUST LAYER P1.1: the companion surface IS the person — the ceiling
+        // and the stamp are the same origin here.
+        db.index(COMPANION_SOURCE_TYPE, id, text, {
+          namespace: namespace,
+          metadata: meta,
+          origin: 'person',
+          trust: ORIGIN_TRUST['person']
+        });
+        auditSmWrite(companionActor, 'write', COMPANION_SOURCE_TYPE, id, { row_owner: companionScope });
+      })();
     }
 
     // Embed like every other row (fire-and-forget; no-op without a provider).
@@ -946,8 +1116,20 @@ export default function (core) {
     // neither, and a forget that un-marks is no different — half-done, it
     // leaves the corrected fact AND its correction both recallable.
     var forgetAll = core.db.transaction(function () {
+      // P1.5 (#193 lesson): the delete is audited with the content AS DELETED,
+      // captured before db.remove — same transaction, both rows or neither.
+      var victim = smRowState(COMPANION_SOURCE_TYPE, id);
       db.companionClearSupersededBy(id);
       db.remove(COMPANION_SOURCE_TYPE, id);
+      audit.append({
+        actor: '__user:' + (user.displayName || user.username),
+        action: 'delete',
+        source_type: COMPANION_SOURCE_TYPE,
+        source_id: id,
+        row_owner: String(user.userId),
+        row_hash: victim ? smStateHash(victim) : contentHash({ kind: 'sm_row', missing: true }),
+        reason: null
+      });
     });
     forgetAll();
     res.json({ ok: true, forgotten: id });
@@ -1266,6 +1448,8 @@ export default function (core) {
           for (var ci = 0; ci < chunks.length; ci++) {
             autoEmbedUnembedded('lesson', newId, ci, stored[ci]);
           }
+          // P1.5: the correcting lesson is a write like any other.
+          auditSmWrite(who, 'write', 'lesson', newId);
         }
         // 241/F1 (review 239a): the flip goes through indexDoc, never a raw
         // chunk_index-0 db.index — indexDoc replaces the doc's chunk rows and
@@ -1318,6 +1502,14 @@ export default function (core) {
           }
           autoEmbedUnembedded('lesson', oldId, si, db.getDoc('lesson', oldId, si));
         }
+        // P1.5: the flip is an EDIT on the old row — audited with its content
+        // as now superseded, the ORIGINAL owner kept (the flip never steals
+        // the row), and the caller's reason verbatim. Inside writeBoth, so a
+        // rolled-back supersede leaves no audit row behind.
+        auditSmWrite(who, 'edit', 'lesson', oldId, {
+          row_owner: oldRow.written_by || null,
+          reason: reason
+        });
       });
       writeBoth();
     } catch (e) {
@@ -1493,6 +1685,9 @@ export default function (core) {
         "' is not the caller's row and no entitled embed job covers it — an agent key may store a vector only on a row it wrote, or as the row's owner / an admin-registered embedder holding the claimed embed job for it; ask the owner or use the admin key");
     }
     db.updateEmbedding(sourceType, sourceId, chunkIndex, embedding, model || 'unknown');
+    // No audit row (review A M4): the vector is derived content — the chain
+    // pins the content_text it was computed from, and this module's header
+    // states that law. The P0.2 gate above is what governed THIS write.
     res.json({ ok: true, source_type: sourceType, source_id: sourceId });
   });
 
@@ -1699,6 +1894,63 @@ export default function (core) {
       remaining: db.countUnembedded(owner) // caller-scoped: an agent's remaining is its own backlog
     });
   }));
+
+  // ======== TRUST LAYER P1.5: the audit read surface ==========================
+  // GET /memory/audit?row=<source_type>:<source_id> | ?since=<seq>
+  // Readable by the admin key/JWT and by the audited row's OWNER only —
+  // anyone else gets a plain-sentence 403 (a foreign row and a missing row
+  // read the same: ids are not an existence oracle across owners). Owner
+  // scope is the row_owner captured AT ACTION TIME (written_by for agent
+  // rows, the user id for companion rows), so it survives the row's deletion.
+  router.get('/audit', rateLimited('memory/audit', { windowMs: 60000, max: 120 }), function (req, res) {
+    var who = core.auth.checkAgentOrAdmin(req, res);
+    if (!who) return;
+    var studio = getStudioUser(req);
+    var identity = studio ? ('__user:' + (studio.displayName || studio.username)) : who;
+    var ownerScopes = req._authIsAdmin ? null
+      : [identity, studio ? String(studio.userId) : null].filter(Boolean);
+    var limit = Math.min(parseInt(req.query.limit) || 200, 500);
+
+    if (req.query.row !== undefined) {
+      var spec = String(req.query.row);
+      var sep = spec.indexOf(':');
+      if (sep === -1 || sep === 0 || sep === spec.length - 1) {
+        return apiError(res, 400, "row must be <source_type>:<source_id> — the memory row the audit lines name");
+      }
+      var rowType = spec.slice(0, sep);
+      var rowId = spec.slice(sep + 1);
+      var rows = audit.rowsForRow(rowType, rowId, limit);
+      if (!req._authIsAdmin) {
+        // The owner at action time; for a row with no audit lines yet (a
+        // pre-P1.5 row), fall back to the live row's owner. An owner we
+        // cannot prove is refused — fail closed.
+        var owner = rows.length > 0 ? rows[0].row_owner : (function () {
+          var live = db.getDoc(rowType, rowId, 0);
+          return live ? (live.written_by || null) : null;
+        })();
+        if (owner === null || ownerScopes.indexOf(owner) === -1) {
+          // Review A M3: ONE STATIC sentence for a foreign row AND a missing
+          // row — the body names neither the owner (no existence + ownership
+          // oracle across owners) nor even the requested id, so every refusal
+          // on this route reads byte-identical.
+          return apiError(res, 403, "the audit log of a memory row is readable by the row's owner and the admin only");
+        }
+      }
+      return res.json({ rows: rows, count: rows.length });
+    }
+
+    var since = parseInt(req.query.since) || 0;
+    var sinceRows = audit.rowsSince(since, req._authIsAdmin ? null : ownerScopes, limit);
+    return res.json({ rows: sinceRows, count: sinceRows.length, since: since });
+  });
+
+  // GET /memory/audit/verify — recompute the whole chain (admin only):
+  // {ok, length, first_bad_seq}. O(n); an integrity read, not a hot path.
+  router.get('/audit/verify', rateLimited('memory/audit-verify', { windowMs: 60000, max: 60 }), function (req, res) {
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    res.json(audit.verify());
+  });
 
   return router;
 }

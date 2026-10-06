@@ -966,3 +966,46 @@ CREATE TABLE IF NOT EXISTS x_read_ledger (
   http_status INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_x_read_ledger_at ON x_read_ledger(called_at);
+
+-- =============== Memory audit log (TRUST LAYER P1.5, 2026-10-05) ===============
+-- The append-only, hash-chained record of every memory write / edit / delete /
+-- purge / import across the semantic-memory, auto-memory and federation
+-- plugins. APPEND-ONLY: BEFORE UPDATE/DELETE triggers RAISE at the database
+-- itself, so no housekeeping or rotation path can touch it (the #193 lesson —
+-- audit every DELETE path; this table is the one path that refuses cleanup
+-- outright). HASH-CHAINED: hash = sha256(prev_hash + canonical(row)), genesis
+-- prev_hash = 64 × '0', canonical = recursively key-sorted JSON — see
+-- server/lib/memory-audit.js, which owns the writer, the reader and the
+-- verifier and mirrors this DDL (keep the two in sync; both idempotent).
+-- `actor` is always the AUTHENTICATED identity (never a body field);
+-- 'system:<role>' rows are the server's own internal writers (housekeeping,
+-- consolidation). `row_owner` is the target row's owner AT ACTION TIME — the
+-- read-side scope (admin + that owner), which survives the row itself.
+-- `row_hash` is sha256 of the row's canonical content AFTER the action (for a
+-- delete: the content AS DELETED, captured in the same transaction).
+CREATE TABLE IF NOT EXISTS memory_audit (
+  seq         INTEGER PRIMARY KEY,
+  at          TEXT NOT NULL DEFAULT (datetime('now')),
+  actor       TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id   TEXT NOT NULL,
+  row_owner   TEXT,
+  row_hash    TEXT NOT NULL,
+  reason      TEXT,
+  prev_hash   TEXT NOT NULL,
+  hash        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_audit_row ON memory_audit(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_memory_audit_actor ON memory_audit(actor);
+CREATE INDEX IF NOT EXISTS idx_memory_audit_action ON memory_audit(action, seq);
+CREATE TRIGGER IF NOT EXISTS memory_audit_no_update
+  BEFORE UPDATE ON memory_audit
+BEGIN
+  SELECT RAISE(ABORT, 'memory_audit is append-only (TRUST LAYER P1.5): UPDATE refused');
+END;
+CREATE TRIGGER IF NOT EXISTS memory_audit_no_delete
+  BEFORE DELETE ON memory_audit
+BEGIN
+  SELECT RAISE(ABORT, 'memory_audit is append-only (TRUST LAYER P1.5): DELETE refused');
+END;

@@ -14,6 +14,7 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { rateLimited } from '../../lib/rate-limit.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
   KINDS, verifyRow, verifyNetworkPassport, verifyAgentPassport, makeGrant,
@@ -27,6 +28,32 @@ export default function (core) {
   var store = createFederationStore(core.db);
   var { checkAdmin, getStudioUser } = core.auth;
   var { apiError, asyncHandler } = core;
+  // TRUST LAYER P1.5: fed rows land in sm_embeddings as companion rows — a
+  // visit write and an import are memory writes and are audited like them.
+  var audit = createMemoryAudit(core.db);
+
+  // One audit row for a fed row just inserted: the actor is whoever the route
+  // authenticated (the grant-bound visitor / the importing owner); the owner
+  // scope is the local user the row landed under.
+  function auditFedRow(actor, action, localOwnerId, sourceId, row, reason) {
+    audit.append({
+      actor: actor,
+      action: action,
+      source_type: 'companion',
+      source_id: sourceId,
+      row_owner: String(localOwnerId),
+      row_hash: contentHash({
+        kind: 'fed_row',
+        content: row.text,
+        kind_row: row.kind || null,
+        key: row.key || null,
+        at: row.at || null,
+        home: row.home || null,
+        agent: row.agent || null
+      }),
+      reason: reason
+    });
+  }
 
   var helloLimiter = rateLimited('federation/hello', { windowMs: 60000, max: 30 });
   var visitLimiter = rateLimited('federation/visit', { windowMs: 60000, max: 120 });
@@ -332,7 +359,20 @@ export default function (core) {
       return apiError(res, 400, 'row provenance does not match the grant (agent/home/network/visit)');
     }
 
-    var written = store.insertFedRow(g.visit.host_owner, row);
+    // P1.5: the visitor's write is audited on the HOST — actor = the
+    // grant-bound visitor agent (the authenticated writer), owner = the host
+    // owner's user id. A replay (inserted:false) writes nothing new and is
+    // audited once, on the original insert. Review A M2: insert + audit are
+    // ONE transaction — a crash (or a fail-loud audit throw) must never leave
+    // a FOREIGN memory write with no row; the rollback takes both.
+    var written = core.db.transaction(function () {
+      var w = store.insertFedRow(g.visit.host_owner, row);
+      if (w.inserted) {
+        auditFedRow(g.grant.agent_id, 'write', g.visit.host_owner, w.row.source_id, row,
+          'federation visit write from ' + g.grant.home_network + ' (visit ' + g.grant.visit_id + ')');
+      }
+      return w;
+    })();
     res.status(written.inserted ? 201 : 200).json({
       ok: true,
       replayed: !written.inserted,
@@ -493,13 +533,30 @@ export default function (core) {
     });
 
     var adj = adjudicateImport(bundle, homeRows);
-    for (var i = 0; i < bundle.rows.length; i++) {
-      var outcome = adj.outcomes[i];
-      if (outcome.outcome === 'replayed') continue;
-      store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
-    }
-    var episodeStore = store.insertFedRow(user.userId, adj.episode);
-    store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+    // P1.5: ONE import row per imported bundle row (the episode row is
+    // bookkeeping, not memory content — it is not audited). actor = the
+    // authenticated bearer; owner = the local user the rows landed under.
+    // Review A M2: each insert and its audit row are ONE transaction — a
+    // crash (or a fail-loud audit throw) must never leave a FOREIGN memory
+    // write with no row, and the import record must never name rows that did
+    // not land — so the episode row and recordImport ride the same
+    // transaction and a rollback takes all of it.
+    var fedActor = '__user:' + (user.displayName || user.username);
+    var inserted = [];
+    var episodeStore;
+    core.db.transaction(function () {
+      for (var i = 0; i < bundle.rows.length; i++) {
+        var outcome = adj.outcomes[i];
+        if (outcome.outcome === 'replayed') continue;
+        var ins = store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
+        inserted.push({ stored: ins.row, protocol: bundle.rows[i] });
+        auditFedRow(fedActor, 'import', user.userId, ins.row.source_id, bundle.rows[i],
+          'federation import of bundle ' + bundle.bundle_id + ' from ' +
+          ((bundle.host_passport && (bundle.host_passport.name || bundle.host_passport.network_id)) || 'host'));
+      }
+      episodeStore = store.insertFedRow(user.userId, adj.episode);
+      store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
+    })();
     res.status(201).json({
       ok: true,
       replayed: false,
