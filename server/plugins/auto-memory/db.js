@@ -1,5 +1,34 @@
 // Auto-Memory DB helpers
 
+import { originTrust } from '../../lib/trust-origins.js';
+
+// TRUST LAYER P1.1 (F-mycelium/265): the ONE-TIME backfill of what is KNOWN
+// about pre-column rows. A directive fact came from the operator's own hand
+// (source_authority 'directive' is admin-only by P0's gate) — it is stamped
+// owner-agent at the ladder's owner-agent trust. Everything else stays
+// unknown on purpose: an extracted or inferred row's pre-column origin is
+// genuinely unknowable, and unknown reads as the LOWEST trust, never the
+// highest. Guarded by a marker row in am_config; clearing the marker re-arms
+// it (the test does exactly that). Exported named so the migration is
+// callable — and therefore testable — on a seeded database; a silent
+// migration is an unverified one.
+export function backfillOriginTrust(db) {
+  // A raw harness DB may have am_facts without am_config (the temporal tests
+  // build the wrapper on a minimal schema) — without the marker table the
+  // one-time guard cannot exist, so skip LOUDLY (the init block logs it)
+  // rather than throw the whole wrapper away.
+  var hasConfig = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'am_config'").get();
+  if (!hasConfig) return { marker: 'skipped: no am_config table on this database' };
+  var marker = db.prepare("SELECT value FROM am_config WHERE key = 'origin_trust_backfill_v1'").get();
+  if (marker) return { directive: 0, marker: 'held' };
+  var directive = db.prepare(
+    "UPDATE am_facts SET origin = 'owner-agent', trust = ? WHERE source_authority = 'directive' AND origin IS NULL"
+  ).run(originTrust('owner-agent')).changes;
+  db.prepare("INSERT INTO am_config (key, value) VALUES ('origin_trust_backfill_v1', ?)")
+    .run('applied: ' + directive + ' directive rows -> owner-agent; all other pre-column rows unknown (lowest trust)');
+  return { directive: directive };
+}
+
 export default function createAutoMemoryDB(db) {
   // Migration: add access tracking columns
   try { db.exec('ALTER TABLE am_facts ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already exists */ }
@@ -37,6 +66,25 @@ export default function createAutoMemoryDB(db) {
   // this lives HERE (the guarded-ALTER block), not in schema.sql — same
   // column-dependent-migration rule the namespace note above states.
   try { db.exec('ALTER TABLE am_facts ADD COLUMN claimed_agent_id TEXT'); } catch (e) { /* already exists */ }
+
+  // Migration: trust + provenance that survive derivation (TRUST LAYER P1.1,
+  // F-mycelium/265). origin/trust/derived_from, same law as sm_embeddings —
+  // see the schema.sql comment and server/lib/trust-origins.js (the one
+  // definition). Like every column-dependent migration above, this lives
+  // HERE; on an existing DB the CREATE TABLE in schema.sql is a no-op.
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN origin TEXT'); } catch (e) { /* already exists */ }
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN trust INTEGER DEFAULT 0'); } catch (e) { /* already exists */ }
+  try { db.exec('ALTER TABLE am_facts ADD COLUMN derived_from TEXT'); } catch (e) { /* already exists */ }
+  var backfill = backfillOriginTrust(db);
+  if (backfill.marker) {
+    // 'held' is the NORMAL steady state (every boot after the first); a skip
+    // names its cause. Either way the one-time migration is not re-armed
+    // silently — the log line says which.
+    console.log('[auto-memory] origin/trust backfill not applied (' + backfill.marker + ')');
+  } else {
+    console.log('[auto-memory] TRUST LAYER P1.1 backfill applied: ' + backfill.directive +
+      ' directive facts -> origin owner-agent; all other pre-column rows left unknown (lowest trust)');
+  }
 
   // The inverse of indexFactInMemory() in routes.js. Every path that stops a fact
   // being CURRENT must also stop it being SEARCHABLE — otherwise a retracted or
@@ -117,21 +165,25 @@ export default function createAutoMemoryDB(db) {
     },
 
     // -- Facts --
-    // sourceAuthority (verified|directive|inferred), validFrom, namespace and
-    // claimedAgentId are optional & appended, so existing callers keep working
-    // (defaults: inferred, valid_from=now, namespace=NULL = a legacy row,
-    // claimed_agent_id=NULL = an honest write). claimedAgentId is the body's
-    // agent_id when it disagreed with the authenticated identity — recorded,
-    // flagged, never trusted (TRUST LAYER P0.2).
-    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId) {
+    // sourceAuthority (verified|directive|inferred), validFrom, namespace,
+    // claimedAgentId and — TRUST LAYER P1.1 — origin/trustLevel/derivedFrom
+    // are optional & appended, so existing callers keep working (defaults:
+    // inferred, valid_from=now, namespace=NULL = a legacy row,
+    // claimed_agent_id=NULL = an honest write, origin/trust=NULL = unstamped,
+    // read as the lowest). claimedAgentId is the body's agent_id when it
+    // disagreed with the authenticated identity — recorded, flagged, never
+    // trusted (TRUST LAYER P0.2). trustLevel is the ALREADY-RESOLVED integer
+    // (the routes apply the min law before calling); derivedFrom is an array
+    // of row refs, stored JSON-encoded.
+    createFact(agentId, projectId, category, factText, confidence, sourceType, sourceId, sourceAuthority, validFrom, namespace, claimedAgentId, origin, trustLevel, derivedFrom) {
       // F-mycelium 254: an explicit 0 is "no confidence", not "missing" — the
       // old `confidence || 0.8` inflated a caller's 0 to 0.8, both here and on
       // every /facts POST with confidence: 0. Only a null/undefined confidence
       // takes the 0.8 default.
       var conf = (confidence == null) ? 0.8 : confidence;
       var result = db.prepare(
-        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?) RETURNING id"
-      ).get(agentId || null, projectId || null, category || 'general', factText, conf, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null);
+        "INSERT INTO am_facts (agent_id, project_id, category, fact_text, confidence, source_type, source_id, source_authority, valid_from, namespace, claimed_agent_id, origin, trust, derived_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?, ?, ?) RETURNING id"
+      ).get(agentId || null, projectId || null, category || 'general', factText, conf, sourceType || null, sourceId || null, sourceAuthority || 'inferred', validFrom || null, namespace || null, claimedAgentId || null, origin || null, (trustLevel == null) ? null : Number(trustLevel), derivedFrom ? JSON.stringify(derivedFrom) : null);
       return result.id;
     },
 

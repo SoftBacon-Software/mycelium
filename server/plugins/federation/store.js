@@ -38,7 +38,17 @@ export default function createFederationStore(db) {
     ['sm_embeddings', 'fed_network', 'TEXT'],
     ['sm_embeddings', 'fed_home', 'TEXT'],
     ['sm_embeddings', 'fed_visit', 'TEXT'],
-    ['sm_embeddings', 'fed_sig', 'TEXT']
+    ['sm_embeddings', 'fed_sig', 'TEXT'],
+    // TRUST LAYER P1.1 (F-mycelium/265): origin/trust are SEMANTIC-MEMORY's
+    // columns (its schema.sql + db.js migration are the owners and the
+    // definition — server/lib/trust-origins.js), but THIS plugin's insert
+    // stamps them ('foreign-network' at trust 0 — the row crossed a border,
+    // the bottom of the ladder), so they must exist whoever loads first.
+    // Declaring them here too is the same guarded idiom: on a fresh DB the
+    // ALTER is the swallowed duplicate case; the definitions agree.
+    ['sm_embeddings', 'origin', 'TEXT'],
+    ['sm_embeddings', 'trust', 'INTEGER DEFAULT 0'],
+    ['sm_embeddings', 'derived_from', 'TEXT']
   ]) {
     try {
       db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def).run();
@@ -220,8 +230,8 @@ export default function createFederationStore(db) {
       ).get(storageId);
       if (existing) return { inserted: false, row: existing };
       var res = db.prepare(
-        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig) ' +
-        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)"
+        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig, origin, trust) ' +
+        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'foreign-network', 0)"
       ).run(storageId, row.text, companionNamespace(ownerId), JSON.stringify(meta),
         row.agent || null, row.network || null, row.home || null, row.visit || null, row.sig || null);
       if (res.changes === 0) return { inserted: false, row: this.rowById(ownerId, row.id) };
