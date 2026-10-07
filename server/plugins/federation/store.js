@@ -329,23 +329,38 @@ export default function createFederationStore(db) {
     },
 
     // The holder-side of a verifyRevoke'd message: delete every copy this
-    // instance holds — ANY owner's (the author owns the content; a holder
-    // keeps no claim to it) — tombstone each, and write the standing ban on
-    // the protocol id itself so a copy an owner that never held it tries to
-    // bring in later (souvenir import, replayed visit write) is refused by
-    // insertFedRow's resurrection guard. One transaction; per-row bookkeeping
-    // comes back as { revoked: copies deleted, unknown: ids nothing here held }.
+    // instance holds of ids the revoker AUTHORED — the stored row's fed_agent
+    // is the content's author, so a copy under any other agent's name is not
+    // the revoker's to take down — tombstone each deleted copy, and write the
+    // standing ban on the protocol id ONLY there (authorship evidenced by the
+    // copies) so a copy an owner that never held it tries to bring in later
+    // (souvenir import, replayed visit write) is refused by insertFedRow's
+    // resurrection guard. Review A M1 (267c): the ban used to land
+    // unconditionally — a met, validly-signed agent could ban FOREIGN content
+    // at a holder that cannot verify authorship, permanently refusing every
+    // later import of it. An id with no copy of the revoker's is refused
+    // instead: 'foreign' when the instance holds it under another author,
+    // 'unknown' when nothing here holds it at all. One transaction; per-row
+    // bookkeeping comes back as { revoked, unknown, foreign }.
     revokeRows(agentId, protocolIds) {
       var self = this;
       var revoked = 0;
       var unknown = [];
+      var foreign = [];
       var txn = db.transaction(function () {
         for (var i = 0; i < protocolIds.length; i++) {
           var copies = self.storageIdsForProtocolIds(agentId, [protocolIds[i]]);
           for (var c of copies) {
             revoked += forgetDocRaw(db, 'companion', c.storage_id, { by: agentId, reason: 'federation-revoke' });
           }
-          if (copies.length === 0) unknown.push(protocolIds[i]);
+          if (copies.length === 0) {
+            var heldByAnother = db.prepare(
+              "SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND json_extract(metadata, '$.fed_id') = ?"
+            ).get(protocolIds[i]).c;
+            if (heldByAnother > 0) foreign.push(protocolIds[i]);
+            else unknown.push(protocolIds[i]);
+            continue; // no copy of the revoker's → nothing to delete, authorship unproven → no ban
+          }
           forgetDocRaw(db, 'companion', protocolIds[i], { by: agentId, reason: 'federation-revoke' });
         }
         // TRUST LAYER P1.5: ONE summary row names the whole revoke — actor,
@@ -357,12 +372,13 @@ export default function createFederationStore(db) {
           source_type: 'companion',
           source_id: 'revoke:' + agentId,
           row_owner: null,
-          row_hash: contentHash({ kind: 'fed_revoke', agent: agentId, ids: protocolIds, revoked: revoked, unknown: unknown }),
-          reason: 'federation revoke: ' + revoked + ' copy(ies) across ' + protocolIds.length + ' id(s)'
+          row_hash: contentHash({ kind: 'fed_revoke', agent: agentId, ids: protocolIds, revoked: revoked, unknown: unknown, foreign: foreign }),
+          reason: 'federation revoke: ' + revoked + ' copy(ies) across ' + protocolIds.length + ' id(s)' +
+            (foreign.length ? ', ' + foreign.length + ' foreign id(s) refused' : '')
         });
       });
       txn();
-      return { revoked: revoked, unknown: unknown };
+      return { revoked: revoked, unknown: unknown, foreign: foreign };
     },
 
     // ---- imports --------------------------------------------------------------

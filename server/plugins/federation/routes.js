@@ -673,7 +673,7 @@ export default function (core) {
       return apiError(res, 403, 'revoke home_network does not match the passport on file');
     }
     var out = store.revokeRows(rev.agent_id, rev.row_ids);
-    res.json({ ok: true, revoked: out.revoked, unknown: out.unknown });
+    res.json({ ok: true, revoked: out.revoked, unknown: out.unknown, foreign: out.foreign });
   });
 
   // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for

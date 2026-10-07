@@ -644,6 +644,87 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
     expect(mem.body.results.find((r) => r.provenance && r.provenance.id === revokedRowId)).toBeUndefined();
   });
 
+  it('a cross-author revoke neither deletes nor bans foreign content (review A M1)', async () => {
+    // The grief: v2 is MET (passport on file), its signature is valid, its home
+    // matches — and it revokes v1's content id. The holder cannot verify
+    // authorship of an id it would only ban, so before this fix the standing
+    // ban landed anyway and every later import of v1's row was refused as
+    // revoked, permanently, on evidence v2 authored nothing here.
+    const t = { post: async (path, body, headers) => {
+      const r = request(app).post(path); for (const [k, v] of Object.entries(headers || {})) r.set(k, v); const res = await r.send(body); return { status: res.status, body: res.body };
+    } };
+    const write = await visitor.writeMemory(t, visitId, hostNetworkId, {
+      kind: 'aboutYou', key: 'p14.souvenir.3',
+      text: 'the third p14 souvenir row the cross-author revoke must not touch',
+      source: 'visit', at: '2026-10-06T09:00:00Z', supersedes: null
+    });
+    expect(write.status).toBe(201);
+    const v1RowId = write.body.row.provenance.id;
+
+    const AGENT2_SEED = crypto.createHash('sha256').update('p14-revoke-agent-2').digest('hex');
+    const { makeVisitor } = await import(join(FED_DIR, 'client.js'));
+    const visitor2 = makeVisitor({ homeSeed: GUEST_SEED, agentSeed: AGENT2_SEED, homeName: 'qurio-phone', agentName: 'Qurio-p14-b' });
+    const knock2 = await visitor2.hello(t);
+    expect(knock2.status).toBe(200); // met — passport on file, same home network
+
+    const res = await visitor2.revoke(t, [v1RowId], 'not my content');
+    expect(res.status).toBe(200);
+    expect(res.body.revoked).toBe(0);
+    expect(res.body.foreign).toEqual([v1RowId]); // named, not banned
+
+    // v1's live row survived…
+    const alive = raw.prepare("SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND json_extract(metadata, '$.fed_id') = ?").get(v1RowId).c;
+    expect(alive).toBeGreaterThanOrEqual(1);
+    // …and NO standing ban: the bare-protocol-id tombstone that insertFedRow's
+    // resurrection guard reads must be absent — was written unconditionally.
+    const ban = raw.prepare("SELECT COUNT(*) AS c FROM sm_tombstones WHERE source_type = 'companion' AND source_id = ?").get(v1RowId).c;
+    expect(ban).toBe(0);
+
+    // So a third owner importing v1's bundle afterwards lands it (quarantined,
+    // per P1.3) instead of seeing it refused as revoked.
+    const { makeRow, makeNetworkPassport, makeVisitRecord, makeBundle } = await import(join(FED_DIR, 'protocol.js'));
+    const { keyFromSeed, idForKey } = await import(join(FED_DIR, 'keys.js'));
+    const hostKey = keyFromSeed(HOST_SEED);
+    const hostId = idForKey(hostKey);
+    const homeId = idForKey(keyFromSeed(GUEST_SEED));
+    const row = makeRow(visitor.agentKey, visitor.agentId, {
+      kind: 'aboutYou', key: 'p14.souvenir.3',
+      text: 'the third p14 souvenir row the cross-author revoke must not touch',
+      source: 'visit', at: '2026-10-06T09:00:00Z', supersedes: null
+    }, { agent: visitor.agentId, network: hostId, home: homeId, visit: visitId });
+    expect(row.id).toBe(v1RowId);
+    const hostPassport = makeNetworkPassport(hostKey, hostId, {
+      name: 'p14-host', policy: { visitors: true, kinds_writable: ['aboutYou'], kinds_exportable: ['aboutYou'] },
+      issued_at: new Date().toISOString()
+    });
+    const visit = makeVisitRecord({
+      visit_id: visitId, host_network: hostId, agent_id: visitor.agentId,
+      home_network: homeId, grant_id: 'unused-for-shape', started_at: '2026-10-06T08:45:00Z', ended_at: '2026-10-06T09:00:00Z'
+    });
+    const bundle = makeBundle(hostKey, {
+      host_passport: hostPassport, agent_passport: visitor.agentPassport, visit,
+      rows: [row], issued_at: '2026-10-06T09:05:00Z'
+    });
+    const imp = await request(app).post('/federation/import')
+      .set('Authorization', 'Bearer ' + jwtFor(8888)).send({ bundle });
+    expect([200, 201]).toContain(imp.status);
+    const mine = imp.body.outcomes.find((o) => o.row_id === row.id);
+    expect(mine.outcome).toBe('imported'); // was 'revoked' — the ban made it a permanent refusal
+  });
+
+  it('a revoke of an id nothing here holds is refused without a standing ban (review A M1)', async () => {
+    const t = { post: async (path, body, headers) => {
+      const r = request(app).post(path); for (const [k, v] of Object.entries(headers || {})) r.set(k, v); const res = await r.send(body); return { status: res.status, body: res.body };
+    } };
+    const ghost = 'sha256-tl267-never-held-here';
+    const res = await visitor.revoke(t, [ghost], 'revoke something this holder never saw');
+    expect(res.status).toBe(200);
+    expect(res.body.revoked).toBe(0);
+    expect(res.body.unknown).toEqual([ghost]);
+    const ban = raw.prepare("SELECT COUNT(*) AS c FROM sm_tombstones WHERE source_type = 'companion' AND source_id = ?").get(ghost).c;
+    expect(ban).toBe(0); // was 1 — the ban pre-registered a refusal for content never held
+  });
+
   it('a re-imported souvenir containing the revoked row is refused — no resurrection', async () => {
     // The visitor revokes BEFORE re-import: build a bundle by hand (makeBundle)
     // whose rows contain the revoked id, signed as a host would, and import.
