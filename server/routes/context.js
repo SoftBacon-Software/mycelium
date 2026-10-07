@@ -17,7 +17,7 @@ import {
 export function registerContextRoutes(router, deps) {
   const {
     asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent,
-    checkProjectScope, agentCanAccessProject,
+    checkProjectScope, agentCanAccessProject, getAdminDisplayName,
   } = deps;
 
   // ======== CONTEXT ========
@@ -152,9 +152,11 @@ export function registerContextRoutes(router, deps) {
     // TRUST LAYER P1.4: a deleted key's auto-indexed memory row must follow it
     // — the deletion-cascade listeners fire off this event (the single-key
     // delete previously emitted NOTHING, so its row outlived the key forever).
+    // Review A B1 (267c): checkAdmin returns a boolean — record the resolved
+    // display name, not String(true).
     emitEvent('context_key_deleted', '__system__', null,
       'Admin deleted context key ' + req.params.namespace + ':' + req.params.key,
-      { namespace: req.params.namespace, key: req.params.key, deleted_by: String(who) });
+      { namespace: req.params.namespace, key: req.params.key, deleted_by: getAdminDisplayName(req) });
     res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
   }));
 
@@ -182,7 +184,7 @@ export function registerContextRoutes(router, deps) {
     if (deletedSecurityKey) invalidateEnforcementRulesCache();
     emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys', {
       keys: doomedKeys.map(function (t) { return { namespace: t.namespace, key: t.key }; }),
-      deleted_by: String(who)
+      deleted_by: getAdminDisplayName(req) // review A B1 (267c): was String(who) → 'true'
     });
     res.json({ ok: true, deleted: deleted });
   }));

@@ -19,7 +19,7 @@ export function registerTaskRoutes(router, deps) {
     agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
     emitEvent,
     validateStringLength, checkProjectScope, warnSuspectTransition,
-    dispatchWorkToIdleAgents, pageEnvelope,
+    dispatchWorkToIdleAgents, pageEnvelope, getAdminDisplayName,
     MAX_TITLE, MAX_DESCRIPTION, TASK_STATUSES, TASK_PRIORITIES,
   } = deps;
 
@@ -325,8 +325,11 @@ export function registerTaskRoutes(router, deps) {
     // deleter — the deletion-cascade listeners (semantic-memory's auto-indexed
     // row, auto-memory's extracted facts) key off it, and the tombstones they
     // write record who the platform authenticated, not a body claim.
+    // Review A B1 (267c): checkAdmin returns a boolean, so String(who) landed
+    // 'true' on the tombstones — resolve the display name the way every other
+    // admin path does (studio identity, else X-Acting-As, else '__system__').
     emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title,
-      { task_id: id, deleted_by: String(who) });
+      { task_id: id, deleted_by: getAdminDisplayName(req) });
     res.json({ ok: true, id: id });
   }));
 

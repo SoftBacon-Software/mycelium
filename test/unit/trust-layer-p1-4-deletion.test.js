@@ -130,7 +130,7 @@ describe('P1.4 TOMBSTONES: a deleted row leaves a tombstone, never its content',
     for (let i = 0; i < 3; i++) {
       const tombs = smTombstones(db.getDB(), 'note', 'tl267-purge-' + i);
       expect(tombs.length).toBeGreaterThanOrEqual(1);
-      expect(tombs[0].deleted_by).toBeTruthy(); // the admin actor is on the record
+      expect(tombs[0].deleted_by).toBe('__system__'); // the admin actor is on the record — the value, not a truthy blob
       expect(tombs[0].reason).toBe('purge');
     }
   });
@@ -150,7 +150,7 @@ describe('P1.4 TOMBSTONES: a deleted row leaves a tombstone, never its content',
     const tomb = db.getDB().prepare('SELECT * FROM am_tombstones WHERE fact_id = ?').all(factId);
     expect(tomb.length).toBeGreaterThanOrEqual(1);
     expect(tomb[0].deleted_at).toBeTruthy();
-    expect(tomb[0].deleted_by).toBeTruthy();
+    expect(tomb[0].deleted_by).toBe('__system__'); // the resolved admin actor (review A B1: assert the value)
     expect(JSON.stringify(tomb[0])).not.toContain('tombstones as well');
   });
 });
@@ -181,7 +181,7 @@ describe('P1.4 SOURCE CASCADE: deleting the source deletes the memory rows that 
 
     const tombs = smTombstones(db.getDB(), 'task', String(taskId));
     expect(tombs.length).toBeGreaterThanOrEqual(1);
-    expect(tombs[0].deleted_by).toBeTruthy(); // the authenticated deleter
+    expect(tombs[0].deleted_by).toBe('__system__'); // the authenticated deleter (review A B1: the value, not truthiness)
     expect(tombs[0].reason).toBe('source-deleted');
   });
 
@@ -277,6 +277,69 @@ describe('P1.4 SOURCE CASCADE: deleting the source deletes the memory rows that 
     const afterBulk = await searchFor(app, 'kiln schedule tl267 cones');
     expect(afterBulk.body.results.find((r) => r.source_id === ns + ':kiln')).toBeUndefined();
     expect(smTombstones(db.getDB(), 'context_key', ns + ':kiln').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// --------------------- THE ACTOR ON THE RECORD (review A B1) ------------------
+
+describe('P1.4 ACTOR: the tombstone names the authenticated actor, never a boolean', () => {
+  // checkAdmin returns a BOOLEAN; the source-delete routes used to stringify it,
+  // so every source-deleted tombstone recorded deleted_by = 'true' — a record
+  // of WHO deleted that names nobody. The route must resolve the display name
+  // the way every other admin path does (getAdminDisplayName): the studio
+  // identity, else X-Acting-As, else '__system__'.
+
+  it('a task delete with an acting-as admin records the acting name on the tombstone', async () => {
+    const created = await request(app).post('/api/mycelium/tasks').set(agentAuth).send({
+      title: 'tl267 actor task about the brass orrery maintenance window'
+    });
+    expect(created.status).toBe(200);
+    const del = await request(app).delete('/api/mycelium/tasks/' + created.body.id)
+      .set({ 'X-Admin-Key': ADMIN_KEY, 'X-Acting-As': 'gilbert-tl267' });
+    expect(del.status).toBe(200);
+    const tombs = smTombstones(db.getDB(), 'task', String(created.body.id));
+    expect(tombs.length).toBeGreaterThanOrEqual(1);
+    expect(tombs[0].deleted_by).toBe('gilbert-tl267'); // was 'true' — the review's repro
+  });
+
+  it('a single context-key delete records the acting name', async () => {
+    const ns = 'tl267-actor';
+    const put = await request(app).put('/api/mycelium/context/keys/' + ns + '/actor')
+      .set(agentAuth).send({ data: 'the actor law test key for tl267' });
+    expect(put.status).toBe(200);
+    const del = await request(app).delete('/api/mycelium/context/keys/' + ns + '/actor')
+      .set({ 'X-Admin-Key': ADMIN_KEY, 'X-Acting-As': 'gilbert-tl267' });
+    expect(del.status).toBe(200);
+    const tombs = smTombstones(db.getDB(), 'context_key', ns + ':actor');
+    expect(tombs.length).toBeGreaterThanOrEqual(1);
+    expect(tombs[0].deleted_by).toBe('gilbert-tl267');
+  });
+
+  it('a bulk context-key delete records the acting name on every tombstone', async () => {
+    const ns = 'tl267-actor-bulk';
+    const put = await request(app).put('/api/mycelium/context/keys/' + ns + '/batch')
+      .set(agentAuth).send({ data: 'the bulk actor law test key for tl267' });
+    expect(put.status).toBe(200);
+    const idRow = db.getDB().prepare('SELECT id FROM context_keys WHERE namespace = ? AND key = ?').get(ns, 'batch');
+    expect(idRow).toBeTruthy();
+    const bulk = await request(app).post('/api/mycelium/context/keys/bulk-delete')
+      .set({ 'X-Admin-Key': ADMIN_KEY, 'X-Acting-As': 'gilbert-tl267' }).send({ ids: [idRow.id] });
+    expect(bulk.status).toBe(200);
+    const tombs = smTombstones(db.getDB(), 'context_key', ns + ':batch');
+    expect(tombs.length).toBeGreaterThanOrEqual(1);
+    expect(tombs[0].deleted_by).toBe('gilbert-tl267');
+  });
+
+  it('a bare admin key (no acting-as) records the system actor, not a boolean', async () => {
+    const created = await request(app).post('/api/mycelium/tasks').set(agentAuth).send({
+      title: 'tl267 bare-admin-key actor task about the tin type foundry'
+    });
+    expect(created.status).toBe(200);
+    const del = await request(app).delete('/api/mycelium/tasks/' + created.body.id).set(adminKeyAuth);
+    expect(del.status).toBe(200);
+    const tombs = smTombstones(db.getDB(), 'task', String(created.body.id));
+    expect(tombs.length).toBeGreaterThanOrEqual(1);
+    expect(tombs[0].deleted_by).toBe('__system__'); // the helper's documented fallback
   });
 });
 

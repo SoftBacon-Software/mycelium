@@ -1458,7 +1458,7 @@ registerTaskRoutes(router, {
   agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
   emitEvent, validateStringLength, checkProjectScope, warnSuspectTransition,
   dispatchWorkToIdleAgents, MAX_TITLE, MAX_DESCRIPTION,
-  TASK_STATUSES, TASK_PRIORITIES, pageEnvelope,
+  TASK_STATUSES, TASK_PRIORITIES, pageEnvelope, getAdminDisplayName,
 });
 
 // ======== AGENTS (extracted to agents.js) ========
@@ -1471,7 +1471,7 @@ registerAgentRoutes(router, {
 
 // ======== CONTEXT ========
 
-registerContextRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent, checkProjectScope, agentCanAccessProject });
+registerContextRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent, checkProjectScope, agentCanAccessProject, getAdminDisplayName });
 
 // ======== SPEND TRACKING (extracted to spend.js) ========
 
