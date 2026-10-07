@@ -462,6 +462,10 @@ export function registerHooks(core) {
       }
     } catch (e) {
       console.error('[semantic-memory] source cascade ' + sourceType + ':' + sourceId + ' failed:', e.message);
+      // Review A M2 (267c): the deletion-cascade failure is not swallowed here —
+      // emitEventCascade collects it and the delete route fails LOUD (500, whole
+      // transaction rolled back), the same law the direct forget routes follow.
+      throw e;
     }
   }
 
@@ -470,7 +474,7 @@ export function registerHooks(core) {
       var data = parseEventData(eventData);
       if (data.task_id == null) return;
       forgetSource('task', data.task_id, data.deleted_by);
-    } catch (e) { console.error('[semantic-memory] task_deleted hook error:', e.message); }
+    } catch (e) { console.error('[semantic-memory] task_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('concept_deleted', function (eventData) {
@@ -478,7 +482,7 @@ export function registerHooks(core) {
       var data = parseEventData(eventData);
       if (data.concept_id == null) return;
       forgetSource('concept', data.concept_id, data.deleted_by);
-    } catch (e) { console.error('[semantic-memory] concept_deleted hook error:', e.message); }
+    } catch (e) { console.error('[semantic-memory] concept_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('plan_deleted', function (eventData) {
@@ -486,7 +490,7 @@ export function registerHooks(core) {
       var data = parseEventData(eventData);
       if (data.plan_id == null) return;
       forgetSource('plan', data.plan_id, data.deleted_by);
-    } catch (e) { console.error('[semantic-memory] plan_deleted hook error:', e.message); }
+    } catch (e) { console.error('[semantic-memory] plan_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('context_key_deleted', function (eventData) {
@@ -494,7 +498,7 @@ export function registerHooks(core) {
       var data = parseEventData(eventData);
       if (!data.namespace || !data.key) return;
       forgetSource('context_key', data.namespace + ':' + data.key, data.deleted_by);
-    } catch (e) { console.error('[semantic-memory] context_key_deleted hook error:', e.message); }
+    } catch (e) { console.error('[semantic-memory] context_key_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('context_keys_bulk_delete', function (eventData) {
@@ -504,7 +508,7 @@ export function registerHooks(core) {
       for (var k of keys) {
         if (k && k.namespace && k.key) forgetSource('context_key', k.namespace + ':' + k.key, data.deleted_by);
       }
-    } catch (e) { console.error('[semantic-memory] context_keys_bulk_delete hook error:', e.message); }
+    } catch (e) { console.error('[semantic-memory] context_keys_bulk_delete hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   // Task 219 (2026-09-18): a restart forgets the in-memory embed queue, and

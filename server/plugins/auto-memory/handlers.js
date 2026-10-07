@@ -147,6 +147,10 @@ export function registerHooks(core) {
       if (res.deleted > 0) console.log('[auto-memory] source cascade ' + ref + ': ' + res.deleted + ' fact(s) forgotten (' + res.cascaded + ' derived)');
     } catch (e) {
       console.error('[auto-memory] source cascade ' + ref + ' failed:', e.message);
+      // Review A M2 (267c): the deletion-cascade failure is not swallowed here —
+      // emitEventCascade collects it and the delete route fails LOUD (500, whole
+      // transaction rolled back), the same law the direct forget routes follow.
+      throw e;
     }
   }
 
@@ -155,7 +159,7 @@ export function registerHooks(core) {
       var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
       if (data.task_id == null) return;
       forgetByRef('task:' + data.task_id, data.deleted_by);
-    } catch (e) { console.error('[auto-memory] task_deleted hook error:', e.message); }
+    } catch (e) { console.error('[auto-memory] task_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('concept_deleted', function (eventData) {
@@ -163,7 +167,7 @@ export function registerHooks(core) {
       var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
       if (data.concept_id == null) return;
       forgetByRef('concept:' + data.concept_id, data.deleted_by);
-    } catch (e) { console.error('[auto-memory] concept_deleted hook error:', e.message); }
+    } catch (e) { console.error('[auto-memory] concept_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('plan_deleted', function (eventData) {
@@ -171,7 +175,7 @@ export function registerHooks(core) {
       var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
       if (data.plan_id == null) return;
       forgetByRef('plan:' + data.plan_id, data.deleted_by);
-    } catch (e) { console.error('[auto-memory] plan_deleted hook error:', e.message); }
+    } catch (e) { console.error('[auto-memory] plan_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('context_key_deleted', function (eventData) {
@@ -179,7 +183,7 @@ export function registerHooks(core) {
       var data = typeof eventData.data === 'string' ? JSON.parse(eventData.data) : (eventData.data || {});
       if (!data.namespace || !data.key) return;
       forgetByRef('context_key:' + data.namespace + ':' + data.key, data.deleted_by);
-    } catch (e) { console.error('[auto-memory] context_key_deleted hook error:', e.message); }
+    } catch (e) { console.error('[auto-memory] context_key_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   core.onEvent('context_keys_bulk_delete', function (eventData) {
@@ -189,7 +193,7 @@ export function registerHooks(core) {
       for (var k of keys) {
         if (k && k.namespace && k.key) forgetByRef('context_key:' + k.namespace + ':' + k.key, data.deleted_by);
       }
-    } catch (e) { console.error('[auto-memory] context_keys_bulk_delete hook error:', e.message); }
+    } catch (e) { console.error('[auto-memory] context_keys_bulk_delete hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   // Reflector: periodic consolidation timer

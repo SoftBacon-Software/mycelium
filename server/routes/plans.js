@@ -9,7 +9,7 @@ import {
   createPlanStep, updatePlanStep, deletePlanStep,
   addPlanStepComment, getPlanStepComments, reorderPlanSteps,
   autoRetryOrEscalatePlanStep, getSleepMode, appendSleepLog,
-  createInboxItemForAllOperators, dispatchWebhook,
+  createInboxItemForAllOperators, dispatchWebhook, getDB,
 } from '../db.js';
 
 export function registerPlanRoutes(router, deps) {
@@ -18,7 +18,7 @@ export function registerPlanRoutes(router, deps) {
     parseLimit, parseIntParam, validateStringLength, validateEnum,
     checkApprovalGate, checkProjectScope, warnSuspectTransition,
     emitEvent, MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
-    pageEnvelope,
+    pageEnvelope, emitEventCascade,
   } = deps;
 
   // ======== PLANS ========
@@ -117,11 +117,15 @@ export function registerPlanRoutes(router, deps) {
     var plan = getPlan(parseIntParam(req.params.id));
     if (!plan) return res.status(404).json({ error: 'Plan not found' });
     if (!checkProjectScope(req, res, plan.project_id)) return;
-    deletePlan(plan.id);
-    // TRUST LAYER P1.4: deleted_by rides on the payload — the deletion-cascade
-    // listeners put the authenticated deleter on the tombstones.
-    emitEvent('plan_deleted', who, plan.project_id, who + ' deleted plan #' + plan.id + ': ' + plan.title,
-      { plan_id: plan.id, deleted_by: String(who) });
+    // TRUST LAYER P1.4 + review A M2 (267c): one transaction — a cascade
+    // failure rolls the whole delete back and 500s loud (see tasks.js).
+    getDB().transaction(function () {
+      deletePlan(plan.id);
+      // deleted_by rides on the payload — the deletion-cascade listeners put
+      // the authenticated deleter on the tombstones.
+      emitEventCascade('plan_deleted', who, plan.project_id, who + ' deleted plan #' + plan.id + ': ' + plan.title,
+        { plan_id: plan.id, deleted_by: String(who) });
+    })();
     var result = { ok: true, deleted: plan.id };
     if (gate.warning) result.approval_warning = gate.warning;
     res.json(result);

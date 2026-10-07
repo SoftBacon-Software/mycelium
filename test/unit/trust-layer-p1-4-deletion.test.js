@@ -343,6 +343,41 @@ describe('P1.4 ACTOR: the tombstone names the authenticated actor, never a boole
   });
 });
 
+// ------------------- FAIL LOUD (review A M2) ---------------------------------
+
+describe('P1.4 FAIL LOUD: a source delete whose cascade fails never happened', () => {
+  it('a task delete with the audit store missing is a 500 and rolls the whole delete back', async () => {
+    const created = await request(app).post('/api/mycelium/tasks').set(agentAuth).send({
+      title: 'tl267 fail-loud task about the counterweight cellar door'
+    });
+    expect(created.status).toBe(200);
+    const taskId = created.body.id;
+
+    // Rename (not drop) so the audit store comes back exactly — indexes and
+    // append-only triggers ride the rename both ways.
+    db.getDB().exec('ALTER TABLE memory_audit RENAME TO memory_audit_failloud_bak');
+    try {
+      const del = await request(app).delete('/api/mycelium/tasks/' + taskId).set(adminKeyAuth);
+      // Was 200: the cascade rolled back atomically but the caller was told the
+      // delete fully succeeded — the soft surface P1.5's law forbids.
+      expect(del.status).toBe(500);
+
+      // The whole delete rolled back: the source row is still there…
+      const still = db.getDB().prepare('SELECT COUNT(*) AS c FROM tasks WHERE id = ?').get(taskId).c;
+      expect(still).toBe(1);
+      // …and no memory row was taken: no tombstone, no cascade record.
+      expect(smTombstones(db.getDB(), 'task', String(taskId)).length).toBe(0);
+    } finally {
+      db.getDB().exec('ALTER TABLE memory_audit_failloud_bak RENAME TO memory_audit');
+    }
+
+    // With the audit store back, the same delete succeeds and cascades.
+    const del2 = await request(app).delete('/api/mycelium/tasks/' + taskId).set(adminKeyAuth);
+    expect(del2.status).toBe(200);
+    expect(smTombstones(db.getDB(), 'task', String(taskId)).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 // ------------------- FORGET CASCADE (unit: the derived graph) -----------------
 
 describe('P1.4 FORGET CASCADE: a forgotten fact is not recalled through a summary', () => {

@@ -6,12 +6,13 @@
 // to before extraction — enforced by test/refactor/route-manifest.mjs.
 import {
   listConcepts, getConceptProjects, getConcept, createConcept, updateConcept,
-  deleteConcept, linkConceptToProject, unlinkConceptFromProject,
+  deleteConcept, linkConceptToProject, unlinkConceptFromProject, getDB,
 } from '../db.js';
 
 export function registerConceptRoutes(router, deps) {
   const {
     asyncHandler, checkAgentOrAdmin, parseIntParam, emitEvent, checkApprovalGate,
+    emitEventCascade,
   } = deps;
 
   // ======== SHARED CONCEPTS ========
@@ -82,11 +83,15 @@ export function registerConceptRoutes(router, deps) {
     if (!gate.ok && !gate.soft) return res.status(403).json({ error: gate.error, approval_required: true });
     var concept = getConcept(parseIntParam(req.params.id));
     if (!concept) return res.status(404).json({ error: 'Concept not found' });
-    deleteConcept(concept.id);
-    // TRUST LAYER P1.4: the payload carries the id + authenticated deleter —
-    // the deletion-cascade listeners key off it (the old payload had neither).
-    emitEvent('concept_deleted', who, null, who + ' deleted concept: ' + concept.name,
-      { concept_id: concept.id, deleted_by: String(who) });
+    // TRUST LAYER P1.4 + review A M2 (267c): one transaction — a cascade
+    // failure rolls the whole delete back and 500s loud (see tasks.js).
+    getDB().transaction(function () {
+      deleteConcept(concept.id);
+      // The payload carries the id + authenticated deleter — the
+      // deletion-cascade listeners key off it (the old payload had neither).
+      emitEventCascade('concept_deleted', who, null, who + ' deleted concept: ' + concept.name,
+        { concept_id: concept.id, deleted_by: String(who) });
+    })();
     var result = { ok: true };
     if (gate.warning) result.approval_warning = gate.warning;
     res.json(result);

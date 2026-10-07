@@ -8,7 +8,7 @@ import {
   searchContextKeys, listContextKeys, getContextKey, upsertContextKey,
   deleteContextKey, bulkDeleteContextKeys, getContextHistory, getContextHistoryEntry,
   rollbackContextKey, contextKeyStats, getAllContext, getContext,
-  upsertContext, getContextKeysByIds,
+  upsertContext, getContextKeysByIds, getDB,
 } from '../db.js';
 import {
   isSecurityContextKey, isSecurityContextNamespace, validateEnforcementRulesData, invalidateEnforcementRulesCache,
@@ -18,6 +18,7 @@ export function registerContextRoutes(router, deps) {
   const {
     asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent,
     checkProjectScope, agentCanAccessProject, getAdminDisplayName,
+    emitEventCascade,
   } = deps;
 
   // ======== CONTEXT ========
@@ -146,17 +147,23 @@ export function registerContextRoutes(router, deps) {
   router.delete('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
     var who = checkAdmin(req, res);
     if (!who) return;
-    var wasSecurityKey = isSecurityContextKey(req.params.namespace, req.params.key);
-    deleteContextKey(req.params.namespace, req.params.key);
-    if (wasSecurityKey) invalidateEnforcementRulesCache();
-    // TRUST LAYER P1.4: a deleted key's auto-indexed memory row must follow it
-    // — the deletion-cascade listeners fire off this event (the single-key
-    // delete previously emitted NOTHING, so its row outlived the key forever).
-    // Review A B1 (267c): checkAdmin returns a boolean — record the resolved
-    // display name, not String(true).
-    emitEvent('context_key_deleted', '__system__', null,
-      'Admin deleted context key ' + req.params.namespace + ':' + req.params.key,
-      { namespace: req.params.namespace, key: req.params.key, deleted_by: getAdminDisplayName(req) });
+    // TRUST LAYER P1.4 + review A M2 (267c): one transaction — a cascade
+    // failure rolls the whole delete back and 500s loud (see tasks.js). The
+    // rules-cache invalidation stays right after the delete: a rollback that
+    // leaves it invalidated only costs one re-read of a key that still exists.
+    getDB().transaction(function () {
+      var wasSecurityKey = isSecurityContextKey(req.params.namespace, req.params.key);
+      deleteContextKey(req.params.namespace, req.params.key);
+      if (wasSecurityKey) invalidateEnforcementRulesCache();
+      // A deleted key's auto-indexed memory row must follow it — the
+      // deletion-cascade listeners fire off this event (the single-key delete
+      // previously emitted NOTHING, so its row outlived the key forever).
+      // Review A B1 (267c): checkAdmin returns a boolean — record the resolved
+      // display name, not String(true).
+      emitEventCascade('context_key_deleted', '__system__', null,
+        'Admin deleted context key ' + req.params.namespace + ':' + req.params.key,
+        { namespace: req.params.namespace, key: req.params.key, deleted_by: getAdminDisplayName(req) });
+    })();
     res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
   }));
 
@@ -176,16 +183,23 @@ export function registerContextRoutes(router, deps) {
     // namespace/key. TRUST LAYER P1.4: the same snapshot names the doomed keys
     // on the event, so the deletion-cascade listeners can take their
     // auto-indexed memory rows along.
-    var doomedKeys = getContextKeysByIds(ids);
-    var deletedSecurityKey = doomedKeys.some(function (t) {
-      return isSecurityContextKey(t.namespace, t.key);
-    });
-    var deleted = bulkDeleteContextKeys(ids);
-    if (deletedSecurityKey) invalidateEnforcementRulesCache();
-    emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys', {
-      keys: doomedKeys.map(function (t) { return { namespace: t.namespace, key: t.key }; }),
-      deleted_by: getAdminDisplayName(req) // review A B1 (267c): was String(who) → 'true'
-    });
+    // Review A M2 (267c): one transaction — a cascade failure rolls the whole
+    // bulk delete back and 500s loud (see tasks.js).
+    var deleted = getDB().transaction(function () {
+      var doomedKeys = getContextKeysByIds(ids);
+      var deletedSecurityKey = doomedKeys.some(function (t) {
+        return isSecurityContextKey(t.namespace, t.key);
+      });
+      var n = bulkDeleteContextKeys(ids);
+      if (deletedSecurityKey) invalidateEnforcementRulesCache();
+      // A deleted key's auto-indexed memory row must follow it — the same
+      // snapshot names the doomed keys on the event (P1.4).
+      emitEventCascade('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + n + ' context keys', {
+        keys: doomedKeys.map(function (t) { return { namespace: t.namespace, key: t.key }; }),
+        deleted_by: getAdminDisplayName(req) // review A B1 (267c): was String(who) → 'true'
+      });
+      return n;
+    })();
     res.json({ ok: true, deleted: deleted });
   }));
 
