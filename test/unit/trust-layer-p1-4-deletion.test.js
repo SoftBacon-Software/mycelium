@@ -153,6 +153,32 @@ describe('P1.4 TOMBSTONES: a deleted row leaves a tombstone, never its content',
     expect(tomb[0].deleted_by).toBe('__system__'); // the resolved admin actor (review A B1: assert the value)
     expect(JSON.stringify(tomb[0])).not.toContain('tombstones as well');
   });
+
+  it('the index tombstone names the shape actually removed — legacy memory rows tombstone as memory (review A nit)', async () => {
+    // No namespace → indexFactInMemory → the fact's index row is source_type
+    // 'memory'. unindexFacts used to tombstone every id as 'am_fact' whatever
+    // it had just deleted, so the index row and its tombstone disagreed on type.
+    const created = await request(app).post('/api/mycelium/auto-memory/facts').set(agentAuth).send({
+      fact_text: 'the tl267 legacy-shape fact whose index tombstone must match its type',
+      source_authority: 'verified'
+    });
+    expect(created.status).toBe(200);
+    const factId = created.body.facts?.[0]?.id ?? created.body.id;
+    expect(factId).toBeTruthy();
+
+    const shapes = db.getDB().prepare(
+      "SELECT DISTINCT source_type AS t FROM sm_embeddings WHERE source_id = ? AND source_type IN ('memory','am_fact')"
+    ).all(String(factId)).map((r) => r.t);
+    expect(shapes).toEqual(['memory']); // the legacy shape carried this fact
+
+    const del = await request(app).delete('/api/mycelium/auto-memory/facts/' + factId).set(adminKeyAuth);
+    expect(del.status).toBe(200);
+
+    const memTombs = db.getDB().prepare("SELECT * FROM sm_tombstones WHERE source_type = 'memory' AND source_id = ?").all(String(factId));
+    expect(memTombs.length).toBeGreaterThanOrEqual(1);
+    const wrongTombs = db.getDB().prepare("SELECT * FROM sm_tombstones WHERE source_type = 'am_fact' AND source_id = ?").all(String(factId));
+    expect(wrongTombs.length).toBe(0); // was 1 — the disagreement the review named
+  });
 });
 
 // ---------------------------- SOURCE CASCADE --------------------------------

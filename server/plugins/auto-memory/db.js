@@ -167,6 +167,12 @@ export default function createAutoMemoryDB(db) {
       var removed = 0;
       var removedIds = [];
       for (var id of ids) {
+        // Review A nit (267c): tombstone the shape(s) ACTUALLY removed — a
+        // legacy row indexes under 'memory', namespaced rows under 'am_fact',
+        // and the tombstone must agree with the index row it records. Read the
+        // shapes BEFORE the delete takes them away.
+        var shapes = db.prepare("SELECT DISTINCT source_type AS t FROM sm_embeddings WHERE source_type IN ('memory', 'am_fact') AND source_id = ?")
+          .all(String(id)).map(function (r) { return r.t; });
         var changes = stmt.run(String(id)).changes;
         if (changes > 0) {
           removed += changes;
@@ -178,10 +184,12 @@ export default function createAutoMemoryDB(db) {
           // its own so an absent sm_tombstones table can't turn a done
           // delete into a reported failure.
           if (opts.tombstone) {
-            try {
-              db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
-                .run('am_fact', String(id), opts.by || null, opts.reason || 'delete');
-            } catch (e2) { /* tombstone store absent — the delete itself already landed */ }
+            for (var s of (shapes.length ? shapes : ['am_fact'])) {
+              try {
+                db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
+                  .run(s, String(id), opts.by || null, opts.reason || 'delete');
+              } catch (e2) { /* tombstone store absent — the delete itself already landed */ }
+            }
           }
         }
       }
