@@ -589,8 +589,14 @@ export default function createMemoryDB(db, opts) {
       opts = opts || {};
       var derivedDocs = [];
       if (sourceType === 'plan') {
+        // Review A round 2 (267d): plan_step_completed writes metadata.plan_id
+        // as the raw INTEGER off plan_steps, so json_extract yields an INTEGER
+        // and INTEGER = TEXT never matches in SQLite — the leg silently
+        // orphaned every step row the platform itself indexed. CAST makes the
+        // comparison TEXT = TEXT on either stored shape (and heals rows
+        // already written as integers).
         derivedDocs = db.prepare(
-          "SELECT source_id FROM sm_embeddings WHERE source_type = 'plan_step' AND json_extract(metadata, '$.plan_id') = ?"
+          "SELECT source_id FROM sm_embeddings WHERE source_type = 'plan_step' AND CAST(json_extract(metadata, '$.plan_id') AS TEXT) = ?"
         ).all(String(sourceId)).map(function (r) { return r.source_id; });
       }
       this.remove(sourceType, sourceId, { by: opts.by, reason: opts.reason || 'source-deleted' });
