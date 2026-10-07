@@ -650,8 +650,19 @@ export default function (core) {
   // a holder's store by forging ids, and a signature alone is not a presence.
 
   router.post('/revoke', revokeLimiter, function (req, res) {
-    var rev = req.body && req.body.revoke;
-    if (!rev) return apiError(res, 400, 'revoke is required');
+    // Review A B2 (267c): the shipped client posts envelope({ revoke }) — the
+    // payload NESTED, the same agent-signed envelope every other message rides
+    // (hello / visit-write / souvenir) — while this route read req.body.revoke
+    // top-level, so the PR's own client got 400 'revoke is required' from the
+    // PR's own route. Unwrap like the siblings: verify the envelope (sig, ts
+    // window, fresh nonce), then verify the inner revoke's own signature.
+    var env = checkEnvelope(req, res, null);
+    if (!env) return;
+    var rev = env.payload && env.payload.revoke;
+    if (!rev) return apiError(res, 400, 'payload.revoke is required');
+    if (rev.agent_id !== env.agent_id) {
+      return apiError(res, 401, 'the envelope is signed by ' + env.agent_id + ' but the revoke names ' + rev.agent_id);
+    }
     var rv = verifyRevoke(rev);
     if (!rv.valid) return apiError(res, 400, 'revoke rejected: ' + rv.reason);
     var pp = store.getPassport('agent', rev.agent_id);

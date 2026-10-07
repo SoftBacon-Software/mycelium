@@ -485,7 +485,7 @@ describe('P1.4 FORGET CASCADE: a forgotten fact is not recalled through a summar
 
 describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten where it went', () => {
   const realFetch = global.fetch;
-  let raw, app, visitor, visitId, hostToken, revokedRowId;
+  let raw, app, visitor, visitId, hostToken, revokedRowId, hostNetworkId;
 
   const HOST_SEED = crypto.createHash('sha256').update('p14-revoke-host').digest('hex');
   const GUEST_SEED = crypto.createHash('sha256').update('p14-revoke-guest').digest('hex');
@@ -495,6 +495,13 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
 
   function jwtFor(userId) {
     return jwt.sign({ studioUser: true, userId, username: 'u' + userId, role: 'operator' }, JWT_SECRET, { expiresIn: '1h' });
+  }
+
+  // The wire shape the shipped client speaks (review A B2): the payload nested
+  // in an agent-signed envelope — hello/visit-write/souvenir/revoke all ride it.
+  async function envelopeFor(agent, payload) {
+    const { makeEnvelope } = await import(join(FED_DIR, 'protocol.js'));
+    return makeEnvelope(agent.agentKey, agent.agentId, payload, Math.floor(Date.now() / 1000), crypto.randomBytes(16).toString('hex'));
   }
 
   beforeAll(async () => {
@@ -558,6 +565,7 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
       source: 'visit', at: '2026-10-06T08:00:00Z', supersedes: null
     });
     expect(write.status).toBe(201);
+    hostNetworkId = knock.body.network_passport.network_id;
     // companionView.id is the per-owner STORAGE id — revoke names PROTOCOL ids.
     revokedRowId = write.body.row.provenance.id;
   });
@@ -582,6 +590,30 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
     expect(verifyRevoke(noRows).valid).toBe(false);
   });
 
+  it('the SHIPPED CLIENT reaches the shipped route (review A B2: the route unwraps the agent-signed envelope)', async () => {
+    // Review A's repro: client.revoke() posts envelope({ revoke }) — the
+    // payload nested, like hello/visit-write/souvenir — while the route read
+    // req.body.revoke top-level, so the PR's own client got 400 'revoke is
+    // required' from the PR's own route. This test runs BOTH shipped sides
+    // (makeVisitor's revoke against the mounted route), no hand-built body.
+    const t = { post: async (path, body, headers) => {
+      const r = request(app).post(path); for (const [k, v] of Object.entries(headers || {})) r.set(k, v); const res = await r.send(body); return { status: res.status, body: res.body };
+    } };
+    const write = await visitor.writeMemory(t, visitId, hostNetworkId, {
+      kind: 'aboutYou', key: 'p14.souvenir.2',
+      text: 'the second p14 souvenir row the shipped client itself revokes',
+      source: 'visit', at: '2026-10-06T08:30:00Z', supersedes: null
+    });
+    expect(write.status).toBe(201);
+    const rowId = write.body.row.provenance.id;
+
+    const res = await visitor.revoke(t, [rowId], 'forgotten at home (client-driven)');
+    expect(res.status).toBe(200); // was 400 'revoke is required' on a948592a
+    expect(res.body.revoked).toBeGreaterThanOrEqual(1);
+    const left = raw.prepare("SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND json_extract(metadata, '$.fed_id') = ?").get(rowId).c;
+    expect(left).toBe(0);
+  });
+
   it('the revoke handler deletes the holder\'s copy, unindexes it and tombstones it — and only the author can revoke', async () => {
     // The row is in the host's store and recall before the revoke.
     const before = raw.prepare("SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND fed_agent = ?").get(visitor.agentId).c;
@@ -595,7 +627,7 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
     const rev = makeRevoke(visitor.agentKey, visitor.agentId, visitor.homeNetworkId, [revokedRowId], {
       reason: 'forgotten at home', issued_at: new Date().toISOString()
     });
-    const res = await request(app).post('/federation/revoke').send({ revoke: rev });
+    const res = await request(app).post('/federation/revoke').send(await envelopeFor(visitor, { revoke: rev }));
     expect(res.status).toBe(200);
     expect(res.body.revoked).toBeGreaterThanOrEqual(1);
 
@@ -663,11 +695,11 @@ describe('P1.4 FEDERATION REVOKE: a souvenir forgotten at home is forgotten wher
     const forged = makeRevoke(keyFromSeed(STRANGER_SEED), stranger, 'some-home', [revokedRowId], {
       issued_at: new Date().toISOString()
     });
-    const unknown = await request(app).post('/federation/revoke').send({ revoke: forged });
+    const unknown = await request(app).post('/federation/revoke').send(await envelopeFor({ agentKey: keyFromSeed(STRANGER_SEED), agentId: stranger }, { revoke: forged }));
     expect([401, 403]).toContain(unknown.status);
 
     const badSig = { ...makeRevoke(visitor.agentKey, visitor.agentId, visitor.homeNetworkId, ['sha256-aa'], { issued_at: new Date().toISOString() }), sig: 'ff' };
-    const refused = await request(app).post('/federation/revoke').send({ revoke: badSig });
+    const refused = await request(app).post('/federation/revoke').send(await envelopeFor(visitor, { revoke: badSig }));
     expect(refused.status).toBe(400);
   });
 });
