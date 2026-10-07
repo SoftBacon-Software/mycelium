@@ -243,13 +243,17 @@ describe('P1.4 SOURCE CASCADE: deleting the source deletes the memory rows that 
     expect(created.status).toBe(200);
     const planId = created.body.id;
 
-    // A plan_step row as the auto-indexer writes one (metadata.plan_id links
-    // it) — plan_step is SERVER-OWNED (P1.3), so the write goes as admin,
-    // exactly the authority the plan_step_completed handler writes with.
+    // A plan_step row as the auto-indexer ACTUALLY writes one (review A round
+    // 2): plan_step_completed (handlers.js) stores metadata.plan_id straight
+    // off the plan_steps INTEGER column — step.plan_id, a NUMBER, serialized
+    // verbatim by index() (db.js JSON.stringify). A String here is the shape
+    // the code wishes for, not the shape on disk.
+    // plan_step is SERVER-OWNED (P1.3), so the write goes as admin, exactly
+    // the authority the plan_step_completed handler writes with.
     const stepIdx = await request(app).post('/api/mycelium/memory/index').set(adminKeyAuth).send({
       source_type: 'plan_step', source_id: 'tl267-step-of-' + planId,
       content_text: 'tl267 step one of the doomed plan',
-      metadata: { plan_id: String(planId) }
+      metadata: { plan_id: planId }
     });
     expect(stepIdx.status).toBe(200);
 
