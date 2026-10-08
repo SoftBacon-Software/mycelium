@@ -60,6 +60,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance, config round-trip with api-key stripping, provider firing against
   the configured url/model, unknown-provider degrade).
 
+- **Retrieval ranks by trust, not just relevance (trust layer P1.6)** — every
+  ranked page leaving semantic-memory search (keyword, vector, hybrid) now
+  carries one trust/recency/provenance weight from ONE function
+  (`server/lib/retrieval-trust.js`, constants in one block): the P1.1 origin
+  ladder (person ×1.15 > owner-agent ×1.08 > tool ×1.0 > model-derived ×0.9 >
+  foreign ×0.75, unknown reads lowest), recency with a 45-day half-life
+  floored at ×0.8, and a ×0.5 demotion for unvouched rows — the same set that
+  carries the P1.6 recall label (`needsRecallLabel`, memory-quarantine.js), so
+  the label and the demotion can never disagree; a `promoted_by` stamp is the
+  vouch that clears both. Raw similarity is preserved (`score`/`rrf_score`
+  untouched — the weighted value rides `retrieval_score`), unvouched rows keep
+  the visible label (`unverified`, `quarantine_reason`, `memory_data_marker`
+  naming the P1.2 `[mem] ` datamark) on every arm, and hybrid applies the
+  weight exactly once (fusion arms run deferred; the vector re-rank pool is
+  limit × 4 fetched in one IN-list query, embedding column excluded). Measured
+  cost on a 150-topic synthetic corpus (`bench/memory/tools/
+  retrieval-trust-cost.mjs`, receipts under `bench/memory/results/
+  2026-10-08-f270-retrieval-trust/`): clean-corpus recall@k identical to the
+  unweighted baseline at k ∈ {1,5,10} on all three arms (0.0000 delta); under
+  injection pressure (a foreign row that out-matches on bm25 AND cosine),
+  person-row recall@1 rises 0.65 → 0.99 and the injected row drops out of
+  rank 1 everywhere (poison@1 1.0 → 0.0). 15 tests pin the weight, the
+  ordering, the labels, and the injection canary.
+
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 
 ## [0.1.0] - 2026-05-25

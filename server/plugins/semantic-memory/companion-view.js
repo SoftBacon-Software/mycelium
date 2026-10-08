@@ -9,6 +9,9 @@
 // parsed from the search arms), the API view out. Internal columns (the
 // embedding vector, chunk bookkeeping, raw metadata JSON) never leave.
 
+import { needsRecallLabel, recallLabelReason } from '../../lib/memory-quarantine.js';
+import { MEMORY_DATA_DATAMARK } from '../../lib/memory-fence.js';
+
 export default function companionView(row, opts) {
   var meta = row.metadata;
   if (typeof meta === 'string') {
@@ -46,14 +49,17 @@ export default function companionView(row, opts) {
   // candidate (accepted explicitly, never a silent supersede); a row that
   // crossed a border carries its receipt.
   if (meta.candidate) view.candidate = true;
-  // TRUST LAYER P1.3: a quarantined row (every foreign-network row, every
-  // auto-indexed agent message) is recalled WITH the visible unverified
-  // label — the client renders it; the platform does not vouch for the text.
-  // server/lib/memory-quarantine.js is the one definition of the state.
-  if (meta.quarantined) {
+  // TRUST LAYER P1.3 + P1.6: an unvouched row (every foreign-network row,
+  // every auto-indexed agent message, a supersede candidate — one definition
+  // in server/lib/memory-quarantine.js) is recalled WITH the visible
+  // unverified label — the client renders it; the platform does not vouch for
+  // the text — plus the P1.2 datamark the client prefixes when it renders the
+  // row into a prompt.
+  if (needsRecallLabel(row, meta)) {
     view.unverified = true;
     view.quarantined = true;
-    view.quarantine_reason = meta.quarantine_reason || null;
+    view.quarantine_reason = recallLabelReason(row, meta);
+    view.memory_data_marker = MEMORY_DATA_DATAMARK;
   }
   if (row.fed_agent || row.fed_network || row.fed_visit) {
     view.provenance = {

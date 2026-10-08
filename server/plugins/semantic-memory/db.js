@@ -4,6 +4,7 @@ import { cosineSimilarity, embedQueueDepth, embedDrainSnapshot } from './embeddi
 import { chunkText, DEFAULT_CHUNK_SIZE } from './chunking.js';
 import { createVectorCache } from './vector-cache.js';
 import { parseMeta as parseQuarantineMeta, promotedMeta } from '../../lib/memory-quarantine.js';
+import { retrievalTrustWeight, RETRIEVAL_TRUST } from '../../lib/retrieval-trust.js';
 
 // -- Bench rows are invisible to plain recall (2026-09-08) ---------------------
 // Benchmark harnesses write into the ONE index live recall reads from (task
@@ -740,6 +741,30 @@ export default function createMemoryDB(db, opts) {
       return out;
     },
 
+    // TRUST LAYER P1.6 (F-mycelium/270): the ONE ranking step every recall
+    // page goes through. Each row's ranking value (`score`, or `scoreField`
+    // — the hybrid fusion passes 'rrf_score') is multiplied by the retrieval-
+    // trust weight (server/lib/retrieval-trust.js — the ONE function and the
+    // ONE constants block; no per-call-site weights) into `retrieval_score`,
+    // and the page is ordered by it. The raw relevance field is never
+    // overwritten — `score` keeps its meaning for every existing caller, the
+    // weighted value rides beside it.
+    //
+    // opts.deferTrustRank is INTERNAL (set only by searchHybrid, on its
+    // fusion-input arms): the arms then rank pure relevance, and the fused
+    // page is weighted exactly once at the fusion tail — no compounding, so
+    // the measured utility cost is mode-independent. Routes never pass it.
+    rankRowsByRetrievalTrust(rows, opts, scoreField) {
+      if (opts && opts.deferTrustRank) return rows;
+      var field = scoreField || 'score';
+      var now = Date.now();
+      for (var r of rows) {
+        r.retrieval_score = ((r[field] != null) ? r[field] : 0) * retrievalTrustWeight(r, { now: now });
+      }
+      rows.sort(function (a, b) { return b.retrieval_score - a.retrieval_score; });
+      return rows;
+    },
+
     searchKeyword(query, opts) {
       opts = opts || {};
       var limit = Math.min(opts.limit || 10, 100);
@@ -780,7 +805,8 @@ export default function createMemoryDB(db, opts) {
           full.score = -r.rank; // FTS5 rank is negative (lower = better)
           return decodeTrustRow(stampEmbedded(full)); // task 213 embeddedness + P1.1 trust stamps
         }).filter(Boolean);
-        return this.collapseChunks(enriched).slice(0, limit);
+        // P1.6: the page is trust-ordered at its terminal (one application)
+        return this.collapseChunks(this.rankRowsByRetrievalTrust(enriched, opts)).slice(0, limit);
       } catch (e) {
         // FTS5 query syntax error — fall back to LIKE search
         var likeParams = [];
@@ -800,11 +826,12 @@ export default function createMemoryDB(db, opts) {
         var likeRows = db.prepare(
           'SELECT * FROM sm_embeddings WHERE ' + likeWhere.join(' AND ') + ' ORDER BY updated_at DESC LIMIT ?'
         ).all(...likeParams).map(decodeTrustRow);
-        return this.collapseChunks(likeRows.map(function (r) {
+        // P1.6: the LIKE page is trust-ordered too (one application)
+        return this.collapseChunks(this.rankRowsByRetrievalTrust(likeRows.map(function (r) {
           try { r.metadata = JSON.parse(r.metadata); } catch (e) { r.metadata = {}; }
           r.score = 1.0; // no ranking for LIKE fallback
           return stampEmbedded(r); // task 213: the row states its own embeddedness
-        })).slice(0, limit);
+        }), opts)).slice(0, limit);
       }
     },
 
@@ -830,7 +857,7 @@ export default function createMemoryDB(db, opts) {
       }
       try {
         var scored = vectorCache.scored(queryEmbedding, opts);
-        return this.finishScored(scored, Math.min(opts.limit || 10, 100));
+        return this.finishScored(scored, Math.min(opts.limit || 10, 100), opts);
       } catch (e) {
         console.error('[semantic-memory] vector cache failed, falling back to JSON path:', e.message);
         return this.searchVectorJsonPath(queryEmbedding, opts);
@@ -839,16 +866,39 @@ export default function createMemoryDB(db, opts) {
 
     // Shared tail for both vector arms: collapse chunked docs to their best
     // chunk BEFORE slicing to the page limit (mirrors searchKeyword), then
-    // fetch full rows only for the top results.
-    finishScored(scored, limit) {
-      var topIds = this.collapseChunks(scored).slice(0, limit);
-      return topIds.map(function (s) {
-        var full = decodeTrustRow(db.prepare('SELECT * FROM sm_embeddings WHERE id = ?').get(s.id));
-        if (!full) return null;
+    // fetch full rows for the candidate pool and — P1.6 — trust-rank the page
+    // at this terminal. The pool is limit × RETRIEVAL_TRUST.RERANK_POOL rows
+    // fetched by raw similarity, so a trusted row just below the relevance
+    // cutoff can still move INTO the page; the fetch is one round-trip over an
+    // explicit column list (the multi-KB embedding excluded — routes strip it,
+    // and a vector-scan hit is embedded by construction, which the stamp says
+    // directly instead of re-reading the blob).
+    finishScored(scored, limit, opts) {
+      var defer = !!(opts && opts.deferTrustRank);
+      var pool = this.collapseChunks(scored);
+      var poolSize = defer ? limit : Math.min(pool.length, limit * RETRIEVAL_TRUST.RERANK_POOL);
+      var topIds = pool.slice(0, poolSize);
+      if (topIds.length === 0) return [];
+      var ids = topIds.map(function (s) { return s.id; });
+      var fetched = db.prepare(
+        'SELECT id, source_type, source_id, chunk_index, namespace, content_text, metadata, embedding_model, ' +
+        'created_at, updated_at, superseded_by, written_by, fed_agent, fed_network, fed_home, fed_visit, fed_sig, ' +
+        'origin, trust, derived_from FROM sm_embeddings WHERE id IN (' +
+        ids.map(function () { return '?'; }).join(',') + ')'
+      ).all(...ids);
+      var byId = {};
+      for (var f of fetched) byId[f.id] = f;
+      var rows = [];
+      for (var s of topIds) {
+        var full = byId[s.id];
+        if (!full) continue;
         try { full.metadata = JSON.parse(full.metadata); } catch (e) { full.metadata = {}; }
         full.score = s.score;
-        return stampEmbedded(full); // task 213: a vector-scan hit is embedded by construction
-      }).filter(Boolean);
+        full.embedded = true; // task 213: a vector-scan hit is embedded by construction
+        rows.push(decodeTrustRow(full)); // P1.1 trust stamps
+      }
+      if (!defer) rows = this.rankRowsByRetrievalTrust(rows, opts);
+      return rows.slice(0, limit);
     },
 
     // The pre-194 algorithm, kept verbatim as the correctness oracle for the
@@ -897,7 +947,7 @@ export default function createMemoryDB(db, opts) {
       }
 
       scored.sort(function (a, b) { return b.score - a.score; });
-      return this.finishScored(scored, limit);
+      return this.finishScored(scored, limit, opts);
     },
 
     // Cache observability for tests and ops (additive, read-only).
@@ -984,16 +1034,20 @@ export default function createMemoryDB(db, opts) {
       opts = opts || {};
       var limit = opts.limit || 10;
 
-      // Always do keyword search
-      var keywordResults = this.searchKeyword(query, Object.assign({}, opts, { limit: limit * 2 }));
+      // Always do keyword search. deferTrustRank is INTERNAL (see
+      // rankRowsByRetrievalTrust): the fusion-input arms rank pure relevance,
+      // the fused page below is weighted exactly once.
+      var keywordResults = this.searchKeyword(query, Object.assign({}, opts, { limit: limit * 2, deferTrustRank: true }));
 
-      // If no query embedding, return keyword only
+      // If no query embedding, return keyword only — the arm above deferred
+      // its trust rank (it was staged as a fusion input), so this tail applies
+      // the weight exactly once for the keyword-fallback page.
       if (!queryEmbedding) {
-        return keywordResults.slice(0, limit);
+        return this.rankRowsByRetrievalTrust(keywordResults, opts).slice(0, limit);
       }
 
       // Vector search
-      var vectorResults = await this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2 }));
+      var vectorResults = await this.searchVector(queryEmbedding, Object.assign({}, opts, { limit: limit * 2, deferTrustRank: true }));
 
       // Reciprocal Rank Fusion (RRF)
       var K = 60; // standard RRF constant
@@ -1015,13 +1069,15 @@ export default function createMemoryDB(db, opts) {
       }
 
       // Sort by combined RRF score, then collapse chunked docs to their
-      // best chunk before applying the page limit
+      // best chunk before applying the page limit. P1.6: the fused page is
+      // trust-ranked at THIS terminal (the arms deferred) — one application,
+      // on the fusion score; rrf_score itself keeps its raw meaning.
       var merged = Object.values(scores).sort(function (a, b) { return b.score - a.score; });
       var rows = merged.map(function (m) {
         m.row.rrf_score = m.score;
         return m.row;
       });
-      return this.collapseChunks(rows).slice(0, limit);
+      return this.collapseChunks(this.rankRowsByRetrievalTrust(rows, opts, 'rrf_score')).slice(0, limit);
     },
 
     // -- Stats --
