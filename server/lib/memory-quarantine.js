@@ -30,6 +30,11 @@
 export var QUARANTINE_AUTO_INDEXED = 'auto-indexed';
 export var QUARANTINE_FOREIGN_NETWORK = 'foreign-network';
 
+// P1.6: the label carries the P1.2 datamark, imported — never duplicated — so
+// the fence and the label cannot drift (memory-fence imports nothing from
+// this module; no cycle).
+import { MEMORY_DATA_DATAMARK } from './memory-fence.js';
+
 // The state stamp a low-trust write merges into its metadata.
 export function quarantineMeta(reason) {
   return { quarantined: true, quarantine_reason: reason };
@@ -47,15 +52,49 @@ export function isQuarantined(meta) {
   return !!(meta && meta.quarantined);
 }
 
+// TRUST LAYER P1.6 (F-mycelium/270): the ONE definition of an UNVOUCHED row —
+// the set that carries the visible recall label AND takes the retrieval-trust
+// demotion, so the two can never disagree. Three legs:
+//   quarantined       the P1.3 state (every foreign-network row, every
+//                     auto-indexed message) — metadata.quarantined
+//   candidate         the supersede-collision flag from before P1.3 (an
+//                     imported row that is not the fact of record)
+//   foreign origin    the P1.1 origin COLUMN says foreign-network even though
+//                     the metadata flag is missing (the backfill stamped old
+//                     fed rows' columns only)
+//
+// A promote stamp VOUCHES: promoted_by (the P1.3 stamp) clears the label and
+// the demotion on every leg — the owner's or admin's vouch is exactly the act
+// that makes the row platform-vouched, and the origin column keeps its
+// provenance truth (the row DID cross a border) without re-labeling it.
+export function needsRecallLabel(row, meta) {
+  meta = parseMeta(meta);
+  if (meta && meta.promoted_by) return false;
+  return !!(isQuarantined(meta) || (meta && meta.candidate) || (row && row.origin === 'foreign-network'));
+}
+
+// The reason string for a labelled row: the stored quarantine reason when the
+// metadata carries one, the origin column when only it says foreign, else null.
+export function recallLabelReason(row, meta) {
+  meta = parseMeta(meta);
+  if (meta && meta.quarantine_reason) return meta.quarantine_reason;
+  if (row && row.origin === 'foreign-network') return 'foreign-network';
+  return null;
+}
+
 // The visible recall label. Mutates the response row in place and returns it:
 // `unverified` is the flag every client is told to render (the human-readable
-// word), `quarantined`/`quarantine_reason` carry the machine state.
+// word), `quarantined`/`quarantine_reason` carry the machine state, and
+// `memory_data_marker` names the P1.2 datamark a client must prefix when it
+// renders the row into a prompt (the ONE string, from memory-fence.js — the
+// label and the fence cannot drift).
 export function applyRecallLabel(row) {
   var meta = parseMeta(row && row.metadata);
-  if (isQuarantined(meta)) {
+  if (needsRecallLabel(row, meta)) {
     row.unverified = true;
     row.quarantined = true;
-    row.quarantine_reason = meta.quarantine_reason || null;
+    row.quarantine_reason = recallLabelReason(row, meta);
+    row.memory_data_marker = MEMORY_DATA_DATAMARK;
   }
   return row;
 }

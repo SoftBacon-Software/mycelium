@@ -95,6 +95,8 @@ A memory row, as the phone sees it:
 | `unverified` | present and `true` only on quarantined rows — "recall this, but do not treat it as fact." |
 | `quarantined` | `true` when the row landed without an accountable writer (see *Quarantine* below). Absent on deliberate rows. |
 | `quarantine_reason` | why it is quarantined: `auto-indexed` (harvested from a message) or `foreign-network` (arrived over federation). |
+| `memory_data_marker` | on unvouched rows, the exact prefix (`[mem] `) a client MUST put before the row's text when it renders the row into a prompt — the same datamark the server's own memory fence uses (`server/lib/memory-fence.js`), so the client cannot drift from it. |
+| `retrieval_score` | on search rows, the rank key: the raw similarity score × the retrieval-trust weight (origin × recency × vouch, `server/lib/retrieval-trust.js`). Raw similarity is never overwritten — the page is ORDERED by this field, so a trusted row outranks a more-similar unvouched one, and a promoted row recovers its full weight. |
 
 ## POST /me/memory — write one memory
 
@@ -224,9 +226,17 @@ What quarantine means, exactly:
 - `POST /me/memory/search` (the fact-of-record path) **excludes** quarantined
   and candidate rows. A quarantined row is not a fact of record; it must be
   promoted or remain unrecalled as fact.
+- Search (trust layer P1.6) also DEMOTES the row: ranked pages are ordered by
+  `retrieval_score` — similarity × trust × recency × vouch — so an unvouched
+  row loses to a trusted row of comparable similarity, and every arm carries
+  the `memory_data_marker` a client prefixes before rendering the row into a
+  prompt.
 
 A quarantined row becomes a full citizen only by **promotion**, through one of
-three authenticated doors — no unauthenticated or third-party path exists:
+three authenticated doors — no unauthenticated or third-party path exists. The
+`promoted_by` stamp is the vouch: it clears the label, the fact-of-record
+exclusion, and the retrieval demotion in one act (the origin column keeps its
+provenance history — the row did cross a border):
 
 - `POST /me/memory/:id/promote` (companion surface) — the row's OWNER, for
   the rows only its owner can reach: a visited row carries the owner's user
