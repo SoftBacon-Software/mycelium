@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS am_facts (
   -- read as the LOWEST, derived_from = JSON array of input refs on derived
   -- rows ("am:<id>" for consolidation inputs). The guarded ALTERs in db.js
   -- carry all three to existing databases.
+  -- TRUST LAYER P1.4 (F-mycelium/267): the forget cascade WALKS derived_from —
+  -- a forgotten fact falls through every row derived from it. Extraction's
+  -- source entity is NOT provenance here (it lives on the row's own
+  -- source_type/source_id columns; a non-row ref would floor the trust
+  -- min-law at 0).
   origin TEXT,
   trust INTEGER DEFAULT 0,
   derived_from TEXT,
@@ -36,6 +41,20 @@ CREATE INDEX IF NOT EXISTS idx_am_facts_confidence ON am_facts(confidence DESC);
 -- AFTER the ALTER TABLE ADD COLUMN calls. They must NOT live here: on an existing DB, the
 -- CREATE TABLE above is a no-op, so a CREATE INDEX on a not-yet-added column would throw and
 -- fail the whole plugin load (caught live 2026-07-22).
+
+-- TRUST LAYER P1.4 (F-mycelium/267): the fact-store half of the tombstone
+-- law — the mirror of semantic-memory's sm_tombstones. Every true delete of
+-- a fact (forget, cascade, namespace purge, and the housekeeping prunes)
+-- leaves one: the fact's id, when, the authenticated actor (NULL = internal
+-- writer), why. NO content column, ever. Append-only.
+CREATE TABLE IF NOT EXISTS am_tombstones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fact_id INTEGER NOT NULL,
+  deleted_at TEXT DEFAULT (datetime('now')),
+  deleted_by TEXT,
+  reason TEXT NOT NULL DEFAULT 'delete'
+);
+CREATE INDEX IF NOT EXISTS idx_am_tombstones_fact ON am_tombstones(fact_id);
 
 -- Consolidation log
 CREATE TABLE IF NOT EXISTS am_consolidation_log (

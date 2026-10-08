@@ -553,9 +553,57 @@ export default function createMemoryDB(db, opts) {
       ).get(sourceType, sourceId, chunkIndex || 0);
     },
 
-    remove(sourceType, sourceId) {
-      db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
+    // TRUST LAYER P1.4: a true delete leaves a tombstone (id, when, the
+    // AUTHENTICATED actor, why — never the content). opts: { by, reason,
+    // tombstone } — tombstone:false opts out (the forget-cascade path writes
+    // its own; nothing else may). Chunk cleanup (removeChunksFrom) is NOT a
+    // delete — a re-index replaces chunks on a doc that still exists — so it
+    // never tombstones.
+    remove(sourceType, sourceId, opts) {
+      opts = opts || {};
+      var txn = db.transaction(function () {
+        if (opts.tombstone !== false) {
+          db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
+            .run(sourceType, sourceId, opts.by || null, opts.reason || 'delete');
+        }
+        db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
+      });
+      txn();
       vectorCache.onRemovePair(sourceType, sourceId, null);
+    },
+
+    // TRUST LAYER P1.4: forget one document AND the rows derived from it.
+    // Three legs, one transaction each on the store side:
+    //   1. the doc itself (tombstone + remove through the seam above, so the
+    //      FTS triggers and the vector cache both see it leave);
+    //   2. the sm rows DERIVED from the doc — on master today that is the
+    //      plan_step rows of a deleted plan (metadata.plan_id), found through
+    //      the metadata link the auto-indexer already writes;
+    //   3. the auto-memory facts whose provenance points at this entity
+    //      (derived_from 'task:<id>' / the legacy source_type+source_id
+    //      shape) — reached through the event listeners auto-memory registers
+    //      on the same source-delete events (each plugin cleans its own
+    //      store; no plugin imports another). Here only leg 1 + 2.
+    // Returns { removed, tombstoned, derived } for the route/receipt.
+    forgetDoc(sourceType, sourceId, opts) {
+      opts = opts || {};
+      var derivedDocs = [];
+      if (sourceType === 'plan') {
+        // Review A round 2 (267d): plan_step_completed writes metadata.plan_id
+        // as the raw INTEGER off plan_steps, so json_extract yields an INTEGER
+        // and INTEGER = TEXT never matches in SQLite — the leg silently
+        // orphaned every step row the platform itself indexed. CAST makes the
+        // comparison TEXT = TEXT on either stored shape (and heals rows
+        // already written as integers).
+        derivedDocs = db.prepare(
+          "SELECT source_id FROM sm_embeddings WHERE source_type = 'plan_step' AND CAST(json_extract(metadata, '$.plan_id') AS TEXT) = ?"
+        ).all(String(sourceId)).map(function (r) { return r.source_id; });
+      }
+      this.remove(sourceType, sourceId, { by: opts.by, reason: opts.reason || 'source-deleted' });
+      for (var i = 0; i < derivedDocs.length; i++) {
+        this.remove('plan_step', derivedDocs[i], { by: opts.by, reason: 'source-deleted' });
+      }
+      return { removed: 1 + derivedDocs.length, tombstoned: 1 + derivedDocs.length, derived: derivedDocs.length };
     },
 
     // -- Companion rows (docs/companion-memory-api.md) ---------------------------
@@ -650,16 +698,30 @@ export default function createMemoryDB(db, opts) {
     // is required: the route refuses a bare purge, and this returns null rather
     // than guess. FTS stays in sync through the sm_fts_delete trigger. Returns
     // the number of rows deleted.
-    purge(filters) {
+    purge(filters, opts) {
       filters = filters || {};
+      opts = opts || {};
       var where = [];
       var params = [];
       if (filters.source_type) { where.push('source_type = ?'); params.push(filters.source_type); }
       if (filters.namespace) { where.push('namespace = ?'); params.push(filters.namespace); }
       if (where.length === 0) return null; // never delete unfiltered
-      var info = db.prepare('DELETE FROM sm_embeddings WHERE ' + where.join(' AND ')).run(...params);
+      // TRUST LAYER P1.4: the identity of every row this purge takes, read
+      // BEFORE the delete — afterwards there is nothing left to name. One
+      // tombstone per row (append-only), in the same transaction as the
+      // delete so a purge is all-or-nothing on the ledger too.
+      var doomed = db.prepare('SELECT DISTINCT source_type, source_id FROM sm_embeddings WHERE ' + where.join(' AND ')).all(...params);
+      var txn = db.transaction(function () {
+        for (var d of doomed) {
+          db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
+            .run(d.source_type, d.source_id, opts.by || null, opts.reason || 'purge');
+        }
+        var info = db.prepare('DELETE FROM sm_embeddings WHERE ' + where.join(' AND ')).run(...params);
+        return info.changes;
+      });
+      var changes = txn();
       vectorCache.onPurge(filters);
-      return info.changes;
+      return changes;
     },
 
     // -- Search --
@@ -1189,6 +1251,32 @@ export default function createMemoryDB(db, opts) {
       };
     }
   };
+}
+
+// TRUST LAYER P1.4: the one FORGET write for the federation door — the same
+// shape promoteBySourceId established for the PROMOTE write (a named export
+// taking the host db, NOT a memoryDB method: the federation routes hold
+// core.db, and constructing a second createMemoryDB there would evict the
+// attached vector cache). Tombstones (by = the revoking agent, reason
+// 'federation-revoke'), deletes the row class through the same DELETE the
+// memoryDB.remove seam uses (the FTS triggers fire on any delete), and hooks
+// the decoded-vector cache through its per-db side-channel when one is
+// attached — the same optimistic hook auto-memory's unindexFacts uses; a
+// rolled-back delete is caught by the post-write signature check on the
+// next search. Returns the number of rows removed.
+export function forgetDocRaw(db, sourceType, sourceId, opts) {
+  opts = opts || {};
+  var vc = db.__myceliumVectorCache;
+  var txn = db.transaction(function () {
+    db.prepare('INSERT INTO sm_tombstones (source_type, source_id, deleted_by, reason) VALUES (?, ?, ?, ?)')
+      .run(sourceType, sourceId, opts.by || null, opts.reason || 'delete');
+    return db.prepare('DELETE FROM sm_embeddings WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId).changes;
+  });
+  var changes = txn();
+  if (vc && changes > 0) {
+    try { vc.onRemoveMany(sourceType, [String(sourceId)]); } catch (e) { /* cache absent — the signature reconcile is the net */ }
+  }
+  return changes;
 }
 
 // TRUST LAYER P1.3: the one PROMOTE write. Both doors — POST

@@ -427,6 +427,90 @@ export function registerHooks(core) {
     }
   });
 
+  // ---- TRUST LAYER P1.4: SOURCE CASCADE --------------------------------------
+  // Deleting a source entity deletes the memory rows that came from it.
+  // Deliberately NOT gated on isAutoIndexEnabled(): a row indexed while
+  // auto-indexing was on must be forgotten even if the flag was flipped off
+  // since — deletion propagation does not depend on the index on-ramp's
+  // current setting. forgetDoc tombstones what it removes, so the audit trail
+  // carries id + when + the AUTHENTICATED actor the core route put on the
+  // event + why ('source-deleted'); the plan leg takes its plan_step rows
+  // (metadata.plan_id) with it.
+  function forgetSource(sourceType, sourceId, by) {
+    try {
+      // P1.5: the cascade and its audit row are ONE transaction — the plugin
+      // deletes and then says what it deleted, or neither happens. ONE summary
+      // row names the source and the count (the tombstones carry the per-row
+      // record); the forgetDoc internals nest as savepoints.
+      var res;
+      core.db.transaction(function () {
+        res = db.forgetDoc(sourceType, String(sourceId), { by: by || null, reason: 'source-deleted' });
+        if (res && res.removed > 0) {
+          audit.append({
+            actor: by || 'system:source-cascade',
+            action: 'delete',
+            source_type: sourceType,
+            source_id: String(sourceId),
+            row_owner: null,
+            row_hash: contentHash({ kind: 'sm_source_cascade', source_type: sourceType, source_id: String(sourceId), removed: res.removed, derived: res.derived || 0 }),
+            reason: 'source-deleted cascade: ' + res.removed + ' index row(s)' + (res.derived ? ' + ' + res.derived + ' derived' : '')
+          });
+        }
+      })();
+      if (res && res.removed > 0) {
+        console.log('[semantic-memory] source cascade ' + sourceType + ':' + sourceId + ' removed ' + res.removed + ' index row(s)' + (res.derived ? ' + ' + res.derived + ' plan_step row(s)' : ''));
+      }
+    } catch (e) {
+      console.error('[semantic-memory] source cascade ' + sourceType + ':' + sourceId + ' failed:', e.message);
+      // Review A M2 (267c): the deletion-cascade failure is not swallowed here —
+      // emitEventCascade collects it and the delete route fails LOUD (500, whole
+      // transaction rolled back), the same law the direct forget routes follow.
+      throw e;
+    }
+  }
+
+  core.onEvent('task_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.task_id == null) return;
+      forgetSource('task', data.task_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] task_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('concept_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.concept_id == null) return;
+      forgetSource('concept', data.concept_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] concept_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('plan_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.plan_id == null) return;
+      forgetSource('plan', data.plan_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] plan_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('context_key_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (!data.namespace || !data.key) return;
+      forgetSource('context_key', data.namespace + ':' + data.key, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] context_key_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('context_keys_bulk_delete', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      var keys = Array.isArray(data.keys) ? data.keys : [];
+      for (var k of keys) {
+        if (k && k.namespace && k.key) forgetSource('context_key', k.namespace + ':' + k.key, data.deleted_by);
+      }
+    } catch (e) { console.error('[semantic-memory] context_keys_bulk_delete hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
   // Task 219 (2026-09-18): a restart forgets the in-memory embed queue, and
   // nothing on the platform re-discovered the NULL rows — the Mac's 30-min
   // launchd backfill job was the only sweep, so every restart cost up to 30

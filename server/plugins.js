@@ -31,11 +31,18 @@ export function callEventHooks(eventType, eventData) {
   var handlers = pluginEventHandlers[eventType] || [];
   // Also call wildcard '*' handlers
   var wildcards = pluginEventHandlers['*'] || [];
+  // Review A M2 (267c): collect failures instead of only logging them —
+  // emitEventCascade (the source-delete routes' strict emitter) needs the
+  // error list to fail the delete loud. One handler's failure never skips
+  // another's; the CALLER decides whether an error is fatal.
+  var errors = [];
   for (var fn of [...handlers, ...wildcards]) {
     try { fn(eventData); } catch (e) {
       console.error('[plugins] event hook error for ' + eventType + ':', e.message);
+      errors.push(e.message);
     }
   }
+  return errors;
 }
 
 // ---- Worker plugin process management ----

@@ -12,7 +12,7 @@
 
 import crypto from 'crypto';
 import { keyFromSeed, idForKey } from './keys.js';
-import { makeNetworkPassport, makeAgentPassport, makeRow, makeEnvelope, verifyBundle, episodeRow } from './protocol.js';
+import { makeNetworkPassport, makeAgentPassport, makeRow, makeEnvelope, verifyBundle, episodeRow, makeRevoke } from './protocol.js';
 
 // A visiting agent: its keypair, its home network's keypair, and the passport
 // the home network signed. `homeSeed`/`agentSeed` are the deterministic path
@@ -65,6 +65,17 @@ export function makeVisitor(opts) {
     // SOUVENIR: leave with what the host's export policy allows.
     async requestSouvenir(transport, visitId) {
       return transport.post('/federation/visit/' + visitId + '/souvenir', envelope({}));
+    },
+
+    // REVOKE (TRUST LAYER P1.4): the author's instruction to every holder —
+    // forget these row ids. Signed with the SAME agent key that signed the
+    // rows; sent agent-signed-envelope like every other message. `reason` is
+    // optional free text for the holder's audit trail.
+    async revoke(transport, rowIds, reason) {
+      var revoke = makeRevoke(agentKey, agentId, homeId, rowIds, {
+        reason: reason || null, issued_at: new Date().toISOString()
+      });
+      return transport.post('/federation/revoke', envelope({ revoke: revoke }));
     },
 
     // Border check the phone runs before carrying a bundle anywhere: the same

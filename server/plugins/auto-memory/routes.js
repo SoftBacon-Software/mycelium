@@ -204,16 +204,21 @@ export default function (core) {
     if (!who) return;
     var fact = db.getFact(parseIntParam(req.params.id));
     if (!fact) return apiError(res, 404, 'Fact not found');
-    // P1.5 (#193 lesson): the delete is audited with the fact AS DELETED —
-    // captured before deleteFact, in the same transaction.
-    var indexRemoved = core.db.transaction(function () {
-      var removed = db.deleteFact(fact.id);
-      // getAdminDisplayName: the admin key/JWT's identity as a STRING —
-      // checkAdmin's return value is a boolean, and audit rows bind it.
-      auditFact(getAdminDisplayName(req), 'delete', fact, { reason: 'admin delete' });
-      return removed;
+    // TRUST LAYER P1.4: the forget cascade — the named fact, every row derived
+    // from it (P1.1's derived_from refs, walked transitively), their index
+    // rows, and tombstones on all of it. P1.5 (#193 lesson): the audit row is
+    // written with the fact AS DELETED — captured before the cascade — and
+    // appended in the SAME transaction as the delete it describes.
+    // getAdminDisplayName: the admin key/JWT's identity as a STRING —
+    // checkAdmin's return value is a boolean, and both the tombstones and the
+    // audit rows bind it.
+    var actor = getAdminDisplayName(req);
+    var receipt;
+    core.db.transaction(function () {
+      receipt = db.deleteFact(fact.id, { by: actor, reason: 'forget' });
+      auditFact(actor, 'delete', fact, { reason: 'admin forget (cascade)' });
     })();
-    res.json({ ok: true, index_removed: indexRemoved });
+    res.json({ ok: true, index_removed: receipt.index_removed, deleted: receipt.deleted, cascaded: receipt.cascaded });
   });
 
   // DELETE /auto-memory/facts?namespace=<ns> — purge a whole namespace (admin)
@@ -242,10 +247,12 @@ export default function (core) {
     }
     // TRUST LAYER P1.5 (review A round 2 N3): the wipe and its audit row are
     // ONE transaction — the M2 shape (DELETE commits, then the append) would
-    // 500 AFTER the namespace is gone: silent data loss with no trace.
+    // 500 AFTER the namespace is gone: silent data loss with no trace. P1.4:
+    // the wipe also tombstones every row it takes (the db layer does both
+    // halves inside its own transaction, which nests as a savepoint here).
     var result;
     core.db.transaction(function () {
-      result = db.deleteFactsByNamespace(ns);
+      result = db.deleteFactsByNamespace(ns, { by: getAdminDisplayName(req), reason: 'purge' });
       // P1.5 (#193 lesson): the bulk wipe is ONE purge row naming the namespace
       // and the count — a purge the log cannot name never happened, as far as
       // any reader could tell.
@@ -686,7 +693,12 @@ function clampModelConfidence(raw) {
 // lose knowledge — TRUNCATE instead, and say so on the created[] echo.
 var FACT_TEXT_CAP = 2000;
 
-export async function extractFacts(db, config, text, agentId, projectId) {
+// `sourceRef` (TRUST LAYER P1.4, optional): '<store>:<id>' naming the entity
+// this text came from ('task:41') when the caller knows it — recorded on the
+// facts' own (source_type, source_id) columns so deleting that entity later
+// cascades to them. Callers that don't know the entity omit it; the fact stays
+// source_type 'extraction' with no source id (no invention).
+export async function extractFacts(db, config, text, agentId, projectId, sourceRef) {
   if (!text || text.length < 20) return [];
 
   var prompt = buildExtractionPrompt(text);
@@ -733,6 +745,19 @@ export async function extractFacts(db, config, text, agentId, projectId) {
       // failed append rolls the fact back instead of leaving it persisted with
       // its audit row owed.
       var txdb = db.__coreDb || db;
+      // TRUST LAYER P1.4: the entity this text came from rides on the fact's
+      // own (source_type, source_id) columns — first-colon split, the id
+      // keeping everything after it ('task:41' → 'task','41';
+      // 'context_key:ns:key' → 'context_key','ns:key'), the same parse the
+      // forget cascade's root matcher uses. P1.1's derived_from column stays
+      // ROW-to-row refs only: the trust min-law reads it, and a non-row ref
+      // (unknown to resolveInputTrust) would floor this row — and everything
+      // derived from it — at trust 0 forever.
+      var srcType = 'extraction', srcId = null;
+      if (sourceRef && typeof sourceRef === 'string') {
+        var sc = sourceRef.indexOf(':');
+        if (sc > 0) { srcType = sourceRef.substring(0, sc); srcId = sourceRef.substring(sc + 1); }
+      }
       var id = null;
       txdb.transaction(function () {
         // TRUST LAYER P1.1: a model wrote this — origin model-derived at the
@@ -744,7 +769,7 @@ export async function extractFacts(db, config, text, agentId, projectId) {
           category,
           factText,
           confidence,
-          'extraction', null,
+          srcType, srcId,
           null, null, null, null,
           'model-derived', originTrust('model-derived'), null
         );
@@ -764,7 +789,7 @@ export async function extractFacts(db, config, text, agentId, projectId) {
           factRow || {
             id: id, agent_id: agentId || null, project_id: projectId || null,
             category: category, fact_text: factText, confidence: confidence,
-            source_type: 'extraction', source_authority: 'inferred',
+            source_type: srcType, source_id: srcId, source_authority: 'inferred',
             valid_from: null, valid_to: null, verified_at: null,
             superseded_by: null, namespace: null,
             origin: 'model-derived', trust: originTrust('model-derived'), derived_from: null
@@ -1119,7 +1144,10 @@ export async function runConsolidation(db, config, _core, opts) {
       }
     }
 
-    // Add new insights
+    // Add new insights. TRUST LAYER P1.4: each insight records the input ids
+    // it was derived from (the prompt-seen set), so forgetting any of them
+    // later takes the insight with it — a forgotten fact is not recalled
+    // through its summary.
     if (Array.isArray(result.insights)) {
       // TRUST LAYER P1.1: an insight is the purest derived row — the model
       // wrote it FROM the reviewed set, so it cites every input it was shown
@@ -1139,6 +1167,21 @@ export async function runConsolidation(db, config, _core, opts) {
             // P1.5: the consolidator's insight is a write — the server signs it
             // ('system:consolidation'), owner-unknown (agent_id NULL, admin-only).
             auditExtractFact(db, 'system:consolidation', 'write', db.getFact(insightId), { reason: 'consolidation insight' });
+            // TRUST LAYER P1.4 (§F4): the summary is a memory row — index it
+            // through the same seam extraction uses, or it is written-but-not-
+            // retrievable. Before this slice a consolidation insight NEVER
+            // reached sm_embeddings, so no summary was ever searchable at all.
+            // Synchronous row + keyword work only (vectors are the scheduler's,
+            // derived — M4): safe inside the write transaction.
+            var insIndex;
+            try {
+              insIndex = indexFactInMemory(db, insightId, { fact_text: insight.fact_text, category: insight.category || 'insight', confidence: insight.confidence || 0.7 }, null, null);
+            } catch (idxErr) {
+              insIndex = { indexed: false, reason: idxErr.message };
+            }
+            if (!insIndex.indexed) {
+              console.error('[auto-memory] consolidation insight ' + insightId + ' is NOT searchable: ' + (insIndex.reason || 'unknown reason'));
+            }
           })();
         }
       }

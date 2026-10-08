@@ -21,7 +21,7 @@ import { keyFromSeed, idForKey, cjson } from './keys.js';
 import {
   KINDS, verifyRow, verifyNetworkPassport, verifyAgentPassport, makeGrant,
   makeNetworkPassport, makeVisitRecord, makeBundle, verifyBundle,
-  adjudicateImport, episodeRow, verifyEnvelope, verifyGrant
+  adjudicateImport, episodeRow, verifyEnvelope, verifyGrant, verifyRevoke
 } from './protocol.js';
 import createFederationStore from './store.js';
 
@@ -96,6 +96,10 @@ export default function (core) {
   // handful of grants by hand; imports are one-per-souvenir).
   var grantLimiter = rateLimited('federation/grant', { windowMs: 60000, max: 30 });
   var importLimiter = rateLimited('federation/import', { windowMs: 60000, max: 30 });
+  // TRUST LAYER P1.4: the revoke door — a foreign agent's signed instruction
+  // to forget. Same cadence as hello/import: one message per forgotten
+  // souvenir, not a stream.
+  var revokeLimiter = rateLimited('federation/revoke', { windowMs: 60000, max: 30 });
   // One bucket for the whole admin surface (GET/POST /network, GET /visits,
   // POST /visit/:id/end) — the task-240 remediation pattern for CodeQL's
   // js/missing-rate-limiting, applied to the two routes it flagged on this
@@ -398,6 +402,11 @@ export default function (core) {
     // audited once, on the original insert. Review A M2: insert + audit are
     // ONE transaction — a crash (or a fail-loud audit throw) must never leave
     // a FOREIGN memory write with no row; the rollback takes both.
+    // TRUST LAYER P1.4: the store's resurrection guard runs INSIDE that same
+    // transaction — the author revoked this content id, so the holder keeps
+    // nothing and says so: 410 (gone by the author's own instruction), the
+    // body names the fate instead of echoing a row that was never stored, and
+    // a revoked id lands no row and earns no audit row.
     var written = core.db.transaction(function () {
       var w = store.insertFedRow(g.visit.host_owner, row);
       if (w.inserted) {
@@ -406,6 +415,9 @@ export default function (core) {
       }
       return w;
     })();
+    if (written.revoked) {
+      return apiError(res, 410, 'this row was revoked by its author (revoke-v0); the holder keeps no copy');
+    }
     res.status(written.inserted ? 201 : 200).json({
       ok: true,
       replayed: !written.inserted,
@@ -545,13 +557,28 @@ export default function (core) {
     // owner who already imported this bundle — not just the first one.
     var prior = store.getImport(bundle.bundle_id, user.userId);
     if (prior) {
-      var priorEpisode = store.rowById(user.userId, episodeRow(bundle).id);
+      // The episode the first import actually wrote (a bundle refused at the
+      // door wrote the LANDED count — recompute the same id here so the
+      // replay finds it).
+      var refusedAtFirstImport = prior.outcomes.some(function (o) { return o.outcome === 'revoked'; });
+      var epBundle = refusedAtFirstImport
+        ? Object.assign({}, bundle, { rows: bundle.rows.filter(function (r, ix) { return prior.outcomes[ix].outcome !== 'revoked'; }) })
+        : bundle;
+      var priorEpisode = store.rowById(user.userId, episodeRow(epBundle).id);
       // §2.7: a replay answers 'replayed' PER ROW — the original outcomes are
-      // history, not this answer. Nothing is written.
+      // history, not this answer. Nothing is written. But a dead row never
+      // answers 'replayed': one refused at the first import is still refused,
+      // and one the author revoked SINCE (revoke-v0 deletes the stored copy
+      // and leaves the standing ban) is gone too — either way 'revoked'.
       return res.json({
         ok: true,
         replayed: true,
-        outcomes: prior.outcomes.map(function (o) { return { row_id: o.row_id, outcome: 'replayed' }; }),
+        outcomes: prior.outcomes.map(function (o) {
+          if (o.outcome === 'revoked' || store.revokedForOwner(user.userId, o.row_id)) {
+            return { row_id: o.row_id, outcome: 'revoked' };
+          }
+          return { row_id: o.row_id, outcome: 'replayed' };
+        }),
         episode: priorEpisode ? store.view(priorEpisode) : null
       });
     }
@@ -574,20 +601,37 @@ export default function (core) {
     // write with no row, and the import record must never name rows that did
     // not land — so the episode row and recordImport ride the same
     // transaction and a rollback takes all of it.
+    // TRUST LAYER P1.4: adjudication only sees live rows, so a revoked id
+    // looks importable to it — the store's resurrection guard (inside this
+    // same transaction) is the truth. A revoked row never lands, earns no
+    // audit row, and its outcome says so, never 'imported'.
     var fedActor = '__user:' + (user.displayName || user.username);
     var inserted = [];
+    var refusedRevoked = false;
     var episodeStore;
     core.db.transaction(function () {
       for (var i = 0; i < bundle.rows.length; i++) {
         var outcome = adj.outcomes[i];
         if (outcome.outcome === 'replayed') continue;
         var ins = store.insertFedRow(user.userId, bundle.rows[i], { candidate: outcome.outcome === 'supersede-candidate' });
+        if (ins.revoked) {
+          outcome.outcome = 'revoked';
+          refusedRevoked = true;
+          continue;
+        }
         inserted.push({ stored: ins.row, protocol: bundle.rows[i] });
         auditFedRow(fedActor, 'import', user.userId, ins.row.source_id, bundle.rows[i],
           'federation import of bundle ' + bundle.bundle_id + ' from ' +
           ((bundle.host_passport && (bundle.host_passport.name || bundle.host_passport.network_id)) || 'host'));
       }
-      episodeStore = store.insertFedRow(user.userId, adj.episode);
+      // The episode counts what was LEARNED — a bundle refused at the door is
+      // not remembered as more than it was.
+      var episode = adj.episode;
+      if (refusedRevoked) {
+        var landed = bundle.rows.filter(function (r, ix) { return adj.outcomes[ix].outcome !== 'revoked'; });
+        episode = episodeRow(Object.assign({}, bundle, { rows: landed }));
+      }
+      episodeStore = store.insertFedRow(user.userId, episode);
       store.recordImport(bundle.bundle_id, user.userId, adj.outcomes);
     })();
     res.status(201).json({
@@ -597,6 +641,40 @@ export default function (core) {
       episode: store.view(episodeStore.row)
     });
   }));
+
+  // ---- REVOKE (TRUST LAYER P1.4) -------------------------------------------------
+  // A souvenir forgotten at home is forgotten where it went. The message is
+  // self-signed by the SAME agent key that signed the rows (verifyRevoke);
+  // the holder-side requires a passport ON FILE (an agent this network met at
+  // hello) whose home matches the message — an unknown agent cannot reach into
+  // a holder's store by forging ids, and a signature alone is not a presence.
+
+  router.post('/revoke', revokeLimiter, function (req, res) {
+    // Review A B2 (267c): the shipped client posts envelope({ revoke }) — the
+    // payload NESTED, the same agent-signed envelope every other message rides
+    // (hello / visit-write / souvenir) — while this route read req.body.revoke
+    // top-level, so the PR's own client got 400 'revoke is required' from the
+    // PR's own route. Unwrap like the siblings: verify the envelope (sig, ts
+    // window, fresh nonce), then verify the inner revoke's own signature.
+    var env = checkEnvelope(req, res, null);
+    if (!env) return;
+    var rev = env.payload && env.payload.revoke;
+    if (!rev) return apiError(res, 400, 'payload.revoke is required');
+    if (rev.agent_id !== env.agent_id) {
+      return apiError(res, 401, 'the envelope is signed by ' + env.agent_id + ' but the revoke names ' + rev.agent_id);
+    }
+    var rv = verifyRevoke(rev);
+    if (!rv.valid) return apiError(res, 400, 'revoke rejected: ' + rv.reason);
+    var pp = store.getPassport('agent', rev.agent_id);
+    if (!pp) {
+      return apiError(res, 403, "unknown agent '" + rev.agent_id + "' — no passport on file; a holder only obeys revokes from agents it has met");
+    }
+    if (pp.home_network !== rev.home_network) {
+      return apiError(res, 403, 'revoke home_network does not match the passport on file');
+    }
+    var out = store.revokeRows(rev.agent_id, rev.row_ids);
+    res.json({ ok: true, revoked: out.revoked, unknown: out.unknown, foreign: out.foreign });
+  });
 
   // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for
   // federation candidates. Every imported row landed QUARANTINED

@@ -691,9 +691,11 @@ export default function (core) {
     if (refuseNotRowOwner(res, req.params.sourceType, req.params.sourceId, who, req._authIsAdmin, 'delete')) return;
     // P1.5 (#193 lesson): the delete is audited with the content AS DELETED —
     // captured before db.remove, in the same transaction.
+    // TRUST LAYER P1.4: the tombstone records the AUTHENTICATED actor, never
+    // a body claim — `who` is what checkMemoryAgent resolved from the key.
     core.db.transaction(function () {
       var victim = smRowState(req.params.sourceType, req.params.sourceId);
-      db.remove(req.params.sourceType, req.params.sourceId);
+      db.remove(req.params.sourceType, req.params.sourceId, { by: who, reason: 'delete' });
       audit.append({
         actor: who,
         action: 'delete',
@@ -741,9 +743,12 @@ export default function (core) {
     // and on the M2 shape (DELETE commits, then the audit append) a failed
     // append 500s AFTER the rows are gone: silent data loss with no trace,
     // the exact #193 class this log exists to close.
+    // TRUST LAYER P1.4: housekeeping is deletes (#193) — every row this purge
+    // takes is tombstoned (inside the db layer's own transaction, which nests
+    // as a savepoint here) with the admin actor on the record.
     var deleted;
     core.db.transaction(function () {
-      deleted = db.purge({ source_type: sourceType, namespace: namespace });
+      deleted = db.purge({ source_type: sourceType, namespace: namespace }, { by: getAdminDisplayName(req), reason: 'purge' });
       // P1.5 (#193 lesson): the bulk wipe is audited as ONE purge row naming the
       // exact filter and the count — a purge the log cannot name is a purge that
       // never happened, as far as any reader could tell.
@@ -1128,7 +1133,10 @@ export default function (core) {
       // captured before db.remove — same transaction, both rows or neither.
       var victim = smRowState(COMPANION_SOURCE_TYPE, id);
       db.companionClearSupersededBy(id);
-      db.remove(COMPANION_SOURCE_TYPE, id);
+      // TRUST LAYER P1.4: the tombstone records the owner scope (derived from
+      // the verified token — never a body field) as the actor; the P1.5 audit
+      // row rides the same transaction.
+      db.remove(COMPANION_SOURCE_TYPE, id, { by: companionNamespace(user.userId), reason: 'forget' });
       audit.append({
         actor: '__user:' + (user.displayName || user.username),
         action: 'delete',
