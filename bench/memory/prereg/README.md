@@ -2,7 +2,10 @@
 
 Task F-mycelium 244 (director, 2026-09-19). These are the **pre-registrations**
 for the only three memory claims this lab can still publish first — written
-BEFORE any run, cut once, no runs performed by the registering brief.
+BEFORE any run, cut once, no runs performed by the registering brief. (The
+directory now also holds the trust-layer SAFETY pre-registration,
+`P2-safety-2026-10-08.md` — same discipline, program
+`PROGRAM-mycelium-trust-layer-2026-09-26` §P2.)
 
 **The discipline.** Each file below states: hypothesis (direction +
 magnitude), n, arms, controls, the pre-committed bar, the judge/checker, the
@@ -34,6 +37,7 @@ nothing and buys credibility.
 | [`receipt-30-nights.md`](receipt-30-nights.md) | Yesterday's lessons raise repeat-task pass^k in a live lab, 30 nights, lessons ON vs leak-verified OFF | pre-registered, instrument partially live (nightly receipt + provenance leak gate on master); acted-on diff tool to build |
 | [`model-swap-identity.md`](model-swap-identity.md) | Identity survives a model swap, quantified (we have two real swaps in the transcripts) | pre-registered; Leg R (retroactive) unblocked, Leg P (prospective) waits for the next real swap |
 | [`supersede-behavior.md`](supersede-behavior.md) | Keeping the losing fact changes behavior: supersede-with-history vs last-writer-wins | pre-registered, BLOCKED on bug 220 (reader exposure of superseded history) landing first |
+| [`P2-safety-2026-10-08.md`](P2-safety-2026-10-08.md) | TRUST LAYER P2 — the three SAFETY bars before the first run: laundering resistance (execution ASR ≤ 2%, clean LongMemEval drop ≤ 2 pts), deletion completeness (≥ 95% adversarial, keep-controls 20/20), federation containment (zero canary tool actions, 100% foreign-labelled recall, ≤ 5% benign wrongly quarantined) | pre-registered 2026-10-08 (task F-mycelium 271), cut once; NO run performed by the registering task — its dry-run proved plumbing only and reported no scores |
 
 Program context: `jarvis/runs/fable-specs/BRIEF-lab-alive-memory-program.md`
 (THE DIRECTIVE), `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` (the
