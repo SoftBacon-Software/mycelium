@@ -32,6 +32,15 @@ import { forgetDocRaw } from '../semantic-memory/db.js';
 import { QUARANTINE_FOREIGN_NETWORK } from '../../lib/memory-quarantine.js';
 import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
+// TRUST LAYER P1.4 follow-up (#206): the re-send bounds — ONE place governs
+// what the author carries on a hello and what a hello processes. A revoke is
+// re-announced for RESEND_MAX_AGE_DAYS (an author does not chase the network
+// forever over content everyone has had seasons to drop) and at most
+// RESEND_MAX_PER_HELLO entries ride one knock (a hello is a knock, not a
+// bulk dump — the revoke door's own cadence is 30/min).
+export var REVOKE_RESEND_MAX_AGE_DAYS = 90;
+export var REVOKE_RESEND_MAX_PER_HELLO = 16;
+
 export default function createFederationStore(db) {
   // TRUST LAYER P1.5: the revoke path is a delete path — its audit row lands
   // in the same transaction as the deletes it describes (see revokeRows).
@@ -379,6 +388,51 @@ export default function createFederationStore(db) {
       });
       txn();
       return { revoked: revoked, unknown: unknown, foreign: foreign };
+    },
+
+    // ---- the author's outstanding revokes (TRUST LAYER P1.4 follow-up, #206) --
+
+    // The author's keep: one entry per revoked row id, recorded from an
+    // ALREADY-VERIFIED single-id revoke-v0 (the route verifies before calling,
+    // the same as revokeRows' callers do). The entry stores exactly the fields
+    // the signature covers, so the message the next hello re-sends IS the
+    // message the author signed — verifyRevoke on the far side sees a normal
+    // revoke. Re-revoking an id re-arms the entry (fresh revoked_at, fresh
+    // signature).
+    recordOutboxRevoke(rev) {
+      db.prepare(
+        'INSERT INTO fed_revoke_outbox (agent_id, row_id, home_network, reason, revoked_at, signature) VALUES (?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(agent_id, row_id) DO UPDATE SET home_network = excluded.home_network, reason = excluded.reason, ' +
+        'revoked_at = excluded.revoked_at, signature = excluded.signature, recorded_at = ' + now
+      ).run(rev.agent_id, rev.row_ids[0], rev.home_network, rev.reason || null, rev.issued_at, rev.sig);
+    },
+
+    // What one agent still carries: single-id revoke-v0 messages, oldest
+    // first, only entries within RESEND_MAX_AGE_DAYS of their signed
+    // issued_at, capped at RESEND_MAX_PER_HELLO (the same constant caps what
+    // a hello processes — one place governs both ends of the wire). The age
+    // compare is lexicographic over ISO strings, which is chronological for
+    // the toISOString shape the protocol issues; an entry whose signed
+    // issued_at is some other parseable format sorts oddly but only affects
+    // its own author's trimming — the far side re-verifies the signature and
+    // the M1 gates either way.
+    outstandingRevokes(agentId, nowMs) {
+      var cutoff = new Date(nowMs - REVOKE_RESEND_MAX_AGE_DAYS * 86400000).toISOString();
+      var rows = db.prepare(
+        'SELECT agent_id, row_id, home_network, reason, revoked_at, signature FROM fed_revoke_outbox ' +
+        'WHERE agent_id = ? AND revoked_at >= ? ORDER BY revoked_at, row_id LIMIT ?'
+      ).all(agentId, cutoff, REVOKE_RESEND_MAX_PER_HELLO);
+      return rows.map(function (e) {
+        return {
+          type: 'revoke-v0',
+          agent_id: e.agent_id,
+          home_network: e.home_network,
+          row_ids: [e.row_id],
+          reason: e.reason,
+          issued_at: e.revoked_at,
+          sig: e.signature
+        };
+      });
     },
 
     // ---- imports --------------------------------------------------------------
