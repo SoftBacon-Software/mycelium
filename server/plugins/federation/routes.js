@@ -23,7 +23,7 @@ import {
   makeNetworkPassport, makeVisitRecord, makeBundle, verifyBundle,
   adjudicateImport, episodeRow, verifyEnvelope, verifyGrant, verifyRevoke
 } from './protocol.js';
-import createFederationStore from './store.js';
+import createFederationStore, { REVOKE_RESEND_MAX_PER_HELLO } from './store.js';
 
 export default function (core) {
   var router = Router();
@@ -100,6 +100,12 @@ export default function (core) {
   // to forget. Same cadence as hello/import: one message per forgotten
   // souvenir, not a stream.
   var revokeLimiter = rateLimited('federation/revoke', { windowMs: 60000, max: 30 });
+  // TRUST LAYER P1.4 follow-up (#206): the author's outbox record door — the
+  // revoke door's cadence (one message per forgotten row, not a stream), its
+  // own bucket. The hello's re-send leg needs NO second bucket: it rides
+  // hello's own 30/min limiter — the same cadence as the revoke door — and
+  // an in-handler bucket behind that ceiling could never fire (dead code).
+  var outboxLimiter = rateLimited('federation/outbox', { windowMs: 60000, max: 30 });
   // One bucket for the whole admin surface (GET/POST /network, GET /visits,
   // POST /visit/:id/end) — the task-240 remediation pattern for CodeQL's
   // js/missing-rate-limiting, applied to the two routes it flagged on this
@@ -223,6 +229,60 @@ export default function (core) {
   // crosses. The host answers with its own signed network passport — policy
   // included — so a visitor learns "no visitors here" before asking.
 
+  function answerHello(res, id, reSendReport) {
+    var answer = {
+      ok: true,
+      network_passport: makeNetworkPassport(id.key, id.networkId, {
+        name: id.name, policy: id.policy, issued_at: new Date().toISOString()
+      })
+    };
+    if (reSendReport) answer.revokes = reSendReport;
+    res.json(answer);
+  }
+
+  // TRUST LAYER P1.4 follow-up (#206): the revokes one hello carries. Every
+  // entry is judged on its own — a bad one is REFUSED, named in the report,
+  // never thrown, and the knock itself still answers (a hello must not fail
+  // because a piggy-backed revoke was forged). The gates per entry are the
+  // same ones the /revoke door applies: verifyRevoke, the carrier must BE
+  // the author (a visitor re-announces its own revokes, never a third
+  // party's), passport on file, home match — then the existing revokeRows
+  // path, where a holder that now holds a copy forgets it and writes the
+  // standing ban, and one that still holds nothing writes nothing (M1
+  // stays: the re-send never becomes a ban on unevidenced content). At most
+  // REVOKE_RESEND_MAX_PER_HELLO entries are processed — the same constant
+  // that caps what the author carries (one place governs both ends).
+  function processCarriedRevokes(body, carried) {
+    var report = { received: carried.length, applied: 0, skipped: 0, refused: [], outcomes: [] };
+    var visitorAgentId = body.agent_passport.agent_id;
+    for (var i = 0; i < carried.length; i++) {
+      var rev = carried[i];
+      if (report.applied >= REVOKE_RESEND_MAX_PER_HELLO) { report.skipped++; continue; }
+      var rv = verifyRevoke(rev);
+      if (!rv.valid) {
+        report.refused.push({ agent_id: (rev && rev.agent_id) || null, reason: rv.reason });
+        continue;
+      }
+      if (rev.agent_id !== visitorAgentId) {
+        report.refused.push({ agent_id: rev.agent_id, reason: 'not-the-visitor' });
+        continue;
+      }
+      var pp = store.getPassport('agent', rev.agent_id);
+      if (!pp) {
+        report.refused.push({ agent_id: rev.agent_id, reason: 'unknown-agent' });
+        continue;
+      }
+      if (pp.home_network !== rev.home_network) {
+        report.refused.push({ agent_id: rev.agent_id, reason: 'home-mismatch' });
+        continue;
+      }
+      var out = store.revokeRows(rev.agent_id, rev.row_ids);
+      report.applied++;
+      report.outcomes.push({ agent_id: rev.agent_id, revoked: out.revoked, unknown: out.unknown.length, foreign: out.foreign.length });
+    }
+    return report;
+  }
+
   router.post('/hello', helloLimiter, function (req, res) {
     var body = req.body || {};
     var net = verifyNetworkPassport(body.network_passport);
@@ -235,12 +295,21 @@ export default function (core) {
     store.upsertPassport('network', body.network_passport.network_id, null, cjson(body.network_passport));
     store.upsertPassport('agent', body.agent_passport.agent_id, body.agent_passport.home_network, cjson(body.agent_passport));
     var id = identity();
-    res.json({
-      ok: true,
-      network_passport: makeNetworkPassport(id.key, id.networkId, {
-        name: id.name, policy: id.policy, issued_at: new Date().toISOString()
-      })
-    });
+
+    // Since #206 a knock MAY carry the visitor's outstanding revokes — what
+    // its node read from GET /federation/outbox. Absent: the answer is
+    // byte-identical to the pre-#206 shape (MyceliumKit untouched). Present
+    // but not an array: a malformed knock, 400 like the passports. The
+    // re-send leg is rate-limited by THIS door's own 30/min limiter — the
+    // same cadence as the revoke door — plus the N-entries-per-knock cap in
+    // processCarriedRevokes.
+    if (body.outstanding_revokes === undefined) {
+      return answerHello(res, id, null);
+    }
+    if (!Array.isArray(body.outstanding_revokes)) {
+      return apiError(res, 400, 'outstanding_revokes must be an array of revoke-v0 messages');
+    }
+    answerHello(res, id, processCarriedRevokes(body, body.outstanding_revokes));
   });
 
   // ---- GRANT — the host owner consents ---------------------------------------
@@ -674,6 +743,61 @@ export default function (core) {
     }
     var out = store.revokeRows(rev.agent_id, rev.row_ids);
     res.json({ ok: true, revoked: out.revoked, unknown: out.unknown, foreign: out.foreign });
+  });
+
+  // ---- OUTBOX — the author's keep (TRUST LAYER P1.4 follow-up, #206) -------------
+  // A holder never bans content it cannot evidence (M1), so a revoke that
+  // lands `unknown` must be RE-ANNOUNCED when the content shows up later:
+  // the author records its outstanding revokes here, and its next hello to
+  // each network it meets carries them (the hello processes them through the
+  // same gates as this door). Same identity gates as /revoke — the envelope
+  // is agent-signed, the passport must be on file, the home must match —
+  // because a recorded entry is only ever CARRIED by its own agent (the
+  // hello refuses revokes that do not name the knocking agent) and only
+  // ever acted on after verifyRevoke: parking an entry on a met node grants
+  // no trust. One row id per entry — the message the entry re-sends is the
+  // exact single-id statement the signature covers.
+
+  router.post('/outbox', outboxLimiter, function (req, res) {
+    var env = checkEnvelope(req, res, null);
+    if (!env) return;
+    var rev = env.payload && env.payload.revoke;
+    if (!rev) return apiError(res, 400, 'payload.revoke is required');
+    if (rev.agent_id !== env.agent_id) {
+      return apiError(res, 401, 'the envelope is signed by ' + env.agent_id + ' but the revoke names ' + rev.agent_id);
+    }
+    var rv = verifyRevoke(rev);
+    if (!rv.valid) return apiError(res, 400, 'revoke rejected: ' + rv.reason);
+    var pp = store.getPassport('agent', rev.agent_id);
+    if (!pp) {
+      return apiError(res, 403, "unknown agent '" + rev.agent_id + "' — no passport on file; the outbox keeps revokes for agents this network has met");
+    }
+    if (pp.home_network !== rev.home_network) {
+      return apiError(res, 403, 'revoke home_network does not match the passport on file');
+    }
+    if (rev.row_ids.length !== 1) {
+      return apiError(res, 400, 'the outbox keeps ONE row id per entry — record one revoke per id');
+    }
+    if (isNaN(Date.parse(rev.issued_at))) {
+      return apiError(res, 400, 'issued_at must be a parseable timestamp — the 90-day carry bound reads it');
+    }
+    store.recordOutboxRevoke(rev);
+    res.json({ ok: true, recorded: rev.row_ids[0], outstanding: store.outstandingRevokes(rev.agent_id, Date.now()).length });
+  });
+
+  // What the author's node software reads to know what its hellos must
+  // carry (admin, like the other visibility surfaces): every met agent's
+  // outstanding revokes, age-bounded by the store, each entry the byte-exact
+  // signed message the far side will re-verify.
+  router.get('/outbox', adminLimiter, function (req, res) {
+    if (!checkAdmin(req, res)) return;
+    var agents = core.db.prepare('SELECT DISTINCT agent_id FROM fed_revoke_outbox ORDER BY agent_id').all()
+      .map(function (r) { return r.agent_id; });
+    var revokes = [];
+    for (var i = 0; i < agents.length; i++) {
+      revokes = revokes.concat(store.outstandingRevokes(agents[i], Date.now()));
+    }
+    res.json({ ok: true, revokes: revokes, count: revokes.length });
   });
 
   // POST /import/:bundleId/accept — TRUST LAYER P1.3: the promote door for

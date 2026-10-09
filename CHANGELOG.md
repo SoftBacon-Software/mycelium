@@ -84,6 +84,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rank 1 everywhere (poison@1 1.0 → 0.0). 15 tests pin the weight, the
   ordering, the labels, and the injection canary.
 
+- **The author re-sends its revokes on the next hello (trust layer P1.4
+  follow-up, #206)** — a revoke for an id the holder has never seen writes no
+  standing ban (`unknown` — the M1 trade-off), so a copy that arrived LATER
+  from a third holder still landed and the author's instruction was lost.
+  The author now KEEPS its outstanding revokes: `fed_revoke_outbox` (one
+  signed message per row id, `POST /federation/outbox`, agent-signed like
+  the revoke door) and re-sends them on the next HELLO to every network it
+  meets (`outstanding_revokes` on the knock, signed exactly as the direct
+  revoke). The holder judges each carried entry through the same gates
+  (signature → must name the knocking agent → passport on file → home match)
+  and acts only on what it can evidence — a holder that now holds a copy
+  forgets it and writes the standing ban; `unknown`/`foreign` still write
+  nothing. Bounds in one place (`store.js`): 90 days on the outbox, at most
+  16 revokes per hello; the record door is rate-limited at the revoke door's
+  cadence (30/min) and the re-send leg rides hello's own limiter (an
+  in-handler bucket behind it could never fire). A plain hello answers
+  byte-identically as before (no `revokes` key). 6 tests pin the loop, the
+  forged refusals, the age bound, and the M1 line (`test/unit/
+  trust-layer-p1-4-revoke-resend.test.js` + the outbox limiter in
+  `trust-layer-rate-limits.test.js`); the full loop is also proven live over
+  two spawned servers (`docs/specs/2026-10-08-federation-revoke-resend/`).
+  Spec: `spec/federation-v0/README.md` §2.8 + the §4 route rows.
+
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 
 ## [0.1.0] - 2026-05-25

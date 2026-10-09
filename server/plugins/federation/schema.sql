@@ -86,6 +86,27 @@ CREATE TABLE IF NOT EXISTS fed_imports (
   PRIMARY KEY (bundle_id, owner)
 );
 
+-- TRUST LAYER P1.4 follow-up (#206): the AUTHOR's outstanding revokes — the
+-- signed forget-statements its agents have issued, kept so the next HELLO to
+-- each network carries them. A revoke for an id a holder has never seen
+-- writes no standing ban (`unknown`, the M1 trade-off); without a re-send,
+-- a copy that arrives LATER would land with the author's instruction lost.
+-- One row per revoked row id; (agent_id, row_id) is the key — re-revoking an
+-- id re-arms the entry. `revoked_at` is the message's issued_at (inside the
+-- signature — age is author-asserted), `signature` verifies over the
+-- single-id message the entry re-sends (verifyRevoke, byte-exact).
+CREATE TABLE IF NOT EXISTS fed_revoke_outbox (
+  agent_id     TEXT NOT NULL,
+  row_id       TEXT NOT NULL,
+  home_network TEXT NOT NULL,
+  reason       TEXT,
+  revoked_at   TEXT NOT NULL,
+  signature    TEXT NOT NULL,
+  recorded_at  TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (agent_id, row_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fed_revoke_outbox_age ON fed_revoke_outbox(revoked_at);
+
 -- NOTE — provenance on the memory rows themselves (fed_agent, fed_network,
 -- fed_home, fed_visit, fed_sig on sm_embeddings) is added by the guarded
 -- ALTERs in store.js:CREATE at load, the same idiom semantic-memory uses for
