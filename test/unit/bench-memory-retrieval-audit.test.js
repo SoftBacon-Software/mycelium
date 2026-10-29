@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  armRetrievalVsAnswers,
   buildGoldIndex,
   classifyRow,
   computeRetrievalAudit,
@@ -637,5 +638,370 @@ describe('composeGrid --retrieval-audit: the section lands in the grid receipt, 
     // the hand-label transcripts carry the labels too (judged joins stay on the raw arm)
     expect(md).toContain('| mycelium-timeline [memory-rows] | wrong |');
     expect(md).toContain('| mycelium-timeline [am_facts] | wrong |');
+  });
+});
+
+// ---- task 264: R@5/R@10 beside judged accuracy -----------------------------------
+//
+// The MemPalace headline is LongMemEval R@5 — session-level retrieval recall.
+// Our grid's headline is judge-scored QA accuracy. Two cells, never placed side
+// by side, so the retrieve-vs-use gap stayed invisible. Task 264 makes every
+// arm row's gold hit lands at k=5/k=10 computable and renders, PER ARM:
+// R@5 · R@10 · judged accuracy (p1) · the gap (retrieved-but-answered-wrong %).
+
+describe('task 264 — R@5/R@10 on a fixture with known gold ids', () => {
+  const item = (qid) => ({
+    question_id: qid,
+    question_type: 'multi-session',
+    answer: 'g',
+    answer_session_ids: ['sess-a'],
+    haystack_session_ids: ['sess-a', 'sess-b'],
+    haystack_sessions: [[{ role: 'user', content: 'g' }], [{ role: 'user', content: 'x' }]],
+  });
+  const items = ['q1', 'q2'].map(item);
+  const goldIndex = buildGoldIndex(items);
+  // rows helpers — one gold-session hit at a chosen context rank (session 0 is gold)
+  const hit = (sessionIndex, rank) => ({ source_id: `s${rank}`, score: 1, session_index: sessionIndex, rank });
+  const row = (qid, readHits) => ({ question_id: qid, question_type: 'multi-session', meta: { read_hits: readHits, read_hits_available: readHits !== null } });
+
+  it('a perfect retriever: R@5 = R@10 = 1.0', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [hit(0, 0)]), row('q2', [hit(0, 0)])] } }],
+      goldIndex,
+      budget: 10,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 1, hits: 2, n: 2 });
+    expect(roll.a.r_at[10]).toEqual({ rate: 1, hits: 2, n: 2 });
+  });
+
+  it('an empty retriever (read_hits [] — the search ran, zero rows came back) is a KNOWN miss: R@5 = 0.0, never n/a', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', []), row('q2', [])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 0, hits: 0, n: 2 });
+  });
+
+  it('a partial retriever scores the exact ratio — and R@5/R@10 differ when the gold sits at rank 6', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'r',
+        rowsByArm: {
+          a: [
+            // gold at context rank 5 (1-based) → inside @5
+            row('q1', [hit(1, 0), hit(0, 4)]),
+            // gold at context rank 6 (1-based) → misses @5, inside @10
+            row('q2', [hit(1, 0), hit(1, 1), hit(1, 2), hit(1, 3), hit(1, 4), hit(0, 5)]),
+          ],
+        },
+      }],
+      goldIndex,
+      budget: 10,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 0.5, hits: 1, n: 2 });
+    expect(roll.a.r_at[10]).toEqual({ rate: 1, hits: 2, n: 2 });
+  });
+
+  it('k beyond the read budget is n/a (why), never 0 and never R@budget re-badged', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [hit(0, 0)])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 1, hits: 1, n: 1 });
+    expect(roll.a.r_at[10]).toMatchObject({ na: expect.stringMatching(/read budget 5/) });
+  });
+
+  it('a no-retrieval arm (read_hits null) is n/a (why), never 0', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { none: [row('q1', null), row('q2', null)] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.none.r_at[5]).toMatchObject({ na: expect.stringMatching(/no-retrieval/) });
+    // R@10 at budget 5: the budget note fires first — it is the more fundamental
+    // why (no arm can see rank 10 there), and it is still n/a, never 0
+    expect(roll.none.r_at[10]).toMatchObject({ na: expect.stringMatching(/read budget 5/) });
+  });
+
+  it('banked rows (counts only, no read_hits key) are n/a (why) — ranks are never invented', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { banked: [{ question_id: 'q1', question_type: 'multi-session', meta: { hits: 5 } }] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.banked.r_at[5]).toMatchObject({ na: expect.stringMatching(/banked/) });
+  });
+
+  it('the per-type cells still carry the task-207 hit@budget unchanged (R@k does not disturb it)', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [hit(0, 0)]), row('q2', [hit(0, 0)])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    expect(audit.cells.a['multi-session'].hit_at_budget).toBe(1);
+    expect(audit.cells.a['multi-session'].ranked).toBe(2);
+  });
+});
+
+describe('task 264 — judged accuracy + the retrieved-but-answered-wrong gap', () => {
+  const items = ['q1', 'q2', 'q3'].map((qid) => ({
+    question_id: qid,
+    question_type: 'multi-session',
+    answer: 'g',
+    answer_session_ids: ['sess-a'],
+    haystack_session_ids: ['sess-a'],
+    haystack_sessions: [[{ role: 'user', content: 'g' }]],
+  }));
+  const goldIndex = buildGoldIndex(items);
+  const hitRow = (qid) => ({ question_id: qid, meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } });
+  const judgedRows = [
+    { question_id: 'q1', label: 'exact' },
+    { question_id: 'q2', label: 'wrong' },
+    { question_id: 'q3', label: 'partial' },
+  ];
+
+  it('judged accuracy is p1 over the arm’s joined labels; the gap is P(wrong | gold retrieved within budget)', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'r',
+        rowsByArm: { a: [hitRow('q1'), hitRow('q2'), hitRow('q3')] },
+        judgedByArm: { a: judgedRows },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.judged_p1).toBeCloseTo((1 + 0 + 0.5) / 3); // exact + wrong + partial
+    expect(roll.a.gap).toEqual({ rate: 1 / 3, wrong: 1, n: 3 }); // every row retrieved; one wrong
+  });
+
+  it('a retrieved-MISS judged wrong is retrieval-side, not the gap — the gap only counts gold-retrieved rows', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'r',
+        rowsByArm: {
+          a: [
+            { question_id: 'q1', meta: { read_hits: [{ source_id: 'x', score: 1, session_index: 9, rank: 0 }], read_hits_available: true } }, // miss
+            { question_id: 'q2', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }, // hit, wrong
+          ],
+        },
+        judgedByArm: { a: [{ question_id: 'q1', label: 'wrong' }, { question_id: 'q2', label: 'wrong' }] },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    // denominator = the 1 RETRIEVED row (q2): the miss row (q1) is a retrieval
+    // failure and stays out of the gap — R@k carries it instead
+    expect(roll.a.gap).toEqual({ rate: 1, wrong: 1, n: 1 });
+    expect(roll.a.r_at[5]).toEqual({ rate: 0.5, hits: 1, n: 2 });
+  });
+
+  it('no judged labels joined → accuracy n/a + gap n/a, each saying why', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [hitRow('q1')] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.judged_p1).toMatchObject({ na: expect.stringMatching(/no judged rows/) });
+    expect(roll.a.gap).toMatchObject({ na: expect.stringMatching(/no retrieved-hit rows carry a judge label/) });
+  });
+
+  it('task 225: judged labels join on the RAW arm name and surface under the arm’s LABELED identity', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'r',
+        rowsByArm: { 'mycelium-timeline': [hitRow('q1')] },
+        judgedByArm: { 'mycelium-timeline': [{ question_id: 'q1', label: 'exact' }] },
+        labelByArm: { 'mycelium-timeline': 'mycelium-timeline [am_facts]' },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll['mycelium-timeline [am_facts]'].judged_p1).toBe(1);
+  });
+});
+
+describe('task 264 — the receipt renders the per-arm retrieval-vs-answers table', () => {
+  const item = {
+    question_id: 'q-adv',
+    question_type: 'single-session-preference',
+    answer: 'Aisle five',
+    answer_session_ids: ['sess-1'],
+    haystack_session_ids: ['sess-1'],
+    haystack_sessions: [[{ role: 'user', content: 'Aisle five' }]],
+  };
+  const goldIndex = buildGoldIndex([item]);
+
+  const auditFor = (rowsByArm, judgedByArm) =>
+    computeRetrievalAudit({
+      runs: [{ runId: 'r1', rowsByArm, judgedByArm }],
+      goldIndex,
+      budget: 5,
+    });
+
+  it('renders R@5 · R@10 · judged accuracy · the gap per arm, with counts, and states the definitions', () => {
+    const audit = auditFor(
+      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }] },
+      { mycelium: [{ question_id: 'q-adv', label: 'wrong' }] }
+    );
+    const lines = renderRetrievalAuditSection({
+      audit,
+      goldCoverage: goldIndex.coverage,
+      writeCapValue: null,
+      diagnostic: poolDiagnostic(audit, 5),
+      budget: 5,
+    });
+    const text = lines.join('\n');
+    expect(text).toMatch(/task 264/);
+    expect(text).toMatch(/\| mycelium \| 1\.000 \(1\/1\) \| n\/a \(read budget 5[^)]*\) \| 0\.000 \(0\/1\) \| 100\.0% \(1\/1\) \|/);
+    expect(text).toMatch(/R@5 = gold session in the top 5 of the stamped read hits/);
+    expect(text).toMatch(/retrieved-but-answered-wrong/);
+  });
+
+  it('an arm whose rows are banked renders n/a (why) — and its judged accuracy still renders from judged.jsonl', () => {
+    const audit = auditFor(
+      { old: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { hits: 5 } }] },
+      { old: [{ question_id: 'q-adv', label: 'exact' }] }
+    );
+    const lines = renderRetrievalAuditSection({
+      audit,
+      goldCoverage: goldIndex.coverage,
+      writeCapValue: null,
+      diagnostic: poolDiagnostic(audit, 5),
+      budget: 5,
+    });
+    const text = lines.join('\n');
+    expect(text).toMatch(/\| old \| n\/a \(.*banked.*\) \| n\/a \(.*\) \| 1\.000 \(1\/1\) \| n\/a \(.*\) \|/);
+    expect(text).not.toMatch(/\| old \| 0\.000 \|/);
+  });
+
+  it('states the evidence granularity: session-level, turn-level absent in this dataset', () => {
+    const audit = auditFor(
+      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }] },
+      { mycelium: [{ question_id: 'q-adv', label: 'exact' }] }
+    );
+    const lines = renderRetrievalAuditSection({
+      audit,
+      goldCoverage: goldIndex.coverage,
+      writeCapValue: null,
+      diagnostic: poolDiagnostic(audit, 5),
+      budget: 5,
+    });
+    const text = lines.join('\n');
+    expect(text).toMatch(/session-level/);
+    expect(text).toMatch(/[Tt]urn-level .*absent/);
+  });
+});
+
+describe('task 264 — composeGrid: judged labels flow from judged.jsonl into the table (banked-run shape)', () => {
+  let root;
+
+  const AUDIT_ITEMS = [
+    {
+      question_id: 'q-adv',
+      question_type: 'single-session-preference',
+      answer: 'Aisle five',
+      answer_session_ids: ['sess-1'],
+      haystack_session_ids: ['sess-1'],
+      haystack_sessions: [[{ role: 'user', content: 'Aisle five' }]],
+    },
+  ];
+
+  const REGIME = {
+    date_utc: '2026-09-17T00:00:00Z',
+    git_sha: 'sha',
+    git_dirty: false,
+    harness: 'p1-skeleton.1',
+    dataset: { name: 'bench-memory hermetic fixture', file: 'x.json', sha256: 'sha-x', licence: 'MIT', url: null, items_available: 1, citation: 'test' },
+    answerer: { model: 'm', url_host: 'h', temperature: 0, max_tokens: 4096 },
+    judge: { model: 'j', url_host: 'h', judge_prompt_version: 'p' },
+    retrieval: { budget: 5, chunking: 'c', source_type: 'bench_longmemeval', namespace: 'ns', server_mode: 'hybrid (server-side)' },
+    platform: { url_host: 'h', version: 'v' },
+    n: 1,
+    selection_rule: 'sort by question_id ascending, take first n (deterministic, stable across runs)',
+    notes: [],
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-memory-264-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeRun(name, runId, armName, { stamped }) {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir, { recursive: true });
+    const summary = {
+      run_id: runId,
+      n: 1,
+      regime: { ...REGIME, retrieval: { ...REGIME.retrieval, namespace: `ns-${runId}` } },
+      arms: { [armName]: { n: 1, score: { counts: { exact: 0, partial: 0, wrong: 1 }, p1_score: 0 } } },
+      write_info: {},
+      commands: [],
+    };
+    fs.writeFileSync(path.join(dir, 'summary.json'), JSON.stringify(summary));
+    fs.writeFileSync(
+      path.join(dir, 'judged.jsonl'),
+      JSON.stringify({ question_id: 'q-adv', arm: armName, question_type: 'single-session-preference', gold: 'Aisle five', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false }) + '\n'
+    );
+    const meta = stamped
+      ? { hits: 1, read_hits: [{ source_id: 's0', score: 0.9, session_index: 0, rank: 0 }], read_hits_available: true }
+      : { hits: 3 }; // the banked shape: counts only, no read_hits key
+    fs.writeFileSync(
+      path.join(dir, `${armName}.rows.jsonl`),
+      JSON.stringify({ question_id: 'q-adv', question_type: 'single-session-preference', question: 'Where is the cereal?', gold: 'Aisle five', answer: 'I do not know.', meta }) + '\n'
+    );
+    return dir;
+  }
+
+  it('a stamped run: the table carries real R@5/R@10/gap numbers; judged accuracy joins from judged.jsonl', async () => {
+    const dirs = [writeRun('run-a', 'run-a', 'mycelium', { stamped: true })];
+    dirs.push(writeRun('run-b', 'run-b', 'none', { stamped: false })); // none stamps read_hits null itself
+    // overwrite run-b's rows with the true null stamp (writeRun's banked shape is for the other test)
+    fs.writeFileSync(
+      path.join(root, 'run-b', 'none.rows.jsonl'),
+      JSON.stringify({ question_id: 'q-adv', question_type: 'single-session-preference', question: 'Where is the cereal?', gold: 'Aisle five', answer: 'I do not know.', meta: { hits: 0, read_hits: null, read_hits_available: false, budget: 5 } }) + '\n'
+    );
+    const out = await composeGrid({
+      dirs,
+      generatedAt: '2026-10-29T00:00:00Z',
+      receiptsDir: path.join(root, 'receipts'),
+      audit: true,
+      loadSplitFn: async () => ({ items: AUDIT_ITEMS }),
+    });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toMatch(/task 264/);
+    expect(md).toMatch(/\| mycelium \| 1\.000 \(1\/1\) \| n\/a \(read budget 5[^)]*\) \| 0\.000 \(0\/1\) \| 100\.0% \(1\/1\) \|/);
+    // the no-retrieval arm: retrieval columns n/a, judged accuracy still rendered
+    expect(md).toMatch(/\| none \| n\/a \(.*no-retrieval.*\) \| n\/a \(.*\) \| 0\.000 \(0\/1\) \| n\/a \(.*\) \|/);
+  });
+
+  it('a banked run (ids not logged): R@k renders n/a (why), judged accuracy still renders', async () => {
+    const dirs = [writeRun('run-a', 'run-a', 'old-arm', { stamped: false })];
+    dirs.push(writeRun('run-b', 'run-b', 'none', { stamped: false }));
+    const out = await composeGrid({
+      dirs,
+      generatedAt: '2026-10-29T00:00:00Z',
+      receiptsDir: path.join(root, 'receipts'),
+      audit: true,
+      loadSplitFn: async () => ({ items: AUDIT_ITEMS }),
+    });
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toMatch(/\| old-arm \| n\/a \(.*banked.*\) \|/);
+    expect(md).toMatch(/\| old-arm .* \| 0\.000 \(0\/1\) \|/);
+    expect(md).toMatch(/no turn-level evidence ids/);
   });
 });

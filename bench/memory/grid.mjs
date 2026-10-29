@@ -24,6 +24,7 @@ import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './i
 import { RECEIPTS_DIR } from './receipt.mjs';
 import { autopsyRun, renderAutopsySection, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import {
+  armRetrievalVsAnswers,
   buildGoldIndex,
   computeRetrievalAudit,
   decideDiagnostic,
@@ -583,7 +584,65 @@ export function renderTranscripts(groups) {
   return L;
 }
 
-export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget: _budget, transcripts = null }) {
+// --- task 264: the per-arm retrieval-vs-answers table ----------------------------
+//
+// MemPalace's headline is LongMemEval R@5 (session-level retrieval recall); the
+// grid's headline is judge-scored QA accuracy. Two different cells — placing
+// them side by side honestly is exactly what this table is for, and the
+// retrieve-vs-use gap (the evidence was retrieved, the answer still failed)
+// becomes visible instead of argued about.
+
+const fmtRAtCell = (v) => {
+  if (v == null) return '—';
+  if (v.na) return `n/a (${v.na})`;
+  return `${v.rate.toFixed(3)} (${v.hits}/${v.n})`;
+};
+
+const fmtP1Cell = (r) =>
+  typeof r.judged_p1 === 'number'
+    ? `${r.judged_p1.toFixed(3)} (${r.judged_exact}/${r.judged_n})`
+    : `n/a (${r.judged_p1?.na ?? 'unknown'})`;
+
+const fmtGapCell = (v) => {
+  if (v == null) return '—';
+  if (v.na) return `n/a (${v.na})`;
+  return `${(v.rate * 100).toFixed(1)}% (${v.wrong}/${v.n})`;
+};
+
+/** The per-arm block: R@5 · R@10 · judged accuracy (p1) · the gap. */
+export function renderRetrievalVsAnswersTable(rollup) {
+  const L = [];
+  L.push('### Retrieval vs answers, per arm (task 264)');
+  L.push('');
+  L.push('| arm | R@5 | R@10 | judged accuracy (p1) | gap (retrieved-but-answered-wrong) |');
+  L.push('|---|---|---|---|---|');
+  for (const [arm, r] of Object.entries(rollup ?? {})) {
+    L.push(`| ${arm} | ${fmtRAtCell(r.r_at[5])} | ${fmtRAtCell(r.r_at[10])} | ${fmtP1Cell(r)} | ${fmtGapCell(r.gap)} |`);
+  }
+  L.push('');
+  L.push(
+    'Definitions: R@5 = gold session in the top 5 of the stamped read hits, R@10 = the same at top 10 — ' +
+      'session-level recall, the metric shape of a LongMemEval R@k headline, so a 96.6%-style number can be placed beside an arm honestly. ' +
+      '`judged accuracy (p1)` = the arm\'s own judged score (exact + 0.5×partial)/n over its judged rows — the number the Scores table quotes ' +
+      '(counts in parentheses: exact/judged). ' +
+      'The gap = judged `wrong` among rows where the gold session WAS retrieved within the read budget — retrieval delivered the evidence and the answer still failed ' +
+      '(counts: wrong/retrieved).'
+  );
+  L.push('');
+  L.push(
+    'Evidence granularity: session-level (`answer_session_ids`, or the unique answer-text fallback). ' +
+      'There are no turn-level evidence ids in this dataset — turn-level recall is absent by data, not by omission — so R@k is session-level.'
+  );
+  L.push('');
+  L.push(
+    'Honesty rules: a retriever whose search ran and returned zero rows (`read_hits: []`) is a KNOWN miss and scores 0.0; ' +
+      'a no-retrieval arm (`read_hits: null`), a banked row (stamped before the instrument), or a k beyond the read budget renders n/a (why) — never a fabricated 0.'
+  );
+  L.push('');
+  return L;
+}
+
+export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget, transcripts = null }) {
   const L = [];
   L.push('## Retrieval audit — read-side provenance (task 207)');
   L.push('');
@@ -613,6 +672,7 @@ export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue
     }
   }
   L.push('');
+  L.push(...renderRetrievalVsAnswersTable(armRetrievalVsAnswers(audit, budget)));
   L.push('### Pre-committed diagnostic rule (decided by the stamped ranks alone)');
   L.push('');
   for (const d of diagnostic.perArm) {
@@ -1118,7 +1178,10 @@ export function composeGrid({
             errors.push(`${r.runId}/${arm}: ${e.message}`);
           }
         }
-        return { runId: r.runId, summary: r.summary, judged: r.judged, rowsByArm, errors, labelByArm: r.labelByArm };
+        // task 264: judged labels keyed by RAW arm name for the accuracy/gap join
+        const judgedByArm = {};
+        for (const j of r.judged ?? []) if (j.arm) (judgedByArm[j.arm] ??= []).push(j);
+        return { runId: r.runId, summary: r.summary, judged: r.judged, judgedByArm, rowsByArm, errors, labelByArm: r.labelByArm };
       });
       const goldIndex = buildGoldIndex(await loadAuditItems(runs[0].summary, { loadSplitFn, selectItemsFn }));
       const anyRows = loaded.some((r) => Object.keys(r.rowsByArm).length > 0);

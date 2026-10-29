@@ -35,6 +35,11 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #                           over STAMPED rows (meta.read_hits), the gold-mapping
 #                           method + coverage, and the pre-committed diagnostic
 #                           branch (budget-10 replay vs answer-side transcripts)
+#                           — plus the task-264 per-arm table: R@5 · R@10 ·
+#                           judged accuracy (p1) · the gap (retrieved-but-
+#                           answered-wrong %), so a LongMemEval R@k headline is
+#                           placeable beside an arm's judged QA honestly (arms
+#                           that cannot expose retrieved ids render n/a (why))
 #   --question-type T       run ONLY the selected items of that type (the
 #                           budget-10 diagnostic replay lever) — the receipt is
 #                           stamped NON-COMPARABLE: do not grid, do not quote

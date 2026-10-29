@@ -97,6 +97,14 @@ const normText = (s) =>
 /**
  * The dataset's answer-session mapping for ONE item. Returns
  * {mapped, method, indices, reason?}:
+ *
+ * task 264: gold evidence is SESSION-level by this mapping. Turn-level recall
+ * is NOT computed: the LongMemEval-S release carries no turn-level evidence ids
+ * (verified 2026-10-29 — the cleaned corpus's key union is question_id,
+ * question_type, question, question_date, answer, answer_session_ids,
+ * haystack_dates, haystack_session_ids, haystack_sessions). When a source does
+ * carry turn ids, map them HERE and extend classifyRow — the report's
+ * granularity line states the absence until then.
  *   - method 'answer_session_ids' — the source JSON carries the ids and every
  *     one joins haystack_session_ids (the real LongMemEval-S: 500/500).
  *   - method 'answer_text_match' — fallback when the ids are absent: the
@@ -223,6 +231,11 @@ export function median(values) {
 
 // --- the audit ------------------------------------------------------------------
 
+// task 264: the k values the per-arm table quotes — MemPalace's headline shape
+// (LongMemEval R@5) plus the next step out. R@k = the gold session appears in
+// the top k of a row's stamped read hits.
+export const R_AT_K = [5, 10];
+
 const EMPTY_CELL = () => ({
   rows: 0,
   stamped: 0,
@@ -237,6 +250,20 @@ const EMPTY_CELL = () => ({
   hit_at_budget: null,
   median_gold_rank: null,
   mrr: null,
+  // task 264: R@k + judged-answer joins. rankable = the R@k denominator —
+  // rows where the retrieval outcome is KNOWN (provenance-carrying hits, or a
+  // truly-empty retrieval `[]`, which is a known miss — never a fabricated 0,
+  // and never n/a either: the search ran and returned nothing). hit_judged_*
+  // accumulate the retrieve-vs-use gap's cells (gold retrieved ∧ judged).
+  rankable: 0,
+  empty_retrieval: 0,
+  hit_at_k: Object.fromEntries(R_AT_K.map((k) => [k, 0])),
+  judged_n: 0,
+  judged_exact: 0,
+  judged_partial: 0,
+  judged_wrong: 0,
+  hit_judged_n: 0,
+  hit_judged_wrong: 0,
 });
 
 /**
@@ -246,7 +273,10 @@ const EMPTY_CELL = () => ({
  *   <arm>.rows.jsonl rows (each carries question_id, question_type, meta);
  *   labelByArm[arm] (task 225) = the arm's labeled identity from that run's own
  *   regime, so two same-named arms from differently-stamped runs pool as
- *   separate cells instead of silently merging their stores.
+ *   separate cells instead of silently merging their stores;
+ *   judgedByArm[arm] (task 264) = the run's judged rows for that RAW arm name
+ *   ([{question_id, label}]) — the join behind the per-arm judged accuracy and
+ *   the retrieved-but-answered-wrong gap.
  * goldIndex: buildGoldIndex's result over the SAME split selection the runs used.
  * budget:    the regime retrieval budget (comparability guarantees one value).
  * writeCap:  the runs' stamped write cap, or null (grid.mjs writeCap()).
@@ -265,6 +295,8 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
       // regime) — two `mycelium-timeline` runs on different facts layers are
       // different measurements and must never pool into one cell
       const armKey = run.labelByArm?.[arm] ?? arm;
+      // task 264: judged labels join on the RAW arm name and surface under the label
+      const labels = new Map((run.judgedByArm?.[arm] ?? []).map((j) => [j.question_id, j.label]));
       for (const row of rows ?? []) {
         const qtype = row.question_type ?? 'unknown';
         const cell = touch(armKey, qtype);
@@ -278,6 +310,20 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
           mapping,
           writeCap: cap,
         });
+        // task 264: the judged join — accuracy counts EVERY judged row of the
+        // arm (unconditional on retrieval); the gap counts judged rows the
+        // retrieval HIT (gold within the read budget) and the answer was wrong
+        const label = labels.get(row.question_id);
+        if (label !== undefined) {
+          cell.judged_n += 1;
+          if (label === 'exact') cell.judged_exact += 1;
+          else if (label === 'partial') cell.judged_partial += 1;
+          else cell.judged_wrong += 1; // 'wrong', or an unparsed label — tally()'s own convention
+          if (c.hit) {
+            cell.hit_judged_n += 1;
+            if (label !== 'exact' && label !== 'partial') cell.hit_judged_wrong += 1;
+          }
+        }
         if (c.stamp === 'unstamped') cell.unstamped_banked += 1;
         else if (c.stamp === 'null_no_retrieval') cell.null_no_retrieval += 1;
         else if (c.stamp === 'null_error') cell.null_error += 1;
@@ -291,15 +337,27 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
           continue;
         }
         if (c.stamp !== 'stamped') continue; // rank stats are stamped-rows-only
-        if (!c.session_provenance) {
+        // task 264: a truly-empty retrieval (`[]`) is a KNOWN R@k miss — the
+        // search ran and returned nothing — so it counts in the R@k denominator
+        // with hit false (0.0 is its honest score). The task-207 rank stats
+        // stay provenance-only: an empty list carries no session rank, so it is
+        // not `ranked` and never enters the median/MRR (that law is unchanged).
+        const emptyRetrieval = Array.isArray(row.meta?.read_hits) && row.meta.read_hits.length === 0;
+        if (!c.session_provenance && !emptyRetrieval) {
           cell.no_provenance += 1;
           continue;
         }
-        // ranked denominator: stamped + mapped + gold written + provenance
-        cell.ranked += 1;
-        if (c.hit) {
-          cell.hit += 1;
-          ranks.get(key).push(c.gold_rank);
+        cell.rankable += 1; // the R@k denominator: known retrieval outcomes
+        if (c.session_provenance) {
+          // ranked denominator: stamped + mapped + gold written + provenance
+          cell.ranked += 1;
+          if (c.hit) {
+            cell.hit += 1;
+            ranks.get(key).push(c.gold_rank);
+            for (const k of R_AT_K) if (c.gold_rank <= k) cell.hit_at_k[k] += 1;
+          }
+        } else {
+          cell.empty_retrieval += 1;
         }
       }
     }
@@ -320,6 +378,95 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
     }
   }
   return audit;
+}
+
+// --- task 264: the per-arm retrieval-vs-answers rollup ----------------------------
+
+const fmtNaWhy = (acc) => {
+  const reasons = [];
+  if (acc.unstamped_banked) reasons.push(`${acc.unstamped_banked} banked`);
+  if (acc.null_no_retrieval) reasons.push(`${acc.null_no_retrieval} no-retrieval`);
+  if (acc.null_error) reasons.push(`${acc.null_error} retrieval-error`);
+  if (acc.no_provenance) reasons.push(`${acc.no_provenance} hits without session ids`);
+  return reasons.length
+    ? { na: `no rankable rows — ${reasons.join(', ')}` }
+    : { na: 'no rankable rows' };
+};
+
+/**
+ * The per-arm table behind the receipt's task-264 block. Cells pool into arms
+ * (their keys are already the arms' labeled identities), and each arm reports:
+ *
+ *   r_at[k]     R@k — {rate, hits, n} over the arm's RANKABLE rows (provenance-
+ *               carrying hits + truly-empty retrievals), or {na, why} when the
+ *               k exceeds the read budget (ranks beyond it are never stamped)
+ *               or nothing is rankable. Never a fabricated 0.
+ *   judged_p1   the arm's judged score (exact + 0.5×partial)/n over every
+ *               judged row joined to it — the number the Scores table quotes —
+ *               or {na, why} when no judged rows joined.
+ *   gap         P(judged wrong | the gold session was retrieved within the read
+ *               budget) as {rate, wrong, n} — the retrieve-vs-use gap: the
+ *               evidence was in the read context and the answer still failed —
+ *               or {na, why} when no retrieved-hit row carries a judge label.
+ *
+ * budget: the runs' shared retrieval budget (a comparability key); null when
+ * unstamped, which treats every k as measurable (the stamp is uncapped then).
+ */
+export function armRetrievalVsAnswers(audit, budget = audit?.budget) {
+  const b = Number.isInteger(budget) && budget > 0 ? budget : null;
+  const out = {};
+  for (const [arm, byType] of Object.entries(audit?.cells ?? {})) {
+    const acc = {
+      rows: 0,
+      rankable: 0,
+      ranked: 0,
+      empty_retrieval: 0,
+      unstamped_banked: 0,
+      null_no_retrieval: 0,
+      null_error: 0,
+      no_provenance: 0,
+      hit_at_k: Object.fromEntries(R_AT_K.map((k) => [k, 0])),
+      judged_n: 0,
+      judged_exact: 0,
+      judged_partial: 0,
+      judged_wrong: 0,
+      hit_judged_n: 0,
+      hit_judged_wrong: 0,
+    };
+    for (const cell of Object.values(byType)) {
+      acc.rows += cell.rows ?? 0;
+      acc.rankable += cell.rankable ?? 0;
+      acc.ranked += cell.ranked ?? 0;
+      acc.empty_retrieval += cell.empty_retrieval ?? 0;
+      acc.unstamped_banked += cell.unstamped_banked ?? 0;
+      acc.null_no_retrieval += cell.null_no_retrieval ?? 0;
+      acc.null_error += cell.null_error ?? 0;
+      acc.no_provenance += cell.no_provenance ?? 0;
+      for (const k of R_AT_K) acc.hit_at_k[k] += cell.hit_at_k?.[k] ?? 0;
+      acc.judged_n += cell.judged_n ?? 0;
+      acc.judged_exact += cell.judged_exact ?? 0;
+      acc.judged_partial += cell.judged_partial ?? 0;
+      acc.judged_wrong += cell.judged_wrong ?? 0;
+      acc.hit_judged_n += cell.hit_judged_n ?? 0;
+      acc.hit_judged_wrong += cell.hit_judged_wrong ?? 0;
+    }
+    acc.judged_p1 = acc.judged_n
+      ? (acc.judged_exact + 0.5 * acc.judged_partial) / acc.judged_n
+      : { na: 'no judged rows joined (no judged.jsonl labels for this arm)' };
+    acc.gap = acc.hit_judged_n
+      ? { rate: acc.hit_judged_wrong / acc.hit_judged_n, wrong: acc.hit_judged_wrong, n: acc.hit_judged_n }
+      : { na: 'no retrieved-hit rows carry a judge label' };
+    acc.r_at = {};
+    for (const k of R_AT_K) {
+      if (b != null && k > b) {
+        acc.r_at[k] = { na: `read budget ${b} — ranks beyond ${b} are never stamped, so R@${k} is not measurable from this run` };
+      } else {
+        acc.r_at[k] = acc.rankable ? { rate: acc.hit_at_k[k] / acc.rankable, hits: acc.hit_at_k[k], n: acc.rankable } : fmtNaWhy(acc);
+      }
+    }
+    out[arm] = acc;
+  }
+  return out;
 }
 
 // --- the pre-committed diagnostic rule -------------------------------------------
