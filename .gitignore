@@ -57,3 +57,6 @@ bench/memory/arms/.zep-venv/
 
 # letta sidecar venv (task 181) — created from letta-requirements.txt, never committed
 bench/memory/arms/.letta-venv/
+
+# mempalace CONTROL arm (task 263) — venv + its pre-warmed embedder cache, never committed
+bench/memory/.venvs/

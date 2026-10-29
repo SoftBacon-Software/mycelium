@@ -11,6 +11,7 @@ import { createArmMem0 } from './arm_mem0.mjs';
 import { createArmMem0Raw } from './arm_mem0_raw.mjs';
 import { createArmZep } from './arm_zep.mjs';
 import { createArmLetta } from './arm_letta.mjs';
+import { createArmMempalace } from './arm_mempalace.mjs';
 import { createArmMyceliumExtract } from './arm_mycelium_extract.mjs';
 import { createArmMyceliumTimeline } from './arm_mycelium_timeline.mjs';
 
@@ -21,6 +22,7 @@ export const ARM_FACTORIES = {
   'mem0-raw': createArmMem0Raw,
   zep: createArmZep,
   letta: createArmLetta,
+  mempalace: createArmMempalace,
   'mycelium-extract': createArmMyceliumExtract,
   'mycelium-timeline': createArmMyceliumTimeline,
 };
