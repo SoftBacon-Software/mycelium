@@ -1153,7 +1153,7 @@ export default function createMemoryDB(db, opts) {
     // alive-memory-program: "a lesson row without provenance is refused at
     // the route"); the rest of the §1 shape (symptom, fix_or_rule, task_class,
     // repo, origin, outcome) is the documented contract but is not the gate.
-    LESSON_SOURCE_TYPES: { lesson: true, verdict: true },
+    LESSON_SOURCE_TYPES: { lesson: true, verdict: true, ruling: true },
     REQUIRED_PROVENANCE: ['actor', 'learned_at', 'evidence'],
     missingProvenanceFields(metadata) {
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
@@ -1163,6 +1163,21 @@ export default function createMemoryDB(db, opts) {
         var v = metadata[f];
         return typeof v !== 'string' || v.trim().length === 0;
       });
+    },
+
+    // F-mycelium/262: which lesson-class kind holds a row at this source_id —
+    // the map walked in ITS key order ('lesson' first, the historic kind, so an
+    // id that exists under two kinds resolves to the row the route always
+    // served), else null. The ONE kind lookup the supersede route calls: every
+    // hop of a supersede (owner check, lookups, both indexDoc writes, the audit
+    // and the sm: derived ref) then runs under the row's OWN kind instead of a
+    // hardcoded 'lesson' that 404s a ruling row.
+    lessonClassKindOf(sourceId) {
+      var kinds = Object.keys(this.LESSON_SOURCE_TYPES);
+      for (var i = 0; i < kinds.length; i++) {
+        if (this.getDoc(kinds[i], sourceId, 0)) return kinds[i];
+      }
+      return null;
     },
 
     // -- Episodes: the §3 EVENT half (2026-09-18, F-mycelium/218) ------------------
