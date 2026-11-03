@@ -80,6 +80,9 @@ export function createArmMycelium({
           source_id: h.source_id,
           score: h.score,
           session_index: h.metadata?.session_index,
+          // task 304: the store pools every question's haystack — the owning
+          // question is what makes a session_index creditable as gold
+          question_id: h.metadata?.question_id ?? null,
         })),
         retrievalBudget
       );

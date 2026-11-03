@@ -543,6 +543,7 @@ const AUDIT_COLUMNS = [
   ['unmapped', 'unmapped'],
   ['gold_not_written', 'gold≥cap'],
   ['no_provenance', 'no-prov'],
+  ['no_question_provenance', 'no-qid'],
   ['ranked', 'ranked'],
 ];
 
@@ -586,11 +587,14 @@ export function renderTranscripts(groups) {
 
 // --- task 264: the per-arm retrieval-vs-answers table ----------------------------
 //
-// MemPalace's headline is LongMemEval R@5 (session-level retrieval recall); the
-// grid's headline is judge-scored QA accuracy. Two different cells — placing
-// them side by side honestly is exactly what this table is for, and the
-// retrieve-vs-use gap (the evidence was retrieved, the answer still failed)
-// becomes visible instead of argued about.
+// R@k beside judged accuracy, per arm — plus the retrieve-vs-use gap (the
+// evidence was retrieved, the answer still failed). PROTOCOL NOTE (task 304,
+// review B): this bench retrieves over a POOLED per-run store (all n
+// questions' haystacks share one store), NOT LongMemEval's per-question
+// ~50-session collection that published R@k numbers (e.g. MemPalace's 96.6%
+// R@5) use. Different protocol, harder task — the numbers are NOT comparable,
+// and the receipt says so beside the table. A hit credits only a hit that
+// belongs to the row's OWN question (task 304).
 
 const fmtRAtCell = (v) => {
   if (v == null) return '—';
@@ -621,8 +625,10 @@ export function renderRetrievalVsAnswersTable(rollup) {
   }
   L.push('');
   L.push(
-    'Definitions: R@5 = gold session in the top 5 of the stamped read hits, R@10 = the same at top 10 — ' +
-      'session-level recall, the metric shape of a LongMemEval R@k headline, so a 96.6%-style number can be placed beside an arm honestly. ' +
+    'Definitions: R@5 = THIS question\'s gold session in the top 5 of the stamped read hits, R@10 = the same at top 10 — session-level recall, ' +
+      'crediting only hits that belong to the row\'s own question (every arm pools all n questions\' haystacks into one per-run store, so a foreign session at a colliding index is never gold evidence). ' +
+      'PROTOCOL: this R@k retrieves over the pooled per-run store (n questions\' haystacks), not LongMemEval\'s per-question ~50-session collection — a different, harder protocol. ' +
+      'NOT comparable to a published per-question R@k (e.g. MemPalace\'s 96.6% R@5); a like-for-like number needs a per-question-scoped retrieval replay (a separate task). ' +
       '`judged accuracy (p1)` = the arm\'s own judged score (exact + 0.5×partial)/n over its judged rows — the number the Scores table quotes ' +
       '(counts in parentheses: exact/judged). ' +
       'The gap = judged `wrong` among rows where the gold session WAS retrieved within the read budget — retrieval delivered the evidence and the answer still failed ' +
@@ -636,7 +642,8 @@ export function renderRetrievalVsAnswersTable(rollup) {
   L.push('');
   L.push(
     'Honesty rules: a retriever whose search ran and returned zero rows (`read_hits: []`) is a KNOWN miss and scores 0.0; ' +
-      'a no-retrieval arm (`read_hits: null`), a banked row (stamped before the instrument), or a k beyond the read budget renders n/a (why) — never a fabricated 0.'
+      'a no-retrieval arm (`read_hits: null`), a banked row (stamped before the instrument), a k beyond the read budget, ' +
+      'or a hit whose owning question cannot be identified (pooled store, no `question_id` and unparsable `source_id`) renders n/a (why) — never a fabricated 0 and never a foreign-session credit.'
   );
   L.push('');
   return L;
@@ -694,12 +701,21 @@ export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue
         'Transcripts below (all single-session-preference questions + the 12 worst multi-session rows by gold rank) are for hand labels.'
     );
     L.push('');
-    if (transcripts?.length) {
-      L.push('### Transcripts for hand labels');
-      L.push('');
-      L.push(...renderTranscripts(transcripts));
+    // two DIFFERENT absences, worded differently (task 304, review-B reason 3):
+    // the caller built no transcript groups for this render (transcripts
+    // null — a standalone section render that skipped them) vs groups were
+    // built but the selection matched no ranked rows ([])
+    if (Array.isArray(transcripts)) {
+      if (transcripts.length) {
+        L.push('### Transcripts for hand labels');
+        L.push('');
+        L.push(...renderTranscripts(transcripts));
+      } else {
+        L.push('(No transcripts rendered — transcript groups were built, but no ranked rows met the selection.)');
+        L.push('');
+      }
     } else {
-      L.push('(No transcripts rendered — no ranked rows met the selection.)');
+      L.push('(No transcripts rendered — this render built no transcript groups; the answer-side branch renders them from the runs.)');
       L.push('');
     }
   }
@@ -721,6 +737,8 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
           readHitsAvailable: row.meta?.read_hits_available,
           mapping,
           writeCap: writeCapValue,
+          questionId: row.question_id ?? null,
+          runId: run.runId ?? null,
         });
         const judged = run.judged?.find((j) => j.arm === arm && j.question_id === row.question_id);
         perRow.push({

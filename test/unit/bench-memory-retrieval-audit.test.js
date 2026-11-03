@@ -14,6 +14,7 @@ import {
   classifyRow,
   computeRetrievalAudit,
   decideDiagnostic,
+  hitQuestionId,
   mapGoldSessions,
   median,
   recordHits,
@@ -29,7 +30,7 @@ import {
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium } from '../../bench/memory/arms/arm_mycelium.mjs';
 import { createArmMem0 } from '../../bench/memory/arms/arm_mem0.mjs';
-import { sessionIndexFromTags } from '../../bench/memory/arms/arm_letta.mjs';
+import { sessionIndexFromTags, questionIdFromTags } from '../../bench/memory/arms/arm_letta.mjs';
 import { selectItems } from '../../bench/memory/split.mjs';
 
 // ---- fixtures -----------------------------------------------------------------
@@ -79,7 +80,13 @@ describe('recordHits — the shared read-time seam (task 207)', () => {
     expect(out.read_hits_available).toBe(true);
     expect(out.read_hits).toHaveLength(3);
     expect(out.read_hits.map((h) => h.rank)).toEqual([0, 1, 2]);
-    expect(out.read_hits[0]).toEqual({ source_id: 'run-q1-s2', score: 0.9, session_index: 2, rank: 0 });
+    expect(out.read_hits[0]).toEqual({ source_id: 'run-q1-s2', score: 0.9, session_index: 2, question_id: null, rank: 0 });
+  });
+
+  it('normalizes question_id to null when the arm cannot stamp it — the pooled-store honesty field (task 304)', () => {
+    const meta = recordHits({}, [{ source_id: 'x', score: 1, session_index: 0, question_id: 'q-own' }], 5);
+    expect(meta.read_hits[0].question_id).toBe('q-own');
+    expect(recordHits({}, [{ source_id: 'x', score: 1, session_index: 0 }], 5).read_hits[0].question_id).toBeNull();
   });
 
   it('caps at the stamped budget — what the model never read is not stamped as read', () => {
@@ -129,13 +136,13 @@ describe('the arms stamp read_hits at read time', () => {
     expect(meta.budget).toBe(5);
   });
 
-  it('arm_mycelium: search results → {source_id, score, session_index} ordered stamps', async () => {
+  it('arm_mycelium: search results → {source_id, score, session_index, question_id} ordered stamps', async () => {
     const platform = {
       search: async () => ({
         mode: 'hybrid',
         results: [
-          { source_id: 'r-q-s2', content_text: 'gold text', score: 0.88, metadata: { session_index: 2 } },
-          { source_id: 'r-q-s0', content_text: 'other', score: 0.31, metadata: { session_index: 0 } },
+          { source_id: 'r-q-s2', content_text: 'gold text', score: 0.88, metadata: { question_id: 'q', session_index: 2 } },
+          { source_id: 'r-q2-s0', content_text: 'other', score: 0.31, metadata: { question_id: 'q2', session_index: 0 } },
         ],
       }),
     };
@@ -144,12 +151,12 @@ describe('the arms stamp read_hits at read time', () => {
     expect(meta.hits).toBe(2);
     expect(meta.budget).toBe(5);
     expect(meta.read_hits).toEqual([
-      { source_id: 'r-q-s2', score: 0.88, session_index: 2, rank: 0 },
-      { source_id: 'r-q-s0', score: 0.31, session_index: 0, rank: 1 },
+      { source_id: 'r-q-s2', score: 0.88, session_index: 2, question_id: 'q', rank: 0 },
+      { source_id: 'r-q2-s0', score: 0.31, session_index: 0, question_id: 'q2', rank: 1 },
     ]);
   });
 
-  it('arm_mem0: the sidecar’s metadata.session_index rides the stamp; zep-style null scores stay null', async () => {
+  it('arm_mem0: the sidecar’s metadata.session_index + question_id ride the stamp; zep-style null scores stay null', async () => {
     const sidecar = {
       calls: { add: [] },
       async request(pathname) {
@@ -157,21 +164,25 @@ describe('the arms stamp read_hits at read time', () => {
         return {
           ok: true,
           count: 1,
-          results: [{ id: 'mem-9', memory: 'fact', score: 0.7, metadata: { session_index: 3 } }],
+          results: [{ id: 'mem-9', memory: 'fact', score: 0.7, metadata: { question_id: 'q', session_index: 3 } }],
         };
       },
       async stop() {},
     };
     const arm = createArmMem0({ answerChat: async () => ({ text: 'ans' }), runId: 'r', retrievalBudget: 5, sidecar });
     const { meta } = await arm.answer('q?');
-    expect(meta.read_hits).toEqual([{ source_id: 'mem-9', score: 0.7, session_index: 3, rank: 0 }]);
+    expect(meta.read_hits).toEqual([{ source_id: 'mem-9', score: 0.7, session_index: 3, question_id: 'q', rank: 0 }]);
   });
 
-  it('sessionIndexFromTags parses letta’s insert-time tags; malformed/absent → null', () => {
+  it('sessionIndexFromTags/questionIdFromTags parse letta’s insert-time tags; malformed/absent → null', () => {
     expect(sessionIndexFromTags(['u', 'bench:longmemeval', 'question_id:q1', 'session_index:12'])).toBe(12);
     expect(sessionIndexFromTags(['u'])).toBeNull();
     expect(sessionIndexFromTags('not-an-array')).toBeNull();
     expect(sessionIndexFromTags(['session_index:x'])).toBeNull();
+    expect(questionIdFromTags(['u', 'bench:longmemeval', 'question_id:q1', 'session_index:12'])).toBe('q1');
+    expect(questionIdFromTags(['u'])).toBeNull();
+    expect(questionIdFromTags('not-an-array')).toBeNull();
+    expect(questionIdFromTags(['question_id:'])).toBeNull();
   });
 });
 
@@ -249,38 +260,39 @@ describe('classifyRow — the four stamp states + the rank', () => {
   const mapping = { mapped: true, method: 'answer_session_ids', indices: [2] };
 
   it('banked rows (no read_hits key) are unstamped, never ranked', () => {
-    const c = classifyRow({ readHits: undefined, mapping, writeCap: null });
+    const c = classifyRow({ readHits: undefined, mapping, writeCap: null, questionId: 'q' });
     expect(c.stamp).toBe('unstamped');
     expect(c.gold_rank).toBeNull();
   });
 
   it('null + available false = no-retrieval; null otherwise = retrieval error', () => {
-    expect(classifyRow({ readHits: null, readHitsAvailable: false, mapping, writeCap: null }).stamp).toBe('null_no_retrieval');
-    expect(classifyRow({ readHits: null, readHitsAvailable: true, mapping, writeCap: null }).stamp).toBe('null_error');
+    expect(classifyRow({ readHits: null, readHitsAvailable: false, mapping, writeCap: null, questionId: 'q' }).stamp).toBe('null_no_retrieval');
+    expect(classifyRow({ readHits: null, readHitsAvailable: true, mapping, writeCap: null, questionId: 'q' }).stamp).toBe('null_error');
   });
 
   it('gold rank = the BEST (1-based) rank among gold-session hits', () => {
     const c = classifyRow({
       readHits: [
-        { source_id: 'a', rank: 0, session_index: 9 },
-        { source_id: 'b', rank: 1, session_index: 2 },
-        { source_id: 'c', rank: 2, session_index: 3 },
+        { source_id: 'a', rank: 0, session_index: 9, question_id: 'q' },
+        { source_id: 'b', rank: 1, session_index: 2, question_id: 'q' },
+        { source_id: 'c', rank: 2, session_index: 3, question_id: 'q' },
       ],
       mapping,
       writeCap: null,
+      questionId: 'q',
     });
     expect(c.hit).toBe(true);
     expect(c.gold_rank).toBe(2); // rank 1 → 1-based 2
   });
 
   it('gold beyond the write cap is counted, never charged to retrieval', () => {
-    const c = classifyRow({ readHits: [{ source_id: 'a', rank: 0, session_index: 0 }], mapping, writeCap: 2 });
+    const c = classifyRow({ readHits: [{ source_id: 'a', rank: 0, session_index: 0, question_id: 'q' }], mapping, writeCap: 2, questionId: 'q' });
     expect(c.gold_written).toBe(false);
     expect(c.gold_rank).toBeNull();
   });
 
   it('hits without session_index are no-provenance rows (excluded from ranks, counted)', () => {
-    const c = classifyRow({ readHits: [{ source_id: 'zep-edge', rank: 0, session_index: null }], mapping, writeCap: null });
+    const c = classifyRow({ readHits: [{ source_id: 'zep-edge', rank: 0, session_index: null, question_id: 'q' }], mapping, writeCap: null, questionId: 'q' });
     expect(c.session_provenance).toBe(false);
     expect(c.gold_rank).toBeNull();
   });
@@ -292,14 +304,14 @@ describe('computeRetrievalAudit — hit@budget, median gold rank, MRR per type �
   const goldIndex = buildGoldIndex(GOLD_ITEMS);
   const rows = {
     mycelium: [
-      { question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 'a', rank: 0, session_index: 1 }] } },
+      { question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 'a', rank: 0, session_index: 1, question_id: 'q-adv' }] } },
       {
         question_id: 'q-multi',
         question_type: 'multi-session',
         meta: {
           read_hits: [
-            { source_id: 'b', rank: 0, session_index: 4 },
-            { source_id: 'c', rank: 1, session_index: 2 },
+            { source_id: 'b', rank: 0, session_index: 4, question_id: 'q-multi' },
+            { source_id: 'c', rank: 1, session_index: 2, question_id: 'q-multi' },
           ],
         },
       },
@@ -313,7 +325,7 @@ describe('computeRetrievalAudit — hit@budget, median gold rank, MRR per type �
   // gold — the miss-in-the-rank-stats path (MRR charges 0, median skips it)
   const runs = [
     { runId: 'r1', summary: {}, rowsByArm: rows },
-    { runId: 'r2', summary: {}, rowsByArm: { mycelium: [{ question_id: 'q-multi', question_type: 'multi-session', meta: { read_hits: [{ source_id: 'd', rank: 0, session_index: 9 }] } }] } },
+    { runId: 'r2', summary: {}, rowsByArm: { mycelium: [{ question_id: 'q-multi', question_type: 'multi-session', meta: { read_hits: [{ source_id: 'd', rank: 0, session_index: 9, question_id: 'q-multi' }] } }] } },
   ];
   const audit = computeRetrievalAudit({ runs, goldIndex, budget: 5, writeCap: null });
 
@@ -396,7 +408,7 @@ describe('renderRetrievalAuditSection — the receipt block', () => {
         runId: 'r1',
         summary: {},
         rowsByArm: {
-          mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 'a', rank: 0, session_index: 1 }] } }],
+          mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 'a', rank: 0, session_index: 1, question_id: 'q-adv' }] } }],
         },
       },
     ],
@@ -468,10 +480,10 @@ describe('renderRetrievalAuditSection — the receipt block', () => {
         gold: 'g',
         answer: 'a',
         // gold session 0 retrieved at rank i → gold_rank i+1, every row ranked
-        meta: { read_hits: [{ source_id: 'x', rank: i, session_index: 0 }] },
+        meta: { read_hits: [{ source_id: 'x', rank: i, session_index: 0, question_id: `m${i}` }] },
       });
     }
-    rows.push({ question_id: 'q-adv', question_type: 'single-session-preference', question: 'w', gold: 'g', answer: 'a', meta: { read_hits: [{ source_id: 'x', rank: 0, session_index: 1 }] } });
+    rows.push({ question_id: 'q-adv', question_type: 'single-session-preference', question: 'w', gold: 'g', answer: 'a', meta: { read_hits: [{ source_id: 'x', rank: 0, session_index: 1, question_id: 'q-adv' }] } });
     const items = GOLD_ITEMS.concat(
       Array.from({ length: 15 }, (_, i) => ({
         question_id: `m${i}`,
@@ -619,7 +631,7 @@ describe('composeGrid --retrieval-audit: the section lands in the grid receipt, 
   });
 
   it('task 225: two same-named timeline runs on different facts layers audit as SEPARATE labeled cells, never pooled', async () => {
-    const hit = [{ source_id: 's0', rank: 0, score: 0.9, session_index: 0 }]; // gold session 0 at rank 0 → ranked
+    const hit = [{ source_id: 's0', rank: 0, score: 0.9, session_index: 0, question_id: 'q-adv' }]; // gold session 0 at rank 0 → ranked
     const dirs = [
       writeRun('run-rows', 'run-rows', 'mycelium-timeline', hit, 'memory-rows'),
       writeRun('run-am', 'run-am', 'mycelium-timeline', hit, 'am_facts'),
@@ -660,9 +672,19 @@ describe('task 264 — R@5/R@10 on a fixture with known gold ids', () => {
   });
   const items = ['q1', 'q2'].map(item);
   const goldIndex = buildGoldIndex(items);
-  // rows helpers — one gold-session hit at a chosen context rank (session 0 is gold)
+  // rows helpers — one gold-session hit at a chosen context rank (session 0 is gold).
+  // row() stamps the row's question onto every hit that carries none — the
+  // honest arm shape (every hit names its owning question); tests that need a
+  // FOREIGN or unknown hit pass question_id explicitly.
   const hit = (sessionIndex, rank) => ({ source_id: `s${rank}`, score: 1, session_index: sessionIndex, rank });
-  const row = (qid, readHits) => ({ question_id: qid, question_type: 'multi-session', meta: { read_hits: readHits, read_hits_available: readHits !== null } });
+  const row = (qid, readHits) => ({
+    question_id: qid,
+    question_type: 'multi-session',
+    meta: {
+      read_hits: readHits === null ? null : readHits.map((h) => (h.question_id === undefined ? { ...h, question_id: qid } : h)),
+      read_hits_available: readHits !== null,
+    },
+  });
 
   it('a perfect retriever: R@5 = R@10 = 1.0', () => {
     const audit = computeRetrievalAudit({
@@ -761,7 +783,7 @@ describe('task 264 — judged accuracy + the retrieved-but-answered-wrong gap', 
     haystack_sessions: [[{ role: 'user', content: 'g' }]],
   }));
   const goldIndex = buildGoldIndex(items);
-  const hitRow = (qid) => ({ question_id: qid, meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } });
+  const hitRow = (qid) => ({ question_id: qid, meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0, question_id: qid }], read_hits_available: true } });
   const judgedRows = [
     { question_id: 'q1', label: 'exact' },
     { question_id: 'q2', label: 'wrong' },
@@ -789,8 +811,8 @@ describe('task 264 — judged accuracy + the retrieved-but-answered-wrong gap', 
         runId: 'r',
         rowsByArm: {
           a: [
-            { question_id: 'q1', meta: { read_hits: [{ source_id: 'x', score: 1, session_index: 9, rank: 0 }], read_hits_available: true } }, // miss
-            { question_id: 'q2', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }, // hit, wrong
+            { question_id: 'q1', meta: { read_hits: [{ source_id: 'x', score: 1, session_index: 9, rank: 0, question_id: 'q1' }], read_hits_available: true } }, // miss
+            { question_id: 'q2', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0, question_id: 'q2' }], read_hits_available: true } }, // hit, wrong
           ],
         },
         judgedByArm: { a: [{ question_id: 'q1', label: 'wrong' }, { question_id: 'q2', label: 'wrong' }] },
@@ -852,7 +874,7 @@ describe('task 264 — the receipt renders the per-arm retrieval-vs-answers tabl
 
   it('renders R@5 · R@10 · judged accuracy · the gap per arm, with counts, and states the definitions', () => {
     const audit = auditFor(
-      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }] },
+      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0, question_id: 'q-adv' }], read_hits_available: true } }] },
       { mycelium: [{ question_id: 'q-adv', label: 'wrong' }] }
     );
     const lines = renderRetrievalAuditSection({
@@ -865,7 +887,12 @@ describe('task 264 — the receipt renders the per-arm retrieval-vs-answers tabl
     const text = lines.join('\n');
     expect(text).toMatch(/task 264/);
     expect(text).toMatch(/\| mycelium \| 1\.000 \(1\/1\) \| n\/a \(read budget 5[^)]*\) \| 0\.000 \(0\/1\) \| 100\.0% \(1\/1\) \|/);
-    expect(text).toMatch(/R@5 = gold session in the top 5 of the stamped read hits/);
+    expect(text).toMatch(/R@5 = THIS question's gold session in the top 5 of the stamped read hits/);
+    // task 304 (review-B reason 2): the pooled-store protocol is STATED, and the
+    // published-per-question-R@k comparability claim is gone
+    expect(text).toMatch(/pooled per-run store/);
+    expect(text).toMatch(/NOT comparable to a published per-question R@k/);
+    expect(text).not.toMatch(/96\.6%-style number can be placed beside an arm honestly/);
     expect(text).toMatch(/retrieved-but-answered-wrong/);
   });
 
@@ -888,7 +915,7 @@ describe('task 264 — the receipt renders the per-arm retrieval-vs-answers tabl
 
   it('states the evidence granularity: session-level, turn-level absent in this dataset', () => {
     const audit = auditFor(
-      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0 }], read_hits_available: true } }] },
+      { mycelium: [{ question_id: 'q-adv', question_type: 'single-session-preference', meta: { read_hits: [{ source_id: 's', score: 1, session_index: 0, rank: 0, question_id: 'q-adv' }], read_hits_available: true } }] },
       { mycelium: [{ question_id: 'q-adv', label: 'exact' }] }
     );
     const lines = renderRetrievalAuditSection({
@@ -958,7 +985,7 @@ describe('task 264 — composeGrid: judged labels flow from judged.jsonl into th
       JSON.stringify({ question_id: 'q-adv', arm: armName, question_type: 'single-session-preference', gold: 'Aisle five', answer: 'I do not know.', label: 'wrong', judge_raw: 'WRONG', judge_had_think: false }) + '\n'
     );
     const meta = stamped
-      ? { hits: 1, read_hits: [{ source_id: 's0', score: 0.9, session_index: 0, rank: 0 }], read_hits_available: true }
+      ? { hits: 1, read_hits: [{ source_id: 's0', score: 0.9, session_index: 0, rank: 0, question_id: 'q-adv' }], read_hits_available: true }
       : { hits: 3 }; // the banked shape: counts only, no read_hits key
     fs.writeFileSync(
       path.join(dir, `${armName}.rows.jsonl`),
@@ -1003,5 +1030,120 @@ describe('task 264 — composeGrid: judged labels flow from judged.jsonl into th
     expect(md).toMatch(/\| old-arm \| n\/a \(.*banked.*\) \|/);
     expect(md).toMatch(/\| old-arm .* \| 0\.000 \(0\/1\) \|/);
     expect(md).toMatch(/no turn-level evidence ids/);
+  });
+});
+
+// ---- task 304: R@k counts only THIS question's sessions ---------------------------
+//
+// Review B (2026-11-03) sent 264 BACK: every arm writes ALL n questions'
+// haystacks into ONE per-run store, so a read routinely ranks OTHER questions'
+// sessions — and a foreign session whose index collides with this question's
+// gold index was counted as a gold hit by session NUMBER alone. On the banked
+// 2026-09-19-p1-134358 run, 4 of the 34 R@5 "hits" were other questions'
+// sessions (0.680 → 0.600). These are the hostile tests that pin the fix.
+
+describe('task 304 — a hit requires the retrieved session to belong to THIS question', () => {
+  const item = (qid) => ({
+    question_id: qid,
+    question_type: 'multi-session',
+    answer: 'g',
+    answer_session_ids: ['sess-a'],
+    haystack_session_ids: ['sess-a', 'sess-b'],
+    haystack_sessions: [[{ role: 'user', content: 'g' }], [{ role: 'user', content: 'x' }]],
+  });
+  const items = ['q1', 'q2'].map(item);
+  const goldIndex = buildGoldIndex(items);
+  const hit = (sessionIndex, rank, questionId) => ({
+    source_id: `s${rank}`,
+    score: 1,
+    session_index: sessionIndex,
+    rank,
+    ...(questionId !== undefined ? { question_id: questionId } : {}),
+  });
+  const row = (qid, readHits) => ({
+    question_id: qid,
+    question_type: 'multi-session',
+    meta: { read_hits: readHits, read_hits_available: readHits !== null },
+  });
+
+  it('q1 read ONLY q2\'s session 0 (not q1\'s gold) — R@5 must be 0', () => {
+    // q1's gold is its OWN session 0; the single retrieved hit is q2's session 0 —
+    // the numbers collide, the questions do not. Session number alone must not credit.
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [hit(0, 0, 'q2')])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 0, hits: 0, n: 1 });
+  });
+
+  it('the banked shape: a foreign hit parses from the runId-prefixed source_id and does not credit; the OWN hit does, at its own rank', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'run-9',
+        rowsByArm: {
+          a: [
+            row('q1', [
+              { source_id: 'run-9-q2-s0', score: 1, session_index: 0, rank: 0 }, // foreign, colliding index
+              { source_id: 'run-9-q1-s0', score: 1, session_index: 0, rank: 1 }, // own gold
+            ]),
+          ],
+        },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 1, hits: 1, n: 1 });
+    // the task-207 rank stats carry the fix too: gold_rank is the OWN hit's rank
+    const cell = audit.cells.a['multi-session'];
+    expect(cell.hit).toBe(1);
+    expect(cell.median_gold_rank).toBe(2);
+  });
+
+  it('a hit with NO question identity (pooled store, unparsable source id) renders n/a (why) — never a credit, never a guess', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [{ source_id: 'edge-uuid', score: 1, session_index: 0, rank: 0 }])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toMatchObject({ na: expect.stringMatching(/question/) });
+  });
+
+  it('a row where ANY index-carrying hit lacks question identity is n/a — the gold could be that hit, so the outcome is unknown', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'r',
+        rowsByArm: { a: [row('q1', [hit(0, 0, 'q1'), { source_id: 'edge-uuid', score: 1, session_index: 1, rank: 1 }])] },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toMatchObject({ na: expect.stringMatching(/question/) });
+  });
+
+  it('foreign-only reads are KNOWN misses (rankable, 0.0) — not n/a and not silently dropped', () => {
+    const audit = computeRetrievalAudit({
+      runs: [{ runId: 'r', rowsByArm: { a: [row('q1', [hit(1, 0, 'q2'), hit(2, 1, 'q2')])] } }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toEqual({ rate: 0, hits: 0, n: 1 });
+  });
+
+  it('hitQuestionId: the explicit stamp wins; banked runId-prefixed and bare `<qid>-s<idx>` source ids parse; unparseable → null', () => {
+    expect(hitQuestionId({ question_id: 'q9', source_id: 'anything' })).toBe('q9');
+    expect(hitQuestionId({ question_id: null, source_id: 'run-9-q2-s0' }, 'run-9')).toBe('q2');
+    expect(hitQuestionId({ source_id: 'q2-s0' })).toBe('q2');
+    expect(hitQuestionId({ source_id: '15745da0_abs-s37' })).toBe('15745da0_abs');
+    expect(hitQuestionId({ source_id: 'edge-uuid' })).toBeNull();
+    expect(hitQuestionId({ source_id: 's0' })).toBeNull();
+    expect(hitQuestionId({ source_id: 'mem-9' })).toBeNull();
+    expect(hitQuestionId(null)).toBeNull();
+    expect(hitQuestionId({})).toBeNull();
   });
 });

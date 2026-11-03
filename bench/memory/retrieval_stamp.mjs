@@ -1,5 +1,13 @@
 // The shared retrieval-provenance seam + gold mapping + audit math (task 207).
 //
+// task 304 (review B, 2026-11-03): gold credit is QUESTION-SCOPED. Every arm
+// pools all n questions' haystacks into ONE per-run store, so a retrieved hit
+// routinely belongs to another question — a hit counts for a row's gold only
+// when its owning question (stamped question_id, or the `<qid>` parsed from a
+// banked `<runId>-<qid>-s<idx>` source id) equals the row's. Hits of unknown
+// ownership make the row's outcome unknowable: n/a (why), never a credit and
+// never a fabricated miss.
+//
 // WHY: two cells are collapsed in EVERY arm of the P1 grid — single-session-
 // preference 0.071 in all five arms and multi-session ≤ 0.333 — and the banked
 // rows cannot say whether the miss is write-side or read-side: meta.hits is a
@@ -64,10 +72,15 @@ function normSessionIndex(v) {
  * hits === []    → the search truly returned zero rows: read_hits [] +
  *                  read_hits_available true.
  * hits = [...].  → ordered entries as the arm rendered them; each becomes
- *                  {source_id, score, session_index, ...armExtras, rank} —
- *                  normalized shared fields first, the arm's extra fields
- *                  (layer, rendered_date, …) preserved, rank (0-based context
- *                  position) last, capped at the budget.
+ *                  {source_id, score, session_index, question_id,
+ *                  ...armExtras, rank} — normalized shared fields first, the
+ *                  arm's extra fields (layer, rendered_date, …) preserved, rank
+ *                  (0-based context position) last, capped at the budget.
+ *                  question_id (task 304) names the question whose haystack the
+ *                  hit came FROM — every arm pools all n questions' sessions
+ *                  into one per-run store, so the owning question is the only
+ *                  thing that makes a session_index meaningful. Arms forward it
+ *                  from their store's metadata; null when the SDK hides it.
  */
 export function recordHits(meta, hits, budget) {
   if (!Array.isArray(hits)) {
@@ -80,6 +93,7 @@ export function recordHits(meta, hits, budget) {
     source_id: h?.source_id ?? null,
     score: normScore(h?.score),
     session_index: normSessionIndex(h?.session_index),
+    question_id: h?.question_id ?? null,
     rank,
   }));
   meta.read_hits_available = true;
@@ -179,6 +193,32 @@ export function buildGoldIndex(items) {
 // --- per-row classification ----------------------------------------------------
 
 /**
+ * Which question's haystack did this hit come from? (task 304)
+ *
+ * Every arm of this bench writes ALL n questions' haystacks into ONE per-run
+ * store, so a retrieved hit routinely belongs to ANOTHER question — and a
+ * foreign session whose index collides with this question's gold index is not
+ * gold evidence. Resolution order:
+ *   1. the hit's stamped `question_id` (the arms forward it from their store
+ *      metadata at read time — the honest path for every new run);
+ *   2. the BANKED shape: `<runId>-<qid>-s<idx>` source ids (arm_mycelium and
+ *      arm_mycelium_extract write exactly this), parsed by stripping the run's
+ *      own prefix and the `-s<idx>` tail. A `<qid>-s<idx>` without the run
+ *      prefix parses the same way.
+ *   3. null — unknown. A hit of unknown ownership can never be credited as
+ *      this question's gold, and never proves a miss either.
+ */
+export function hitQuestionId(hit, runId = null) {
+  if (hit?.question_id != null) return hit.question_id;
+  const sid = hit?.source_id;
+  if (typeof sid !== 'string' || !sid) return null;
+  let rest = sid;
+  if (runId && rest.startsWith(`${runId}-`)) rest = rest.slice(runId.length + 1);
+  const m = rest.match(/^(.+)-s\d+$/);
+  return m ? m[1] : null;
+}
+
+/**
  * Classify ONE row against its gold sessions.
  *
  * stamp:        'stamped' (read_hits array) | 'null_no_retrieval' (null +
@@ -189,11 +229,20 @@ export function buildGoldIndex(items) {
  *               any gold session lies inside the capped write (a gold session
  *               the write phase never stored cannot be retrieved — counted
  *               separately, never charged against retrieval).
- * gold_rank:    1-based context position of the FIRST gold-session hit, when
- *               the row is ranked (stamped + mapped + gold written + at least
- *               one hit carrying session_index).
+ * session_provenance: any hit carries a session_index.
+ * question_provenance (task 304): EVERY index-carrying hit resolves to a known
+ *               question. Required for R@k and the rank stats — one
+ *               unidentified hit could be the gold, so the row's retrieval
+ *               outcome is unknown, not a miss.
+ * foreign_hits: how many index-carrying hits belong to OTHER questions (the
+ *               pooled-store diagnostic — large counts mean the search is not
+ *               discriminating between questions' haystacks).
+ * gold_rank:    1-based context position of the FIRST gold-session hit OWNED
+ *               BY THIS QUESTION, when the row is ranked (stamped + mapped +
+ *               gold written + question-provenance + at least one own hit
+ *               landing on a gold index).
  */
-export function classifyRow({ readHits, readHitsAvailable, mapping, writeCap }) {
+export function classifyRow({ readHits, readHitsAvailable, mapping, writeCap, questionId = null, runId = null }) {
   const out = {
     stamp: 'unstamped',
     unmapped: !mapping?.mapped,
@@ -201,6 +250,8 @@ export function classifyRow({ readHits, readHitsAvailable, mapping, writeCap }) 
     gold_rank: null,
     hit: false,
     session_provenance: false,
+    question_provenance: false,
+    foreign_hits: 0,
   };
   if (readHits === null || readHits === undefined) {
     if (readHits === null && readHitsAvailable === false) out.stamp = 'null_no_retrieval';
@@ -213,8 +264,18 @@ export function classifyRow({ readHits, readHitsAvailable, mapping, writeCap }) 
   const gold = new Set(mapping.indices);
   out.gold_written = writeCap == null ? true : mapping.indices.some((i) => i < writeCap);
   if (!out.gold_written) return out;
-  const ranks = readHits.filter((h) => h?.session_index != null && gold.has(h.session_index)).map((h) => h.rank + 1);
-  out.session_provenance = readHits.some((h) => h?.session_index != null);
+  // task 304: resolve every index-carrying hit's owning question ONCE — own
+  // hits can credit gold, foreign hits never do, unidentified hits make the
+  // row's outcome unknowable.
+  const identified = readHits
+    .filter((h) => h?.session_index != null)
+    .map((h) => ({ hit: h, question: hitQuestionId(h, runId) }));
+  out.session_provenance = identified.length > 0;
+  out.question_provenance = out.session_provenance && identified.every((x) => x.question != null);
+  out.foreign_hits = identified.filter((x) => x.question != null && questionId != null && x.question !== questionId).length;
+  const ranks = identified
+    .filter((x) => x.question != null && x.question === questionId && gold.has(x.hit.session_index))
+    .map((x) => x.hit.rank + 1);
   if (ranks.length) {
     out.hit = true;
     out.gold_rank = Math.min(...ranks);
@@ -231,9 +292,14 @@ export function median(values) {
 
 // --- the audit ------------------------------------------------------------------
 
-// task 264: the k values the per-arm table quotes — MemPalace's headline shape
-// (LongMemEval R@5) plus the next step out. R@k = the gold session appears in
-// the top k of a row's stamped read hits.
+// task 264: the k values the per-arm table quotes. R@k = THIS question's gold
+// session appears in the top k of the row's stamped read hits, counting only
+// hits that belong to this question's haystack (task 304 — the store is POOLED
+// across all n questions' haystacks, so the owning question must match too).
+// Protocol note: LongMemEval's published R@k (and e.g. MemPalace's 96.6% R@5)
+// retrieves within each question's OWN ~50-session collection; this bench
+// retrieves over the pooled per-run store — a different, harder protocol. The
+// two numbers are NOT comparable; the receipt states this beside the table.
 export const R_AT_K = [5, 10];
 
 const EMPTY_CELL = () => ({
@@ -245,6 +311,7 @@ const EMPTY_CELL = () => ({
   unmapped: 0,
   gold_not_written: 0,
   no_provenance: 0,
+  no_question_provenance: 0,
   ranked: 0,
   hit: 0,
   hit_at_budget: null,
@@ -262,6 +329,7 @@ const EMPTY_CELL = () => ({
   judged_exact: 0,
   judged_partial: 0,
   judged_wrong: 0,
+  judged_unparsed: 0,
   hit_judged_n: 0,
   hit_judged_wrong: 0,
 });
@@ -309,6 +377,11 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
           readHitsAvailable: row.meta?.read_hits_available,
           mapping,
           writeCap: cap,
+          // task 304: gold credit is question-scoped — the hit must belong to
+          // THIS row's question, and banked rows' source ids resolve only
+          // against their own run's id
+          questionId: row.question_id ?? null,
+          runId: run.runId ?? null,
         });
         // task 264: the judged join — accuracy counts EVERY judged row of the
         // arm (unconditional on retrieval); the gap counts judged rows the
@@ -318,7 +391,14 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
           cell.judged_n += 1;
           if (label === 'exact') cell.judged_exact += 1;
           else if (label === 'partial') cell.judged_partial += 1;
-          else cell.judged_wrong += 1; // 'wrong', or an unparsed label — tally()'s own convention
+          else {
+            // convention (task 304, review-B nit): any label that is neither
+            // exact nor partial scores wrong in this join — tally()'s
+            // null-means-wrong rule extended to unparsed strings — but it is
+            // ALSO counted here so the lump is visible, never silent
+            cell.judged_wrong += 1;
+            if (label !== 'wrong') cell.judged_unparsed += 1;
+          }
           if (c.hit) {
             cell.hit_judged_n += 1;
             if (label !== 'exact' && label !== 'partial') cell.hit_judged_wrong += 1;
@@ -342,13 +422,19 @@ export function computeRetrievalAudit({ runs, goldIndex, budget, writeCap: cap }
         // with hit false (0.0 is its honest score). The task-207 rank stats
         // stay provenance-only: an empty list carries no session rank, so it is
         // not `ranked` and never enters the median/MRR (that law is unchanged).
+        // task 304: provenance now needs BOTH the session index AND the hit's
+        // owning question (every arm pools all n questions' haystacks into one
+        // per-run store — a foreign session at a colliding index is not gold
+        // evidence, and an unidentified hit makes the outcome unknowable).
         const emptyRetrieval = Array.isArray(row.meta?.read_hits) && row.meta.read_hits.length === 0;
-        if (!c.session_provenance && !emptyRetrieval) {
-          cell.no_provenance += 1;
+        const provenance = c.session_provenance && c.question_provenance;
+        if (!provenance && !emptyRetrieval) {
+          if (c.session_provenance) cell.no_question_provenance += 1;
+          else cell.no_provenance += 1;
           continue;
         }
         cell.rankable += 1; // the R@k denominator: known retrieval outcomes
-        if (c.session_provenance) {
+        if (provenance) {
           // ranked denominator: stamped + mapped + gold written + provenance
           cell.ranked += 1;
           if (c.hit) {
@@ -388,6 +474,7 @@ const fmtNaWhy = (acc) => {
   if (acc.null_no_retrieval) reasons.push(`${acc.null_no_retrieval} no-retrieval`);
   if (acc.null_error) reasons.push(`${acc.null_error} retrieval-error`);
   if (acc.no_provenance) reasons.push(`${acc.no_provenance} hits without session ids`);
+  if (acc.no_question_provenance) reasons.push(`${acc.no_question_provenance} hits without question ids (pooled store — own-vs-foreign unknowable)`);
   return reasons.length
     ? { na: `no rankable rows — ${reasons.join(', ')}` }
     : { na: 'no rankable rows' };
@@ -425,11 +512,13 @@ export function armRetrievalVsAnswers(audit, budget = audit?.budget) {
       null_no_retrieval: 0,
       null_error: 0,
       no_provenance: 0,
+      no_question_provenance: 0,
       hit_at_k: Object.fromEntries(R_AT_K.map((k) => [k, 0])),
       judged_n: 0,
       judged_exact: 0,
       judged_partial: 0,
       judged_wrong: 0,
+      judged_unparsed: 0,
       hit_judged_n: 0,
       hit_judged_wrong: 0,
     };
@@ -442,11 +531,13 @@ export function armRetrievalVsAnswers(audit, budget = audit?.budget) {
       acc.null_no_retrieval += cell.null_no_retrieval ?? 0;
       acc.null_error += cell.null_error ?? 0;
       acc.no_provenance += cell.no_provenance ?? 0;
+      acc.no_question_provenance += cell.no_question_provenance ?? 0;
       for (const k of R_AT_K) acc.hit_at_k[k] += cell.hit_at_k?.[k] ?? 0;
       acc.judged_n += cell.judged_n ?? 0;
       acc.judged_exact += cell.judged_exact ?? 0;
       acc.judged_partial += cell.judged_partial ?? 0;
       acc.judged_wrong += cell.judged_wrong ?? 0;
+      acc.judged_unparsed += cell.judged_unparsed ?? 0;
       acc.hit_judged_n += cell.hit_judged_n ?? 0;
       acc.hit_judged_wrong += cell.hit_judged_wrong ?? 0;
     }

@@ -60,6 +60,18 @@ export function sessionIndexFromTags(tags) {
   const n = Number.parseInt(hit.slice('session_index:'.length), 10);
   return Number.isInteger(n) && n >= 0 ? n : null;
 }
+
+// task 304: the same insert-time tags name the OWNING question — the archival
+// store is pooled across all n questions' haystacks, so a hit credits a row's
+// gold only when it came from that row's question. Returns the tag's value, or
+// null when the SDK hid the tags or the tag is absent (never a guess).
+export function questionIdFromTags(tags) {
+  if (!Array.isArray(tags)) return null;
+  const hit = tags.find((t) => typeof t === 'string' && t.startsWith('question_id:'));
+  if (!hit) return null;
+  const v = hit.slice('question_id:'.length);
+  return v ? v : null;
+}
 export const LETTA_DEFAULT_EMBEDDER_DIMS = 768; // measured on the platform host's ollama
 
 // Retrieval scope: the run namespace, same granularity as the other arms. For
@@ -535,6 +547,7 @@ export function createArmLetta({
           source_id: m.id,
           score: m.score,
           session_index: sessionIndexFromTags(m.tags),
+          question_id: questionIdFromTags(m.tags),
         })),
         retrievalBudget
       );

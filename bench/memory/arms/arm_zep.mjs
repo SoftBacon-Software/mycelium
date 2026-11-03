@@ -414,6 +414,10 @@ export function createArmZep({
   // (resume) or a re-answer run have no entry and stamp session_index null,
   // which the audit counts as no-provenance rather than guessing.
   const sessionByEpisodeUuid = new Map();
+  // task 304: the same write-time ledger keyed by question — the store pools
+  // every question's haystack, so a hit's session_index credits gold only when
+  // its episode belongs to the row's own question
+  const questionByEpisodeUuid = new Map();
 
   // The sidecar is long-lived (a 50-item write phase is hours of LLM
   // extractions), so it can die mid-run to something outside this process. A
@@ -484,7 +488,10 @@ export function createArmZep({
         });
         const secs = ((Date.now() - t0) / 1000).toFixed(1);
         log(`add ${idx + 1}/${sessionTurns.length} (${kb} KB, ${r.count ?? 0} facts) in ${secs}s — q=${questionId}`);
-        if (r.episode_uuid) sessionByEpisodeUuid.set(r.episode_uuid, idx);
+        if (r.episode_uuid) {
+          sessionByEpisodeUuid.set(r.episode_uuid, idx);
+          questionByEpisodeUuid.set(r.episode_uuid, questionId);
+        }
         rows += r.count ?? 0;
         if (resumeDir) writeCp(questionId, idx + 1);
       }
@@ -509,6 +516,7 @@ export function createArmZep({
           source_id: f.id,
           score: f.score, // RRF: graphiti exposes no scores — stamped null, honestly
           session_index: sessionByEpisodeUuid.get(f.episode_uuids?.[0]) ?? null,
+          question_id: questionByEpisodeUuid.get(f.episode_uuids?.[0]) ?? null,
         })),
         retrievalBudget
       );
