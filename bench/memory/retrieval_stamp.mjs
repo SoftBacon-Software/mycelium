@@ -204,7 +204,9 @@ export function buildGoldIndex(items) {
  *   2. the BANKED shape: `<runId>-<qid>-s<idx>` source ids (arm_mycelium and
  *      arm_mycelium_extract write exactly this), parsed by stripping the run's
  *      own prefix and the `-s<idx>` tail. A `<qid>-s<idx>` without the run
- *      prefix parses the same way.
+ *      prefix parses the same way (only when no runId is given — task 324:
+ *      with a runId given, an id that does not carry it belongs to another
+ *      run and resolves to null, never to a fabricated foreign id).
  *   3. null — unknown. A hit of unknown ownership can never be credited as
  *      this question's gold, and never proves a miss either.
  */
@@ -213,7 +215,14 @@ export function hitQuestionId(hit, runId = null) {
   const sid = hit?.source_id;
   if (typeof sid !== 'string' || !sid) return null;
   let rest = sid;
-  if (runId && rest.startsWith(`${runId}-`)) rest = rest.slice(runId.length + 1);
+  if (runId) {
+    // task 324 (review B finding 2): with a runId given, a source id from
+    // ANOTHER run is not this run's banked shape — parsing it fabricates
+    // `<otherRun>-<qid>`, an id foreign to every row that can only ever miss
+    // (a fabricated miss). Unknown ownership (null → n/a) is the honest answer.
+    if (!rest.startsWith(`${runId}-`)) return null;
+    rest = rest.slice(runId.length + 1);
+  }
   const m = rest.match(/^(.+)-s\d+$/);
   return m ? m[1] : null;
 }

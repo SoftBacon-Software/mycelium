@@ -1116,6 +1116,23 @@ describe('task 304 — a hit requires the retrieved session to belong to THIS qu
     expect(roll.a.r_at[5]).toMatchObject({ na: expect.stringMatching(/question/) });
   });
 
+  it('a source id from ANOTHER run (runId given, prefix mismatch) is unknown ownership — n/a, never a fabricated foreign miss (task 324)', () => {
+    // the re-answer shape review B flagged: the pass stamps
+    // run_id `<orig>-reanswer-<policy>` while its store's ids carry `<orig>-`;
+    // the old bare parse fabricated `<orig>-<qid>`, foreign to every row and
+    // therefore a KNOWN miss — a fabricated miss. It must be n/a.
+    const audit = computeRetrievalAudit({
+      runs: [{
+        runId: 'run-9-reanswer-mixed',
+        rowsByArm: { a: [row('q1', [{ source_id: 'run-9-q1-s0', score: 1, session_index: 0, rank: 0 }])] },
+      }],
+      goldIndex,
+      budget: 5,
+    });
+    const roll = armRetrievalVsAnswers(audit, audit.budget);
+    expect(roll.a.r_at[5]).toMatchObject({ na: expect.stringMatching(/question/) });
+  });
+
   it('a row where ANY index-carrying hit lacks question identity is n/a — the gold could be that hit, so the outcome is unknown', () => {
     const audit = computeRetrievalAudit({
       runs: [{
@@ -1139,11 +1156,14 @@ describe('task 304 — a hit requires the retrieved session to belong to THIS qu
     expect(roll.a.r_at[5]).toEqual({ rate: 0, hits: 0, n: 1 });
   });
 
-  it('hitQuestionId: the explicit stamp wins; banked runId-prefixed and bare `<qid>-s<idx>` source ids parse; unparseable → null', () => {
+  it('hitQuestionId: the explicit stamp wins; banked runId-prefixed and bare `<qid>-s<idx>` source ids parse; another run\'s id with runId given → null (task 324); unparseable → null', () => {
     expect(hitQuestionId({ question_id: 'q9', source_id: 'anything' })).toBe('q9');
     expect(hitQuestionId({ question_id: null, source_id: 'run-9-q2-s0' }, 'run-9')).toBe('q2');
     expect(hitQuestionId({ source_id: 'q2-s0' })).toBe('q2');
     expect(hitQuestionId({ source_id: '15745da0_abs-s37' })).toBe('15745da0_abs');
+    // task 324 (review B finding 2): runId given, id from ANOTHER run — the old
+    // parse fabricated `<otherRun>-<qid>`, a foreign id that could only miss
+    expect(hitQuestionId({ question_id: null, source_id: 'run-8-q2-s0' }, 'run-9')).toBeNull();
     expect(hitQuestionId({ source_id: 'edge-uuid' })).toBeNull();
     expect(hitQuestionId({ source_id: 's0' })).toBeNull();
     expect(hitQuestionId({ source_id: 'mem-9' })).toBeNull();
