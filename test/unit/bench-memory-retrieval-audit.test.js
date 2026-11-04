@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   armRetrievalVsAnswers,
@@ -23,9 +24,12 @@ import {
 import {
   buildTranscriptGroups,
   composeGrid,
+  loadArmRows,
   loadAuditItems,
+  loadRun,
   poolDiagnostic,
   renderRetrievalAuditSection,
+  writeCap,
 } from '../../bench/memory/grid.mjs';
 import { createArmNone } from '../../bench/memory/arms/arm_none.mjs';
 import { createArmMycelium } from '../../bench/memory/arms/arm_mycelium.mjs';
@@ -1145,5 +1149,71 @@ describe('task 304 — a hit requires the retrieved session to belong to THIS qu
     expect(hitQuestionId({ source_id: 'mem-9' })).toBeNull();
     expect(hitQuestionId(null)).toBeNull();
     expect(hitQuestionId({})).toBeNull();
+  });
+});
+
+// task 319 — the BANKED RUN re-stamps to 30/50 on the committed rows. The
+// committed receipt (receipts/2026-09-19-p1-134358-retrieval-audit-task264.md)
+// quotes R@5 0.600 (30/50) own-question; this test pins that number to the
+// committed rows joined against a committed gold-map fixture
+// (bench/memory/test-fixtures/banked-134358-gold-map.json — the LongMemEval-S
+// gold fields for the run's 50 selected questions, extracted once via
+// loadAuditItems so the 277 MB dataset is never touched here), so a future
+// regression in the question-scoping cannot silently re-inflate the banked
+// headline. Review B's four foreign-only rows must stay misses.
+describe('task 319 — the banked 2026-09-19-p1-134358 run re-stamps to 30/50 own-question', () => {
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const RUN_DIR = path.join(REPO_ROOT, 'bench/memory/results/2026-09-19-p1-134358');
+  const GOLD_MAP = path.join(REPO_ROOT, 'bench/memory/test-fixtures/banked-134358-gold-map.json');
+
+  it('mycelium R@5 = 0.600 (30/50) and gap 50.0% (15/30) over the committed rows', () => {
+    const run = loadRun(RUN_DIR);
+    const budget = run.summary.regime?.retrieval?.budget;
+    const goldFixture = JSON.parse(fs.readFileSync(GOLD_MAP, 'utf8'));
+    expect(goldFixture.n).toBe(50);
+    const goldIndex = buildGoldIndex(goldFixture.items);
+    expect(goldIndex.coverage.mapped).toBe(50); // all answer_session_ids join their haystack ids
+    const judgedByArm = {}; // keyed by RAW arm name — the same join the render tool runs
+    for (const j of run.judged ?? []) if (j.arm) (judgedByArm[j.arm] ??= []).push(j);
+    const audit = computeRetrievalAudit({
+      runs: [
+        {
+          runId: run.runId,
+          rowsByArm: { mycelium: loadArmRows(run.dir, 'mycelium') },
+          judgedByArm,
+          labelByArm: run.labelByArm,
+        },
+      ],
+      goldIndex,
+      budget,
+      writeCap: writeCap(run.summary),
+    });
+    const roll = armRetrievalVsAnswers(audit, budget);
+    expect(roll.mycelium.r_at[5]).toEqual({ rate: 0.6, hits: 30, n: 50 });
+    expect(roll.mycelium.gap).toEqual({ rate: 0.5, wrong: 15, n: 30 });
+    // R@10 stays n/a: the read budget (5) never stamps deeper ranks
+    expect(roll.mycelium.r_at[10]).toHaveProperty('na');
+  });
+
+  it('review B\'s four foreign-only rows are misses with foreign hits — never re-credited', () => {
+    const run = loadRun(RUN_DIR);
+    const goldFixture = JSON.parse(fs.readFileSync(GOLD_MAP, 'utf8'));
+    const goldIndex = buildGoldIndex(goldFixture.items);
+    const rows = loadArmRows(run.dir, 'mycelium');
+    const byQ = new Map(rows.map((r) => [r.question_id, r]));
+    for (const qid of ['07741c44', '0862e8bf_abs', '0a34ad58', '1192316e']) {
+      const r = byQ.get(qid);
+      expect(r, `row ${qid} in the committed banked rows`).toBeTruthy();
+      const c = classifyRow({
+        readHits: r.meta.read_hits,
+        readHitsAvailable: r.meta.read_hits_available,
+        mapping: goldIndex.byQuestion.get(qid),
+        writeCap: writeCap(run.summary),
+        questionId: qid,
+        runId: run.runId,
+      });
+      expect(c.hit).toBe(false);
+      expect(c.foreign_hits).toBeGreaterThan(0);
+    }
   });
 });
