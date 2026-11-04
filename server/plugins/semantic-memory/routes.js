@@ -1438,17 +1438,48 @@ export default function (core) {
   // one transaction — a supersede is both rows or neither.
   // Rate-limited (CodeQL js/missing-rate-limiting on PR #182): a correction is a
   // hand or lane action, never a machine loop — the 120/min floor.
+  //
+  // F-mycelium/262 (2026-10-29): the route is KIND-AWARE. It serves every kind
+  // in db.LESSON_SOURCE_TYPES — 'lesson', 'verdict', 'ruling' (added for the
+  // Game Masters rows) — not just 'lesson': a 'ruling' row was invisible to
+  // the hardcoded lookups (404), and a by_text replacement would have been
+  // written as kind 'lesson'. The old row's kind comes from its own row
+  // (db.lessonClassKindOf, ONE helper beside the map) or an optional
+  // body.source_type validated against the map; the replacement is written as
+  // the SAME kind, so a supersede edge never crosses kinds. Every guard is
+  // unchanged: reason/actor/evidence required, owner-only (now actually
+  // enforced for non-lesson kinds — the hardcoded owner check found no chunks
+  // and let them through), already-superseded → 409.
   router.post('/lessons/:id/supersede',
     rateLimited('memory/lessons-supersede', { windowMs: 60000, max: 120 }),
     async function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var oldId = String(req.params.id || '');
-    // TRUST LAYER P0.2: a supersede rewrites BOTH rows — only the old row's
-    // owner (or the admin key) may start one.
-    if (refuseNotRowOwner(res, 'lesson', oldId, who, req._authIsAdmin, 'supersede')) return;
     var body = req.body || {};
     function str(v) { return typeof v === 'string' ? v.trim() : ''; }
+    // F-mycelium/262: the route serves EVERY lesson-class kind, not just
+    // 'lesson'. The caller may pin the kind (optional body.source_type,
+    // validated against db.LESSON_SOURCE_TYPES); otherwise the old row's OWN
+    // kind is resolved from the id through db.lessonClassKindOf — the ONE
+    // lookup helper, beside the map it walks — defaulting to 'lesson' when no
+    // lesson-class row exists, so the 404 below reads exactly as it always
+    // did. EVERY hop below — the owner check, both getDoc lookups, both
+    // indexDoc writes, the audit rows, the emit and the sm: derived ref —
+    // runs under THIS kind: a supersede edge connects two rows of the same
+    // kind, and a ruling replaces a ruling.
+    var askedKind = str(body.source_type);
+    var kind = askedKind || db.lessonClassKindOf(oldId) || 'lesson';
+    if (askedKind && !db.LESSON_SOURCE_TYPES[kind]) {
+      return apiError(res, 400, "supersede refused: 'source_type' '" + askedKind +
+        "' is not a lesson-class kind (one of: " + Object.keys(db.LESSON_SOURCE_TYPES).join(', ') +
+        ") — the supersede edge connects two rows of the SAME kind");
+    }
+    // TRUST LAYER P0.2: a supersede rewrites BOTH rows — only the old row's
+    // owner (or the admin key) may start one. Under the RESOLVED kind: a
+    // hardcoded 'lesson' here found no chunks for any other kind and let the
+    // request through as if the row did not exist yet.
+    if (refuseNotRowOwner(res, kind, oldId, who, req._authIsAdmin, 'supersede')) return;
     var reason = str(body.reason);
     var actor = str(body.actor);
     var evidence = str(body.evidence);
@@ -1465,12 +1496,12 @@ export default function (core) {
       return apiError(res, 400, "supersede refused: 'by_text' and 'by_id' are mutually exclusive — a correction is new text OR a pointer to an existing row, not both");
     }
 
-    var oldRow = db.getDoc('lesson', oldId, 0);
-    if (!oldRow) return apiError(res, 404, "supersede refused: no lesson row '" + oldId + "' (lessons are memory rows — source_type 'lesson', source_id '" + oldId + "' not found)");
+    var oldRow = db.getDoc(kind, oldId, 0);
+    if (!oldRow) return apiError(res, 404, "supersede refused: no " + kind + " row '" + oldId + "' (lessons are memory rows — source_type '" + kind + "', source_id '" + oldId + "' not found)");
     var oldMeta = {};
     try { oldMeta = JSON.parse(oldRow.metadata || '{}'); } catch (e) { oldMeta = {}; }
     if (oldMeta.superseded_by) {
-      return apiError(res, 409, "supersede refused: lesson '" + oldId + "' was already superseded on " +
+      return apiError(res, 409, "supersede refused: " + kind + " '" + oldId + "' was already superseded on " +
         (oldMeta.valid_to || '?') + " by '" + oldMeta.superseded_by +
         "' — supersede the replacement, not the history", {
         superseded_by: oldMeta.superseded_by,
@@ -1478,14 +1509,14 @@ export default function (core) {
       });
     }
     if (byId && byId === oldId) {
-      return apiError(res, 400, "supersede refused: 'by_id' equals the lesson being superseded ('" + oldId + "') — a lesson cannot replace itself");
+      return apiError(res, 400, "supersede refused: 'by_id' equals the " + kind + " being superseded ('" + oldId + "') — a lesson cannot replace itself");
     }
 
     var now = core.db.prepare("SELECT datetime('now') AS n").get().n; // the store's clock, same format am_facts' valid_to uses
     var newId, newText, newMeta, newOrigin, newTrust, newDerivedFrom;
     if (byId) {
-      var succRow = db.getDoc('lesson', byId, 0);
-      if (!succRow) return apiError(res, 400, "supersede refused: 'by_id' '" + byId + "' names no lesson row — write the correcting lesson first (or pass by_text)");
+      var succRow = db.getDoc(kind, byId, 0);
+      if (!succRow) return apiError(res, 400, "supersede refused: 'by_id' '" + byId + "' names no " + kind + " row — write the correcting " + kind + " first (or pass by_text)");
       newId = byId;
       newText = succRow.content_text;
       try { newMeta = JSON.parse(succRow.metadata || '{}'); } catch (e) { newMeta = {}; }
@@ -1520,13 +1551,13 @@ export default function (core) {
       // TRUST LAYER P0.2: the correcting agent signs its own correction — a
       // body actor that disagrees with the authenticated identity rides along
       // as claimed_actor (the gate below still sees a present actor).
-      newMeta = bindProvenanceIdentity('lesson', newMeta, who, req._authIsAdmin);
+      newMeta = bindProvenanceIdentity(kind, newMeta, who, req._authIsAdmin);
       var missing = db.missingProvenanceFields(newMeta);
       if (missing.length > 0) {
-        return apiError(res, 400, "supersede refused: source_type 'lesson' requires provenance metadata — missing: " + missing.join(', '));
+        return apiError(res, 400, "supersede refused: source_type '" + kind + "' requires provenance metadata — missing: " + missing.join(', '));
       }
-      if (db.getDoc('lesson', newId, 0)) {
-        return apiError(res, 409, "supersede refused: 'new_source_id' '" + newId + "' already names a lesson — passing one would overwrite it; choose a fresh id");
+      if (db.getDoc(kind, newId, 0)) {
+        return apiError(res, 409, "supersede refused: 'new_source_id' '" + newId + "' already names a " + kind + " — passing one would overwrite it; choose a fresh id");
       }
       // TRUST LAYER P1.1: a correcting lesson IS a derived row — it exists
       // because of the lesson it corrects, so that lesson is its input
@@ -1537,7 +1568,11 @@ export default function (core) {
       // fail-closed, same as everywhere else).
       var supBody = Object.assign({}, body);
       var callerRefs = (Array.isArray(body.derived_from) && body.derived_from.length > 0) ? body.derived_from : [];
-      if (callerRefs.indexOf('sm:lesson:' + oldId) === -1) callerRefs = callerRefs.concat(['sm:lesson:' + oldId]);
+      // The seed ref names the row's OWN kind — resolveInputTrust matches on
+      // source_type, so an 'sm:lesson:' ref for a ruling row resolves to no
+      // row and the correction silently derives from an unknown input.
+      var oldRef = 'sm:' + kind + ':' + oldId;
+      if (callerRefs.indexOf(oldRef) === -1) callerRefs = callerRefs.concat([oldRef]);
       supBody.derived_from = callerRefs;
       var boundSup = bindOriginAndTrust(supBody, newMeta, 'owner-agent', res, 'supersede');
       if (!boundSup) return;
@@ -1556,7 +1591,7 @@ export default function (core) {
         // source_type/source_id, so the upsert replaces its live text): its
         // content gains the dated supersede line, its metadata the pointer.
         if (byText) {
-          var chunks = db.indexDoc('lesson', newId, newText, {
+          var chunks = db.indexDoc(kind, newId, newText, {
             namespace: oldRow.namespace || null,
             metadata: newMeta,
             written_by: who,
@@ -1564,12 +1599,12 @@ export default function (core) {
             trust: newTrust,
             derived_from: newDerivedFrom
           });
-          var stored = db.getDocChunks('lesson', newId);
+          var stored = db.getDocChunks(kind, newId);
           for (var ci = 0; ci < chunks.length; ci++) {
-            autoEmbedUnembedded('lesson', newId, ci, stored[ci]);
+            autoEmbedUnembedded(kind, newId, ci, stored[ci]);
           }
           // P1.5: the correcting lesson is a write like any other.
-          auditSmWrite(who, 'write', 'lesson', newId);
+          auditSmWrite(who, 'write', kind, newId);
         }
         // 241/F1 (review 239a): the flip goes through indexDoc, never a raw
         // chunk_index-0 db.index — indexDoc replaces the doc's chunk rows and
@@ -1580,7 +1615,7 @@ export default function (core) {
         // The doc's content is the WHOLE doc: chunkText is lossless (chunks
         // join back to the text), and oldRow.content_text is only chunk 0's
         // slice — marking that slice alone would shrink the doc.
-        var oldChunks = db.getDocChunks('lesson', oldId);
+        var oldChunks = db.getDocChunks(kind, oldId);
         var oldFullContent = oldChunks.map(function (c) { return c.content_text; }).join('');
         var deathLine = '\n\n[superseded on ' + now + ' by: ' + newText + ']';
         var supersededContent = oldFullContent + deathLine;
@@ -1589,7 +1624,7 @@ export default function (core) {
           superseded_by: newId,
           superseded_by_text: newText
         });
-        db.indexDoc('lesson', oldId, supersededContent, {
+        db.indexDoc(kind, oldId, supersededContent, {
           namespace: oldRow.namespace || null,
           metadata: reindexedMeta,
           // TRUST LAYER P0.2: the flip keeps the row's ORIGINAL owner — an
@@ -1607,10 +1642,10 @@ export default function (core) {
         // the last slice — every surviving chunk that lacks it gains it (still
         // inside writeBoth), so a recall hit on ANY chunk renders the row's
         // own death. Then embed what is stored, never a stale copy.
-        var storedChunks = db.getDocChunks('lesson', oldId);
+        var storedChunks = db.getDocChunks(kind, oldId);
         for (var si = 0; si < storedChunks.length; si++) {
           if (storedChunks[si].content_text.indexOf('[superseded on ') === -1) {
-            db.index('lesson', oldId, storedChunks[si].content_text + deathLine, {
+            db.index(kind, oldId, storedChunks[si].content_text + deathLine, {
               namespace: storedChunks[si].namespace,
               chunk_index: storedChunks[si].chunk_index,
               metadata: reindexedMeta,
@@ -1620,13 +1655,13 @@ export default function (core) {
               derived_from: storedChunks[si].derived_from || null
             });
           }
-          autoEmbedUnembedded('lesson', oldId, si, db.getDoc('lesson', oldId, si));
+          autoEmbedUnembedded(kind, oldId, si, db.getDoc(kind, oldId, si));
         }
         // P1.5: the flip is an EDIT on the old row — audited with its content
         // as now superseded, the ORIGINAL owner kept (the flip never steals
         // the row), and the caller's reason verbatim. Inside writeBoth, so a
         // rolled-back supersede leaves no audit row behind.
-        auditSmWrite(who, 'edit', 'lesson', oldId, {
+        auditSmWrite(who, 'edit', kind, oldId, {
           row_owner: oldRow.written_by || null,
           reason: reason
         });
@@ -1637,8 +1672,8 @@ export default function (core) {
     }
 
     core.emitEvent('memory_indexed', who, null,
-      who + ' superseded lesson ' + oldId + ' -> ' + newId,
-      { source_type: 'lesson', source_id: oldId, superseded_by: newId });
+      who + ' superseded ' + kind + ' ' + oldId + ' -> ' + newId,
+      { source_type: kind, source_id: oldId, superseded_by: newId });
 
     res.json({
       ok: true,
