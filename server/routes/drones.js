@@ -21,7 +21,7 @@ import {
 
 export function registerDroneRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkAgent, checkAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin, checkAgent, checkAdmin,
     agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
     apiError, emitEvent, getAdminDisplayName, isAdminKey, getStudioUser,
     requireAuth, artifactUpload, ARTIFACTS_DIR,
@@ -151,7 +151,6 @@ export function registerDroneRoutes(router, deps) {
   router.post('/drones/jobs', agentWriteLimiter, asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    if (!checkGuardrails(req, res, 'drone_job_queued', { agent: who, title: req.body.title })) return;
     var title = escapeHtml(req.body.title);
     if (!title) return res.status(400).json({ error: 'title is required' });
     var command = req.body.command || '';

@@ -13,7 +13,7 @@ import {
 
 export function registerAssetRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin, checkAdmin,
     escapeHtml, parseLimit, parseIntParam, validateEnum,
     emitEvent, getAdminDisplayName,
     requireAuth, upload,
@@ -38,7 +38,6 @@ export function registerAssetRoutes(router, deps) {
   router.post('/assets', asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'asset_registered', { agent: agentId, project_id: req.body.project_id, name: req.body.name })) return;
     var name = escapeHtml(req.body.name);
     if (!name) return res.status(400).json({ error: 'name is required' });
     var type = req.body.type || 'sprite';

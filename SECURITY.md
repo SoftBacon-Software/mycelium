@@ -77,6 +77,63 @@ the `.env.example` shows how to generate them.
 - The kill switch (`PUT /admin/override`) lets any human operator
   freeze all agent work instantly. Treat this as a real safety lever.
 
+### No guardrails plugin — but enforcement rules do block (trust layer P0.3)
+
+The guardrails plugin and its `checkGuardrails` seam are gone: the
+plugin shipped disabled, never mounted, and was removed, and its
+fail-open seam — a gate that could only ever fail open while its
+warning text pointed at the deleted plugin — was removed with
+trust-layer P0.3 before it could mislead an operator into thinking
+rules were enforced. The dead `mycelium_list_safety_events` /
+`mycelium_safety_stats` MCP client tools that once answered 404 have
+their surface now: trust layer P1.5 built `/safety/*`
+(`server/routes/safety.js`) — `GET /safety/events` and
+`GET /safety/events/stats`, an admin-only read projection of the
+append-only, hash-chained memory audit log (this repo's own MCP
+surface never declared those tools; the copies in the m5Max MCP fork
+were removed there).
+
+One rule mechanism **is** live and blocks in-core:
+`checkEnforcementRules` (`server/routes/mycelium.js`) reads rules from
+the `mycelium/enforcement_rules` context key — set by an **admin key**
+through the context API (`PUT /context/keys/mycelium/enforcement_rules`),
+surfaced in db stats as `enforcement_rules_active` — and guards two
+routes: `POST /messages` (tool `send_message`) and
+`POST /github/prs/:owner/:repo/:number/merge` (tool `merge_pr`). A
+rule matches by tool name (`*` wildcard) plus an optional
+case-insensitive regex over the call args (with optional `enforce`
+conditions: `expected_tool`, `expected_args`, `required_role`); a
+matched rule with `severity: 'block'` answers 403 with
+`enforcement_rule: <rule id>` and emits an `enforcement_violation`
+event — lower severities warn only. It is opt-in: with no rules
+configured, every call passes.
+
+The write side of this key is hardened so the gate cannot be weakened
+behind the admin's back (trust layer P0; the census, the shape
+validator and the cache live in `server/enforcement-rules.js`):
+
+- **Admin key only.** A key whose value a security check reads is not
+  writable by the principals it gates: writing, bulk-writing, deleting,
+  bulk-deleting and rolling back `mycelium/enforcement_rules` all
+  require the admin key — an agent key gets 403. Reads stay open (the
+  rules are not secrets — knowing them is the point).
+- **Validated on write.** The value must be the `{"rules":[…]}` object
+  shape; a bare array, a rule missing a non-empty `id` or `tool`, an
+  unknown `severity`, or a non-compiling `content_pattern` is refused
+  with 400 and nothing is stored. The key is stored whole, never
+  merged, so it cannot hold a shape its reader silently reads as "no
+  rules".
+- **A write takes effect at once.** Every write path invalidates the
+  rules cache on write; the 60 s `ENFORCEMENT_CACHE_TTL` bounds
+  database re-reads only, never read-your-writes.
+- **Durable by construction.** Writes refuse `ttl`/`expires_at`, the
+  row is stored `durable`, the per-namespace key cap never counts nor
+  evicts it, and the expiry sweeps skip it — no flood, clock, or cap
+  eviction can empty the gate without an admin write.
+
+Everything else that enforces is unchanged: authentication (above),
+per-route rate limits, the risk-tiered approvals, and the kill switch.
+
 ### Third-party plugins
 
 Plugins run in the same process as the core server. Only install

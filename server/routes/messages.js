@@ -15,7 +15,7 @@ import {
 
 export function registerMessageRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin, checkAdmin,
     agentWriteLimiter, parseLimit, parseIntParam, validateStringLength,
     MAX_CONTENT, checkEnforcementRules, getStudioUser, displayName,
     emitEvent,
@@ -44,7 +44,6 @@ export function registerMessageRoutes(router, deps) {
   router.post('/messages', agentWriteLimiter, asyncHandler(function (req, res) {
     var agentId = checkAgentOrAdmin(req, res);
     if (!agentId) return;
-    if (!checkGuardrails(req, res, 'message_sent', { agent: agentId, to_agent: req.body.to, content: (req.body.content || '').substring(0, 200) })) return;
     var content = req.body.content;
     if (!content) return res.status(400).json({ error: 'content is required' });
     if (!validateStringLength(res, content, MAX_CONTENT, 'content')) return;

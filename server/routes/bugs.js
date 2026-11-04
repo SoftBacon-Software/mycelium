@@ -12,7 +12,7 @@ import {
 export function registerBugRoutes(router, deps) {
   const {
     asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
-    checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
+    emitEvent, validateEnum, validateStringLength, getBugCategories,
     parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
     MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES, pageEnvelope,
   } = deps;
@@ -21,7 +21,6 @@ export function registerBugRoutes(router, deps) {
   router.post('/bugs', agentWriteLimiter, asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    if (!checkGuardrails(req, res, 'bug_created', { agent: who, project_id: req.body.project_id, title: req.body.title })) return;
     var { project_id, title, description, category, severity, assignee, diagnostic_data } = req.body;
     var projectId = project_id;
     if (!title || !description) return res.status(400).json({ error: 'title and description are required' });

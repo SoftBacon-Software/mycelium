@@ -11,7 +11,7 @@ import {
 
 export function registerRunRoutes(router, deps) {
   const {
-    asyncHandler, checkAgentOrAdmin, checkGuardrails,
+    asyncHandler, checkAgentOrAdmin,
     checkAdminOrOperator, checkProjectScope,
   } = deps;
 
@@ -21,7 +21,6 @@ export function registerRunRoutes(router, deps) {
   router.post('/runs', asyncHandler(function (req, res) {
     var who = checkAgentOrAdmin(req, res);
     if (!who) return;
-    if (!checkGuardrails(req, res, 'run_started', { agent: who, project_id: req.body.project_id })) return;
     // Bind the run to the AUTHENTICATED agent — a non-admin can't attribute a run to
     // another agent. Admin (e.g. the bridge recording on behalf of an agent) may set it.
     var ownerAgent = req._authIsAdmin ? (req.body.agent_id || who) : (req._authAgentId || who);

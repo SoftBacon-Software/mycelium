@@ -296,32 +296,6 @@ function asyncHandler(fn) {
   };
 }
 
-// Pre-action guardrail check — blocks mutations if a guardrail rule with enforcement='block' fires
-function checkGuardrails(req, res, eventType, eventData) {
-  if (!req.app._guardrailsCheck) {
-    // Fail-open is correct ONLY when the guardrails plugin is genuinely not
-    // installed. It is NOT correct when the plugin loaded but its hook did not
-    // attach — that state looks enforced and is not, which is exactly what
-    // happened until 2026-08-08. Say so once, loudly, per process.
-    if (!checkGuardrails._warned) {
-      checkGuardrails._warned = true;
-      console.warn('[guardrails] NO BLOCKING HOOK INSTALLED - every '
-        + "enforcement='block' rule is a no-op for this process. If the "
-        + 'guardrails plugin is loaded, this is a WIRING BUG, not config.');
-    }
-    return true;
-  }
-  var result = req.app._guardrailsCheck(eventType, eventData);
-  if (!result.allowed) {
-    res.status(403).json({
-      error: 'Blocked by guardrail: ' + result.violations.map(function (v) { return v.rule_name; }).join(', '),
-      violations: result.violations
-    });
-    return false;
-  }
-  return true;
-}
-
 // Parse an integer route/query parameter safely.
 // Returns null (not NaN) when the value is missing or non-numeric,
 // preventing NaN from propagating into DB prepared statements.
@@ -1486,7 +1460,7 @@ router.post('/reasoning', agentWriteLimiter, asyncHandler(function (req, res) {
 
 
 registerTaskRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin, checkAdmin,
   agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
   emitEvent, validateStringLength, checkProjectScope, warnSuspectTransition,
   dispatchWorkToIdleAgents, MAX_TITLE, MAX_DESCRIPTION,
@@ -1508,11 +1482,11 @@ registerContextRoutes(router, { asyncHandler, checkAgentOrAdmin, checkAdmin, emi
 // ======== SPEND TRACKING (extracted to spend.js) ========
 
 registerSpendRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin,
 });
 
 registerRunRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin,
   checkAdminOrOperator, checkProjectScope,
 });
 
@@ -1623,7 +1597,7 @@ function parseVoiceCommand(text, who) {
 
 
 registerAssetRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin, checkAdmin,
   escapeHtml, parseLimit, parseIntParam, validateEnum,
   emitEvent, getAdminDisplayName,
   requireAuth, upload,
@@ -1633,7 +1607,7 @@ registerAssetRoutes(router, {
 // ======== EVENTS (extracted to events.js) ========
 
 registerEventRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin,
   escapeHtml, parseLimit, emitEvent,
   sseClients, jwt, JWT_SECRET,
 });
@@ -1647,19 +1621,19 @@ registerSafetyRoutes(router, {
 });
 
 registerRequestRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin,
   escapeHtml, parseIntParam, emitEvent,
 });
 
 registerMessageRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin, checkAdmin,
   agentWriteLimiter, parseLimit, parseIntParam, validateStringLength,
   MAX_CONTENT, checkEnforcementRules, getStudioUser, displayName,
   emitEvent,
 });
 
 registerPlanRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkGuardrails, escapeHtml,
+  asyncHandler, checkAgentOrAdmin, escapeHtml,
   parseLimit, parseIntParam, validateStringLength, validateEnum,
   checkApprovalGate, checkProjectScope, warnSuspectTransition,
   emitEvent, MAX_TITLE, MAX_DESCRIPTION, PLAN_STATUSES, PLAN_STEP_STATUSES,
@@ -1797,7 +1771,7 @@ registerFileRoutes(router, {
 // =============== BUGS (extracted to bugs.js) ===============
 registerBugRoutes(router, {
   asyncHandler, agentWriteLimiter, checkAgentOrAdmin, checkAdmin, checkProjectScope,
-  checkGuardrails, emitEvent, validateEnum, validateStringLength, getBugCategories,
+  emitEvent, validateEnum, validateStringLength, getBugCategories,
   parseLimit, parseIntParam, warnSuspectTransition, getAdminDisplayName,
   MAX_TITLE, MAX_DESCRIPTION, BUG_STATUSES, BUG_SEVERITIES, pageEnvelope,
 });
@@ -1863,7 +1837,7 @@ router.get('/webhooks/deliveries', asyncHandler(function (req, res) {
 }));
 
 registerDroneRoutes(router, {
-  asyncHandler, checkAgentOrAdmin, checkAgent, checkAdmin, checkGuardrails,
+  asyncHandler, checkAgentOrAdmin, checkAgent, checkAdmin,
   agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
   apiError, emitEvent, getAdminDisplayName, isAdminKey, getStudioUser,
   requireAuth, artifactUpload, ARTIFACTS_DIR,
@@ -1937,7 +1911,7 @@ router.get('/docs', asyncHandler(function (req, res) {
 }));
 
 registerFeedbackRoutes(router, {
-  asyncHandler, checkAdmin, checkAgentOrAdmin, checkGuardrails,
+  asyncHandler, checkAdmin, checkAgentOrAdmin,
   parseIntParam, apiError, emitEvent,
 });
 
