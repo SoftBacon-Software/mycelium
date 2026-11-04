@@ -53,6 +53,7 @@ export function buildRegime({
   mycelium_timeline = null, // optional — brief §3 timeline arm (episodic + reconciled layers)
   zep = null,   // optional — competitor-arm block from the zep sidecar's /health
   letta = null, // optional — competitor-arm block from the letta sidecar's /health
+  mempalace = null, // optional — task 263 CONTROL-arm block from the mempalace sidecar's /health
   write = null, // optional — {max_sessions_per_question} when the write phase was capped
   n,
   notes = [],
@@ -85,6 +86,7 @@ export function buildRegime({
   if (mycelium_timeline) stamp.mycelium_timeline = mycelium_timeline;
   if (zep) stamp.zep = zep;
   if (letta) stamp.letta = letta;
+  if (mempalace) stamp.mempalace = mempalace;
   if (write) stamp.write = write;
   return requireCompleteRegime(stamp);
 }
