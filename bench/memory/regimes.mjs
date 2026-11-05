@@ -430,12 +430,15 @@ function parseArgs(argv) {
   return out;
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const resultsDir = args.results ? path.resolve(args.results) : DEFAULT_RESULTS;
-  const receiptsDir = args.receipts ? path.resolve(args.receipts) : DEFAULT_RECEIPTS;
-  const outFile = args.out ? path.resolve(args.out) : DEFAULT_OUT;
-
+/**
+ * task 341 — the CLI's WHOLE pipeline (collect → group → audit → render) as ONE
+ * exported function. The committed-file test
+ * (test/unit/bench-memory-regimes-committed.test.js) renders through THIS — the
+ * exact bytes `node bench/memory/regimes.mjs` writes — so a renderer change, a
+ * stamp-field rename, or a new banked run that drifts the committed table fails
+ * the suite. main() is a thin wrapper: call this, write the file, print the line.
+ */
+export function renderRegimes({ resultsDir = DEFAULT_RESULTS, receiptsDir = DEFAULT_RECEIPTS } = {}) {
   const collected = collectRunFiles(resultsDir);
   const unreadable = collected.filter((e) => e.kind === 'unreadable');
   const groups = groupByRegime(collected);
@@ -454,14 +457,28 @@ async function main() {
   const noSummaryDirs = allDirs.filter((d) => !withSummary.has(d));
 
   const md = renderRegimesMd({ groups, audits, unreadable, noSummaryDirs, generatedAt: generatedFromRuns(collected), resultsDir, receiptsDir });
+  return {
+    md,
+    groups: groups.length,
+    total: groups.reduce((acc, g) => acc + g.entries.length, 0),
+    grids: audits.length,
+    mixed: audits.filter((au) => au.mixed.length).length,
+    unverifiable: audits.reduce((acc, au) => acc + au.unverifiable.length, 0),
+  };
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const resultsDir = args.results ? path.resolve(args.results) : DEFAULT_RESULTS;
+  const receiptsDir = args.receipts ? path.resolve(args.receipts) : DEFAULT_RECEIPTS;
+  const outFile = args.out ? path.resolve(args.out) : DEFAULT_OUT;
+
+  const { md, groups, total, grids, mixed, unverifiable } = renderRegimes({ resultsDir, receiptsDir });
   fs.writeFileSync(outFile, md);
 
-  const total = groups.reduce((acc, g) => acc + g.entries.length, 0);
-  const mixed = audits.filter((au) => au.mixed.length).length;
-  const unverifiable = audits.reduce((acc, au) => acc + au.unverifiable.length, 0);
   console.log(
-    `regimes: ${total} banked run files in ${groups.length} regimes; ` +
-      `${audits.length} composed grids audited (mixed: ${mixed}, unverifiable citations: ${unverifiable}) -> ${path.relative(process.cwd(), outFile)}`
+    `regimes: ${total} banked run files in ${groups} regimes; ` +
+      `${grids} composed grids audited (mixed: ${mixed}, unverifiable citations: ${unverifiable}) -> ${path.relative(process.cwd(), outFile)}`
   );
 }
 

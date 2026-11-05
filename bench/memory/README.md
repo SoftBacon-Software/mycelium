@@ -129,6 +129,7 @@ Every command below was run on master @ `b832052d`, 2026-11-05 (task 340):
 | what | file | what it does | the command that shows it |
 |---|---|---|---|
 | the regime table | `bench/memory/regimes.mjs` → `bench/memory/regimes.md` | every banked run file × arm, grouped by regime, plus a MIXED audit of every committed grid receipt; regeneration is byte-stable (the stamp is the newest banked run's `date_utc`, not the wall clock) | `node bench/memory/regimes.mjs` → `regimes: 20 banked run files in 10 regimes; 4 composed grids audited (mixed: 0, unverifiable citations: 2)`; a re-run on a clean tree leaves `git diff --stat bench/memory/regimes.md` EMPTY (sha256 `91338344037f7cdb…`, stable across regenerations) |
+| committed table = regenerated | `test/unit/bench-memory-regimes-committed.test.js` (task 341) | the equality above made permanent: renders the table in-process through the CLI's own pipeline (`renderRegimes()` — one function, no second renderer) and FAILS with a unified diff (first 40 lines) + the fix command the moment the committed `regimes.md` drifts from the tool; a second test renders twice and compares, and pins the stamp to the runs' newest `date_utc` (no wall clock) | `npx vitest run test/unit/bench-memory-regimes-committed.test.js` → **2 passed**, EXIT=0; with one digit planted wrong in a committed row (`0.380`→`0.381`) → **1 failed** at `@@ -24,11 +24,11 @@` showing the planted cell vs the tool's, restored → **2 passed** |
 | the composer | `bench/memory/grid.mjs` (`composeGrid`) | `--grid-from-results <dir,…>` composes the grid receipt from finished run dirs; incomparable runs refuse with exit 1 naming every differing key | `node bench/memory/run.mjs --grid-from-results bench/memory/results/2026-09-08-p1-185920,bench/memory/results/2026-09-17-p1-225526` → **exit 1**, naming `judge.judge_prompt_version`, `answerer.model`, `n`, `question_ids` (this committed two-regime pair also differs on comparability keys, so comparability names first) |
 | the regime guard | `bench/memory/grid.mjs` (`REGIME_ENFORCED_KEYS`, `findRegimeDifferences`) | additionally refuses a composition whose runs differ on `regime.answerer.url_host`, `regime.answerer.temperature`, `regime.judge.url_host`, or any platform field BOTH runs stamp — the seat move comparability cannot see (a platform-NULL run — the mem0 shape — still composes; absence is shown, never judged) | `npx vitest run test/unit/bench-memory-grid.test.js` → **80 passed** (describe `task 333 — a mixed-regime pair refuses unless allowMixedRegime`; no committed pair is comparability-clean-but-regime-split, so the fixtures in that describe are the guard's proof) |
 | `--allow-mixed-regime` | `bench/memory/run.mjs` → `composeGrid({ allowMixedRegime })` | lifts ONLY the regime guard — every comparability key stays unconditional — and the receipt then prints the regimes side by side under a bold `## MIXED REGIME` banner | the same describe: the mixed-path assertions pin both the banner and the "the runs' regimes DIFFER — composed under --allow-mixed-regime" opening line (task 333-F1), and the clean path keeps the one-regime sentence |
@@ -136,7 +137,11 @@ Every command below was run on master @ `b832052d`, 2026-11-05 (task 340):
 <!-- verified 2026-11-05 by: all four commands executed on master @ b832052d in
      the task-340 worktree; outputs quoted verbatim above. regimes.md sha256
      91338344037f7cdbae74d219e2af1c0f58fd781b14649a73d10e41f19b1ed2c9 matched
-     the value task 337's receipt recorded. -->
+     the value task 337's receipt recorded.
+     task-341 row: npx vitest run test/unit/bench-memory-regimes-committed.test.js
+     → 2 passed, EXIT=0; plant (sed 0.380→0.381 in one committed row) →
+     Test Files 1 failed (1), Tests 1 failed | 1 passed (2) with the
+     @@ -24,11 +24,11 @@ hunk; git checkout -- → 2 passed, EXIT=0, tree diff 0 lines. -->
 
 ## THE RECEIPT — the repair-class prereg (jarvis side, not this repo)
 
