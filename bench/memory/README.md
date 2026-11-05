@@ -155,17 +155,15 @@ candidates — 4 specimens → 8 fires; at n = 4 the smallest achievable two-sid
 p is 0.125, so the claim is directional by construction (pre-committed as
 such in the prereg).
 
-It lives in the jarvis checkout (a sibling repo):
-`~/Projects/jarvis/training/glm-distill/eval/receipt/repair-set-2026-11-05.PREREG.md`,
-written BEFORE any fire, with the frozen set
-(`repair-set-2026-11-05.json`, selection sha256 `24daf61d1a1d…`) beside it.
-**Nothing has fired** — as of 2026-11-05 that directory holds only the prereg
-and the frozen set. A fire run is a separate, later decision, gated by the
-house two-frontier-review rule (two frontier reviews that converge on the
-same sha) before any seat runs. The prereg text is not duplicated here —
-read the file; it is the claim of record.
-<!-- verified 2026-11-05 by: ls of that jarvis directory (2 files, no fire
-     output); facts read from the prereg itself; selection sha256 quoted from it -->
+The pre-registration (the frozen set, its selection hash and the stop rule)
+is held in the lab's private repository, written BEFORE any fire, and will be
+published beside the result. **Nothing has fired** as of 2026-11-05. A fire
+run is a separate, later decision, gated by the house two-frontier-review rule
+(two frontier reviews that converge on the same sha) before any seat runs.
+<!-- verified 2026-11-05 by the director: the prereg directory in the private
+     repo holds only the prereg and the frozen set (no fire output); no path or
+     hash from it is quoted here because the set is re-cut on a tree-stable
+     anchor and the hash moves with it -->
 
 ## Arms
 
