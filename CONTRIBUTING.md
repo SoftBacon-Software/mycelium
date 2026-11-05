@@ -125,7 +125,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 188 files across `test/unit/`,
+There's a vitest suite under `test/` — 190 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
@@ -146,6 +146,24 @@ every PR) or `test/unit/` (focused module/route coverage against a
 fresh temp DB). See `test/README.md` for layout + conventions. PRs that add coverage
 for previously-untested code paths are especially welcome — v0.1.0
 shipped with smoke coverage only.
+
+**Work receipts**: substantive changes to the memory benchmark
+(`bench/memory/`) ship with a run receipt under
+`docs/receipts/<task>/RECEIPT.md` — what changed, how it was verified,
+and the proof lines quoted. The receipts currently on the books:
+
+- `docs/receipts/F-333/RECEIPT.md` — one regime per grid: the composer
+  refuses mixed regimes, every banked run shows its stamp, and the
+  lane receipt carries the RED/GREEN pair for the guard.
+- `docs/receipts/F-337/RECEIPT.md` — review findings F1 (mixed receipt
+  opening line), F2 (one rejudge-stamp reader), F3 (receipt-table
+  drift) closed, proof lines quoted.
+- `docs/receipts/F-340/RECEIPT.md` — the bench README truth pass: 13
+  claims verified in-file, 6 corrected, the regime-machinery table
+  added.
+- `docs/receipts/F-341/RECEIPT.md` — the committed regimes table is a
+  test: byte equality with the renderer, determinism, and the
+  plant-RED/restore-GREEN pair.
 
 ## Releases
 
