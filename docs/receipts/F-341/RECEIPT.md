@@ -1,7 +1,8 @@
 # Receipt — lane F-mycelium task 341: the regimes table is a TEST
 
 Lane: F-mycelium · task 341 · branch `lane/f-mycelium-341-regimes-test`
-(worktree `~/Projects/_wt/f-mycelium-341-regimes-test`), cut from master
+(its own worktree — the lab's private checkout, named without a path),
+cut from master
 `fe05881f` (task 340's landing; the brief's floor was `b832052d`, "or
 later"). Nothing kept 337's F3 proof (`node bench/memory/regimes.mjs` →
 empty `git diff`) from silently breaking — the next banked run or a stamp
@@ -93,9 +94,8 @@ sha256 91338344037f7cdbae74d219e2af1c0f58fd781b14649a73d10e41f19b1ed2c9
 ```
 
 (340 landed 32 files / 607 tests; +1 file, +2 tests = this deliverable.)
-`node_modules` is a SYMLINK to the main checkout's
-`~/Projects/mycelium/node_modules` (this worktree has none; the same
-borrow 337 recorded). The symlink is gitignored. ESLint clean on both
+`node_modules` is a SYMLINK to the main checkout's `node_modules`
+(this worktree has none; the same borrow 337 recorded). The symlink is gitignored. ESLint clean on both
 touched sources.
 
 ## Commits

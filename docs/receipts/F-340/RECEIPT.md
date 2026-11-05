@@ -1,7 +1,8 @@
 # Receipt — lane F-mycelium task 340: bench/memory README truth pass after 333/337/335
 
-Lane: F-mycelium · task 340 · branch `lane/f-mycelium-340-readme` (worktree
-`~/Projects/_wt/f-mycelium-340-readme`), cut from master `b832052d` — the BASE
+Lane: F-mycelium · task 340 · branch `lane/f-mycelium-340-readme`
+(its own worktree — the lab's private checkout, named without a path),
+cut from master `b832052d` — the BASE
 CHECK ran first: `git log --oneline -3 master` showed 337's commits at the tip
 (`b832052d` task-337 receipt, `b15dd64c` 333-F3, `428fb701` 333-F2). Docs-only
 change: `bench/memory/README.md` is the only tracked file touched (no grading

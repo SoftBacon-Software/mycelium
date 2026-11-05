@@ -1,7 +1,8 @@
 # Receipt — lane F-mycelium task 333: every banked p1 row carries its regime stamp in one table
 
-Lane: F-mycelium · task 333 · branch `lane/f-mycelium-333-regime-table` (worktree
-`~/Projects/_wt/f-mycelium-333-regime-table`), cut from master `160dc52b`,
+Lane: F-mycelium · task 333 · branch `lane/f-mycelium-333-regime-table`
+(its own worktree — the lab's private checkout, named without a path),
+cut from master `160dc52b`,
 landed as commit **`e6173fa0`** (branch-only; not pushed, not merged — the
 director's fast-forward).
 

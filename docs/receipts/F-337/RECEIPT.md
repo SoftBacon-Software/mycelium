@@ -1,7 +1,8 @@
 # Receipt — lane F-mycelium task 337: review A's three FIX findings on 333, closed for review B
 
-Lane: F-mycelium · task 337 · branch `lane/f-mycelium-337-333-fix` (worktree
-`~/Projects/_wt/f-mycelium-337-333-fix`), cut from master `abf42f22` (333's
+Lane: F-mycelium · task 337 · branch `lane/f-mycelium-337-333-fix`
+(its own worktree — the lab's private checkout, named without a path),
+cut from master `abf42f22` (333's
 receipt commit). Findings read VERBATIM from
 `docs/reviews/F-333r.md` @ `lane/f-mycelium-334-review` (47974ef6).
 Branch-only local commits; not pushed, not merged — review B and the landing
@@ -96,7 +97,7 @@ never a clock read).
 ```
 
 (333 landed 603; +2 F2 divergence tests, +2 F3 stamp tests = 607.)
-`node_modules` is a SYMLINK to `~/Projects/_wt/f-mycelium-333-regime-table/node_modules`
+`node_modules` is a SYMLINK to the 333 worktree's `node_modules`
 (this checkout has none; the same borrow review A used — said per the brief).
 The symlink is gitignored; `git status` clean.
 
