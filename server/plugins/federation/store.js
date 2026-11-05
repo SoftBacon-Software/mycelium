@@ -28,8 +28,23 @@
 
 import crypto from 'crypto';
 import companionView from '../semantic-memory/companion-view.js';
+import { forgetDocRaw } from '../semantic-memory/db.js';
+import { QUARANTINE_FOREIGN_NETWORK } from '../../lib/memory-quarantine.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
+
+// TRUST LAYER P1.4 follow-up (#206): the re-send bounds — ONE place governs
+// what the author carries on a hello and what a hello processes. A revoke is
+// re-announced for RESEND_MAX_AGE_DAYS (an author does not chase the network
+// forever over content everyone has had seasons to drop) and at most
+// RESEND_MAX_PER_HELLO entries ride one knock (a hello is a knock, not a
+// bulk dump — the revoke door's own cadence is 30/min).
+export var REVOKE_RESEND_MAX_AGE_DAYS = 90;
+export var REVOKE_RESEND_MAX_PER_HELLO = 16;
 
 export default function createFederationStore(db) {
+  // TRUST LAYER P1.5: the revoke path is a delete path — its audit row lands
+  // in the same transaction as the deletes it describes (see revokeRows).
+  var audit = createMemoryAudit(db);
   // The migration this plugin owns (task 247 §2): provenance columns on the
   // companion row class. Idempotent — safe on every boot and every ordering
   // of plugin loads.
@@ -38,7 +53,17 @@ export default function createFederationStore(db) {
     ['sm_embeddings', 'fed_network', 'TEXT'],
     ['sm_embeddings', 'fed_home', 'TEXT'],
     ['sm_embeddings', 'fed_visit', 'TEXT'],
-    ['sm_embeddings', 'fed_sig', 'TEXT']
+    ['sm_embeddings', 'fed_sig', 'TEXT'],
+    // TRUST LAYER P1.1 (F-mycelium/265): origin/trust are SEMANTIC-MEMORY's
+    // columns (its schema.sql + db.js migration are the owners and the
+    // definition — server/lib/trust-origins.js), but THIS plugin's insert
+    // stamps them ('foreign-network' at trust 0 — the row crossed a border,
+    // the bottom of the ladder), so they must exist whoever loads first.
+    // Declaring them here too is the same guarded idiom: on a fresh DB the
+    // ALTER is the swallowed duplicate case; the definitions agree.
+    ['sm_embeddings', 'origin', 'TEXT'],
+    ['sm_embeddings', 'trust', 'INTEGER DEFAULT 0'],
+    ['sm_embeddings', 'derived_from', 'TEXT']
   ]) {
     try {
       db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + col + ' ' + def).run();
@@ -203,25 +228,64 @@ export default function createFederationStore(db) {
 
     // Insert one federated row (visited or imported). Idempotent per owner by
     // protocol id: returns { inserted: false, row } when the row already exists.
+    // TRUST LAYER P1.4: the resurrection guard — a row id the AUTHOR has
+    // revoked is refused at the door, whatever transport replays it: a visit
+    // write and a souvenir import are the two doors in, and both come through
+    // here. Two tombstone shapes fire the guard, because revocation is of the
+    // CONTENT, not of one holder's copy:
+    //   source_id = <storage id>  — this holder deleted its copy (the handler
+    //                               tombstones what it actually removed);
+    //   source_id = <protocol id> — the standing ban the revoke handler writes
+    //                               so a copy under an owner that never held it
+    //                               (a fresh import) is refused too. Storage
+    //                               ids and protocol ids are both sha256 hex
+    //                               of distinct domains — a cross-hit would be
+    //                               a hash collision, and both shapes mean the
+    //                               same thing anyway: this content id is dead
+    //                               here.
+    // The caller sees { inserted: false, revoked: true } and answers honestly.
+    // Has the author revoked this content id as far as THIS owner's door is
+    // concerned? The guard insertFedRow enforces — and the import replay path
+    // reads, so a 'replayed' verdict is never given to a dead row.
+    revokedForOwner(ownerId, protocolId) {
+      var tomb = db.prepare(
+        'SELECT id FROM sm_tombstones WHERE source_type = ? AND source_id IN (?, ?) LIMIT 1'
+      ).get('companion', this.fedRowId(ownerId, protocolId), protocolId);
+      return !!tomb;
+    },
+
+    //
+    // TRUST LAYER P1.3: EVERY row that crossed a network border lands
+    // QUARANTINED (metadata.quarantined + quarantine_reason
+    // 'foreign-network') — a visit write on the host side and an import on
+    // the home side are the same foreign-network fact, and neither is vouched
+    // for by this platform until its owner (or an admin) promotes it:
+    // POST /memory/:id/promote, or the bundle accept route for imports.
+    // The collision `candidate` flag keeps its older, narrower meaning
+    // (supersede-candidate); quarantine is the wider state every fed row
+    // now carries. server/lib/memory-quarantine.js is the one definition.
     insertFedRow(ownerId, row, opts) {
       var meta = {
         owner: ownerId,
         kind: row.kind,
         source: row.source,
         at: row.at,
-        fed_id: row.id
+        fed_id: row.id,
+        quarantined: true,
+        quarantine_reason: QUARANTINE_FOREIGN_NETWORK
       };
       if (row.key) meta.key = row.key;
       if (row.supersedes) meta.supersedes = row.supersedes;
       if (opts && opts.candidate) meta.candidate = true;
+      if (this.revokedForOwner(ownerId, row.id)) return { inserted: false, revoked: true, row: null };
       var storageId = this.fedRowId(ownerId, row.id);
       var existing = db.prepare(
         "SELECT * FROM sm_embeddings WHERE source_type = 'companion' AND source_id = ? AND chunk_index = 0"
       ).get(storageId);
       if (existing) return { inserted: false, row: existing };
       var res = db.prepare(
-        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig) ' +
-        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)"
+        'INSERT OR IGNORE INTO sm_embeddings (source_type, source_id, chunk_index, content_text, namespace, metadata, fed_agent, fed_network, fed_home, fed_visit, fed_sig, origin, trust) ' +
+        "VALUES ('companion', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'foreign-network', 0)"
       ).run(storageId, row.text, companionNamespace(ownerId), JSON.stringify(meta),
         row.agent || null, row.network || null, row.home || null, row.visit || null, row.sig || null);
       if (res.changes === 0) return { inserted: false, row: this.rowById(ownerId, row.id) };
@@ -255,6 +319,120 @@ export default function createFederationStore(db) {
         visit: row.fed_visit || null,
         sig: row.fed_sig || null
       };
+    },
+
+    // ---- revocation (TRUST LAYER P1.4) ----------------------------------------
+
+    // The storage ids this instance holds for one protocol row id, across
+    // every owner (the author owns the content; a holder keeps no claim to
+    // it). Empty when nothing here carries it.
+    storageIdsForProtocolIds(agentId, protocolIds) {
+      var out = [];
+      for (var i = 0; i < protocolIds.length; i++) {
+        var rows = db.prepare(
+          "SELECT source_id, namespace FROM sm_embeddings WHERE source_type = 'companion' AND fed_agent = ? AND json_extract(metadata, '$.fed_id') = ?"
+        ).all(agentId, protocolIds[i]);
+        for (var r of rows) out.push({ storage_id: r.source_id, namespace: r.namespace, protocol_id: protocolIds[i] });
+      }
+      return out;
+    },
+
+    // The holder-side of a verifyRevoke'd message: delete every copy this
+    // instance holds of ids the revoker AUTHORED — the stored row's fed_agent
+    // is the content's author, so a copy under any other agent's name is not
+    // the revoker's to take down — tombstone each deleted copy, and write the
+    // standing ban on the protocol id ONLY there (authorship evidenced by the
+    // copies) so a copy an owner that never held it tries to bring in later
+    // (souvenir import, replayed visit write) is refused by insertFedRow's
+    // resurrection guard. Review A M1 (267c): the ban used to land
+    // unconditionally — a met, validly-signed agent could ban FOREIGN content
+    // at a holder that cannot verify authorship, permanently refusing every
+    // later import of it. An id with no copy of the revoker's is refused
+    // instead: 'foreign' when the instance holds it under another author,
+    // 'unknown' when nothing here holds it at all. One transaction; per-row
+    // bookkeeping comes back as { revoked, unknown, foreign }.
+    revokeRows(agentId, protocolIds) {
+      var self = this;
+      var revoked = 0;
+      var unknown = [];
+      var foreign = [];
+      var txn = db.transaction(function () {
+        for (var i = 0; i < protocolIds.length; i++) {
+          var copies = self.storageIdsForProtocolIds(agentId, [protocolIds[i]]);
+          for (var c of copies) {
+            revoked += forgetDocRaw(db, 'companion', c.storage_id, { by: agentId, reason: 'federation-revoke' });
+          }
+          if (copies.length === 0) {
+            var heldByAnother = db.prepare(
+              "SELECT COUNT(*) AS c FROM sm_embeddings WHERE source_type = 'companion' AND json_extract(metadata, '$.fed_id') = ?"
+            ).get(protocolIds[i]).c;
+            if (heldByAnother > 0) foreign.push(protocolIds[i]);
+            else unknown.push(protocolIds[i]);
+            continue; // no copy of the revoker's → nothing to delete, authorship unproven → no ban
+          }
+          forgetDocRaw(db, 'companion', protocolIds[i], { by: agentId, reason: 'federation-revoke' });
+        }
+        // TRUST LAYER P1.5: ONE summary row names the whole revoke — actor,
+        // what was dead on arrival, what actually fell (#193: a delete the
+        // log cannot name never happened). Same transaction as the deletes.
+        audit.append({
+          actor: agentId,
+          action: 'delete',
+          source_type: 'companion',
+          source_id: 'revoke:' + agentId,
+          row_owner: null,
+          row_hash: contentHash({ kind: 'fed_revoke', agent: agentId, ids: protocolIds, revoked: revoked, unknown: unknown, foreign: foreign }),
+          reason: 'federation revoke: ' + revoked + ' copy(ies) across ' + protocolIds.length + ' id(s)' +
+            (foreign.length ? ', ' + foreign.length + ' foreign id(s) refused' : '')
+        });
+      });
+      txn();
+      return { revoked: revoked, unknown: unknown, foreign: foreign };
+    },
+
+    // ---- the author's outstanding revokes (TRUST LAYER P1.4 follow-up, #206) --
+
+    // The author's keep: one entry per revoked row id, recorded from an
+    // ALREADY-VERIFIED single-id revoke-v0 (the route verifies before calling,
+    // the same as revokeRows' callers do). The entry stores exactly the fields
+    // the signature covers, so the message the next hello re-sends IS the
+    // message the author signed — verifyRevoke on the far side sees a normal
+    // revoke. Re-revoking an id re-arms the entry (fresh revoked_at, fresh
+    // signature).
+    recordOutboxRevoke(rev) {
+      db.prepare(
+        'INSERT INTO fed_revoke_outbox (agent_id, row_id, home_network, reason, revoked_at, signature) VALUES (?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(agent_id, row_id) DO UPDATE SET home_network = excluded.home_network, reason = excluded.reason, ' +
+        'revoked_at = excluded.revoked_at, signature = excluded.signature, recorded_at = ' + now
+      ).run(rev.agent_id, rev.row_ids[0], rev.home_network, rev.reason || null, rev.issued_at, rev.sig);
+    },
+
+    // What one agent still carries: single-id revoke-v0 messages, oldest
+    // first, only entries within RESEND_MAX_AGE_DAYS of their signed
+    // issued_at, capped at RESEND_MAX_PER_HELLO (the same constant caps what
+    // a hello processes — one place governs both ends of the wire). The age
+    // compare is lexicographic over ISO strings, which is chronological for
+    // the toISOString shape the protocol issues; an entry whose signed
+    // issued_at is some other parseable format sorts oddly but only affects
+    // its own author's trimming — the far side re-verifies the signature and
+    // the M1 gates either way.
+    outstandingRevokes(agentId, nowMs) {
+      var cutoff = new Date(nowMs - REVOKE_RESEND_MAX_AGE_DAYS * 86400000).toISOString();
+      var rows = db.prepare(
+        'SELECT agent_id, row_id, home_network, reason, revoked_at, signature FROM fed_revoke_outbox ' +
+        'WHERE agent_id = ? AND revoked_at >= ? ORDER BY revoked_at, row_id LIMIT ?'
+      ).all(agentId, cutoff, REVOKE_RESEND_MAX_PER_HELLO);
+      return rows.map(function (e) {
+        return {
+          type: 'revoke-v0',
+          agent_id: e.agent_id,
+          home_network: e.home_network,
+          row_ids: [e.row_id],
+          reason: e.reason,
+          issued_at: e.revoked_at,
+          sig: e.signature
+        };
+      });
     },
 
     // ---- imports --------------------------------------------------------------

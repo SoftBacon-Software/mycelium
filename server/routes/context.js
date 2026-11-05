@@ -8,7 +8,7 @@ import {
   searchContextKeys, listContextKeys, getContextKey, upsertContextKey,
   deleteContextKey, bulkDeleteContextKeys, getContextHistory, getContextHistoryEntry,
   rollbackContextKey, contextKeyStats, getAllContext, getContext,
-  upsertContext, getContextKeysByIds,
+  upsertContext, getContextKeysByIds, getDB,
 } from '../db.js';
 import {
   isSecurityContextKey, isSecurityContextNamespace, validateEnforcementRulesData, invalidateEnforcementRulesCache,
@@ -17,7 +17,8 @@ import {
 export function registerContextRoutes(router, deps) {
   const {
     asyncHandler, checkAgentOrAdmin, checkAdmin, emitEvent,
-    checkProjectScope, agentCanAccessProject,
+    checkProjectScope, agentCanAccessProject, getAdminDisplayName,
+    emitEventCascade,
   } = deps;
 
   // ======== CONTEXT ========
@@ -127,23 +128,49 @@ export function registerContextRoutes(router, deps) {
     if (req.body.expires_at) opts.expires_at = req.body.expires_at;
     upsertContextKey(req.params.namespace, req.params.key, dataStr, agentId, opts);
     if (securityKey) invalidateEnforcementRulesCache();
-    emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key);
+    // TRUST LAYER P1.4: the auto-indexer's context_key_updated listener reads
+    // namespace/key/value OFF THE DATA PAYLOAD — the old emit carried none, so
+    // the handler always saw an empty value and context keys were NEVER
+    // auto-indexed from this route. The value rides truncated (the indexer
+    // caps at 2000 chars anyway) so the persisted event stays small.
+    var eventValue = typeof dataStr === 'string' ? dataStr : JSON.stringify(dataStr);
+    emitEvent('context_key_updated', agentId, req.params.namespace, agentId + ' updated context ' + req.params.namespace + ':' + req.params.key, {
+      namespace: req.params.namespace,
+      key: req.params.key,
+      value: String(eventValue || '').substring(0, 2000)
+    });
     res.json({ ok: true, namespace: req.params.namespace, key: req.params.key });
   }));
 
   // Admin-only — checkAdmin is a stricter gate than project scope (admins bypass
   // scope anyway), so no agent can reach this path cross-project. Left as-is.
   router.delete('/context/keys/:namespace/:key', asyncHandler(function (req, res) {
-    if (!checkAdmin(req, res)) return;
-    var wasSecurityKey = isSecurityContextKey(req.params.namespace, req.params.key);
-    deleteContextKey(req.params.namespace, req.params.key);
-    if (wasSecurityKey) invalidateEnforcementRulesCache();
+    var who = checkAdmin(req, res);
+    if (!who) return;
+    // TRUST LAYER P1.4 + review A M2 (267c): one transaction — a cascade
+    // failure rolls the whole delete back and 500s loud (see tasks.js). The
+    // rules-cache invalidation stays right after the delete: a rollback that
+    // leaves it invalidated only costs one re-read of a key that still exists.
+    getDB().transaction(function () {
+      var wasSecurityKey = isSecurityContextKey(req.params.namespace, req.params.key);
+      deleteContextKey(req.params.namespace, req.params.key);
+      if (wasSecurityKey) invalidateEnforcementRulesCache();
+      // A deleted key's auto-indexed memory row must follow it — the
+      // deletion-cascade listeners fire off this event (the single-key delete
+      // previously emitted NOTHING, so its row outlived the key forever).
+      // Review A B1 (267c): checkAdmin returns a boolean — record the resolved
+      // display name, not String(true).
+      emitEventCascade('context_key_deleted', '__system__', null,
+        'Admin deleted context key ' + req.params.namespace + ':' + req.params.key,
+        { namespace: req.params.namespace, key: req.params.key, deleted_by: getAdminDisplayName(req) });
+    })();
     res.json({ ok: true, deleted: req.params.namespace + ':' + req.params.key });
   }));
 
   // Bulk delete context keys by IDs (admin only — see DELETE note above)
   router.post('/context/keys/bulk-delete', asyncHandler(function (req, res) {
-    if (!checkAdmin(req, res)) return;
+    var who = checkAdmin(req, res);
+    if (!who) return;
     var ids = req.body.ids;
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ error: 'ids array is required' });
@@ -153,13 +180,26 @@ export function registerContextRoutes(router, deps) {
     }
     // A delete that takes in the rules key must drop the enforcement cache too
     // (trust layer P0) — look BEFORE deleting, while the rows still carry
-    // namespace/key.
-    var deletedSecurityKey = getContextKeysByIds(ids).some(function (t) {
-      return isSecurityContextKey(t.namespace, t.key);
-    });
-    var deleted = bulkDeleteContextKeys(ids);
-    if (deletedSecurityKey) invalidateEnforcementRulesCache();
-    emitEvent('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + deleted + ' context keys');
+    // namespace/key. TRUST LAYER P1.4: the same snapshot names the doomed keys
+    // on the event, so the deletion-cascade listeners can take their
+    // auto-indexed memory rows along.
+    // Review A M2 (267c): one transaction — a cascade failure rolls the whole
+    // bulk delete back and 500s loud (see tasks.js).
+    var deleted = getDB().transaction(function () {
+      var doomedKeys = getContextKeysByIds(ids);
+      var deletedSecurityKey = doomedKeys.some(function (t) {
+        return isSecurityContextKey(t.namespace, t.key);
+      });
+      var n = bulkDeleteContextKeys(ids);
+      if (deletedSecurityKey) invalidateEnforcementRulesCache();
+      // A deleted key's auto-indexed memory row must follow it — the same
+      // snapshot names the doomed keys on the event (P1.4).
+      emitEventCascade('context_keys_bulk_delete', 'admin', null, 'Admin bulk-deleted ' + n + ' context keys', {
+        keys: doomedKeys.map(function (t) { return { namespace: t.namespace, key: t.key }; }),
+        deleted_by: getAdminDisplayName(req) // review A B1 (267c): was String(who) → 'true'
+      });
+      return n;
+    })();
     res.json({ ok: true, deleted: deleted });
   }));
 

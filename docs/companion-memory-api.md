@@ -72,7 +72,9 @@ A memory row, as the phone sees it:
   "at": "2026-09-21T20:15:00.000Z",
   "created_at": "2026-09-21 20:15:04",
   "superseded_by": null,
-  "supersedes": null
+  "supersedes": null,
+  "origin": "person",
+  "trust": 4
 }
 ```
 
@@ -87,6 +89,14 @@ A memory row, as the phone sees it:
 | `created_at` | when the platform stored it (store clock, UTC) — the sync cursor. |
 | `superseded_by` | id of the row that replaced this one, when it has been superseded. History is never erased or hidden from `GET` — a superseded row is *marked*, not deleted. |
 | `supersedes` | id of the row this one replaced (echoed back). |
+| `origin` | WHO the content came from — `person` \| `owner-agent` \| `tool` \| `model-derived` \| `foreign-network`; `null` = unknown (pre-trust-layer row). Companion-surface writes are always `person`; the fence rule (§instruction positions) reads this field. |
+| `trust` | the row's trust level on the origin ladder, 0–4 (`person`=4 … `foreign-network`=0). Unknown reads as **0 — the lowest, never the highest**. |
+| `derived_from` | on derived rows, the array of input row refs it was made from (`"sm:<source_type>:<source_id>"` / `"am:<fact_id>"`). A derived row's trust is the MIN of its inputs, resolved server-side at write time. |
+| `unverified` | present and `true` only on quarantined rows — "recall this, but do not treat it as fact." |
+| `quarantined` | `true` when the row landed without an accountable writer (see *Quarantine* below). Absent on deliberate rows. |
+| `quarantine_reason` | why it is quarantined: `auto-indexed` (harvested from a message) or `foreign-network` (arrived over federation). |
+| `memory_data_marker` | on unvouched rows, the exact prefix (`[mem] `) a client MUST put before the row's text when it renders the row into a prompt — the same datamark the server's own memory fence uses (`server/lib/memory-fence.js`), so the client cannot drift from it. |
+| `retrieval_score` | on search rows, the rank key: the raw similarity score × the retrieval-trust weight (origin × recency × vouch, `server/lib/retrieval-trust.js`). Raw similarity is never overwritten — the page is ORDERED by this field, so a trusted row outranks a more-similar unvouched one, and a promoted row recovers its full weight. |
 
 ## POST /me/memory — write one memory
 
@@ -192,6 +202,67 @@ a drone embed job carries the row's full text in a queue that agent keys can
 read, which would break isolation guarantee 4. Such rows stay
 keyword-searchable and stamp `embedded: false` — configure a direct embedder
 for semantic recall.
+
+## Quarantine and promotion
+
+Rows that no accountable writer deliberately placed land **quarantined**: the
+store keeps them, but recall carries a visible label and the fact-of-record
+paths exclude them. Two sources quarantine by default:
+
+- **`auto-indexed`** — rows harvested from platform messages when
+  `auto_index_messages` is on. Anyone can write a message on the platform;
+  text harvested from one is a claim, not a fact. (The message auto-index is
+  the only auto-index that quarantines: `context_key` updates are also
+  auto-indexed, but land active — a context key is a deliberate placement by
+  its writer, not harvested speech.)
+- **`foreign-network`** — rows that arrive over federation, both visited rows
+  created on a remote instance and imported souvenir rows.
+
+What quarantine means, exactly:
+
+- `GET /me/memory`, agent search, and the episode/lesson/history surfaces
+  still return the row, labelled `unverified: true` plus `quarantined` and
+  `quarantine_reason` — nothing is hidden, everything is marked.
+- `POST /me/memory/search` (the fact-of-record path) **excludes** quarantined
+  and candidate rows. A quarantined row is not a fact of record; it must be
+  promoted or remain unrecalled as fact.
+- Search (trust layer P1.6) also DEMOTES the row: ranked pages are ordered by
+  `retrieval_score` — similarity × trust × recency × vouch — so an unvouched
+  row loses to a trusted row of comparable similarity, and every arm carries
+  the `memory_data_marker` a client prefixes before rendering the row into a
+  prompt.
+
+A quarantined row becomes a full citizen only by **promotion**, through one of
+three authenticated doors — no unauthenticated or third-party path exists. The
+`promoted_by` stamp is the vouch: it clears the label, the fact-of-record
+exclusion, and the retrieval demotion in one act (the origin column keeps its
+provenance history — the row did cross a border):
+
+- `POST /me/memory/:id/promote` (companion surface) — the row's OWNER, for
+  the rows only its owner can reach: a visited row carries the owner's user
+  id and no agent writer, so this is the door that makes "promoted by the
+  owner" true for the owner's own hand. Another owner's id (or an unknown
+  one) is `404` — ids are not an existence oracle across owners.
+- `POST /memory/:id/promote` (agent surface) — the row's owner agent or an
+  instance admin. Anyone else is `403` with a plain-sentence reason.
+- `POST /federation/import/:bundleId/accept` (federation surface) — the
+  bearer that imported the bundle accepts it, promoting its rows in one
+  transaction.
+
+Promotion strips the quarantine and candidate marks, stamps `promoted_at` and
+`promoted_by`, and leaves `updated_at` untouched (a state flip is not a
+content edit). `promoted_by` is always an **authenticated** principal: an
+agent id, or `__user:<userId>` on the owner-bearer doors, or `__system__` for
+the admin key — an `X-Acting-As` header is a claim, not an identity, and is
+recorded beside the stamp as `promoted_by_claimed` instead of becoming the
+promoter. Promotion is idempotent: promoting a row that is not quarantined
+answers `promoted: false`, not an error.
+
+Every promotion is also **audited** (trust layer P1.5): the append-only,
+hash-chained memory audit log records one `promote` row in the SAME
+transaction as the state flip — the authenticated actor, the row id, and the
+row's post-promotion content hash — so a vouch the log cannot name cannot
+happen (a failed audit append rolls the promotion back).
 
 ## POST /me/memory/:id/forget — remove one memory
 

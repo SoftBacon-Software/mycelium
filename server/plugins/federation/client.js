@@ -12,7 +12,7 @@
 
 import crypto from 'crypto';
 import { keyFromSeed, idForKey } from './keys.js';
-import { makeNetworkPassport, makeAgentPassport, makeRow, makeEnvelope, verifyBundle, episodeRow } from './protocol.js';
+import { makeNetworkPassport, makeAgentPassport, makeRow, makeEnvelope, verifyBundle, episodeRow, makeRevoke } from './protocol.js';
 
 // A visiting agent: its keypair, its home network's keypair, and the passport
 // the home network signed. `homeSeed`/`agentSeed` are the deterministic path
@@ -44,12 +44,18 @@ export function makeVisitor(opts) {
     networkPassport: networkPassport,
     agentPassport: agentPassport,
 
-    // HELLO: knock on a host network. Nothing but passports crosses.
-    async hello(transport) {
-      return transport.post('/federation/hello', {
+    // HELLO: knock on a host network. Nothing but passports crosses — plus,
+    // since #206, optionally this agent's outstanding revokes (opts.revokes,
+    // what GET /federation/outbox listed on its node): the far side judges
+    // each through the same gates as its revoke door, so a holder that picked
+    // up a copy of something this agent revoked is caught at the meeting.
+    async hello(transport, opts) {
+      var body = {
         network_passport: networkPassport,
         agent_passport: agentPassport
-      });
+      };
+      if (opts && opts.revokes && opts.revokes.length) body.outstanding_revokes = opts.revokes;
+      return transport.post('/federation/hello', body);
     },
 
     // VISIT: write one memory in the host's store, attributed to this agent.
@@ -65,6 +71,29 @@ export function makeVisitor(opts) {
     // SOUVENIR: leave with what the host's export policy allows.
     async requestSouvenir(transport, visitId) {
       return transport.post('/federation/visit/' + visitId + '/souvenir', envelope({}));
+    },
+
+    // REVOKE (TRUST LAYER P1.4): the author's instruction to every holder —
+    // forget these row ids. Signed with the SAME agent key that signed the
+    // rows; sent agent-signed-envelope like every other message. `reason` is
+    // optional free text for the holder's audit trail.
+    async revoke(transport, rowIds, reason) {
+      var revoke = makeRevoke(agentKey, agentId, homeId, rowIds, {
+        reason: reason || null, issued_at: new Date().toISOString()
+      });
+      return transport.post('/federation/revoke', envelope({ revoke: revoke }));
+    },
+
+    // THE AUTHOR'S KEEP (#206): record an outstanding revoke on the node this
+    // agent uses, so the next hello to every network it meets can re-announce
+    // it. One row id per entry — the outbox keeps one signed message per id.
+    // Pair with revoke(): the direct instruction goes to holders known to
+    // hold the content; the keep catches every holder that meets it later.
+    async recordRevoke(transport, rowId, reason) {
+      var revoke = makeRevoke(agentKey, agentId, homeId, [rowId], {
+        reason: reason || null, issued_at: new Date().toISOString()
+      });
+      return transport.post('/federation/outbox', envelope({ revoke: revoke }));
     },
 
     // Border check the phone runs before carrying a bundle anywhere: the same

@@ -3,9 +3,14 @@
 import createMemoryDB from './db.js';
 import { generateEmbedding } from './embeddings.js';
 import { startBootDrain } from './boot-drain.js';
+import { QUARANTINE_AUTO_INDEXED } from '../../lib/memory-quarantine.js';
+import createMemoryAudit, { contentHash } from '../../lib/memory-audit.js';
 
 export function registerHooks(core) {
   var db = createMemoryDB(core.db);
+  // TRUST LAYER P1.5: the event-driven auto-index writes are audited too —
+  // the server itself is the honest actor when no real one owns the row.
+  var audit = createMemoryAudit(core.db);
 
   // Auto-index defaults ON — set auto_index='false' (PUT /memory/config) to disable.
   // (It used to default OFF, which kept platform-native content out of the index.)
@@ -69,12 +74,42 @@ export function registerHooks(core) {
     if (existing.length > 0) {
       var joined = existing.map(function (c) { return c.content_text; }).join('');
       var allEmbedded = existing.every(function (c) { return c.embedding; });
-      if (joined === contentText && allEmbedded) return;
+      if (joined === contentText && allEmbedded) return; // nothing written, nothing to audit
     }
-    var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
-    for (var i = 0; i < chunks.length; i++) {
-      autoEmbed(sourceType, sourceId, chunks[i], i);
-    }
+    var owner = opts.written_by || null;
+    core.db.transaction(function () {
+      var chunks = db.indexDoc(sourceType, sourceId, contentText, opts);
+      // TRUST LAYER P1.1 (264d merge): the stamps the upsert actually SETTLED,
+      // read back off the stored row — a content-unchanged rewrite PRESERVES
+      // the row's existing stamps (the upsert's CASE), so hashing the intent
+      // here could pin stamps the row does not carry. Same stamp shape the
+      // routes' smRowState hashes.
+      var storedRow = db.getDocChunks(sourceType, sourceId)[0] || {};
+      audit.append({
+        // A server-internal write names the server when no real agent owns
+        // the row ('system:auto-index'); otherwise the row's owner is both.
+        actor: owner || 'system:auto-index',
+        action: 'write',
+        source_type: sourceType,
+        source_id: sourceId,
+        row_owner: owner,
+        row_hash: contentHash({
+          kind: 'sm_row',
+          content: contentText,
+          namespace: opts.namespace || null,
+          metadata: opts.metadata || {},
+          written_by: owner,
+          superseded_by: null,
+          origin: storedRow.origin || null,
+          trust: (storedRow.trust == null) ? null : Number(storedRow.trust),
+          derived_from: storedRow.derived_from || null
+        }),
+        reason: 'auto-index ' + sourceType + ':' + sourceId
+      });
+      for (var i = 0; i < chunks.length; i++) {
+        autoEmbed(sourceType, sourceId, chunks[i], i);
+      }
+    })();
   }
 
   // Auto-index context key updates
@@ -137,7 +172,13 @@ export function registerHooks(core) {
           project_id: row.project_id,
           msg_type: row.msg_type,
           auto_indexed: true,
-          candidate: true // auto-indexed speech: a candidate, never a fact of record
+          candidate: true, // auto-indexed speech: a candidate, never a fact of record
+          // TRUST LAYER P1.3: quarantined by default — the platform did not
+          // vouch for this text, a speaker said it. Recalled labelled
+          // unverified; promoted by the owner or an admin
+          // (POST /memory/:id/promote). server/lib/memory-quarantine.js.
+          quarantined: true,
+          quarantine_reason: QUARANTINE_AUTO_INDEXED
         },
         written_by: eventOwner(row.from_agent), // the SENDER owns the row
         force_written_by: true
@@ -384,6 +425,90 @@ export function registerHooks(core) {
     } catch (e) {
       console.error('[semantic-memory] auto-index plan_step_completed failed:', e.message);
     }
+  });
+
+  // ---- TRUST LAYER P1.4: SOURCE CASCADE --------------------------------------
+  // Deleting a source entity deletes the memory rows that came from it.
+  // Deliberately NOT gated on isAutoIndexEnabled(): a row indexed while
+  // auto-indexing was on must be forgotten even if the flag was flipped off
+  // since — deletion propagation does not depend on the index on-ramp's
+  // current setting. forgetDoc tombstones what it removes, so the audit trail
+  // carries id + when + the AUTHENTICATED actor the core route put on the
+  // event + why ('source-deleted'); the plan leg takes its plan_step rows
+  // (metadata.plan_id) with it.
+  function forgetSource(sourceType, sourceId, by) {
+    try {
+      // P1.5: the cascade and its audit row are ONE transaction — the plugin
+      // deletes and then says what it deleted, or neither happens. ONE summary
+      // row names the source and the count (the tombstones carry the per-row
+      // record); the forgetDoc internals nest as savepoints.
+      var res;
+      core.db.transaction(function () {
+        res = db.forgetDoc(sourceType, String(sourceId), { by: by || null, reason: 'source-deleted' });
+        if (res && res.removed > 0) {
+          audit.append({
+            actor: by || 'system:source-cascade',
+            action: 'delete',
+            source_type: sourceType,
+            source_id: String(sourceId),
+            row_owner: null,
+            row_hash: contentHash({ kind: 'sm_source_cascade', source_type: sourceType, source_id: String(sourceId), removed: res.removed, derived: res.derived || 0 }),
+            reason: 'source-deleted cascade: ' + res.removed + ' index row(s)' + (res.derived ? ' + ' + res.derived + ' derived' : '')
+          });
+        }
+      })();
+      if (res && res.removed > 0) {
+        console.log('[semantic-memory] source cascade ' + sourceType + ':' + sourceId + ' removed ' + res.removed + ' index row(s)' + (res.derived ? ' + ' + res.derived + ' plan_step row(s)' : ''));
+      }
+    } catch (e) {
+      console.error('[semantic-memory] source cascade ' + sourceType + ':' + sourceId + ' failed:', e.message);
+      // Review A M2 (267c): the deletion-cascade failure is not swallowed here —
+      // emitEventCascade collects it and the delete route fails LOUD (500, whole
+      // transaction rolled back), the same law the direct forget routes follow.
+      throw e;
+    }
+  }
+
+  core.onEvent('task_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.task_id == null) return;
+      forgetSource('task', data.task_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] task_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('concept_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.concept_id == null) return;
+      forgetSource('concept', data.concept_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] concept_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('plan_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (data.plan_id == null) return;
+      forgetSource('plan', data.plan_id, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] plan_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('context_key_deleted', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      if (!data.namespace || !data.key) return;
+      forgetSource('context_key', data.namespace + ':' + data.key, data.deleted_by);
+    } catch (e) { console.error('[semantic-memory] context_key_deleted hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
+  });
+
+  core.onEvent('context_keys_bulk_delete', function (eventData) {
+    try {
+      var data = parseEventData(eventData);
+      var keys = Array.isArray(data.keys) ? data.keys : [];
+      for (var k of keys) {
+        if (k && k.namespace && k.key) forgetSource('context_key', k.namespace + ':' + k.key, data.deleted_by);
+      }
+    } catch (e) { console.error('[semantic-memory] context_keys_bulk_delete hook error:', e.message); throw e; } // review A M2 (267c): the delete route fails loud
   });
 
   // Task 219 (2026-09-18): a restart forgets the in-memory embed queue, and

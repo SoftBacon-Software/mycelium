@@ -196,3 +196,32 @@ describe('P0.2 the six memory routes answer 429 one past their ceiling', () => {
         request(base).post('/api/mycelium/memory/backfill-embeddings?limit=1').set(agent))();
     }, 60000);
 });
+
+// TRUST LAYER P1.4 follow-up (#206): the author's outbox record door rides
+// the revoke door's cadence (30/min, one message per forgotten row). The
+// fill drives the SHIPPED client's recordRevoke — a fresh envelope (fresh
+// nonce) every call, so the fill proves the bucket, not an envelope-replay
+// 401. The hello re-send leg needs no proof of its own: it rides hello's
+// own 30/min limiter, an in-handler bucket behind that ceiling could never
+// fire, and the N-entries-per-knock cap bounds the work per knock.
+describe('P1.4+ the federation outbox record door answers 429 one past its ceiling', () => {
+  it('POST /federation/outbox holds 30/min', async () => {
+    const { makeVisitor } = await import('../../server/plugins/federation/client.js');
+    const visitor = makeVisitor({
+      homeSeed: crypto.createHash('sha256').update('rl-outbox-home').digest('hex'),
+      agentSeed: crypto.createHash('sha256').update('rl-outbox-agent').digest('hex'),
+      homeName: 'rl-outbox-phone', agentName: 'Qurio-rl-outbox'
+    });
+    const transportFor = (base) => ({ post: async (path, body) => {
+      const r = await request(base).post('/api/mycelium' + path).send(body);
+      return { status: r.status, body: r.body };
+    } });
+    // One knock — the outbox keeps revokes for agents this network has met.
+    const knock = await request(app).post('/api/mycelium/federation/hello').send({
+      network_passport: visitor.networkPassport, agent_passport: visitor.agentPassport
+    });
+    expect(knock.status).toBe(200);
+    await expectCeiling('federation/outbox', 30, (base) => () =>
+      visitor.recordRevoke(transportFor(base), 'sha256-rl-outbox-ghost', 'rate limit probe'))();
+  }, 60000);
+});

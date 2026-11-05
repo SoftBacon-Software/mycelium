@@ -206,6 +206,38 @@ No collision ⇒ the row imports as a live row carrying its receipt.
 imported) answers `replayed` per row and writes nothing new — content
 addressing makes the second arrival a no-op.
 
+### 2.8 REVOKE (author instructs holders; trust layer P1.4, #205/#206)
+
+Not one of the five v0 messages — added later by the trust layer. The author
+of a row can order every holder to forget it:
+
+```json
+{ "type": "revoke-v0", "agent_id": "<base32>", "home_network": "<base32>",
+  "row_ids": ["<content id>", …], "reason": "free text | null",
+  "issued_at": "<ISO-8601>", "sig": "<agent key over cjson(all fields above)>" }
+```
+
+Signed with the SAME agent key that signed the rows. A holder judges the
+message, then acts only on what it can evidence: each `row_id` names content
+this holder holds under that author (`fed_agent` + protocol id) — those rows
+are deleted and the ids tombstoned as a **standing ban** (re-arrivals are
+refused: `revoked` on the import door, `410` on the visit door). An id the
+holder has never seen (`unknown`) or holds under a DIFFERENT author
+(`foreign`) writes NOTHING — the M1 trade-off: a holder never bans content it
+cannot evidence.
+
+**The catch-up (the author's keep, #206).** `unknown` means a revoke can
+miss a copy that arrives later from a third holder. So the author KEEPS its
+outstanding revokes: `POST /federation/outbox` records one signed message per
+row id on the node the agent uses (`fed_revoke_outbox`), and the author's
+next HELLO to every network it met carries them in `outstanding_revokes` —
+signed exactly as the direct revoke, judged by the holder through the same
+gates, and acted on ONLY for the knocking agent (a hello never revokes on
+behalf of a third party). Bounds, in one place (`store.js`): revokes ride the
+outbox for 90 days, at most 16 per hello; the record door is rate-limited
+like the revoke door, and the re-send leg rides hello's own limiter. A plain
+hello (no `outstanding_revokes`) answers exactly as before.
+
 ## 3. Transport
 
 The five messages are JSON, signed, and transport-agnostic: Multipeer/
@@ -234,6 +266,9 @@ envelope is transport hardening; the §2 signatures are the protocol.
 | `POST /federation/visit/:visitId/souvenir` | visitor leaves | agent-signed envelope |
 | `POST /federation/visit/:visitId/end` | host operator kills an in-flight visit | admin |
 | `POST /federation/import` | home imports | studio bearer (rows land in their scope; rate-limited) |
+| `POST /federation/revoke` | author orders holders to forget | agent-signed envelope (rate-limited) |
+| `POST /federation/outbox` | author records an outstanding revoke | agent-signed envelope (rate-limited) |
+| `GET /federation/outbox` | the author's node lists its outstanding revokes | admin |
 | `GET/POST /federation/network` | instance identity + policy | admin |
 
 Default policy: **no visitors** — HELLO reports it, GRANT refuses to issue,
@@ -241,7 +276,9 @@ visit writes 403 until an operator turns it on. Two levers revoke what is
 already in flight: `POST /visit/:id/end` (the kill switch — writes AND
 souvenirs refuse) and a re-key (`POST /network` with a new `seed_hex`, or
 re-pinning `FEDERATION_NETWORK_SEED`) — every grant issued under the previous
-network key is refused at the door.
+network key is refused at the door. A third lever is the author's own
+instruction — §2.8's REVOKE, now backed by the outbox re-send so it also
+catches copies that arrive after the instruction.
 
 Visited/imported rows land in the companion store (`sm_embeddings`,
 `source_type 'companion'`) with provenance columns `fed_agent, fed_network,

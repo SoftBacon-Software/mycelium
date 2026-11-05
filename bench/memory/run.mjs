@@ -26,6 +26,7 @@ import { createFactsStore, FACTS_FILE } from './facts_store.mjs';
 import { createHash } from 'node:crypto';
 import { startZepSidecar, removeZepStore } from './arms/arm_zep.mjs';
 import { startLettaSidecar, purgeLettaScope } from './arms/arm_letta.mjs';
+import { startMempalaceSidecar, removeMempalaceStore } from './arms/arm_mempalace.mjs';
 import { extractionThinkingByArm, assertNoExtractionThinkingMix } from './ingestion.mjs';
 import { loadDatasetTypes } from './per_type.mjs';
 import { buildRegime, gitState } from './regime.mjs';
@@ -435,6 +436,7 @@ async function main() {
   // platform call.
   const timelineReadPolicy = resolveTimelineReadPolicy(args['read-policy']);
   const wantsMem0Sidecar = arms.includes('mem0') || arms.includes('mem0-raw');
+  const wantsMempalaceSidecar = arms.includes('mempalace');
 
   const split = await loadSplit(splitName);
   let items = selectItems(split.items, n);
@@ -603,6 +605,46 @@ async function main() {
       lettaHandle.stateFile = again.stateFile;
       lettaHandle.stop = () => again.manager.stop();
       console.error(`[run] letta sidecar RESTARTED: pid ${again.manager.pid}, agent reattached from ${again.stateFile}`);
+      return { request: (p, b) => again.manager.request(p, b), health: again.health };
+    };
+  }
+
+  // mempalace CONTROL arm (task 263): sidecar lifecycle as mem0/zep — the
+  // store is a LOCAL per-run palace dir, so a fresh run wipes it, a restart
+  // keeps it, and teardown stops the sidecar then purges the dir. Its
+  // write/search paths are LLM-free (raw mode), so unlike mem0/zep/letta this
+  // arm contributes no LLM endpoint to the run.
+  let mempalaceHandle = null;
+  if (wantsMempalaceSidecar) {
+    mempalaceHandle = await startMempalaceSidecar({
+      runId,
+      log: (m) => console.error(`[mempalace] ${m}`),
+    });
+    console.error(
+      `[run] mempalace sidecar: v${mempalaceHandle.health.mempalace_version} ` +
+        `(pin ${mempalaceHandle.health.mempalace_version_under_test}, match: ${mempalaceHandle.health.mempalace_version_matches}), ` +
+        `embedder ${mempalaceHandle.health.embedder.model}@${mempalaceHandle.health.embedder.dims}, palace ${mempalaceHandle.palacePath}`
+    );
+    // Mid-run sidecar death: the arm only calls this when a request died with
+    // ECONNREFUSED (nothing committed — a replay cannot duplicate drawers).
+    // Same runId → same palace dir, NOT wiped; the handle is swapped so the
+    // finally-block stops the NEW sidecar.
+    mempalaceHandle.restart = async () => {
+      try {
+        await mempalaceHandle.stop();
+      } catch (e) {
+        console.error(`[run] mempalace old sidecar stop problem (continuing with restart): ${e.message}`);
+      }
+      const again = await startMempalaceSidecar({
+        runId,
+        fresh: false,
+        log: (m) => console.error(`[mempalace] ${m}`),
+      });
+      mempalaceHandle.manager = again.manager;
+      mempalaceHandle.health = again.health;
+      mempalaceHandle.storePath = again.storePath;
+      mempalaceHandle.stop = () => again.manager.stop();
+      console.error(`[run] mempalace sidecar RESTARTED: pid ${again.manager.pid}, palace preserved (${again.storePath})`);
       return { request: (p, b) => again.manager.request(p, b), health: again.health };
     };
   }
@@ -938,6 +980,14 @@ async function main() {
           sidecar: 'bench/memory/arms/letta_sidecar.py (spawned per run, 127.0.0.1 only, telemetry off)',
         }
       : null,
+    mempalace: mempalaceHandle
+      ? {
+          ...mempalaceHandle.health,
+          retrieval_budget: budget,
+          scope: mempalaceHandle.scope,
+          sidecar: 'bench/memory/arms/mempalace_sidecar.py (spawned per run, 127.0.0.1 only, offline — pre-warmed embedder)',
+        }
+      : null,
     write: maxSessions ? { max_sessions_per_question: maxSessions } : null,
     n: items.length,
     notes: [
@@ -964,6 +1014,9 @@ async function main() {
         : null,
       arms.includes('letta')
         ? `arms this run: ${arms.join(', ')}; letta = OSS letta server (formerly MemGPT) archival memory via the official letta-client SDK, one archival passage per haystack session, its agent LLM and embedder matched to the incumbent arms' answerer/embedder; the server EXTERNAL (PostgreSQL+pgvector is its storage requirement — no embedded store exists in 0.16.8, see letta-requirements.txt)`
+        : null,
+      arms.includes('mempalace')
+        ? `arms this run: ${arms.join(', ')}; mempalace = the CONTROL arm (task 263): OSS MemPalace at the source commit declaring v3.12.0 (unreleased upstream — pinned by commit + tarball sha256 in setup_mempalace_venv.sh), driven through the product's OWN ingest+search API (mcp_server tool_add_drawer / tool_search — never raw chromadb, which is the flaw found in MemPalace's own benchmark scripts), RAW mode (verbatim drawers, no LLM in the write path), its DEFAULT MiniLM embedder (384-dim — as-shipped, deliberately not the incumbent arms' nomic-embed-text/768; the regime stamps the difference), NO LLM rerank, NO AAAK, local ChromaDB palace per run, run time offline`
         : null,
       arms.length === 2 && arms.includes('none') && arms.includes('mycelium')
         ? 'two arms only: none (no memory) and mycelium (platform memory API); competitor arms are task 165+'
@@ -1110,7 +1163,9 @@ async function main() {
             ? () => zepHandle.restart()
             : lettaHandle
               ? () => lettaHandle.restart()
-              : null,
+              : mempalaceHandle
+                ? () => mempalaceHandle.restart()
+                : null,
         mem0: mem0Handle
           ? { sidecar: mem0Handle.manager, mem0Version: mem0Handle.health.mem0_version, restart: () => mem0Handle.restart() }
           : null,
@@ -1123,6 +1178,13 @@ async function main() {
               lettaVersion: lettaHandle.health.letta_version,
               lettaClientVersion: lettaHandle.health.letta_client_version,
               restart: () => lettaHandle.restart(),
+            }
+          : null,
+        mempalace: mempalaceHandle
+          ? {
+              sidecar: mempalaceHandle.manager,
+              mempalaceVersion: mempalaceHandle.health.mempalace_version,
+              restart: () => mempalaceHandle.restart(),
             }
           : null,
       },
@@ -1205,6 +1267,7 @@ async function main() {
       // letta keeps no local store — the run's agent on the EXTERNAL letta
       // server is the store; teardown deletes it (recorded as kept under --keep)
       ...(lettaHandle ? { letta_agent: { external: true, server: lettaHandle.health.server.url_host, deleted: !args.keep } } : {}),
+      ...(mempalaceHandle ? { mempalace_store: { path: mempalaceHandle.storePath, local_only: true, purged: !args.keep } } : {}),
       ...(maxSessions ? { max_sessions_per_question: maxSessions } : {}),
       commands: [
         `node bench/memory/run.mjs --split ${splitName} --arms ${arms.join(',')} --n ${n}${maxSessions ? ` --max-sessions ${maxSessions}` : ''} --receipt${args.keep ? ' --keep' : ''}`,
@@ -1313,6 +1376,22 @@ async function main() {
         await lettaHandle.stop();
       } catch (e) {
         console.error(`[run] letta sidecar teardown problem: ${e.message}`);
+      }
+    }
+    if (mempalaceHandle) {
+      // stop FIRST, purge SECOND: the palace dir backs a live chromadb client
+      // inside the sidecar — removing it under the process would strand the
+      // client's caches (the counterpart of the letta purge order above).
+      try {
+        await mempalaceHandle.stop();
+      } catch (e) {
+        console.error(`[run] mempalace sidecar teardown problem: ${e.message}`);
+      }
+      if (!args.keep) {
+        removeMempalaceStore(mempalaceHandle.storePath);
+        console.error(`[run] mempalace store purged: ${mempalaceHandle.storePath}`);
+      } else {
+        console.error(`[run] mempalace store KEPT (--keep): ${mempalaceHandle.storePath}`);
       }
     }
   }

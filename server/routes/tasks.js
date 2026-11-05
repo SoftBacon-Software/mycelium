@@ -19,7 +19,7 @@ export function registerTaskRoutes(router, deps) {
     agentWriteLimiter, escapeHtml, parseLimit, parseIntParam, validateEnum,
     emitEvent,
     validateStringLength, checkProjectScope, warnSuspectTransition,
-    dispatchWorkToIdleAgents, pageEnvelope,
+    dispatchWorkToIdleAgents, pageEnvelope, getAdminDisplayName, emitEventCascade,
     MAX_TITLE, MAX_DESCRIPTION, TASK_STATUSES, TASK_PRIORITIES,
   } = deps;
 
@@ -315,12 +315,29 @@ export function registerTaskRoutes(router, deps) {
   }));
 
   router.delete('/tasks/:id', asyncHandler(function (req, res) {
-    if (!checkAdmin(req, res)) return;
+    var who = checkAdmin(req, res);
+    if (!who) return;
     var id = parseIntParam(req.params.id);
     var task = getTask(id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    deleteTask(id);
-    emitEvent('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title);
+    // TRUST LAYER P1.4 + review A M2 (267c): the delete and its cascade are ONE
+    // transaction. emitEventCascade throws when a cascade hook fails (the
+    // plugins' deletion listeners rethrow instead of swallowing now), and the
+    // rollback takes the source row, the event row and the half-done cascade
+    // back together — a delete whose memory did not follow it never happened,
+    // and the caller hears the same loud 500 the direct forget routes give.
+    getDB().transaction(function () {
+      deleteTask(id);
+      // The data payload carries the id and the AUTHENTICATED deleter — the
+      // deletion-cascade listeners (semantic-memory's auto-indexed row,
+      // auto-memory's extracted facts) key off it, and the tombstones they
+      // write record who the platform authenticated, not a body claim.
+      // Review A B1 (267c): checkAdmin returns a boolean, so String(who) landed
+      // 'true' on the tombstones — resolve the display name the way every other
+      // admin path does (studio identity, else X-Acting-As, else '__system__').
+      emitEventCascade('task_deleted', '__system__', task.project_id, 'Task #' + id + ' deleted: ' + task.title,
+        { task_id: id, deleted_by: getAdminDisplayName(req) });
+    })();
     res.json({ ok: true, id: id });
   }));
 

@@ -5,7 +5,8 @@ SKELETON: two arms (`none`, `mycelium`) on LongMemEval-S. Task 169 landed
 the first competitor arm (`mem0` — Mem0 OSS via a local sidecar); task 180
 the second (`zep` — Zep's OSS graphiti on its embedded kuzu store); task 181
 the third (`letta` — the OSS Letta server's archival memory via its official
-client SDK).
+client SDK); task 263 the fourth (`mempalace` — OSS MemPalace, the CONTROL
+arm: the product driven through its own ingest + search API, as-shipped).
 
 Program: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md` §P1.
 
@@ -25,7 +26,7 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #   --answer-url URL        OpenAI-compatible answer endpoint (default: BOX_3090_URL from substrate.conf + /v1)
 #   --answer-model ID       (default qwen3.8:27b)
 #   --arms LIST             subset of none,mycelium,mycelium-extract,mycelium-timeline,
-#                           mem0,mem0-raw,zep,letta (default none,mycelium)
+#                           mem0,mem0-raw,zep,letta,mempalace (default none,mycelium)
 #   --judge-url URL         (default http://localhost:8780/v1 — the served XS seat)
 #   --judge-model ID        (default Laguna-XS-2.1-mlx-oq4e-agentic-ours)
 #   --handlabels FILE       judge-agreement vs a hand-scored set (see below)
@@ -199,6 +200,21 @@ An arm exposes `write(sessionTurns, {questionId})` and `answer(question) → {te
   SAME RAG prompt the other arms use, same answer model. Scope = one Letta
   agent per run (created lazily, reattached across sidecar restarts via a
   state file, deleted at teardown unless `--keep`).
+- **`mempalace`** (task 263) — OSS MemPalace, the **CONTROL arm**: the
+  product driven through its OWN ingest + search API (`mcp_server`
+  `tool_add_drawer` / `tool_search` — never raw chromadb, which is the flaw
+  the 2026-10-29 analysis found in MemPalace's own LongMemEval scripts) via
+  a local Python sidecar (`arms/mempalace_sidecar.py`, see below). write:
+  ONE verbatim drawer per haystack session (RAW mode — the product chunks
+  it at its configured `chunk_size`; no LLM anywhere in the write path).
+  answer: `tool_search` at the retrieval budget (the product's as-shipped
+  vector candidates + its own hybrid re-rank; no LLM rerank), joined into
+  the SAME RAG prompt the other arms use, same answer model. Deliberately
+  AS-SHIPPED embedder (MiniLM, 384-dim — not the incumbent arms'
+  nomic-embed-text/768; the regime stamps the difference); NO AAAK. Scope =
+  one ChromaDB palace dir per run (fresh store, purged at teardown unless
+  `--keep`), `user_id = bench-p1-<runId>` — the same granularity as the
+  mem0 `user_id` / zep `group_id`.
 - **`mem0-raw`** (task 182) — the Mem0 RAW-ingestion control. Identical to
   `mem0` except `Memory.add(..., infer=False)` (mem0ai 2.0.20,
   `mem0/memory/main.py:770`; the raw path `_add_to_vector_store` at
@@ -482,6 +498,47 @@ two-stage stop protocol, the reattach behaviour; 127.0.0.1 only):
 bench/memory/arms/.letta-venv/bin/python -m unittest -v bench/memory/arms/test_letta_sidecar.py
 ```
 
+## The mempalace arm (sidecar setup + the pin)
+
+MemPalace is Python; the arms are JavaScript. `arm_mempalace.mjs` spawns
+`arms/mempalace_sidecar.py` (stdlib `http.server`, 127.0.0.1 only), learns
+its ephemeral port from a `MEMPALACE_SIDECAR_READY <port>` stderr line, and
+stops it gating on BOTH child exit AND the port actually being freed. The
+sidecar drives MemPalace's OWN mcp_server tools (`tool_add_drawer` /
+`tool_search`) against a per-run local ChromaDB palace — it never touches
+chromadb directly. One-time setup (the venv is gitignored; run time is
+offline — the embedder is pre-warmed into it):
+
+```bash
+bash bench/memory/arms/setup_mempalace_venv.sh
+```
+
+⚠ **THE PIN — v3.12.0 does not exist as a release.** PyPI tops at 3.11.0 and
+upstream has no `v3.12.0` git tag; the version string lives only in the
+develop tip's `pyproject.toml`. The setup script therefore pins the SOURCE
+COMMIT `84582fb055a6429261f9c779da86c0561ec80adc` and verifies the tarball
+sha256 `fabe6c765c16fb43b300ddb9f17de44c9f2f3dc6a19e885514fe1659504d762d`
+before installing — the brief's "hash of the wheel or commit" option. The
+sidecar stamps `mempalace_version` (what the installed package reports) +
+`mempalace_version_matches` rather than refusing, so a deliberately
+re-pointed bench still says truthfully which version ran.
+
+Config the director pinned for this arm (stamped in `regime.mempalace`):
+RAW mode (verbatim drawers — no LLM in the write path; the sidecar has no
+LLM endpoint at all), no LLM rerank (`tool_search`'s default vector
+candidates + the product's own non-LLM hybrid re-rank), no AAAK, embedder =
+the product default MiniLM (all-MiniLM-L6-v2, 384-dim ONNX) — as-shipped on
+purpose: the difference from the incumbent arms' nomic-embed-text/768 is
+part of what a control arm measures. Bench data only — never customer text.
+
+The sidecar's unittest (request/response shapes, the REAL `MempalaceRuntime`
+mapping over fake product envelopes, the two-stage stop protocol; 127.0.0.1
+only, no mempalace import):
+
+```bash
+bench/memory/.venvs/mempalace/bin/python -m unittest -v bench/memory/arms/test_mempalace_sidecar.py
+```
+
 ## Judge + validation
 
 The judge is a LOCAL model (default: the served XS seat at oMLX :8780 — a
@@ -600,8 +657,8 @@ split.mjs      registry + sha256 gate + selection
 receipt.mjs    markdown receipt
 platform.mjs   Mycelium client (URL from env/conf, never literal)
 arms/          arm_none, arm_mycelium, arm_mycelium_extract, arm_mycelium_timeline,
-               arm_mem0, arm_mem0_raw, arm_zep, arm_letta, registry
-               (+ mem0/zep/letta_sidecar.py, requirements + per-arm venvs, gitignored)
+               arm_mem0, arm_mem0_raw, arm_zep, arm_letta, arm_mempalace, registry
+               (+ mem0/zep/letta/mempalace_sidecar.py, requirements + per-arm venvs, gitignored)
 tools/         cleanup-run.mjs — remove a crashed run's rows from the platform
 data/          gitignored corpora      results/     committed run evidence
 receipts/      committed receipts      handlabels/  committed hand-scored sets

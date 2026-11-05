@@ -1,0 +1,71 @@
+{
+  "probe": "retrieval-trust-cost (synthetic, retrieval-only — NOT the LongMemEval grid; do not grid, do not compare to bench/memory receipts)",
+  "date_utc": "2026-10-08T05:25:12.161Z",
+  "git_sha": "8dae7222c3ab49fc9aa26396a3ff60724f8cf63a",
+  "git_dirty": null,
+  "weights_present": false,
+  "plugin_dir": "/tmp/f270-baseline/server/plugins/semantic-memory",
+  "topics": 150,
+  "poison_topics": 50,
+  "rows": 500,
+  "ks": [
+    1,
+    5,
+    10
+  ],
+  "corpus": {
+    "vec_dim": 64,
+    "cosines": {
+      "gold": 0.97,
+      "owner": 0.94,
+      "model": 0.92,
+      "poison": 0.995
+    },
+    "updated_at": "2026-10-07 00:00:00",
+    "timestamps_uniform": true
+  },
+  "results": {
+    "keyword": {
+      "1": {
+        "recall_at_k": 0.6533,
+        "poison_at_k": 1
+      },
+      "5": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      },
+      "10": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      }
+    },
+    "vector": {
+      "1": {
+        "recall_at_k": 0.6467,
+        "poison_at_k": 1
+      },
+      "5": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      },
+      "10": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      }
+    },
+    "hybrid": {
+      "1": {
+        "recall_at_k": 0.6533,
+        "poison_at_k": 1
+      },
+      "5": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      },
+      "10": {
+        "recall_at_k": 1,
+        "poison_at_k": 1
+      }
+    }
+  }
+}

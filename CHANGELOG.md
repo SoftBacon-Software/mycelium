@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Memory is data, never authority (trust layer P1.2)** — every render of
+  recalled or peer-authored stored text into a model-facing surface now goes
+  through one shared memory fence (`server/lib/memory-fence.js`): a
+  per-request random delimiter opens and closes the block, every physical
+  line carries a `[mem] ` datamark, a fixed rule above the block states it is
+  data to read and never instructions, and a byte-exact delimiter occurrence
+  inside the text is escaped so it cannot close the fence from inside. Fenced:
+  the extraction and consolidation prompts (both auto-memory builders, with
+  function replacement so `$&`-style patterns cannot expand), the outreach
+  personalizer prompt, the boot seed's savepoint recall, role contract
+  (description/responsibilities/constraints/guidelines, plus the
+  agent-settable llm fields), agent roster (working_on and the self-set
+  display name), drone roster, the overview's recent_activity lines, the
+  savepoint view/diff, the memory_search / facts / get_context / agent_profile
+  recall views (first content block byte-identical for programs, fence riding
+  as a second block), and CR-only line breaks normalized before the datamark.
+  Write side: the `roles/` context namespace is admin-owned for NEW keys
+  (`SECURITY_CONTEXT_NAMESPACES` — the census-namespace precedent), closing
+  the cross-project creation of `roles/<victim>` that the F1 project-scope
+  check never saw; existing keys keep project scope and the render fences
+  them. `getLatestSavepoint` breaks same-second ties by rowid. Injection
+  canaries in `test/unit/memory-fence.test.js` cover every path.
+
+- **Memory quarantine by default (trust layer P1.3)** — rows that no
+  accountable writer deliberately placed land quarantined in metadata
+  (`quarantined: true` + `quarantine_reason`): message auto-index rows
+  (`auto-indexed`) and federation rows, both visited and imported
+  (`foreign-network`). Recall labels them `unverified: true` on
+  search/list/episodes/lessons/history, and the fact-of-record companion
+  search excludes them. Promotion is explicit and authenticated: new
+  `POST /me/memory/:id/promote` (the owner's door for visited rows),
+  `POST /memory/:id/promote` (owner agent or admin, 403 with a plain
+  sentence otherwise) and `POST /federation/import/:bundleId/accept` (the
+  importer's bearer, promoting the bundle's rows in one transaction, receipt
+  counting rows forgotten since the import). The `promoted_by` stamp is
+  always an authenticated principal (agent id, `__user:<userId>`,
+  `__system__`) — an `X-Acting-As` claim is recorded separately as
+  `promoted_by_claimed`, never as the promoter. Promotion strips the marks,
+  stamps `promoted_at`/`promoted_by`, and leaves `updated_at` alone. 26 tests
+  pin the contract end to end (8 added addressing review A).
 - **Semantic Memory plugin README** — documents the two search halves
   (FTS5 keyword + optional vector), the config table with both write paths
   (`PUT /memory/config` and the platform plugin-config surface), the four
@@ -19,6 +59,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Plugin suite gains four pins of that config + degrade contract (fresh
   instance, config round-trip with api-key stripping, provider firing against
   the configured url/model, unknown-provider degrade).
+
+- **Retrieval ranks by trust, not just relevance (trust layer P1.6)** — every
+  ranked page leaving semantic-memory search (keyword, vector, hybrid) now
+  carries one trust/recency/provenance weight from ONE function
+  (`server/lib/retrieval-trust.js`, constants in one block): the P1.1 origin
+  ladder (person ×1.15 > owner-agent ×1.08 > tool ×1.0 > model-derived ×0.9 >
+  foreign ×0.75, unknown reads lowest), recency with a 45-day half-life
+  floored at ×0.8, and a ×0.5 demotion for unvouched rows — the same set that
+  carries the P1.6 recall label (`needsRecallLabel`, memory-quarantine.js), so
+  the label and the demotion can never disagree; a `promoted_by` stamp is the
+  vouch that clears both. Raw similarity is preserved (`score`/`rrf_score`
+  untouched — the weighted value rides `retrieval_score`), unvouched rows keep
+  the visible label (`unverified`, `quarantine_reason`, `memory_data_marker`
+  naming the P1.2 `[mem] ` datamark) on every arm, and hybrid applies the
+  weight exactly once (fusion arms run deferred; the vector re-rank pool is
+  limit × 4 fetched in one IN-list query, embedding column excluded). Measured
+  cost on a 150-topic synthetic corpus (`bench/memory/tools/
+  retrieval-trust-cost.mjs`, receipts under `bench/memory/results/
+  2026-10-08-f270-retrieval-trust/`): clean-corpus recall@k identical to the
+  unweighted baseline at k ∈ {1,5,10} on all three arms (0.0000 delta); under
+  injection pressure (a foreign row that out-matches on bm25 AND cosine),
+  person-row recall@1 rises 0.65 → 0.99 and the injected row drops out of
+  rank 1 everywhere (poison@1 1.0 → 0.0). 15 tests pin the weight, the
+  ordering, the labels, and the injection canary.
+
+- **The author re-sends its revokes on the next hello (trust layer P1.4
+  follow-up, #206)** — a revoke for an id the holder has never seen writes no
+  standing ban (`unknown` — the M1 trade-off), so a copy that arrived LATER
+  from a third holder still landed and the author's instruction was lost.
+  The author now KEEPS its outstanding revokes: `fed_revoke_outbox` (one
+  signed message per row id, `POST /federation/outbox`, agent-signed like
+  the revoke door) and re-sends them on the next HELLO to every network it
+  meets (`outstanding_revokes` on the knock, signed exactly as the direct
+  revoke). The holder judges each carried entry through the same gates
+  (signature → must name the knocking agent → passport on file → home match)
+  and acts only on what it can evidence — a holder that now holds a copy
+  forgets it and writes the standing ban; `unknown`/`foreign` still write
+  nothing. Bounds in one place (`store.js`): 90 days on the outbox, at most
+  16 revokes per hello; the record door is rate-limited at the revoke door's
+  cadence (30/min) and the re-send leg rides hello's own limiter (an
+  in-handler bucket behind it could never fire). A plain hello answers
+  byte-identically as before (no `revokes` key). 6 tests pin the loop, the
+  forged refusals, the age bound, and the M1 line (`test/unit/
+  trust-layer-p1-4-revoke-resend.test.js` + the outbox limiter in
+  `trust-layer-rate-limits.test.js`); the full loop is also proven live over
+  two spawned servers (`docs/specs/2026-10-08-federation-revoke-resend/`).
+  Spec: `spec/federation-v0/README.md` §2.8 + the §4 route rows.
 
 _No released changes yet. This section collects work on `master` since `0.1.0`._
 

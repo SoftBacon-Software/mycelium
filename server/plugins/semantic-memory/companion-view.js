@@ -9,6 +9,9 @@
 // parsed from the search arms), the API view out. Internal columns (the
 // embedding vector, chunk bookkeeping, raw metadata JSON) never leave.
 
+import { needsRecallLabel, recallLabelReason } from '../../lib/memory-quarantine.js';
+import { MEMORY_DATA_DATAMARK } from '../../lib/memory-fence.js';
+
 export default function companionView(row, opts) {
   var meta = row.metadata;
   if (typeof meta === 'string') {
@@ -24,12 +27,40 @@ export default function companionView(row, opts) {
     at: meta.at || null,
     created_at: row.created_at,
     superseded_by: row.superseded_by || null,
-    supersedes: meta.supersedes || null
+    supersedes: meta.supersedes || null,
+    // TRUST LAYER P1.1: WHO the row came from and how much it can be
+    // trusted — the fields the phone fences instruction positions on
+    // (PROGRAM §P0.4/P1.1: a row that is not the person's own never lands in
+    // an instruction slot). Unknown reads as the LOWEST trust, never the
+    // highest; a pre-migration row is origin null / trust 0.
+    origin: row.origin || null,
+    trust: (row.trust == null) ? 0 : row.trust
   };
+  // Derived rows keep their input refs so a client can show what the row
+  // was made from (and P1.4 deletion can walk the provenance graph).
+  if (row.derived_from) {
+    var refs = row.derived_from;
+    if (typeof refs === 'string') {
+      try { refs = JSON.parse(refs); } catch (e) { /* keep raw */ }
+    }
+    view.derived_from = refs;
+  }
   // Federation v0: an imported row that collided with a live home row is a
   // candidate (accepted explicitly, never a silent supersede); a row that
   // crossed a border carries its receipt.
   if (meta.candidate) view.candidate = true;
+  // TRUST LAYER P1.3 + P1.6: an unvouched row (every foreign-network row,
+  // every auto-indexed agent message, a supersede candidate — one definition
+  // in server/lib/memory-quarantine.js) is recalled WITH the visible
+  // unverified label — the client renders it; the platform does not vouch for
+  // the text — plus the P1.2 datamark the client prefixes when it renders the
+  // row into a prompt.
+  if (needsRecallLabel(row, meta)) {
+    view.unverified = true;
+    view.quarantined = true;
+    view.quarantine_reason = recallLabelReason(row, meta);
+    view.memory_data_marker = MEMORY_DATA_DATAMARK;
+  }
   if (row.fed_agent || row.fed_network || row.fed_visit) {
     view.provenance = {
       id: meta.fed_id || null, // the protocol's content-addressed id
