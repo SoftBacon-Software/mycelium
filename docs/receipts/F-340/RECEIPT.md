@@ -43,9 +43,8 @@ the director lands.
 6. **THE RECEIPT had no mention at all.** Added a short section: what the
    repair-class set is (ON/OFF lessons arm, code-gate grading, sign test,
    repair-class only, 4 specimens → 8 fires, p ≥ 0.125 directional), where it
-   lives (jarvis — one link,
-   `~/Projects/jarvis/training/glm-distill/eval/receipt/repair-set-2026-11-05.PREREG.md`,
-   no prereg text duplicated), that NOTHING has fired (dir holds prereg +
+   lives (the lab's private repository, named without a path — the
+   pre-registration ships with the result; no prereg text duplicated), that NOTHING has fired (dir holds prereg +
    frozen set only, verified by ls), and the two-frontier-review rule before
    any fire.
 
@@ -95,8 +94,8 @@ Every corrected/verified spot carries a `<!-- verified 2026-11-05 by <command> -
   (32), Tests 607 passed (607), EXIT=0** (run AFTER the edits; docs-only, and
   still green).
 - Link pass (manual): markdown links = 2, both `[regimes.md](regimes.md)` →
-  resolves. Inline paths: `jarvis/runs/fable-specs/BRIEF-memory-sota-program.md`
-  → exists; the jarvis prereg path → exists. External: the HF dataset URL →
+  resolves. Inline references to the lab's private planning and prereg
+  documents → exist in the private repository (named, not pathed, in the README). External: the HF dataset URL →
   `curl -sI` → **HTTP 302** (HF's standard CDN redirect — resource live).
 
 ## Artifacts
