@@ -22,6 +22,7 @@ import {
   findRegimeDifferences,
   loadRun,
   regimeIdentity,
+  rejudgeJudgePromptStamp,
 } from './grid.mjs';
 
 const BENCH_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +44,9 @@ export function runLike(entry) {
         runId: entry.runId,
         summary: entry.summary,
         rejudge: {
-          judge_prompt_version: entry.summary.judge_prompt_version ?? entry.summary.regime?.judge?.judge_prompt_version,
+          // task 333-F2: the ONE stamp reader (grid.mjs's) — a second inline
+          // parser beside the composer's is how the table and the grid drift
+          judge_prompt_version: rejudgeJudgePromptStamp(entry.summary),
           pair: [],
           stem: entry.tag ?? 'rejudge',
         },

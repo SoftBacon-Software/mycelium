@@ -17,7 +17,7 @@ import {
   thinkingStamp,
   writeDecisions,
 } from '../../bench/memory/regimes.mjs';
-import { effectiveN } from '../../bench/memory/grid.mjs';
+import { effectiveN, loadRun, rejudgeJudgePromptStamp } from '../../bench/memory/grid.mjs';
 
 let root;
 let resultsDir;
@@ -181,6 +181,59 @@ describe('runLike: rejudge files read as what they are', () => {
     writeBankedFile('d', 'summary.json', { runId: 'd', arms: { none: armScore(50, 1, 2, 47) } });
     const entry = collectRunFiles(resultsDir)[0];
     expect(effectiveN(runLike(entry))).toBe(50);
+  });
+
+  // task 333-F2: the rejudge stamp is parsed ONCE — grid.mjs's exported
+  // rejudgeJudgePromptStamp — and runLike reads it through that same symbol.
+  // The composer's loadRun path and the regime table's path therefore cannot
+  // diverge: if the stamp moves or gains a field, both change together, and
+  // this test fails if either side stops agreeing with the shared reader.
+  describe('rejudgeJudgePromptStamp: ONE reader for the composer and the table (task 333-F2)', () => {
+    it('runLike\'s rejudge stamp equals the shared reader on every stamp shape', () => {
+      const arms = { 'mycelium-timeline': armScore(50, 20, 0, 30) };
+      // top-level stamp wins over the regime mirror
+      writeBankedFile('run-top', 'summary.rejudge.json', {
+        runId: 'run-top',
+        arms,
+        rejudge: { judge_prompt_version: 'judge-prompt.3' },
+        regime: { judge: { judge_prompt_version: 'judge-prompt.9' } },
+      });
+      // mirror-only (no top-level field) — the fallback is exercised
+      writeBankedFile('run-mirror', 'summary.rejudge.json', {
+        runId: 'run-mirror',
+        arms,
+        regime: { judge: { judge_prompt_version: 'judge-prompt.4' } },
+      });
+      // both nullish — the reader normalizes to null (never undefined)
+      writeBankedFile('run-blank', 'summary.rejudge.json', {
+        runId: 'run-blank',
+        arms,
+        regime: { judge: { judge_prompt_version: null } },
+      });
+
+      const entries = collectRunFiles(resultsDir);
+      for (const entry of entries) {
+        expect(runLike(entry).rejudge.judge_prompt_version).toBe(rejudgeJudgePromptStamp(entry.summary));
+      }
+      const byRunId = new Map(entries.map((e) => [e.runId, e]));
+      expect(runLike(byRunId.get('run-top')).rejudge.judge_prompt_version).toBe('judge-prompt.3');
+      expect(runLike(byRunId.get('run-mirror')).rejudge.judge_prompt_version).toBe('judge-prompt.4');
+      expect(runLike(byRunId.get('run-blank')).rejudge.judge_prompt_version).toBeNull();
+    });
+
+    it('the composer\'s loadRun rejudge object reads the same symbol (one parser, both paths)', () => {
+      const arms = { 'mycelium-timeline': armScore(50, 20, 0, 30) };
+      const judgedRows = [judgedRow(), judgedRow({ question_id: 'q2', label: 'wrong' })];
+      const dir = writeBankedFile('pair', 'summary.rejudge.json', {
+        runId: 'pair-rejudge',
+        arms,
+        rejudge: { judge_prompt_version: 'judge-prompt.3' },
+        judgedRows,
+      });
+      const run = loadRun(dir);
+      expect(run.rejudge.judge_prompt_version).toBe(rejudgeJudgePromptStamp(run.summary));
+      expect(run.rejudge.judge_prompt_version).toBe('judge-prompt.3');
+    });
   });
 });
 

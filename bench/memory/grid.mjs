@@ -91,6 +91,19 @@ export function effectiveJudgePromptVersion(run) {
 }
 
 /**
+ * The rejudge PAIR's own judge-prompt stamp — the pair's top-level
+ * judge_prompt_version, falling back to the pair's regime mirror. ONE reader
+ * for both code paths that parse it (task 333-F2): the composer's loadRun
+ * rejudge object, and regimes.mjs's runLike (which cannot call loadRun —
+ * collectRunFiles parses summaries without needing the judged side). If the
+ * stamp moves or gains a field, both move together; a second inline parser
+ * would let the composer and the regime table drift in lockstep failure.
+ */
+export function rejudgeJudgePromptStamp(summary) {
+  return summary.judge_prompt_version ?? summary.regime?.judge?.judge_prompt_version ?? null;
+}
+
+/**
  * The question count a run's numbers are per — for a rejudge PAIR, summary.n
  * is the judged-ROW count (arms × questions), so it reads the pair's regime.n
  * (the question count the original run stamped); primaries read summary.n
@@ -338,7 +351,7 @@ export function loadRun(dir, { existsFn = fs.existsSync, readFileFn = defaultRea
       labelByArm: armLabels(summary),
       rejudge: {
         of_run_id: ofRunId,
-        judge_prompt_version: summary.judge_prompt_version ?? summary.regime?.judge?.judge_prompt_version ?? null,
+        judge_prompt_version: rejudgeJudgePromptStamp(summary), // task 333-F2: the ONE reader
         pass,
         stem: pass ? `rejudge-${pass}` : 'rejudge',
         pair: [path.basename(rejSummaryFile), path.basename(rejJudgedFile)],
