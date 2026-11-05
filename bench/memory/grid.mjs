@@ -820,9 +820,13 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
   L.push('');
   L.push(`Generated: ${generatedAt}`);
   L.push('');
+  // task 333-F1: the opening sentence states which receipt this IS — the old
+  // unconditional "one regime each, one grid" printed a false claim directly
+  // above the MIXED REGIME banner on the allowed path.
   L.push(
-    `Composed from ${runs.length} separate runs; one regime each, one grid. Comparability was checked ` +
-      'mechanically (see below) — this receipt contains no hand-typed numbers.'
+    mixedRegime
+      ? `Composed from ${runs.length} separate runs; the runs' regimes DIFFER — composed under --allow-mixed-regime (see the table below). Comparability was checked mechanically — this receipt contains no hand-typed numbers.`
+      : `Composed from ${runs.length} separate runs; one regime each, one grid. Comparability was checked mechanically (see below) — this receipt contains no hand-typed numbers.`
   );
 
   // task 333: rendered ONLY when --allow-mixed-regime let a differing-regime

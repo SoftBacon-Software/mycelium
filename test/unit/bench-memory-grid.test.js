@@ -1612,6 +1612,10 @@ describe('task 333 — a mixed-regime pair refuses unless allowMixedRegime', () 
     const md = fs.readFileSync(out.file, 'utf8');
     expect(md).toContain('## MIXED REGIME');
     expect(md).toContain('**This grid mixes regimes');
+    // task 333-F1: the opening line states the MIXED truth — it must not claim
+    // "one regime each" two lines above the banner that says the opposite
+    expect(md).toContain("the runs' regimes DIFFER — composed under --allow-mixed-regime");
+    expect(md).not.toContain('one regime each, one grid');
     // the side-by-side table names BOTH values, matched and mismatched alike
     expect(md).toContain('| answerer.url_host | desktop-1uiqnip:11434 | localhost:8780 |');
     expect(md).toContain('| judge.url_host | localhost:8780 | localhost:8780 |');
@@ -1628,6 +1632,9 @@ describe('task 333 — a mixed-regime pair refuses unless allowMixedRegime', () 
     expect(out.mixedRegime).toBe(false);
     const md = fs.readFileSync(out.file, 'utf8');
     expect(md).not.toContain('MIXED REGIME');
+    // task 333-F1: a clean grid keeps the one-regime opening sentence (the
+    // conditional never touches the default path's text)
+    expect(md).toContain('one regime each, one grid');
   });
 
   it('findRegimeDifferences lists every run\'s value (a trio with one outlier) and throws via assertSameRegime', () => {
