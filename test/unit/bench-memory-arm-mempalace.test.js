@@ -124,7 +124,7 @@ describe('arm_mempalace — the MemPalace OSS CONTROL arm (task 263)', () => {
   it('answer(): product search at the retrieval budget, then the shared answerer over the results', async () => {
     const sidecar = fakeSidecar({
       searchResults: [
-        { memory: 'user: I am moving to Lisbon in the spring.', score: 0.42, id: 'drawer-1', session_index: 0 },
+        { memory: 'user: I am moving to Lisbon in the spring.', score: 0.42, id: 'drawer-1', session_index: 0, room: 'q-9' },
         { memory: 'user: My manager is Dana now.', score: 0.31, id: 'drawer-2', session_index: 1 },
       ],
       candidates: 20,
@@ -158,10 +158,12 @@ describe('arm_mempalace — the MemPalace OSS CONTROL arm (task 263)', () => {
       mempalace_version: '3.12.0',
       budget: 7,
     });
-    // task 207: every hit carries its provenance — drawer id, score, session
+    // task 207: every hit carries its provenance — drawer id, score, session;
+    // task 324: and its owning question (the drawer's room — the sidecar files
+    // each drawer with room=question_id; null when the product did not expose one)
     expect(r.meta.read_hits).toEqual([
-      { source_id: 'drawer-1', score: 0.42, session_index: 0, rank: 0 },
-      { source_id: 'drawer-2', score: 0.31, session_index: 1, rank: 1 },
+      { source_id: 'drawer-1', score: 0.42, session_index: 0, question_id: 'q-9', rank: 0 },
+      { source_id: 'drawer-2', score: 0.31, session_index: 1, question_id: null, rank: 1 },
     ]);
   });
 
@@ -188,6 +190,7 @@ describe('arm_mempalace — the MemPalace OSS CONTROL arm (task 263)', () => {
     });
     const r = await arm.answer('q');
     expect(r.meta.read_hits[0].session_index).toBeNull();
+    expect(r.meta.read_hits[0].question_id).toBeNull(); // task 324: no room → no question stamp, same honesty
   });
 
   it('answer(): a sidecar error envelope is loud (a failed search is never a fake empty)', async () => {
