@@ -164,6 +164,10 @@ and the proof lines quoted. The receipts currently on the books:
 - `docs/receipts/F-341/RECEIPT.md` — the committed regimes table is a
   test: byte equality with the renderer, determinism, and the
   plant-RED/restore-GREEN pair.
+- `docs/receipts/F-364/RECEIPT.md` — the union tree: origin/master
+  merged into the regime line, the one conflict (the bench README's arm
+  roster) resolved as the union of both sides, the two docs-gate debts
+  cured, and the full suite green on the result.
 
 ## Releases
 
