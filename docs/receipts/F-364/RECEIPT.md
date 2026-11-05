@@ -162,8 +162,8 @@ $ git diff --name-only origin/master...HEAD | xargs grep -nE '<HOME>/Projects/|/
 <no output>  [SWEEP_EXIT=1 — grep found nothing]
 ```
 
-15 files differ from `origin/master` on this branch (three-dot diff:
-the PR's own delta). Docs gates re-run after the cure: exit 0, 18/18.
+16 files differ from `origin/master` on this branch (three-dot diff:
+the PR's own delta; the 16th is this receipt). Docs gates re-run after the cure: exit 0, 18/18.
 
 ## The gates (all executed in the worktree; rc captured directly)
 
