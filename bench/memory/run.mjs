@@ -48,7 +48,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock' || key === 'autopsy' || key === 'retrieval-audit') { out[key] = true; continue; }
+    if (key === 'receipt' || key === 'keep' || key === 'rejudge' || key === 'no-slot-lock' || key === 'autopsy' || key === 'retrieval-audit' || key === 'allow-mixed-regime') { out[key] = true; continue; }
     out[key] = argv[++i];
   }
   return out;
@@ -389,12 +389,13 @@ async function main() {
     // --dataset <file>: only needed when a judged row lacks question_type — the
     // join is quoted in the receipt (never a silent guess)
     const datasetTypes = args.dataset ? await loadDatasetTypes(path.resolve(args.dataset)) : null;
-    const out = await composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy), audit: Boolean(args['retrieval-audit']), datasetTypes, rejudgePass: args['rejudge-pass'] != null ? String(args['rejudge-pass']) : null });
+    const out = await composeGrid({ dirs, generatedAt: utcStamp(new Date()), write: Boolean(args.receipt), autopsy: Boolean(args.autopsy), audit: Boolean(args['retrieval-audit']), datasetTypes, rejudgePass: args['rejudge-pass'] != null ? String(args['rejudge-pass']) : null, allowMixedRegime: Boolean(args['allow-mixed-regime']) });
     console.log(
       JSON.stringify(
         {
           runs: out.runIds,
           grid_rendered: out.gridRendered,
+          mixed_regime: out.mixedRegime,
           ...(args.receipt
             ? { receipt: path.relative(REPO_ROOT, out.file) }
             : { wrote: false, why: 'dry run — pass --receipt to write' }),

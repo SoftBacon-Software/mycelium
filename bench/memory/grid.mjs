@@ -119,6 +119,105 @@ export const COMPARABILITY_KEYS = [
 // regime.n mirrors summary.n — same check; keep it out of the allowed-differences list
 const COMPARABILITY_PATHS = new Set([...COMPARABILITY_KEYS.map(([k]) => k), 'n']);
 
+// ---- task 333: the REGIME identity — the same model name on another box is
+// another regime. The comparability keys catch rubric/model/budget differences
+// but not a SEAT MOVE: `qwen3.8:27b` on the 3090 and `qwen3.8:27b` on the Mac
+// are different answerers, and a grid composed across the two looks like one
+// result. The composer refuses on these unless --allow-mixed-regime is passed
+// (and then prints the regimes side by side, never silently).
+
+// Ordered field→reader list shared by the composer's refusal, the receipt's
+// side-by-side table, and regimes.mjs's grouping — one definition of the regime.
+export const REGIME_IDENTITY_FIELDS = [
+  ['dataset.name', (r) => r.summary.regime?.dataset?.name],
+  ['dataset.sha256', (r) => r.summary.regime?.dataset?.sha256],
+  ['answerer.model', (r) => r.summary.regime?.answerer?.model],
+  ['answerer.url_host', (r) => r.summary.regime?.answerer?.url_host],
+  ['answerer.temperature', (r) => r.summary.regime?.answerer?.temperature],
+  ['answerer.max_tokens', (r) => r.summary.regime?.answerer?.max_tokens],
+  ['judge.model', (r) => r.summary.regime?.judge?.model],
+  ['judge.url_host', (r) => r.summary.regime?.judge?.url_host],
+  ['judge.judge_prompt_version', effectiveJudgePromptVersion],
+  ['retrieval.budget', (r) => r.summary.regime?.retrieval?.budget],
+  ['n', effectiveN],
+];
+
+/** Canonical identity string for a run's regime (grouping key for regimes.mjs). */
+export function regimeIdentity(run) {
+  return JSON.stringify(REGIME_IDENTITY_FIELDS.map(([k, read]) => [k, read(run) ?? null]));
+}
+
+// Fields whose stamp must MATCH across every run in a grid (absent vs present
+// counts as a difference — you cannot know two unstamped seats were the same).
+const REGIME_ENFORCED_KEYS = [
+  ['regime.answerer.url_host', (r) => r.summary.regime?.answerer?.url_host, 'the same model name on another box is another regime'],
+  ['regime.answerer.temperature', (r) => r.summary.regime?.answerer?.temperature, 'the sampling regime differs'],
+  ['regime.judge.url_host', (r) => r.summary.regime?.judge?.url_host, 'a judge on another seat is another regime'],
+];
+
+/**
+ * The regime differences the comparability keys cannot see: seat moves
+ * (answerer/judge url_host, temperature) and platform identity. Platform
+ * fields are compared only between runs that STAMP them — a run whose arms
+ * never touched the platform (the mem0 shape: platform stamped all-NULL)
+ * composes with a platform-stamped run legitimately; a PROVABLE difference
+ * (both stamped, values differ) refuses. Absence is shown in the table,
+ * never judged.
+ */
+export function findRegimeDifferences(runs) {
+  const differences = [];
+  for (const [key, read, note] of REGIME_ENFORCED_KEYS) {
+    const values = runs.map(read);
+    const allSame = values.every((v) => JSON.stringify(v) === JSON.stringify(values[0]));
+    if (!allSame) {
+      differences.push({
+        key,
+        note,
+        values: runs.map((r, i) => ({ run: r.runId, value: values[i], display: fmtValue(values[i]) })),
+      });
+    }
+  }
+  // platform leaves: collect the STAMPED values per dotted path, then refuse
+  // on any path carrying ≥2 distinct stamped values
+  const stamped = new Map(); // dotted path -> [{run, value}]
+  for (const r of runs) {
+    const flat = flattenRegime(r.summary.regime?.platform ?? {}, 'platform.'); // the prefix carries its own dot
+    for (const [p, v] of Object.entries(flat)) {
+      if (v === null || v === undefined) continue;
+      if (!stamped.has(p)) stamped.set(p, []);
+      stamped.get(p).push({ run: r.runId, value: v });
+    }
+  }
+  for (const p of [...stamped.keys()].sort()) {
+    const entries = stamped.get(p);
+    const distinct = new Set(entries.map((e) => JSON.stringify(e.value)));
+    if (distinct.size > 1) {
+      differences.push({
+        key: `regime.${p}`,
+        note: 'compared only where runs stamp it (a platform-NULL run composes with a stamped one)',
+        values: entries.map((e) => ({ run: e.run, value: e.value, display: fmtValue(e.value) })),
+      });
+    }
+  }
+  return differences;
+}
+
+/** Refuse unless every run shares one regime (see findRegimeDifferences). Throws GridRefusal. */
+export function assertSameRegime(runs) {
+  if (!Array.isArray(runs) || runs.length < 2) {
+    throw new GridInputError(`regime comparison needs at least two runs (got ${runs?.length ?? 0})`);
+  }
+  const differences = findRegimeDifferences(runs);
+  if (differences.length > 0) throw new GridRefusal(differences, runs.map((r) => r.runId));
+  return true;
+}
+
+/** Ordered [field, display] rows for the receipt's side-by-side regime table. */
+export function regimeSideBySide(runs) {
+  const cell = (v) => (v === undefined || v === null ? '—' : String(v));
+  return REGIME_IDENTITY_FIELDS.map(([field, read]) => [field, runs.map((r) => cell(read(r)))]);
+}
+
 /** The stamped write cap, wherever the run put it (regime.write and/or top level). */
 export function writeCap(summary) {
   return summary.regime?.write?.max_sessions_per_question ?? summary.max_sessions_per_question ?? null;
@@ -700,7 +799,7 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
   return [...preference, ...multi];
 }
 
-export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null, auditSection = null, datasetTypes = null }) {
+export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies = null, auditSection = null, datasetTypes = null, mixedRegime = null }) {
   const runIds = runs.map((r) => r.runId);
   // task 235: the pre-committed keyword-fallback bound — read from the env at
   // render time, its source stamped beside it
@@ -725,6 +824,20 @@ export function renderGridReceipt({ runs, generatedAt, commands = [], autopsies 
     `Composed from ${runs.length} separate runs; one regime each, one grid. Comparability was checked ` +
       'mechanically (see below) — this receipt contains no hand-typed numbers.'
   );
+
+  // task 333: rendered ONLY when --allow-mixed-regime let a differing-regime
+  // composition through — the regimes side by side, so a mixed grid can never
+  // masquerade as one result. The default path renders nothing here.
+  if (mixedRegime) {
+    L.push('');
+    L.push('## MIXED REGIME — composed with --allow-mixed-regime');
+    L.push('');
+    L.push('**This grid mixes regimes. It is NOT a one-regime result — never quote it as one.**');
+    L.push('');
+    L.push(`| regime field | ${runIds.join(' | ')} |`);
+    L.push(`|---${'|---'.repeat(runIds.length)}|`);
+    for (const [field, cells] of regimeSideBySide(runs)) L.push(`| ${field} | ${cells.join(' | ')} |`);
+  }
 
   // A capped or unclean run is NOT a quotable grid — say so at the top, in bold.
   const warnings = [];
@@ -1056,6 +1169,7 @@ export function composeGrid({
   readFileFn = defaultReadFile,
   handlabelsDir = HANDLABELS_DIR, // where a rejudged run's hand-label file is looked up
   rejudgePass = null, // task 229: name a suffixed rejudge pass (--rejudge-pass <tag>) for every rejudged dir
+  allowMixedRegime = false, // task 333: compose across regimes (--allow-mixed-regime) — the receipt then prints them side by side
   writeFn = fs.writeFileSync,
   mkdirFn = fs.mkdirSync,
   commandLine = null,
@@ -1068,6 +1182,11 @@ export function composeGrid({
   }
   const runs = dirs.map((d) => loadRun(d, { existsFn, readFileFn, handlabelsDir, rejudgePass }));
   assertComparable(runs);
+  // task 333: one regime per grid, unless the caller passes --allow-mixed-regime
+  // — and then the receipt carries the regimes side by side (never silently).
+  const regimeDifferences = findRegimeDifferences(runs);
+  if (!allowMixedRegime && regimeDifferences.length > 0) throw new GridRefusal(regimeDifferences, runs.map((r) => r.runId));
+  const mixedRegime = regimeDifferences.length > 0 ? { differences: regimeDifferences } : null;
   const runIds = runs.map((r) => r.runId);
   const commands =
     commandLine != null
@@ -1078,7 +1197,7 @@ export function composeGrid({
         ];
   const { armsUnion } = buildUnion(runs);
   const gridRendered = GRID_ROWS.flatMap((r) => [r.raw, r.extract]).every((n) => armsUnion[n]);
-  if (!write) return { file: null, runIds, gridRendered, receipt: null };
+  if (!write) return { file: null, runIds, gridRendered, receipt: null, mixedRegime: Boolean(mixedRegime) };
 
   // the autopsies need the arm's rows file — loaded only when asked for, and
   // only for runs that carry the arm; a run without it just doesn't appear
@@ -1152,11 +1271,11 @@ export function composeGrid({
   }
 
   const finish = (resolvedAudit) => {
-    const md = renderGridReceipt({ runs, generatedAt, commands, autopsies, auditSection: resolvedAudit?.lines ?? null, datasetTypes });
+    const md = renderGridReceipt({ runs, generatedAt, commands, autopsies, auditSection: resolvedAudit?.lines ?? null, datasetTypes, mixedRegime: allowMixedRegime ? mixedRegime : null });
     mkdirFn(receiptsDir, { recursive: true });
     const file = path.join(receiptsDir, `${runIds.join('+')}-grid.md`);
     writeFn(file, md);
-    return { file, runIds, gridRendered, diagnosticBranch: resolvedAudit?.branch ?? null };
+    return { file, runIds, gridRendered, diagnosticBranch: resolvedAudit?.branch ?? null, mixedRegime: Boolean(mixedRegime) };
   };
   if (audit && auditMeta) return auditMeta.then(finish);
   return finish(null);
