@@ -1,6 +1,6 @@
 # Memory benchmark — every banked run, by regime (task 333)
 
-Generated: 2026-11-05T02:15:52Z
+Generated: 2026-09-19T14:10:07Z (the newest banked run file's date_utc — regeneration is byte-stable)
 
 Rendered from the run files under `bench/memory/results/` (primary `summary.json` + every `summary.rejudge*.json` pass) — no hand-typed numbers. One row per run file × arm; grouped by regime. A number is quotable only beside numbers from the SAME regime; the grid composer now refuses a cross-regime composition (bench/memory/grid.mjs: `regime.answerer.url_host`, `regime.judge.url_host`, `regime.answerer.temperature`, stamped platform fields) unless `--allow-mixed-regime` is passed — and then the receipt prints the regimes side by side.
 

@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
   auditGridReceipts,
   collectRunFiles,
+  generatedFromRuns,
   groupByRegime,
   headline,
   resolveEmbedder,
@@ -347,6 +348,35 @@ describe('writeDecisions / resolveEmbedder / thinkingStamp', () => {
   it('the thinking stamp reads the extraction blocks; no extraction arms → a dash', () => {
     expect(thinkingStamp({ mycelium_timeline: { extraction_thinking: 'off' }, mem0: { extraction_thinking: 'off' } })).toBe('timeline:off mem0:off');
     expect(thinkingStamp({})).toBe('—');
+  });
+});
+
+// ---- task 333-F3: the generation stamp is DERIVED, not the wall clock ----------
+
+describe('generatedFromRuns: the table regenerates byte-identical (no wall clock)', () => {
+  it('the stamp is the NEWEST banked run file\'s own date_utc, unreadable entries excluded', () => {
+    const arms = { 'mycelium-timeline': armScore(50, 20, 0, 30) };
+    writeBankedFile('run-old', 'summary.json', {
+      runId: 'run-old',
+      arms,
+      regime: { date_utc: '2026-09-09T19:50:34Z' },
+    });
+    writeBankedFile('run-new', 'summary.json', {
+      runId: 'run-new',
+      arms,
+      regime: { date_utc: '2026-09-19T14:10:07Z' },
+    });
+    // an unreadable summary must not feed the stamp
+    fs.mkdirSync(path.join(resultsDir, 'smoke'), { recursive: true });
+    fs.writeFileSync(path.join(resultsDir, 'smoke', 'summary.json'), '{not json');
+
+    const entries = collectRunFiles(resultsDir);
+    expect(generatedFromRuns(entries)).toBe('2026-09-19T14:10:07Z'); // content-derived, insertion order irrelevant
+    expect(generatedFromRuns([...entries].reverse())).toBe('2026-09-19T14:10:07Z');
+  });
+
+  it('no banked run stamps a date -> a named placeholder, never a clock read', () => {
+    expect(generatedFromRuns(collectRunFiles(path.join(root, 'nope')))).toBe('no banked run stamps a date_utc');
   });
 });
 

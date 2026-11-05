@@ -338,7 +338,9 @@ export function renderRegimesMd({ groups, audits, unreadable, noSummaryDirs, gen
   const L = [];
   L.push('# Memory benchmark — every banked run, by regime (task 333)');
   L.push('');
-  L.push(`Generated: ${generatedAt}`);
+  // task 333-F3: the stamp is DERIVED (the newest banked run's date_utc), so
+  // regenerating on a clean tree is byte-identical — no wall-clock line
+  L.push(`Generated: ${generatedAt} (the newest banked run file's date_utc — regeneration is byte-stable)`);
   L.push('');
   L.push(
     `Rendered from the run files under \`${path.relative(REPO_ROOT, resultsDir)}/\` ` +
@@ -400,8 +402,19 @@ export function renderRegimesMd({ groups, audits, unreadable, noSummaryDirs, gen
   return L.join('\n');
 }
 
-function utcStamp(d = new Date()) {
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+/**
+ * The table's generation stamp — the NEWEST banked run file's own regime
+ * date_utc, NOT the wall clock (task 333-F3): a regenerated table must be
+ * byte-identical to the committed one, so the only thing allowed to move the
+ * stamp is a newly banked run. Deterministic from file CONTENT, so it survives
+ * a fresh clone (where file mtimes would all be checkout time).
+ */
+export function generatedFromRuns(entries) {
+  const stamps = entries
+    .filter((e) => e.kind !== 'unreadable' && typeof e.summary?.regime?.date_utc === 'string')
+    .map((e) => e.summary.regime.date_utc)
+    .sort();
+  return stamps.at(-1) ?? 'no banked run stamps a date_utc';
 }
 
 function parseArgs(argv) {
@@ -440,7 +453,7 @@ async function main() {
   const withSummary = new Set(collected.map((e) => e.dirName));
   const noSummaryDirs = allDirs.filter((d) => !withSummary.has(d));
 
-  const md = renderRegimesMd({ groups, audits, unreadable, noSummaryDirs, generatedAt: utcStamp(), resultsDir, receiptsDir });
+  const md = renderRegimesMd({ groups, audits, unreadable, noSummaryDirs, generatedAt: generatedFromRuns(collected), resultsDir, receiptsDir });
   fs.writeFileSync(outFile, md);
 
   const total = groups.reduce((acc, g) => acc + g.entries.length, 0);
