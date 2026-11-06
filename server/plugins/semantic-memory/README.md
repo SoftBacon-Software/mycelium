@@ -110,6 +110,7 @@ All routes are under `/api/mycelium/memory`.
 | DELETE | `/index/:sourceType/:sourceId` | agent/admin | Remove a doc (all chunks). |
 | DELETE | `/index?source_type=&namespace=` | admin | Bulk purge by exact filter (at least one required — an unfiltered purge is refused). How a finished benchmark run cleans up after itself. Returns `{deleted: N}`. |
 | GET | `/list?source_type=` | agent/admin | Query-free retrieval by type, newest first — for always-on content. |
+| GET | `/list?source_types=&namespace=` | agent/admin | One namespace's current rows across kinds (1–8, comma list), newest by the row's own date — the deterministic "everything current in this namespace" read. Superseded rows excluded (same predicate as `/lessons`); `include_superseded=1` reads them back; `truncated` reports a limit cut. |
 | GET | `/lessons?task_class=&repo=&since=&limit=&q=` | agent/admin | Lesson recall (see below). Newest first by the lesson's own date; `q=` switches to semantic recall restricted to lessons. |
 | GET | `/history?repo=&task_class=&limit=` | agent/admin | Prior verdict rows (source_type `verdict`) for a repo/class, newest first — "what happened last time". |
 | GET | `/episodes?agent=&session_date=&namespace=&limit=` | agent/admin | Dated enumeration of episode rows (see below) — "the indexed episodes of one agent/day", newest first by the episode's own `session_date`. |
@@ -168,6 +169,38 @@ Read side: `POST /search` with `source_types: ['episode']` reaches episodes by
 meaning — each hit renders its `session_date`. `GET /episodes` is the dated
 enumeration ("all of Tuesday" is a filter, not a query): filter by `agent`
 and/or `session_date`, newest first by the episode's own date.
+
+## Current rows — one namespace, several kinds (2026-11-06)
+
+`GET /list?source_type=` reads ONE kind. A game master booting on
+`game:<name>` needs more than one: every current **ruling**, **measurement**,
+**look** and **mechanic** in the namespace, dated. Similarity search ranks by
+query and never promises completeness; the `source_types` form of `/list` is
+the deterministic read:
+
+```bash
+curl "$URL/memory/list?source_types=ruling,measurement,look&namespace=game:build-and-die"
+```
+
+The response carries `{results, source_types, namespace, include_superseded,
+count, truncated}`:
+
+- **Superseded rows are excluded by default**, with the same predicate the
+  `/lessons` read uses (one shared definition in the db layer — the two reads
+  cannot disagree on what "current" means). `include_superseded=1` reads the
+  dead rows back with their `superseded_by` pointer (history kept, never
+  erased — the §3 rule).
+- **Order is the row's own date** — `metadata.valid_from` when the row stamps
+  one, falling back to `metadata.learned_at`, then `created_at` — the same
+  own-date rule `/lessons` orders by. Ties break by `source_type`,
+  `source_id`, so two calls return byte-identical bodies.
+- **`truncated: true` when `limit` (≤ 100) cut the list** — a namespace can
+  outgrow one page, and a silently capped "complete" read is the false-zero
+  hazard `/search` documents.
+- Exactly one of `source_type` / `source_types` per call; `source_types`
+  requires `namespace` (a cross-namespace multi-kind listing is a search —
+  `POST /search` takes `source_types`). Companion-private kinds and
+  namespaces are refused exactly as on every other agent read.
 
 ## MCP tools
 
