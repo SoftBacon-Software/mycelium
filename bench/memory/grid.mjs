@@ -24,6 +24,7 @@ import { renderIngestionGrid, factsStatLine, dropStatLine, GRID_ROWS } from './i
 import { RECEIPTS_DIR } from './receipt.mjs';
 import { autopsyRun, renderAutopsySection, DEFAULT_AUTOPSY_ARM } from './miss_autopsy.mjs';
 import {
+  armRetrievalVsAnswers,
   buildGoldIndex,
   computeRetrievalAudit,
   decideDiagnostic,
@@ -542,6 +543,7 @@ const AUDIT_COLUMNS = [
   ['unmapped', 'unmapped'],
   ['gold_not_written', 'gold≥cap'],
   ['no_provenance', 'no-prov'],
+  ['no_question_provenance', 'no-qid'],
   ['ranked', 'ranked'],
 ];
 
@@ -583,7 +585,71 @@ export function renderTranscripts(groups) {
   return L;
 }
 
-export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget: _budget, transcripts = null }) {
+// --- task 264: the per-arm retrieval-vs-answers table ----------------------------
+//
+// R@k beside judged accuracy, per arm — plus the retrieve-vs-use gap (the
+// evidence was retrieved, the answer still failed). PROTOCOL NOTE (task 304,
+// review B): this bench retrieves over a POOLED per-run store (all n
+// questions' haystacks share one store), NOT LongMemEval's per-question
+// ~50-session collection that published R@k numbers (e.g. MemPalace's 96.6%
+// R@5) use. Different protocol, harder task — the numbers are NOT comparable,
+// and the receipt says so beside the table. A hit credits only a hit that
+// belongs to the row's OWN question (task 304).
+
+const fmtRAtCell = (v) => {
+  if (v == null) return '—';
+  if (v.na) return `n/a (${v.na})`;
+  return `${v.rate.toFixed(3)} (${v.hits}/${v.n})`;
+};
+
+const fmtP1Cell = (r) =>
+  typeof r.judged_p1 === 'number'
+    ? `${r.judged_p1.toFixed(3)} (${r.judged_exact}/${r.judged_n})`
+    : `n/a (${r.judged_p1?.na ?? 'unknown'})`;
+
+const fmtGapCell = (v) => {
+  if (v == null) return '—';
+  if (v.na) return `n/a (${v.na})`;
+  return `${(v.rate * 100).toFixed(1)}% (${v.wrong}/${v.n})`;
+};
+
+/** The per-arm block: R@5 · R@10 · judged accuracy (p1) · the gap. */
+export function renderRetrievalVsAnswersTable(rollup) {
+  const L = [];
+  L.push('### Retrieval vs answers, per arm (task 264)');
+  L.push('');
+  L.push('| arm | R@5 | R@10 | judged accuracy (p1) | gap (retrieved-but-answered-wrong) |');
+  L.push('|---|---|---|---|---|');
+  for (const [arm, r] of Object.entries(rollup ?? {})) {
+    L.push(`| ${arm} | ${fmtRAtCell(r.r_at[5])} | ${fmtRAtCell(r.r_at[10])} | ${fmtP1Cell(r)} | ${fmtGapCell(r.gap)} |`);
+  }
+  L.push('');
+  L.push(
+    'Definitions: R@5 = THIS question\'s gold session in the top 5 of the stamped read hits, R@10 = the same at top 10 — session-level recall, ' +
+      'crediting only hits that belong to the row\'s own question (every arm pools all n questions\' haystacks into one per-run store, so a foreign session at a colliding index is never gold evidence). ' +
+      'PROTOCOL: this R@k retrieves over the pooled per-run store (n questions\' haystacks), not LongMemEval\'s per-question ~50-session collection — a different, harder protocol. ' +
+      'NOT comparable to a published per-question R@k (e.g. MemPalace\'s 96.6% R@5); a like-for-like number needs a per-question-scoped retrieval replay (a separate task). ' +
+      '`judged accuracy (p1)` = the arm\'s own judged score (exact + 0.5×partial)/n over its judged rows — the number the Scores table quotes ' +
+      '(counts in parentheses: exact/judged). ' +
+      'The gap = judged `wrong` among rows where the gold session WAS retrieved within the read budget — retrieval delivered the evidence and the answer still failed ' +
+      '(counts: wrong/retrieved).'
+  );
+  L.push('');
+  L.push(
+    'Evidence granularity: session-level (`answer_session_ids`, or the unique answer-text fallback). ' +
+      'There are no turn-level evidence ids in this dataset — turn-level recall is absent by data, not by omission — so R@k is session-level.'
+  );
+  L.push('');
+  L.push(
+    'Honesty rules: a retriever whose search ran and returned zero rows (`read_hits: []`) is a KNOWN miss and scores 0.0; ' +
+      'a no-retrieval arm (`read_hits: null`), a banked row (stamped before the instrument), a k beyond the read budget, ' +
+      'or a hit whose owning question cannot be identified (pooled store, no `question_id` and unparsable `source_id`) renders n/a (why) — never a fabricated 0 and never a foreign-session credit.'
+  );
+  L.push('');
+  return L;
+}
+
+export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue, diagnostic, budget, transcripts = null }) {
   const L = [];
   L.push('## Retrieval audit — read-side provenance (task 207)');
   L.push('');
@@ -613,6 +679,7 @@ export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue
     }
   }
   L.push('');
+  L.push(...renderRetrievalVsAnswersTable(armRetrievalVsAnswers(audit, budget)));
   L.push('### Pre-committed diagnostic rule (decided by the stamped ranks alone)');
   L.push('');
   for (const d of diagnostic.perArm) {
@@ -634,12 +701,21 @@ export function renderRetrievalAuditSection({ audit, goldCoverage, writeCapValue
         'Transcripts below (all single-session-preference questions + the 12 worst multi-session rows by gold rank) are for hand labels.'
     );
     L.push('');
-    if (transcripts?.length) {
-      L.push('### Transcripts for hand labels');
-      L.push('');
-      L.push(...renderTranscripts(transcripts));
+    // two DIFFERENT absences, worded differently (task 304, review-B reason 3):
+    // the caller built no transcript groups for this render (transcripts
+    // null — a standalone section render that skipped them) vs groups were
+    // built but the selection matched no ranked rows ([])
+    if (Array.isArray(transcripts)) {
+      if (transcripts.length) {
+        L.push('### Transcripts for hand labels');
+        L.push('');
+        L.push(...renderTranscripts(transcripts));
+      } else {
+        L.push('(No transcripts rendered — transcript groups were built, but no ranked rows met the selection.)');
+        L.push('');
+      }
     } else {
-      L.push('(No transcripts rendered — no ranked rows met the selection.)');
+      L.push('(No transcripts rendered — this render built no transcript groups; the answer-side branch renders them from the runs.)');
       L.push('');
     }
   }
@@ -661,6 +737,8 @@ export function buildTranscriptGroups({ runs, goldIndex, writeCapValue, limit = 
           readHitsAvailable: row.meta?.read_hits_available,
           mapping,
           writeCap: writeCapValue,
+          questionId: row.question_id ?? null,
+          runId: run.runId ?? null,
         });
         const judged = run.judged?.find((j) => j.arm === arm && j.question_id === row.question_id);
         perRow.push({
@@ -1118,7 +1196,10 @@ export function composeGrid({
             errors.push(`${r.runId}/${arm}: ${e.message}`);
           }
         }
-        return { runId: r.runId, summary: r.summary, judged: r.judged, rowsByArm, errors, labelByArm: r.labelByArm };
+        // task 264: judged labels keyed by RAW arm name for the accuracy/gap join
+        const judgedByArm = {};
+        for (const j of r.judged ?? []) if (j.arm) (judgedByArm[j.arm] ??= []).push(j);
+        return { runId: r.runId, summary: r.summary, judged: r.judged, judgedByArm, rowsByArm, errors, labelByArm: r.labelByArm };
       });
       const goldIndex = buildGoldIndex(await loadAuditItems(runs[0].summary, { loadSplitFn, selectItemsFn }));
       const anyRows = loaded.some((r) => Object.keys(r.rowsByArm).length > 0);

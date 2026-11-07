@@ -552,6 +552,7 @@ export function createArmMem0({
           source_id: m.id,
           score: m.score,
           session_index: m.metadata?.session_index,
+          question_id: m.metadata?.question_id ?? null, // task 304: pooled store
         })),
         retrievalBudget
       );
