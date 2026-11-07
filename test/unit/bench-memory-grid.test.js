@@ -18,11 +18,13 @@ import {
   GridRefusal,
   allowedDifferences,
   assertComparable,
+  assertSameRegime,
   buildUnion,
   composeGrid,
   effectiveJudgePromptVersion,
   effectiveN,
   findDifferences,
+  findRegimeDifferences,
   flattenRegime,
   loadRun,
   renderGridReceipt,
@@ -1499,5 +1501,160 @@ describe('task 229: the judge adoption gate renders in the grid receipt', () => 
     });
     const fresh = fs.readFileSync(out.file, 'utf8');
     expect(fresh).toBe(banked);
+  });
+});
+
+// ---- task 333 — the mixed-regime guard ---------------------------------------
+// The comparability keys catch rubric/model/budget differences but NOT a seat
+// move: the same answerer model name on a different box (3090 vs the Mac) is a
+// different regime, and a grid composed across the two looks like one result.
+// The composer must refuse unless --allow-mixed-regime is passed — and then it
+// must print the regimes side by side, never silently.
+
+describe('task 333 — a mixed-regime pair refuses unless allowMixedRegime', () => {
+  it('the same answerer MODEL on a DIFFERENT box composes silently before 333 — after, it refuses naming regime.answerer.url_host', () => {
+    const [dirA, dirB] = writeMatchingPair({
+      regimeB: { answerer: { url_host: 'localhost:8780' } },
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toContain('runs are not comparable — no grid receipt written');
+    expect(err.message).toMatch(/^ {2}regime\.answerer\.url_host/m);
+    expect(err.message).toContain('desktop-1uiqnip:11434');
+    expect(err.message).toContain('localhost:8780');
+    // a refused grid leaves NO receipt behind
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('the same JUDGE model on a different box refuses naming regime.judge.url_host', () => {
+    const [dirA, dirB] = writeMatchingPair({
+      regimeB: { judge: { url_host: '127.0.0.1:8780' } },
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}regime\.judge\.url_host/m);
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a different answerer temperature refuses naming regime.answerer.temperature', () => {
+    const [dirA, dirB] = writeMatchingPair({
+      regimeB: { answerer: { temperature: 0.7 } },
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}regime\.answerer\.temperature/m);
+    expect(err.message).toContain('0.7');
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('two runs that BOTH stamp the platform but differ on the embedder refuse (stamped-vs-stamped is provable)', () => {
+    const [dirA, dirB] = writeMatchingPair({
+      regimeA: { platform: { embedding_provider: 'ollama', embedding_model: 'nomic-embed-text' } },
+      regimeB: {
+        platform: {
+          url_host: '127.0.0.1:3002',
+          embedding_provider: 'ollama',
+          embedding_model: 'nomic-embed-text-mac',
+        },
+      },
+    });
+    let err = null;
+    try {
+      composeGrid({ dirs: [dirA, dirB], generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GridRefusal);
+    expect(err.message).toMatch(/^ {2}regime\.platform\.url_host/m);
+    expect(err.message).toMatch(/^ {2}regime\.platform\.embedding_model/m);
+    expect(err.message).toContain('nomic-embed-text-mac');
+    expect(fs.existsSync(receiptsDir())).toBe(false);
+  });
+
+  it('a platform-NULL run beside a platform-stamped run still composes (the mem0 shape — absence is shown, never judged)', () => {
+    // the committed mem0×mycelium grids compose platform-NULL (mem0 never
+    // touches the platform) with platform-stamped runs legitimately; the new
+    // guard compares platform fields only between runs that stamp them
+    const [dirA, dirB] = writeMatchingPair({
+      regimeB: { platform: { url_host: null, version: null } },
+    });
+    const out = composeGrid({ dirs: [dirA, dirB], generatedAt: '2026-09-09T19:00:00Z', receiptsDir: receiptsDir() });
+    expect(out.mixedRegime).toBe(false);
+    expect(fs.existsSync(out.file)).toBe(true);
+  });
+
+  it('allowMixedRegime composes AND prints the regimes side by side under a bold MIXED REGIME banner', () => {
+    const [dirA, dirB] = writeMatchingPair({
+      regimeB: { answerer: { url_host: 'localhost:8780' } },
+    });
+    const out = composeGrid({
+      dirs: [dirA, dirB],
+      generatedAt: '2026-09-09T19:00:00Z',
+      receiptsDir: receiptsDir(),
+      allowMixedRegime: true,
+    });
+    expect(out.mixedRegime).toBe(true);
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).toContain('## MIXED REGIME');
+    expect(md).toContain('**This grid mixes regimes');
+    // task 333-F1: the opening line states the MIXED truth — it must not claim
+    // "one regime each" two lines above the banner that says the opposite
+    expect(md).toContain("the runs' regimes DIFFER — composed under --allow-mixed-regime");
+    expect(md).not.toContain('one regime each, one grid');
+    // the side-by-side table names BOTH values, matched and mismatched alike
+    expect(md).toContain('| answerer.url_host | desktop-1uiqnip:11434 | localhost:8780 |');
+    expect(md).toContain('| judge.url_host | localhost:8780 | localhost:8780 |');
+  });
+
+  it('allowMixedRegime on a SAME-regime pair adds no MIXED section (the flag never decorates a clean grid)', () => {
+    const [dirA, dirB] = writeMatchingPair();
+    const out = composeGrid({
+      dirs: [dirA, dirB],
+      generatedAt: '2026-09-09T19:00:00Z',
+      receiptsDir: receiptsDir(),
+      allowMixedRegime: true,
+    });
+    expect(out.mixedRegime).toBe(false);
+    const md = fs.readFileSync(out.file, 'utf8');
+    expect(md).not.toContain('MIXED REGIME');
+    // task 333-F1: a clean grid keeps the one-regime opening sentence (the
+    // conditional never touches the default path's text)
+    expect(md).toContain('one regime each, one grid');
+  });
+
+  it('findRegimeDifferences lists every run\'s value (a trio with one outlier) and throws via assertSameRegime', () => {
+    const arms = { mycelium: armEntry(2, 2, 0, 0) };
+    const dirA = writeFixtureRun('run-a', { runId: 'run-a', arms, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirB = writeFixtureRun('run-b', { runId: 'run-b', arms, writeInfo: {}, questionIds: ['q1', 'q2'] });
+    const dirC = writeFixtureRun('run-c', {
+      runId: 'run-c',
+      arms,
+      writeInfo: {},
+      questionIds: ['q1', 'q2'],
+      regime: { answerer: { url_host: 'other-box:11434' } },
+    });
+    const runs = [loadRun(dirA), loadRun(dirB), loadRun(dirC)];
+    const diffs = findRegimeDifferences(runs);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].key).toBe('regime.answerer.url_host');
+    // every run's value is named — no representative-picking
+    expect(diffs[0].values.map((v) => v.run)).toEqual(['run-a', 'run-b', 'run-c']);
+    expect(() => assertSameRegime(runs)).toThrow(GridRefusal);
+    expect(() => assertSameRegime([runs[0], runs[1]])).not.toThrow();
   });
 });
