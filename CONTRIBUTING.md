@@ -125,7 +125,7 @@ warning-free lint — just don't add new ones. The informal house style:
 
 ## Tests
 
-There's a vitest suite under `test/` — 188 files across `test/unit/`,
+There's a vitest suite under `test/` — 189 files across `test/unit/`,
 `test/smoke/`, and `test/refactor/`. Run it locally before opening
 a PR:
 
@@ -223,3 +223,7 @@ Operational runbooks and landed design docs live outside `docs/`:
 - [Jetson ollama keep-alive](runbooks/jetson-ollama-keep-alive.md)
 - [Jetson orderly-deploy plan](superpowers/plans/2026-08-16-jetson-orderly-deploy.md)
 - [Jetson deploy design](superpowers/specs/2026-08-16-jetson-mycelium-deploy-design.md)
+
+Lane receipts — the RED/GREEN record a change landed with — live under `docs/receipts/<lane-task>/RECEIPT.md`:
+
+- [F-378 — a game namespace reads its current rows (`/memory/list` by source_type)](docs/receipts/F-mycelium-378/RECEIPT.md)

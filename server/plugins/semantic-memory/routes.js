@@ -1261,10 +1261,70 @@ export default function (core) {
   // every turn (standing preferences), where query-ranked /search is wrong.
   // Rate-limited (task 257, alert #288): a recall-class read — the listing
   // sibling of /memory/search, same 1200/min ceiling #190 measured for recall.
+  //
+  // F-mycelium/378 (2026-11-06): the second form —
+  //   GET /memory/list?source_types=ruling,measurement,look&namespace=game:<name>[&limit=][&include_superseded=1]
+  // reads one namespace's CURRENT rows across kinds, deterministically — the
+  // Game Masters boot read (DESIGN-game-masters-2026-10-29 §2.1/§2.3): "every
+  // current ruling, measurement, look and mechanic in this namespace, dated".
+  // N similarity searches rank by query and never promise completeness; this
+  // is the deterministic read they were standing in for. Contract:
+  //   * exactly one of source_type / source_types — both is a 400 (one
+  //     sentence); neither keeps the single-form's own 400 below;
+  //   * source_types is a comma list of 1–8 kinds and REQUIRES namespace — a
+  //     cross-namespace multi-kind listing is a search, not a list (POST
+  //     /memory/search takes source_types);
+  //   * refuseCompanionScoped runs for EVERY kind in the list, as today;
+  //   * superseded rows are excluded by default with the SAME predicate the
+  //     lesson reads use (db's shared LIVE_ROW predicate — one definition);
+  //     include_superseded=1 reads them back with their superseded_by pointer;
+  //   * order is the row's OWN date (valid_from, then learned_at, then
+  //     created_at — 186's rule generalized), ties by source_type, source_id,
+  //     so two calls return byte-identical bodies;
+  //   * `truncated: true` when limit (≤ 100) cut the list — silently capping
+  //     a "complete" read is the false-zero hazard /search documents.
+  // The single-source_type form is UNCHANGED byte for byte — the same SQL,
+  // order and response keys (snapshotted by
+  // test/unit/memory-list-current-rows.test.js).
   router.get('/list', rateLimited('memory/list', { windowMs: 60000, max: 1200 }), function (req, res) {
     var who = checkMemoryAgent(req, res);
     if (!who) return;
     var sourceType = req.query.source_type;
+    var sourceTypesParam = req.query.source_types;
+    if (sourceTypesParam != null) {
+      if (sourceType != null) {
+        return apiError(res, 400, "pass 'source_type' OR 'source_types', never both — one kind or a kind list per call");
+      }
+      var kinds = String(sourceTypesParam).split(',').map(function (k) { return k.trim(); })
+        .filter(function (k) { return k.length > 0; });
+      if (kinds.length < 1) {
+        return apiError(res, 400, 'source_types needs at least one kind — a comma list like ruling,measurement,look');
+      }
+      if (kinds.length > 8) {
+        return apiError(res, 400, 'source_types takes at most 8 kinds per call (got ' + kinds.length + ') — narrow the list');
+      }
+      var namespace = nonEmptyQuery(req.query.namespace);
+      if (!namespace) {
+        return apiError(res, 400, "source_types requires a namespace — a cross-namespace multi-kind listing is a search, not a list (POST /memory/search takes source_types)");
+      }
+      for (var ki = 0; ki < kinds.length; ki++) {
+        if (refuseCompanionScoped(kinds[ki], namespace, res)) return;
+      }
+      var includeSuperseded = req.query.include_superseded === '1' || req.query.include_superseded === 'true';
+      var listed = db.listByTypes(kinds, {
+        namespace: namespace,
+        limit: req.query.limit,
+        include_superseded: includeSuperseded
+      });
+      return res.json({
+        results: listed.rows.map(applyRecallLabel),
+        source_types: kinds,
+        namespace: namespace,
+        include_superseded: includeSuperseded,
+        count: listed.rows.length,
+        truncated: listed.truncated
+      });
+    }
     if (!sourceType || typeof sourceType !== 'string') {
       return apiError(res, 400, 'source_type is required');
     }

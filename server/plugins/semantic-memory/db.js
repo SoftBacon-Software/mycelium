@@ -161,6 +161,16 @@ export function buildFtsQuery(query) {
   return terms.join(' OR ');
 }
 
+// F-mycelium/378 (2026-11-06): the ONE "this row is live" predicate — a row
+// whose metadata.superseded_by is set is history (the §3 rule: kept, never
+// erased, but it stops teaching). EVERY default read that claims to be
+// "current" filters through THIS expression — listProvenanceRows (186's
+// lessons/history) and listByTypes (the /memory/list current-rows read).
+// Shared, never copied: the day the two reads disagree on what "current"
+// means, a game master boots on rows the lessons block already stopped
+// teaching.
+var LIVE_ROW_SQL = "json_extract(metadata, '$.superseded_by') IS NULL";
+
 export default function createMemoryDB(db, opts) {
   // Decoded-vector cache behind searchVector (F-mycelium/194): each embedded
   // row's vector is JSON.parse'd ONCE, not on every query. Write paths below
@@ -1097,6 +1107,48 @@ export default function createMemoryDB(db, opts) {
       return db.prepare(sql).all(...args).map(decodeTrustRow);
     },
 
+    // F-mycelium/378 (2026-11-06): the multi-kind sibling of listByType — one
+    // namespace's CURRENT rows across several kinds, the deterministic read a
+    // game master boots on ("every current ruling, measurement, look and
+    // mechanic in game:<name>, dated"). Query-ranked /search never promises
+    // completeness; this does, and reports honestly when `limit` cut it.
+    //
+    // Superseded rows are excluded by default through LIVE_ROW_SQL — the SAME
+    // predicate the lesson reads use (shared above, never copied);
+    // opts.include_superseded reads them back with their pointer (the §3
+    // rule). Order is the row's OWN date, 186's rule generalized to the game
+    // kinds: metadata.valid_from first (when a row stamps one), falling back
+    // to metadata.learned_at, then created_at for rows that carry neither —
+    // NOT insertion order, which disagrees with reality the moment a batch
+    // migrates in. Ties break by source_type, source_id, so two calls return
+    // byte-identical bodies.
+    //
+    // Returns { rows, truncated } — `truncated` is true when the limit cut
+    // the list (fetched limit+1 before slicing): silently capping a
+    // "complete" read is the false-zero hazard /search documents.
+    listByTypes(sourceTypes, opts) {
+      opts = opts || {};
+      var kinds = (sourceTypes || []).filter(function (t) { return typeof t === 'string' && t.length > 0; });
+      var namespace = opts.namespace || null;
+      var limit = Math.min(parseInt(opts.limit, 10) || 20, 100);
+      var where = ['source_type IN (' + kinds.map(function () { return '?'; }).join(',') + ')', 'chunk_index = 0'];
+      var args = kinds.slice();
+      if (namespace) { where.push('namespace = ?'); args.push(namespace); }
+      if (!opts.include_superseded) {
+        where.push(LIVE_ROW_SQL); // the ONE live-row predicate (378) — shared, never copied
+      }
+      // TRUST LAYER P1.1: the trust stamps ride the query-free listing too.
+      var sql = 'SELECT source_type, source_id, content_text, namespace, metadata, created_at, origin, trust, derived_from '
+              + 'FROM sm_embeddings WHERE ' + where.join(' AND ')
+              + " ORDER BY COALESCE(json_extract(metadata, '$.valid_from'), json_extract(metadata, '$.learned_at'), created_at) DESC"
+              + ', created_at DESC, source_type ASC, source_id ASC '
+              + 'LIMIT ?';
+      args.push(limit + 1); // one past the cap: the truncation probe
+      var rows = db.prepare(sql).all(...args);
+      var truncated = rows.length > limit;
+      return { rows: rows.slice(0, limit).map(decodeTrustRow), truncated: truncated };
+    },
+
     // -- Lessons & history (2026-09-10, F-mycelium/186) ---------------------------
     // A LESSON is a memory row like everything else: source_type 'lesson', one
     // row per lesson (chunk_index 0), provenance in metadata (actor, learned_at,
@@ -1116,7 +1168,7 @@ export default function createMemoryDB(db, opts) {
       var where = ['source_type = ?', 'chunk_index = 0'];
       var args = [sourceType];
       if (!opts.include_superseded) {
-        where.push("json_extract(metadata, '$.superseded_by') IS NULL");
+        where.push(LIVE_ROW_SQL); // the ONE live-row predicate (378) — shared, never copied
       }
       if (opts.task_class) { where.push("json_extract(metadata, '$.task_class') = ?"); args.push(opts.task_class); }
       if (opts.repo) { where.push("json_extract(metadata, '$.repo') = ?"); args.push(opts.repo); }
