@@ -35,6 +35,15 @@ node bench/memory/run.mjs --split longmemeval --arms none,mycelium --n 50 --rece
 #                           over STAMPED rows (meta.read_hits), the gold-mapping
 #                           method + coverage, and the pre-committed diagnostic
 #                           branch (budget-10 replay vs answer-side transcripts)
+#                           — plus the task-264 per-arm table: R@5 · R@10 ·
+#                           judged accuracy (p1) · the gap (retrieved-but-
+#                           answered-wrong %). R@k credits only hits from the
+#                           row's OWN question (task 304 — the store is pooled
+#                           across all questions) and retrieves over that
+#                           pooled per-run store, NOT LongMemEval's
+#                           per-question collection: NOT comparable to a
+#                           published per-question R@k (arms that cannot
+#                           expose retrieved ids render n/a (why))
 #   --question-type T       run ONLY the selected items of that type (the
 #                           budget-10 diagnostic replay lever) — the receipt is
 #                           stamped NON-COMPARABLE: do not grid, do not quote

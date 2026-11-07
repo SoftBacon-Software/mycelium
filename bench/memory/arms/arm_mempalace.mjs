@@ -507,11 +507,15 @@ export function createArmMempalace({
         // each drawer was filed with source_file `bench/<qid>/session_<n>.txt`
         // (the sidecar's /add); the sidecar parses the session index back out
         // of each hit's source_path — a hit shape without it stamps null,
-        // honestly
+        // honestly. Task 324: each drawer was also filed with
+        // room=question_id (the sidecar's /add), and /search hits carry the
+        // room back — forwarded as the question-scoped gold credit's stamp
+        // (task 304); a hit shape without it stamps null (n/a, never a credit)
         memories.map((m) => ({
           source_id: m.id,
           score: m.score,
           session_index: m.session_index ?? null,
+          question_id: m.room ?? null,
         })),
         retrievalBudget
       );

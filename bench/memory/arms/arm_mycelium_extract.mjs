@@ -282,11 +282,13 @@ export function createArmMyceliumExtract({
           had_think: !!r.hadThink,
         },
         // fact rows carry metadata.session_index = the haystack session the
-        // fact was extracted from — the same provenance the raw rows carry
+        // fact was extracted from — the same provenance the raw rows carry,
+        // plus the owning question (task 304: the store is pooled)
         (s.results || []).map((h) => ({
           source_id: h.source_id,
           score: h.score,
           session_index: h.metadata?.session_index,
+          question_id: h.metadata?.question_id ?? null,
         })),
         retrievalBudget
       );
